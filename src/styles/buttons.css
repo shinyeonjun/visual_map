@@ -1,0 +1,101 @@
+.square-button { width: 30px; height: 30px; flex: 0 0 30px; padding: 0; }
+
+.primary-action {
+  height: 32px;
+  margin-top: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 7px;
+  color: #f5f9ff;
+  background: linear-gradient(180deg, var(--accent), var(--accent-deep));
+  font-size: 12px;
+  font-weight: 700;
+}
+.primary-action:not(:disabled),
+.outline-action:not(:disabled),
+.square-button:not(:disabled) {
+  transition:
+    border-color 0.12s ease,
+    background-color 0.12s ease,
+    box-shadow 0.12s ease,
+    color 0.12s ease;
+}
+.primary-action:not(:disabled):hover {
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.18);
+}
+.primary-action:focus-visible,
+.outline-action:focus-visible,
+.square-button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.primary-action.compact {
+  flex: 0 0 auto;
+  height: 30px;
+  margin-top: 0;
+  padding: 0 12px;
+}
+.primary-action:disabled,
+.outline-action:disabled,
+.square-button:disabled,
+.top-select select:disabled {
+  cursor: not-allowed;
+}
+.primary-action:disabled,
+.outline-action:disabled,
+.square-button:disabled {
+  border-color: var(--line-2);
+  color: var(--ink-4);
+  background: var(--bg-inset);
+  box-shadow: none;
+  opacity: 1;
+}
+
+.spin { animation: spin 0.9s linear infinite; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.outline-action {
+  margin-top: auto;
+  height: 32px;
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  background: var(--bg-raised);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 650;
+}
+.outline-action:not(:disabled):hover,
+.square-button:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line-2));
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-raised));
+  color: var(--accent-ink);
+}
+.outline-action.accent { border-color: rgba(91, 157, 255, 0.45); color: var(--blue-ink); background: rgba(91, 157, 255, 0.14); }
+.db-load-action {
+  width: 100%;
+  margin-top: 6px;
+}
+.table-button {
+  width: 100%;
+  border: 0;
+  text-align: left;
+}
+.table-button.active { background: var(--green-soft); }
+.column-button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.column-button:hover { background: var(--bg-inset); }

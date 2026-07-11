@@ -1,0 +1,360 @@
+/* ============================================================
+   Status bar (workbench)
+   ============================================================ */
+.statusbar {
+  height: 28px;
+  flex: 0 0 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-panel);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  overflow: hidden;
+}
+.statusbar span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.statusbar svg { color: var(--green); }
+.status-workspace {
+  flex: 1 1 160px;
+  max-width: 260px;
+}
+.engine-status {
+  flex: 0 0 114px;
+}
+.status-source {
+  flex: 0 1 196px;
+}
+.status-map {
+  flex: 0 0 142px;
+}
+.status-snapshot {
+  flex: 0 0 158px;
+  justify-content: flex-end;
+  color: var(--ink-3);
+}
+.status-quality {
+  flex: 0 0 184px;
+  justify-content: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--ink-3);
+}
+.status-quality.ready {
+  background: var(--green-soft);
+  color: var(--green);
+}
+.status-quality.candidate {
+  background: var(--orange-soft);
+  color: var(--orange);
+}
+.statusbar b {
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 9.5px;
+}
+.statusbar b.missing {
+  background: var(--orange-soft);
+  color: var(--orange);
+}
+.statusbar b.pending {
+  background: var(--bg-inset);
+  color: var(--ink-4);
+}
+.statusbar b.snapshot {
+  background: rgba(91, 157, 255, 0.14);
+  color: var(--blue-ink);
+}
+.statusbar b.error {
+  background: var(--red-soft);
+  color: var(--red);
+}
+.engine-status svg { color: var(--green); }
+.engine-status.pending svg { color: var(--ink-4); }
+.engine-status.snapshot svg { color: var(--blue-ink); }
+.engine-status.missing svg { color: var(--orange); }
+.engine-status.error svg { color: var(--red); }
+
+.operation-details {
+  position: relative;
+  max-width: 280px;
+  color: var(--ink-3);
+}
+.operation-details summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.operation-details.running summary { color: var(--blue-ink); }
+.operation-details.success summary { color: var(--green); }
+.operation-details.error summary { color: var(--red); }
+.operation-details pre {
+  position: absolute;
+  right: 0;
+  bottom: 24px;
+  z-index: 90;
+  width: min(520px, calc(100vw - 80px));
+  max-height: 220px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+  white-space: pre-wrap;
+}
+.push { margin-left: auto; }
+
+/* ============================================================
+   Dev diagnostics (docked in statusbar / panel footer)
+   ============================================================ */
+.dev-diag {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.statusbar .dev-diag { margin-left: 2px; }
+.at-side-footer .dev-diag { margin-left: auto; }
+
+.dev-diag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  color: var(--ink-4);
+  font-family: var(--mono);
+  font-size: 9px;
+  opacity: 0.7;
+}
+.dev-diag-chip.open,
+.dev-diag-chip:hover { opacity: 1; color: var(--ink-2); }
+
+.dev-diag-panel {
+  position: absolute;
+  bottom: 24px;
+  z-index: 80;
+  width: max-content;
+  max-width: min(640px, calc(100vw - 120px));
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.statusbar .dev-diag-panel { right: 0; }
+.at-side-footer .dev-diag-panel { left: 0; }
+.dev-diag-panel strong {
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+}
+.dev-diag-panel span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Narrow window fallback
+   ============================================================ */
+@media (max-width: 1360px) {
+  .side,
+  .at-side.side-left { width: 300px; flex-basis: 300px; }
+  .side-right,
+  .at-side.side-right { width: 340px; flex-basis: 340px; }
+  .top-time { display: none; }
+  .scan-pill { max-width: 190px; }
+  .view-switch button,
+  .view-switch .view-tab {
+    flex-basis: 96px;
+    max-width: 96px;
+    padding: 0 8px;
+  }
+  .select-shell select { max-width: 132px; }
+  .search-shell { width: 240px; flex-basis: 240px; }
+  .global-search { width: 240px; }
+  .statusbar { gap: 6px; }
+  .status-workspace { max-width: 210px; }
+  .engine-status { flex-basis: 108px; }
+  .status-source { flex-basis: 150px; }
+  .status-map { flex-basis: 128px; }
+  .status-quality { flex-basis: 150px; }
+  .status-snapshot { display: none; }
+  .at-legend-item:not(.primary) { display: none; }
+  .at-cards { gap: var(--at-lane-gap, 18px); padding-right: var(--at-lane-pad-x, 10px); }
+}
+
+@media (max-width: 1120px) {
+  .statusbar .dev-diag {
+    display: none;
+  }
+  .side-left:not(.at-side) {
+    width: 260px;
+    flex-basis: 260px;
+  }
+  .side-right:not(.at-side) {
+    width: 300px;
+    flex-basis: 300px;
+  }
+  .at-side.side-left {
+    width: 260px;
+    flex-basis: 260px;
+  }
+  .at-side.side-right {
+    width: 300px;
+    flex-basis: 300px;
+  }
+}
+
+@media (max-width: 1040px) {
+  .statusbar {
+    gap: 5px;
+    padding-inline: 10px;
+  }
+  .statusbar .status-workspace,
+  .statusbar .status-snapshot,
+  .statusbar .operation-details,
+  .statusbar .dev-diag {
+    display: none;
+  }
+  .statusbar .push {
+    margin-left: 0;
+  }
+  .statusbar .engine-status {
+    flex: 0 0 104px;
+  }
+  .statusbar .status-source {
+    flex: 0.85 1 128px;
+    min-width: 126px;
+  }
+  .statusbar .push.status-source {
+    flex: 1.25 1 168px;
+    min-width: 150px;
+  }
+  .statusbar .status-map {
+    flex: 0 0 130px;
+  }
+  .statusbar .status-quality {
+    flex: 0 0 112px;
+  }
+  .statusbar .status-source:not(.push) {
+    display: none;
+  }
+  .side-left:not(.at-side) {
+    width: 248px;
+    flex-basis: 248px;
+  }
+  .side-right:not(.at-side) {
+    width: 288px;
+    flex-basis: 288px;
+  }
+  .at-side.side-left {
+    width: 248px;
+    flex-basis: 248px;
+  }
+  .at-side.side-right {
+    width: 288px;
+    flex-basis: 288px;
+  }
+  .at-side .mode-card {
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 5px;
+    padding: 6px;
+  }
+  .side-right .mode-text {
+    column-gap: 4px;
+  }
+  .side-right .mode-text strong {
+    display: -webkit-box;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .side-right .mode-source {
+    width: 58px;
+    padding-inline: 4px;
+    font-size: 8px;
+  }
+  .side-right .mode-answer {
+    padding-inline: 5px;
+    font-size: 9.5px;
+  }
+  .side-right .answer-summary {
+    gap: 4px;
+    padding: 6px;
+  }
+  .side-right .answer-summary p {
+    -webkit-line-clamp: 2;
+  }
+  .side-right .answer-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .side-right .answer-metrics span {
+    min-height: 28px;
+  }
+  .side-right .answer-action {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .side-right .answer-action svg {
+    display: none;
+  }
+  .side-right .answer-step-block,
+  .side-right .answer-summary > small {
+    display: none;
+  }
+}
+
+@media (max-width: 960px) {
+  .statusbar .status-source:not(.push) {
+    display: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .side-left:not(.at-side),
+  .at-side.side-left {
+    width: 220px;
+    flex-basis: 220px;
+  }
+  .side-right:not(.at-side),
+  .at-side.side-right {
+    width: 260px;
+    flex-basis: 260px;
+  }
+  .side-right .answer-head {
+    grid-template-columns: 50px minmax(0, 1fr) 38px;
+    gap: 4px;
+  }
+  .side-right .answer-head span,
+  .side-right .answer-verdict {
+    padding-inline: 4px;
+    font-size: 9px;
+  }
+  .side-right .answer-metrics em {
+    font-size: 8.8px;
+  }
+}

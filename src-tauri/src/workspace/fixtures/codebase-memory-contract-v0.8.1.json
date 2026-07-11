@@ -1,0 +1,90 @@
+{
+  "engineVersion": "0.8.1",
+  "project": "D-meeting-overlay-assistant",
+  "routes": {
+    "total": 2,
+    "results": [
+      {
+        "name": "/api/v1/auth/bootstrap-admin",
+        "qualified_name": "__route__POST__/api/v1/auth/bootstrap-admin",
+        "label": "Route",
+        "file_path": "",
+        "method": "POST"
+      },
+      {
+        "name": "/bootstrap-admin",
+        "qualified_name": "__route__POST__/bootstrap-admin",
+        "label": "Route",
+        "file_path": "server/app/api/http/routes/auth.py",
+        "method": "POST",
+        "source": "decorator"
+      }
+    ],
+    "has_more": false
+  },
+  "code": {
+    "total": 2,
+    "results": [
+      {
+        "name": "bootstrap_admin",
+        "qualified_name": "D-meeting-overlay-assistant.server.app.api.http.routes.auth.bootstrap_admin",
+        "label": "Function",
+        "file_path": "server/app/api/http/routes/auth.py"
+      },
+      {
+        "name": "_to_session_response",
+        "qualified_name": "D-meeting-overlay-assistant.server.app.api.http.routes.auth._to_session_response",
+        "label": "Function",
+        "file_path": "server/app/api/http/routes/auth.py"
+      }
+    ],
+    "has_more": false
+  },
+  "files": {
+    "total": 1,
+    "results": [
+      {
+        "name": "auth.py",
+        "qualified_name": "D-meeting-overlay-assistant.server.app.api.http.routes.auth.__file__",
+        "label": "File",
+        "file_path": "server/app/api/http/routes/auth.py",
+        "extension": ".py"
+      }
+    ],
+    "has_more": false
+  },
+  "calls": {
+    "columns": ["source", "target"],
+    "rows": [
+      [
+        "D-meeting-overlay-assistant.server.app.api.http.routes.auth.bootstrap_admin",
+        "D-meeting-overlay-assistant.server.app.api.http.routes.auth._to_session_response"
+      ]
+    ],
+    "total": 1
+  },
+  "handles": {
+    "columns": ["source", "target"],
+    "rows": [
+      [
+        "D-meeting-overlay-assistant.server.app.api.http.routes.auth.bootstrap_admin",
+        "__route__POST__/bootstrap-admin"
+      ]
+    ],
+    "total": 1
+  },
+  "sourceLocations": {
+    "columns": ["source", "path", "start_line", "start_column", "end_line", "end_column"],
+    "rows": [
+      [
+        "D-meeting-overlay-assistant.server.app.api.http.routes.auth.bootstrap_admin",
+        "server/app/api/http/routes/auth.py",
+        "69",
+        "",
+        "86",
+        ""
+      ]
+    ],
+    "total": 1
+  }
+}

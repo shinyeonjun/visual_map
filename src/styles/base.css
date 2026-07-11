@@ -1,0 +1,24 @@
+* { box-sizing: border-box; }
+html,
+body {
+  overscroll-behavior: none;
+}
+body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
+button { font: inherit; cursor: pointer; }
+button:focus-visible,
+select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 58%, #fff);
+  outline-offset: 2px;
+}
+h2, h3 { margin: 0; }
+code, pre { font-family: var(--mono); }
+
+.app-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+}
+
+.app-shell[data-view="workbench"] { --accent: var(--teal); --accent-deep: var(--teal-deep); --accent-ink: var(--teal-ink); --accent-soft: rgba(76, 201, 220, 0.14); }
+.app-shell[data-view="atlas"] { --accent: var(--blue); --accent-deep: var(--blue-deep); --accent-ink: var(--blue-ink); --accent-soft: rgba(91, 157, 255, 0.14); }

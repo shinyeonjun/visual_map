@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "engines": [
+    {
+      "id": "codebase-memory",
+      "version": "0.8.1",
+      "sourceRepository": "https://github.com/DeusData/codebase-memory-mcp",
+      "sourceCommit": "f0c9be19c5d74b84f418d807bfdce7b5d6a261ff",
+      "releaseUrl": "https://github.com/DeusData/codebase-memory-mcp/releases/tag/v0.8.1",
+      "archive": {
+        "fileName": "codebase-memory-mcp-windows-amd64.zip",
+        "url": "https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.8.1/codebase-memory-mcp-windows-amd64.zip",
+        "sha256": "A602AD090ED3F49D86C55472F73F27AD7055222806A82358F2E08513E027F00F",
+        "entry": "codebase-memory-mcp.exe"
+      },
+      "executable": {
+        "fileName": "codebase-memory-mcp.exe",
+        "sha256": "12375E6A39A31F003D776E54EF487640F9F59DB7DBEEE96973A9EE9EB18BC7BB"
+      },
+      "licenseId": "MIT",
+      "contractVersion": "1",
+      "releaseReady": true,
+      "developmentArtifacts": []
+    },
+    {
+      "id": "database-memory",
+      "version": "0.1.1",
+      "sourceRepository": "https://github.com/shinyeonjun/rdb-memory-mcp",
+      "sourceCommit": "acedac7bcc92f6f2c25b5890f121b64da2a90779",
+      "releaseUrl": "https://github.com/shinyeonjun/rdb-memory-mcp/releases/tag/v0.1.1",
+      "archive": {
+        "fileName": "rdb-memory-mcp-windows-amd64.zip",
+        "url": "https://github.com/shinyeonjun/rdb-memory-mcp/releases/download/v0.1.1/rdb-memory-mcp-windows-amd64.zip",
+        "sha256": "44754EE82BD873D9802F3FABCAEE3AFB510469E7586CDC542BC72A065716A0E6",
+        "entry": "database-memory.exe"
+      },
+      "executable": {
+        "fileName": "database-memory.exe",
+        "sha256": "D2633542BC12BC14EDA79C05AB61B9DD3DE2B3FD92DAB94F2BEC49A349F42BF4"
+      },
+      "licenseId": "MIT",
+      "contractVersion": "1",
+      "releaseReady": true,
+      "developmentArtifacts": []
+    }
+  ]
+}

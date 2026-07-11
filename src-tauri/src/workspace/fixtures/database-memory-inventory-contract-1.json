@@ -1,0 +1,121 @@
+{
+  "contract_version": 1,
+  "snapshot_key": "sqlite:shop",
+  "limit_requested": 1000,
+  "limit_applied": 1000,
+  "limit_clamped": false,
+  "result_count": 2,
+  "total_tables": 2,
+  "truncated": false,
+  "capability_warnings": ["view dependency metadata is not tracked"],
+  "tables": [
+    {
+      "contract_version": 1,
+      "snapshot_key": "sqlite:shop",
+      "table_key": "sqlite:shop:main:main:table:accounts",
+      "table": "accounts",
+      "columns": [
+        {
+          "key": "sqlite:shop:main:main:column:accounts:id",
+          "table_key": "sqlite:shop:main:main:table:accounts",
+          "schema": "main",
+          "database": "main",
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": false
+        }
+      ],
+      "primary_key": ["id"],
+      "constraints": [
+        {
+          "key": "sqlite:shop:main:main:primary_key:accounts:accounts_pkey",
+          "table_key": "sqlite:shop:main:main:table:accounts",
+          "name": "accounts_pkey",
+          "kind": "primary_key",
+          "columns": ["id"],
+          "column_keys": ["sqlite:shop:main:main:column:accounts:id"],
+          "referenced_table_key": null,
+          "referenced_columns": [],
+          "referenced_column_keys": [],
+          "expression": null
+        }
+      ],
+      "foreign_keys": { "outbound": [], "inbound": [] },
+      "indexes": [],
+      "capability_warnings": []
+    },
+    {
+      "contract_version": 1,
+      "snapshot_key": "sqlite:shop",
+      "table_key": "sqlite:shop:main:main:table:orders",
+      "table": "orders",
+      "columns": [
+        {
+          "key": "sqlite:shop:main:main:column:orders:id",
+          "table_key": "sqlite:shop:main:main:table:orders",
+          "schema": "main",
+          "database": "main",
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": false
+        },
+        {
+          "key": "sqlite:shop:main:main:column:orders:account_id",
+          "table_key": "sqlite:shop:main:main:table:orders",
+          "schema": "main",
+          "database": "main",
+          "name": "account_id",
+          "type": "INTEGER",
+          "nullable": false
+        }
+      ],
+      "primary_key": ["id"],
+      "constraints": [
+        {
+          "key": "sqlite:shop:main:main:foreign_key:orders:orders_account_fk",
+          "table_key": "sqlite:shop:main:main:table:orders",
+          "name": "orders_account_fk",
+          "kind": "foreign_key",
+          "columns": ["account_id"],
+          "column_keys": ["sqlite:shop:main:main:column:orders:account_id"],
+          "referenced_table_key": "sqlite:shop:main:main:table:accounts",
+          "referenced_columns": ["id"],
+          "referenced_column_keys": ["sqlite:shop:main:main:column:accounts:id"],
+          "expression": null
+        }
+      ],
+      "foreign_keys": {
+        "outbound": [
+          {
+            "key": "sqlite:shop:main:main:foreign_key:orders:orders_account_fk",
+            "table_key": "sqlite:shop:main:main:table:orders",
+            "name": "orders_account_fk",
+            "table": "orders",
+            "columns": ["account_id"],
+            "column_keys": ["sqlite:shop:main:main:column:orders:account_id"],
+            "referenced_table_key": "sqlite:shop:main:main:table:accounts",
+            "referenced_table": "accounts",
+            "referenced_columns": ["id"],
+            "referenced_column_keys": ["sqlite:shop:main:main:column:accounts:id"]
+          }
+        ],
+        "inbound": []
+      },
+      "indexes": [
+        {
+          "key": "sqlite:shop:main:main:index:orders:orders_account_idx",
+          "table_key": "sqlite:shop:main:main:table:orders",
+          "name": "orders_account_idx",
+          "columns": ["account_id"],
+          "column_keys": ["sqlite:shop:main:main:column:orders:account_id"],
+          "unique": false,
+          "primary": false,
+          "predicate": null,
+          "expression": null
+        }
+      ],
+      "capability_warnings": [],
+      "rows": [{ "password": "must-not-persist" }]
+    }
+  ]
+}

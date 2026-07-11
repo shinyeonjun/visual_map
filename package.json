@@ -1,0 +1,41 @@
+{
+  "name": "backend-visual-map",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc && vite build",
+    "verify:engines": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-engines.ps1 -VerifyOnly",
+    "verify:release-engines": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-engines.ps1 -VerifyOnly -Release",
+    "verify:notices": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-third-party-notices.ps1",
+    "verify:inventory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-dependency-inventory.ps1 -VerifyOnly",
+    "smoke:code": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-code-engine-contract.ps1",
+    "smoke:code-matrix": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-code-field-matrix.ps1",
+    "smoke:rdb": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-rdb-productization.ps1 -DatabaseMemory .\\src-tauri\\engines\\database-memory.exe",
+    "smoke:release-internal": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-smoke.ps1 -Internal",
+    "release:inventory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-dependency-inventory.ps1",
+    "security:audit": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/security-audit.ps1",
+    "build:desktop-assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-build-assets.ps1",
+    "build:internal": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:BACKEND_VISUAL_MAP_BUILD_SCOPE='internal'; npx tauri build\"",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "lucide-react": "^1.23.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}

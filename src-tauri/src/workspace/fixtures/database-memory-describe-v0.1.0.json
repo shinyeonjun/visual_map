@@ -1,0 +1,39 @@
+{
+  "capability_warnings": [
+    "view dependency metadata is not tracked by the ddl-sqlite adapter."
+  ],
+  "columns": [
+    { "name": "id", "nullable": false, "type": "INTEGER" },
+    { "name": "customer_id", "nullable": false, "type": "INTEGER" }
+  ],
+  "foreign_keys": {
+    "inbound": [
+      {
+        "columns": ["order_id"],
+        "name": "fk_order_items_1",
+        "referenced_columns": ["id"],
+        "referenced_table": "orders",
+        "table": "order_items"
+      }
+    ],
+    "outbound": [
+      {
+        "columns": ["customer_id"],
+        "name": "fk_orders_0",
+        "referenced_columns": ["id"],
+        "referenced_table": "customers",
+        "table": "orders"
+      }
+    ]
+  },
+  "indexes": [
+    {
+      "columns": ["customer_id"],
+      "name": "idx_orders_customer_id",
+      "primary": false,
+      "unique": false
+    }
+  ],
+  "primary_key": ["id"],
+  "table": "orders"
+}

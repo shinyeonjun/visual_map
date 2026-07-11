@@ -1,0 +1,91 @@
+{
+  "contract_version": 1,
+  "snapshot_key": "postgres:shop",
+  "table_key": "postgres:shop:shop:public:table:orders",
+  "table": "orders",
+  "columns": [
+    { "name": "id", "nullable": false, "type": "bigint" },
+    { "name": "customer_id", "nullable": false, "type": "bigint" },
+    { "name": "external_id", "nullable": false, "type": "text" },
+    { "name": "amount", "nullable": false, "type": "numeric" }
+  ],
+  "primary_key": ["id"],
+  "constraints": [
+    {
+      "key": "postgres:shop:shop:public:primary_key:orders:orders_pkey",
+      "name": "orders_pkey",
+      "kind": "primary_key",
+      "columns": ["id"],
+      "referenced_table_key": null,
+      "referenced_columns": [],
+      "expression": null
+    },
+    {
+      "key": "postgres:shop:shop:public:foreign_key:orders:orders_customer_id_fkey",
+      "name": "orders_customer_id_fkey",
+      "kind": "foreign_key",
+      "columns": ["customer_id"],
+      "referenced_table_key": "postgres:shop:shop:public:table:customers",
+      "referenced_columns": ["id"],
+      "expression": null
+    },
+    {
+      "key": "postgres:shop:shop:public:unique_constraint:orders:orders_external_id_key",
+      "name": "orders_external_id_key",
+      "kind": "unique",
+      "columns": ["external_id"],
+      "referenced_table_key": null,
+      "referenced_columns": [],
+      "expression": null
+    },
+    {
+      "key": "postgres:shop:shop:public:check_constraint:orders:orders_amount_check",
+      "name": "orders_amount_check",
+      "kind": "check",
+      "columns": ["amount"],
+      "referenced_table_key": null,
+      "referenced_columns": [],
+      "expression": "amount >= 0"
+    }
+  ],
+  "foreign_keys": {
+    "outbound": [
+      {
+        "key": "postgres:shop:shop:public:foreign_key:orders:orders_customer_id_fkey",
+        "table_key": "postgres:shop:shop:public:table:orders",
+        "referenced_table_key": "postgres:shop:shop:public:table:customers",
+        "name": "orders_customer_id_fkey",
+        "table": "orders",
+        "columns": ["customer_id"],
+        "referenced_table": "customers",
+        "referenced_columns": ["id"]
+      }
+    ],
+    "inbound": [
+      {
+        "key": "postgres:shop:shop:public:foreign_key:order_items:order_items_order_id_fkey",
+        "table_key": "postgres:shop:shop:public:table:order_items",
+        "referenced_table_key": "postgres:shop:shop:public:table:orders",
+        "name": "order_items_order_id_fkey",
+        "table": "order_items",
+        "columns": ["order_id"],
+        "referenced_table": "orders",
+        "referenced_columns": ["id"]
+      }
+    ]
+  },
+  "indexes": [
+    {
+      "key": "postgres:shop:shop:public:index:orders:orders_external_id_idx",
+      "name": "orders_external_id_idx",
+      "columns": ["external_id"],
+      "unique": true,
+      "primary": false,
+      "predicate": "external_id IS NOT NULL",
+      "expression": "lower(external_id)"
+    }
+  ],
+  "capability_warnings": [
+    "trigger dependency metadata is not tracked by the postgres adapter."
+  ]
+}
