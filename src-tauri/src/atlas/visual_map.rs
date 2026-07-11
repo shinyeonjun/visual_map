@@ -2963,8 +2963,11 @@ fn atlas_groups(
         group.sort_members(&item_by_id, &degrees);
     }
     groups.sort_by(|a, b| {
-        b.confirmed_degree
-            .cmp(&a.confirmed_degree)
+        let a_has_product_surface = a.api_count > 0 || a.db_count > 0;
+        let b_has_product_surface = b.api_count > 0 || b.db_count > 0;
+        b_has_product_surface
+            .cmp(&a_has_product_surface)
+            .then_with(|| b.confirmed_degree.cmp(&a.confirmed_degree))
             .then_with(|| b.api_count.cmp(&a.api_count))
             .then_with(|| b.db_count.cmp(&a.db_count))
             .then_with(|| b.member_ids.len().cmp(&a.member_ids.len()))

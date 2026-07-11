@@ -157,25 +157,31 @@ export function useVisualMap({ currentWorkspaceId }: { currentWorkspaceId: strin
     }
   }
 
-  async function saveInventorySnapshot(workspaceId: string, code: CodeInventory | null, db: DbInventory | null) {
+  async function saveInventorySnapshot(
+    workspaceId: string,
+    code: CodeInventory | null,
+    db: DbInventory | null,
+  ): Promise<boolean> {
     if (!code && !db) {
-      return;
+      return false;
     }
 
     try {
       const snapshot = await invoke<InventorySnapshot>("save_inventory_snapshot", { workspaceId, code, db });
       if (currentWorkspaceIdRef.current !== workspaceId) {
-        return;
+        return false;
       }
       setSnapshotSavedAt(snapshot.savedAt);
       await loadVisualMap(null, mapMode, workspaceId);
+      return true;
     } catch (error) {
       if (currentWorkspaceIdRef.current !== workspaceId) {
-        return;
+        return false;
       }
       const uiError = toUserError(error, "코드/DB 읽기 결과를 저장하지 못했습니다");
       setVisualMapError(uiError.message);
       setVisualMapErrorDetail(uiError.details);
+      return false;
     }
   }
 

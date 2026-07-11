@@ -18,7 +18,7 @@ src-tauri/engines/*.exe
 # Local caches and generated QA captures
 .cache/
 coverage/
-.codex/ui-captures/
+.codex/
 
 # Environment and signing secrets
 .env

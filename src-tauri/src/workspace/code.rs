@@ -652,6 +652,16 @@ pub(crate) fn attach_code_handles(handles_json: &serde_json::Value, inventory: &
         &mut inventory.handlers,
         &handler_ids,
     );
+    let handled_routes = handles
+        .iter()
+        .map(|handle| handle.route.as_str())
+        .collect::<HashSet<_>>();
+    inventory.routes.sort_by(|left, right| {
+        (!handled_routes.contains(left.id.as_str()), left.id.as_str()).cmp(&(
+            !handled_routes.contains(right.id.as_str()),
+            right.id.as_str(),
+        ))
+    });
     inventory.handlers.sort_by(|a, b| a.id.cmp(&b.id));
     inventory.handles = handles;
     inventory.summary = code_inventory_summary(inventory);

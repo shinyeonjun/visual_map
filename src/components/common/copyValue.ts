@@ -1,7 +1,13 @@
 export async function copyValue(value: string): Promise<boolean> {
   try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
+    const isTauri = "__TAURI_INTERNALS__" in window;
+    if (!isTauri && navigator.clipboard?.writeText) {
+      await Promise.race([
+        navigator.clipboard.writeText(value),
+        new Promise<never>((_, reject) =>
+          window.setTimeout(() => reject(new Error("Clipboard API timed out")), 750),
+        ),
+      ]);
       return true;
     }
   } catch {

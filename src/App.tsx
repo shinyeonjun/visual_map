@@ -62,12 +62,21 @@ function App() {
   const workspaces = useWorkspaces({ withBusy });
   const { engineRegistry, engineError } = useEngineRegistry();
   const visual = useVisualMap({ currentWorkspaceId: workspaces.currentWorkspace?.id ?? null });
+  async function saveInventorySnapshot(
+    workspaceId: string,
+    codeInventory: CodeInventory | null,
+    dbInventory: DbInventory | null,
+  ) {
+    if (await visual.saveInventorySnapshot(workspaceId, codeInventory, dbInventory)) {
+      setSnapshotRecoveryNotice(null);
+    }
+  }
   const code = useCodeInventory({
     currentWorkspace: workspaces.currentWorkspace,
     withBusy,
     setCurrentWorkspace: workspaces.setCurrentWorkspace,
     refreshWorkspaces: workspaces.refreshWorkspaces,
-    saveInventorySnapshot: visual.saveInventorySnapshot,
+    saveInventorySnapshot,
     getDbInventory: () => dbInventoryRef.current,
   });
   const db = useDbProfiles({
@@ -76,7 +85,7 @@ function App() {
     setCurrentWorkspace: workspaces.setCurrentWorkspace,
     refreshWorkspaces: workspaces.refreshWorkspaces,
     clearVisualMap: visual.clearVisualMap,
-    saveInventorySnapshot: visual.saveInventorySnapshot,
+    saveInventorySnapshot,
     getCodeInventory: () => codeInventoryRef.current,
   });
 

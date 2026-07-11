@@ -2325,6 +2325,62 @@ fn atlas_overview_caps_ranked_domain_cards_and_reports_hidden_count() {
 }
 
 #[test]
+fn atlas_overview_prefers_api_or_db_domains_over_large_code_only_groups() {
+    let snapshot = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: "workspace-1".to_string(),
+        saved_at: "1".to_string(),
+        metadata: Default::default(),
+        stale_reasons: Vec::new(),
+        links: vec![super::model::SnapshotLink {
+            id: "code-call:audio-one->audio-two".to_string(),
+            from: "code:function:audio-one".to_string(),
+            to: "code:function:audio-two".to_string(),
+            kind: "code_call".to_string(),
+            label: Some("CALLS".to_string()),
+            truth_class: "confirmed".to_string(),
+            direction: "outbound".to_string(),
+            engine_edge_type: Some("CALLS".to_string()),
+            evidence: Vec::new(),
+        }],
+        items: vec![
+            item(
+                "code:function:audio-one",
+                "function",
+                "decodeAudio",
+                "code",
+                "code",
+                None,
+                Some("src/audio/decode.ts"),
+            ),
+            item(
+                "code:function:audio-two",
+                "function",
+                "encodeAudio",
+                "code",
+                "code",
+                None,
+                Some("src/audio/encode.ts"),
+            ),
+            item(
+                "code:route:orders",
+                "api",
+                "GET /orders",
+                "api",
+                "code",
+                None,
+                None,
+            ),
+        ],
+    };
+
+    let map = visual_map(&snapshot, None, "atlas".to_string());
+
+    assert_eq!(map.nodes[0].id, "group:domain:order");
+    assert_eq!(map.nodes[1].id, "group:domain:audio");
+}
+
+#[test]
 fn large_snapshot_projection_stays_bounded_and_has_no_dangling_edges() {
     let domains = [
         "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india",

@@ -1317,6 +1317,7 @@ fn code_inventory_keeps_no_route_empty_instead_of_fabricating_one() {
 fn code_inventory_normalizes_handles_from_handler_to_route_rows() {
     let routes = serde_json::json!({
         "results": [
+            { "name": "/", "qualified_name": "routes.generic", "label": "Route" },
             { "name": "POST /orders", "qualified_name": "routes.orders.create", "label": "Route" }
         ]
     });
@@ -1344,6 +1345,8 @@ fn code_inventory_normalizes_handles_from_handler_to_route_rows() {
         }]
     );
     attach_code_handles(&handles, &mut inventory);
+    assert_eq!(inventory.routes[0].id, "routes.orders.create");
+    assert_eq!(inventory.routes[1].id, "routes.generic");
     assert_eq!(inventory.handlers[0].id, "handlers.createOrder");
     assert!(inventory.functions.is_empty());
     assert_eq!(inventory.summary.handlers, 1);

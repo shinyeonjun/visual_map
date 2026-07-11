@@ -1058,7 +1058,7 @@ function ImpactReviewEntry({ item, onSelect }: { item: ImpactReviewItem; onSelec
       ) : null}
       {item.evidence.length > 0 ? (
         <small className="at-impact-evidence" title={item.evidence.map((evidence) => evidence.text).join("\n")}>
-          근거 · {item.evidence[0].text}
+          근거 · {impactEvidenceLabel(item.evidence[0])}
           {item.evidence.length > 1 ? ` · +${item.evidence.length - 1}` : ""}
         </small>
       ) : null}
@@ -1072,6 +1072,15 @@ function ImpactReviewEntry({ item, onSelect }: { item: ImpactReviewItem; onSelec
   ) : (
     <article className="at-impact-item">{content}</article>
   );
+}
+
+function impactEvidenceLabel(evidence: ImpactReviewItem["evidence"][number]): string {
+  if (evidence.kind.startsWith("db-") || evidence.kind === "engine-edge") return "DB 메타데이터";
+  if (evidence.kind === "column-name-match") return "컬럼명 일치";
+  if (evidence.kind.startsWith("code-search")) return "코드 검색";
+  if (evidence.kind === "handles") return "HANDLES 관계";
+  if (evidence.kind === "calls") return "CALLS 관계";
+  return evidence.text;
 }
 
 function reviewTruthLabel(value: string): string {

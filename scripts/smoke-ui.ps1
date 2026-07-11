@@ -239,10 +239,14 @@ $largeRepoExpression = @'
   const searchMs = Math.round(performance.now() - searchStarted);
   if (searchMs > 300) throw new Error(`Search exceeded 300ms: ${searchMs}ms`);
   let diagnosticsText = null;
-  Object.defineProperty(navigator, 'clipboard', {
-    configurable: true,
-    value: { writeText: async (value) => { diagnosticsText = value; } },
-  });
+  const originalExecCommand = document.execCommand;
+  document.execCommand = (command) => {
+    if (command === 'copy' && document.activeElement instanceof HTMLTextAreaElement) {
+      diagnosticsText = document.activeElement.value;
+      return true;
+    }
+    return originalExecCommand.call(document, command);
+  };
   const diagnostics = await waitFor('[data-diagnostics-action="copy"]');
   diagnostics.click();
   const diagnosticsStarted = Date.now();
@@ -250,6 +254,7 @@ $largeRepoExpression = @'
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   if (!diagnosticsText) throw new Error('Diagnostics export did not reach the clipboard boundary');
+  document.execCommand = originalExecCommand;
   const bundle = JSON.parse(diagnosticsText);
   const serialized = JSON.stringify(bundle);
   const forbiddenKeys = ['workspaceId', 'workspaceName', 'repoPath', 'path', 'executable', 'engineDir', 'details', 'error'];
