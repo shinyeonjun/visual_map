@@ -40,7 +40,7 @@ $matrix = @(
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $ownsRoot = [string]::IsNullOrWhiteSpace($ReuseRoot)
 $matrixRoot = if ($ownsRoot) {
-  Join-Path $tempBase ("backend-visual-map-field-matrix-" + [guid]::NewGuid().ToString("N"))
+  Join-Path $tempBase ("bvm-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 } else {
   [IO.Path]::GetFullPath($ReuseRoot)
 }
@@ -64,7 +64,12 @@ function Invoke-CodeTool([string]$Tool, [hashtable]$Payload, [string]$RunRoot) {
     Remove-Item -LiteralPath $argsPath -Force -ErrorAction SilentlyContinue
   }
   if ($exitCode -ne 0) {
-    throw "$Tool failed for $RunRoot. Sidecar output was suppressed; rerun this smoke locally for diagnostics."
+    $diagnostic = (@($output) | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+    $diagnostic = $diagnostic.Replace($matrixRoot, "<matrix-root>", [StringComparison]::OrdinalIgnoreCase)
+    $diagnostic = $diagnostic.Replace($EnginePath, "<engine>", [StringComparison]::OrdinalIgnoreCase)
+    $diagnostic = $diagnostic.Replace($env:USERPROFILE, "<user-profile>", [StringComparison]::OrdinalIgnoreCase)
+    if ($diagnostic.Length -gt 2000) { $diagnostic = $diagnostic.Substring($diagnostic.Length - 2000) }
+    throw "$Tool failed for <run-root>.`n$diagnostic"
   }
   foreach ($line in @($output)) {
     $text = [string]$line
