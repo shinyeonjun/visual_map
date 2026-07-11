@@ -83,9 +83,9 @@ try {
       if (-not $ownsRoot) {
         throw "Pinned repository is missing from -ReuseRoot: $sourceRoot"
       }
-      & git clone --filter=blob:none --no-checkout $entry.Url $sourceRoot
+      & git -c core.longpaths=true clone --filter=blob:none --no-checkout $entry.Url $sourceRoot
       if ($LASTEXITCODE -ne 0) { throw "Clone failed: $($entry.Name)" }
-      & git -C $sourceRoot checkout --detach $entry.Commit
+      & git -C $sourceRoot -c core.longpaths=true checkout --detach $entry.Commit
       if ($LASTEXITCODE -ne 0) { throw "Pinned checkout failed: $($entry.Name) $($entry.Commit)" }
     }
     $actualCommit = (& git -C $sourceRoot rev-parse HEAD).Trim()
