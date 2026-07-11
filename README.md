@@ -75,7 +75,7 @@ powershell -File scripts/release-smoke.ps1
 powershell -File scripts/build-signed-release.ps1 -CertificateThumbprint <SHA1>
 ```
 
-제품은 MIT로 배포하며 `database-memory v0.1.1` 공개 release를 고정합니다. `.github/workflows/release.yml`은 보호된 Windows 코드 서명 인증서와 네트워크 DB 연결이 제공된 깨끗한 runner에서 설치, 실행, 제거와 Authenticode 서명까지 확인합니다.
+제품은 MIT로 배포하며 `database-memory v0.1.1` 공개 release를 고정합니다. `.github/workflows/release.yml`은 PostgreSQL 16/MySQL 8.4 서비스로 DB 계약을 검증하고, 보호된 Windows 코드 서명 인증서가 제공되면 깨끗한 runner에서 설치, 실행, 제거와 Authenticode 서명까지 확인합니다.
 
 ## 개인정보와 데이터 접근
 

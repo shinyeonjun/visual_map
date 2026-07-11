@@ -2,6 +2,11 @@ name: Signed Windows Release Candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      validate_only:
+        description: Run every pre-signing release gate without producing an installer
+        type: boolean
+        default: true
   push:
     tags: ["v*"]
 
@@ -13,7 +18,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  database-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: backend_map_smoke
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: backend_map_smoke
+          MYSQL_ROOT_PASSWORD: mysql
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out product source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Check out pinned database engine source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: shinyeonjun/rdb-memory-mcp
+          ref: acedac7bcc92f6f2c25b5890f121b64da2a90779
+          path: database-engine
+
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: rustup toolchain install 1.96.1 --profile minimal
+
+      - name: Build pinned database CLI
+        run: cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path database-engine/Cargo.toml
+
+      - name: Required PostgreSQL and MySQL matrix
+        shell: pwsh
+        env:
+          BACKEND_MAP_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/backend_map_smoke
+          BACKEND_MAP_TEST_MYSQL_URL: mysql://root:mysql@127.0.0.1:3306/backend_map_smoke
+        run: ./scripts/smoke-rdb-productization.ps1 -DatabaseMemory ./database-engine/target/release/database-memory -RequireReleaseMatrix
+
   windows:
+    needs: database-matrix
     runs-on: windows-latest
     timeout-minutes: 60
     environment: release
@@ -42,16 +101,12 @@ jobs:
         shell: pwsh
         run: .\scripts\smoke-code-field-matrix.ps1
 
-      - name: Required database field matrix
+      - name: Exact Windows database engine contract
         shell: pwsh
-        env:
-          BACKEND_MAP_TEST_POSTGRES_URL: ${{ secrets.BACKEND_MAP_TEST_POSTGRES_URL }}
-          BACKEND_MAP_TEST_MYSQL_URL: ${{ secrets.BACKEND_MAP_TEST_MYSQL_URL }}
-          BACKEND_MAP_TEST_SQLSERVER_URL: ${{ secrets.BACKEND_MAP_TEST_SQLSERVER_URL }}
-          BACKEND_MAP_TEST_ORACLE_URL: ${{ secrets.BACKEND_MAP_TEST_ORACLE_URL }}
-        run: .\scripts\smoke-rdb-productization.ps1 -DatabaseMemory .\src-tauri\engines\database-memory.exe -RequireReleaseMatrix
+        run: .\scripts\smoke-rdb-productization.ps1 -DatabaseMemory .\src-tauri\engines\database-memory.exe
 
       - name: Import Windows signing certificate
+        if: github.event_name != 'workflow_dispatch' || inputs.validate_only == false
         id: certificate
         shell: pwsh
         env:
@@ -67,14 +122,17 @@ jobs:
           Remove-Item -LiteralPath $path -Force
 
       - name: Build signed installer
+        if: github.event_name != 'workflow_dispatch' || inputs.validate_only == false
         shell: pwsh
         run: .\scripts\build-signed-release.ps1 -CertificateThumbprint '${{ steps.certificate.outputs.thumbprint }}'
 
       - name: Clean-profile install and uninstall smoke
+        if: github.event_name != 'workflow_dispatch' || inputs.validate_only == false
         shell: pwsh
         run: .\scripts\release-smoke.ps1 -RequireSignature -ExerciseInstall -AcknowledgeSystemChanges
 
       - name: Upload signed release evidence
+        if: github.event_name != 'workflow_dispatch' || inputs.validate_only == false
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: backend-visual-map-windows-signed

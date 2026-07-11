@@ -12,6 +12,7 @@ Date: 2026-07-11
 - Installed that NSIS package into an isolated temporary directory, verified both bundled engines, started the installed application for five seconds, silently uninstalled it and confirmed zero remaining registry entries, temp directories and processes.
 - Added a pinned real-repository matrix covering Java/Spring, C#/.NET and a Python/FastAPI + TypeScript monorepo.
 - Added a release-only RDB matrix gate requiring PostgreSQL and at least one of MySQL, SQL Server or Oracle in addition to the SQLite DDL contract smoke.
+- Moved the required PostgreSQL 16/MySQL 8.4 matrix to isolated GitHub service containers built from the pinned DB engine source commit, removing network DB secrets from the release prerequisites. The exact published Windows EXE still runs the metadata-only contract and SQLite DDL evidence smoke before signing.
 - Ran that required matrix against isolated PostgreSQL 16 and MySQL 8.4 containers; SQLite DDL, PostgreSQL and MySQL metadata indexing all passed, then the containers, images and Docker Desktop service were removed.
 
 ## Evidence
