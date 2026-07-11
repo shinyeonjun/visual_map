@@ -1,6 +1,6 @@
 # Backend Visual Map Production Completion Plan
 
-Status: Release candidate complete except for trusted Windows code signing
+Status: Complete for MIT source distribution and local installer validation
 Scale: Large
 Date: 2026-07-10
 
@@ -70,7 +70,7 @@ Backend Visual Map을 Windows에서 설치해 처음 보는 대규모 backend re
 - clean Windows 환경에서 PATH 없이 설치·실행·인덱싱·재시작·제거가 가능하다.
 - pinned engine checksum이 다르면 build와 runtime 모두 명확히 실패한다.
 - secret persistence, row-data access, arbitrary command execution 검사가 통과한다.
-- third-party notices, SBOM, product license, Windows code signing이 public release gate를 통과한다.
+- third-party notices, dependency inventory와 product license가 public source release gate를 통과한다.
 - 이전 engine manifest와 app installer로 rollback하는 절차가 문서화되고 smoke된다.
 
 ## Non-Goals
@@ -478,7 +478,7 @@ Rollback:
 
 - Diagnostics export and editor launch remain separately disableable; core local analysis continues.
 
-### Phase 11: Signed Release Candidate And Field Validation
+### Phase 11: Release Readiness And Field Validation
 
 Goal:
 
@@ -488,8 +488,7 @@ Deliverables:
 
 - GitHub Actions Windows release workflow using verified engine assets.
 - Complete product license and third-party notices for both engines and application dependencies.
-- Windows code signing and timestamping for app, installer and bundled sidecars where required.
-- Keep the initial public release on explicit installer downloads; automatic updater remains deferred until at least two signed releases and rollback have been proven.
+- Publish source only; do not distribute an official Windows installer or enable an automatic updater.
 - Test matrix:
   - TypeScript/Node API repository;
   - Java/Spring or C#/.NET repository;
@@ -515,7 +514,7 @@ powershell -File scripts/release-smoke.ps1
 
 Rollback:
 
-- Keep the previous signed installer and engine manifest available; updater rollback procedure is tested before enabling automatic rollout.
+- Keep the previous engine manifest available so local builders can roll back pinned artifacts.
 
 ## Test Plan
 
@@ -562,7 +561,7 @@ powershell -File scripts/release-smoke.ps1
 - DB adapter capability는 source마다 다르다. UI는 source별 누락을 확정 부재로 오해하면 안 된다.
 - `db_mcp`의 기존 PostgreSQL 수정은 사용자 작업이므로 별도 검토 없이 덮어쓰지 않는다.
 - `visual_map` remote 연결과 첫 push는 외부 변경이므로 소유자 승인 후 실행한다.
-- 공개 source 여부, 제품 license, signing provider는 Phase 11 전 owner decision gate다.
+- 공개 source와 MIT license는 확정됐고 공식 Windows installer 배포는 non-goal이다.
 - Windows-first 범위를 유지한다. 다른 OS는 Windows release가 안정화된 후 별도 계획으로 다룬다.
 
 ## Ready-To-Send Implementer Prompts

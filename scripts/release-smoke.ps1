@@ -2,7 +2,6 @@
 param(
   [string]$InstallerPath,
   [switch]$Internal,
-  [switch]$RequireSignature,
   [switch]$ExerciseInstall,
   [switch]$AcknowledgeSystemChanges
 )
@@ -10,17 +9,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-
-function Get-SignToolPath {
-  $command = Get-Command signtool.exe -ErrorAction SilentlyContinue
-  if ($command) { return $command.Source }
-  $kits = "C:\Program Files (x86)\Windows Kits\10\bin"
-  if (-not (Test-Path -LiteralPath $kits -PathType Container)) { return $null }
-  return Get-ChildItem -LiteralPath $kits -Filter signtool.exe -File -Recurse -ErrorAction SilentlyContinue |
-    Where-Object { $_.Directory.Name -eq "x64" } |
-    Sort-Object FullName -Descending |
-    Select-Object -First 1 -ExpandProperty FullName
-}
 
 function Get-Sha256([string]$Path) {
   $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
@@ -31,18 +19,6 @@ function Get-Sha256([string]$Path) {
     $algorithm.Dispose()
     $stream.Dispose()
   }
-}
-
-function Test-AuthenticodeSignature([string]$Path, [switch]$Required) {
-  $signTool = Get-SignToolPath
-  if (-not $signTool) {
-    if ($Required) { throw "signtool.exe is required to verify Authenticode signatures." }
-    return "Unknown (signtool unavailable)"
-  }
-  & $signTool verify /pa /q $Path *> $null
-  if ($LASTEXITCODE -eq 0) { return "Valid" }
-  if ($Required) { throw "Authenticode verification failed: $Path" }
-  return "NotSignedOrInvalid"
 }
 
 if ($ExerciseInstall -and -not $AcknowledgeSystemChanges) {
@@ -92,7 +68,6 @@ $installer = Get-Item -LiteralPath $InstallerPath
 if ($installer.Length -lt 1MB) {
   throw "Installer is unexpectedly small: $($installer.Length) bytes."
 }
-$signatureStatus = Test-AuthenticodeSignature -Path $InstallerPath -Required:$RequireSignature
 $hash = Get-Sha256 $InstallerPath
 
 if ($ExerciseInstall) {
@@ -115,8 +90,6 @@ if ($ExerciseInstall) {
         throw "Installed resource is missing: $engine"
       }
     }
-    [void](Test-AuthenticodeSignature -Path $app.FullName -Required:$RequireSignature)
-
     $process = Start-Process -FilePath $app.FullName -PassThru -WindowStyle Hidden
     Start-Sleep -Seconds 5
     if ($process.HasExited -and $process.ExitCode -ne 0) {
@@ -146,4 +119,4 @@ if ($ExerciseInstall) {
 Write-Output "PASS: installer smoke completed."
 Write-Output "Installer: $InstallerPath"
 Write-Output "SHA256: $hash"
-Write-Output "Signature: $signatureStatus"
+Write-Output "Distribution: local validation only"

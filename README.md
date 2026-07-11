@@ -60,9 +60,9 @@ npm run build:internal
 npm run tauri build
 ```
 
-내부 설치본은 실행 중 `internal` 엔진 모드를 표시합니다. 공개 배포에는 signed release workflow를 사용합니다.
+내부 설치본은 실행 중 `internal` 엔진 모드를 표시합니다. 이 저장소는 소스 공개와 로컬 빌드만 제공하며 Windows 설치 파일을 공식 배포하지 않습니다.
 
-### 릴리스 후보 검증
+### 제품 검증
 
 ```powershell
 # 실제 Java, C#/.NET, Python/FastAPI + TypeScript monorepo를 고정 commit으로 검증
@@ -71,11 +71,9 @@ npm run smoke:code-matrix
 # 현재 release-candidate installer의 형식, 엔진, notices, checksum 검증
 powershell -File scripts/release-smoke.ps1
 
-# 인증서가 준비된 공개 릴리스 후보 생성
-powershell -File scripts/build-signed-release.ps1 -CertificateThumbprint <SHA1>
 ```
 
-제품은 MIT로 배포하며 `database-memory v0.1.1` 공개 release를 고정합니다. `.github/workflows/release.yml`은 PostgreSQL 16/MySQL 8.4 서비스로 DB 계약을 검증하고, 보호된 Windows 코드 서명 인증서가 제공되면 깨끗한 runner에서 설치, 실행, 제거와 Authenticode 서명까지 확인합니다.
+제품 소스는 MIT로 공개하며 `database-memory v0.1.1` 공개 release를 고정합니다. `.github/workflows/release.yml`은 PostgreSQL 16/MySQL 8.4, 다국어 코드 필드와 공개 Windows 엔진 계약을 검증합니다.
 
 ## 개인정보와 데이터 접근
 
@@ -92,7 +90,7 @@ powershell -File scripts/build-signed-release.ps1 -CertificateThumbprint <SHA1>
 - raw full graph를 그대로 렌더링하지 않습니다. 큰 프로젝트는 grouped/focused map으로 축약합니다.
 - 외부 DB smoke는 로컬 환경에 해당 DB와 드라이버/연결 문자열이 있을 때만 통과할 수 있습니다.
 - SQLite DDL 파서는 DB별 확장 문법 일부를 건너뛰거나 실패할 수 있습니다.
-- 공개 설치본은 신뢰할 수 있는 Windows Authenticode 인증서로 서명한 뒤 배포해야 합니다.
+- 공식 Windows 설치 파일 배포는 현재 제품 범위가 아닙니다.
 - 현재 제품 목표는 Windows desktop입니다.
 
 ## 문서
