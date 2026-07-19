@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { toUserError } from "../app/operationStatus";
 import { hasTauriRuntime, tauriUnavailableMessage } from "../app/tauriRuntime";
 import {
@@ -43,13 +43,14 @@ export function useDbProfiles({
   const [dbError, setDbError] = useState<string | null>(null);
   const [dbErrorDetail, setDbErrorDetail] = useState<string | null>(null);
   const [dbInventory, setDbInventory] = useState<DbInventory | null>(null);
+  const [inventoryWorkspaceId, setInventoryWorkspaceId] = useState<string | null>(null);
   const [selectedDbTableKey, setSelectedDbTableKey] = useState<string | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     hydrateDbProfile(activeProfile);
   }, [currentWorkspace?.id, activeProfile?.id]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setDbStatus(null);
     setDbError(null);
     setDbErrorDetail(null);
@@ -230,6 +231,34 @@ export function useDbProfiles({
     });
   }
 
+  async function deleteDbProfile() {
+    if (!currentWorkspace || !activeProfile || !hasTauriRuntime()) {
+      return;
+    }
+    const deletedName = activeProfile.name;
+    await withBusy("db-delete", async () => {
+      try {
+        const updated = await invoke<Workspace>("delete_db_profile", {
+          workspaceId: currentWorkspace.id,
+          profileId: activeProfile.id,
+        });
+        setCurrentWorkspace(updated);
+        clearDbInventory();
+        clearVisualMap();
+        setDbConnectionString("");
+        setDbStatus(`DB 연결 삭제됨: ${deletedName}`);
+        setDbError(null);
+        setDbErrorDetail(null);
+        await refreshWorkspaces(updated.id);
+      } catch (error) {
+        const uiError = toUserError(error, "DB 연결을 삭제하지 못했습니다");
+        setDbStatus(null);
+        setDbError(uiError.message);
+        setDbErrorDetail(uiError.details);
+      }
+    });
+  }
+
   function hydrateDbProfile(profile: DbProfile | null) {
     if (!profile) {
       setDbProfileName("");
@@ -268,11 +297,13 @@ export function useDbProfiles({
 
   function clearDbInventory() {
     setDbInventory(null);
+    setInventoryWorkspaceId(null);
     setSelectedDbTableKey(null);
   }
 
   function restoreDbInventory(inventory: DbInventory, selectedTableKey: string | null) {
     setDbInventory(inventory);
+    setInventoryWorkspaceId(currentWorkspace?.id ?? null);
     setSelectedDbTableKey(selectedTableKey);
     setDbStatus(dbInventoryStatus(inventory, "불러옴"));
     setDbError(null);
@@ -285,11 +316,12 @@ export function useDbProfiles({
       profileId,
     });
     setDbInventory(inventory);
+    setInventoryWorkspaceId(workspaceId);
     setSelectedDbTableKey(inventory.tables[0] ? dbInventoryTableKey(inventory.tables[0]) : null);
     setDbStatus(dbInventoryStatus(inventory, action));
     setDbError(null);
     setDbErrorDetail(null);
-    void saveInventorySnapshot(workspaceId, getCodeInventory(), inventory);
+    await saveInventorySnapshot(workspaceId, getCodeInventory(), inventory);
   }
 
   return {
@@ -301,8 +333,8 @@ export function useDbProfiles({
     dbStatus,
     dbError,
     dbErrorDetail,
-    dbInventory,
-    selectedDbTableKey,
+    dbInventory: inventoryWorkspaceId === currentWorkspace?.id ? dbInventory : null,
+    selectedDbTableKey: inventoryWorkspaceId === currentWorkspace?.id ? selectedDbTableKey : null,
     setDbProfileName,
     setDbProfileSource,
     setDbProfilePath: updateDbProfilePath,
@@ -314,6 +346,7 @@ export function useDbProfiles({
     testDbConnection,
     indexDbProfile,
     loadDbInventory,
+    deleteDbProfile,
     clearDbInventory,
   };
 }
@@ -369,12 +402,11 @@ function activeProfileMatchesForm(
 function dbIndexSummary(indexJson: unknown): string | null {
   const tables = countFromJson(indexJson, ["tableCount", "tablesCount", "tables"]);
   const columns = countFromJson(indexJson, ["columnCount", "columnsCount", "columns"]);
-
-  if (tables == null && columns == null) {
-    return null;
-  }
-
-  return `테이블 ${tables ?? 0}개, 컬럼 ${columns ?? 0}개`;
+  const facts = [
+    tables == null ? null : `테이블 ${tables}개`,
+    columns == null ? null : `컬럼 ${columns}개`,
+  ].filter((fact): fact is string => fact !== null);
+  return facts.length > 0 ? facts.join(", ") : null;
 }
 
 function countFromJson(value: unknown, keys: string[]): number | null {

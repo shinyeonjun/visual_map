@@ -1,4 +1,4 @@
-import { CheckCircle2, ChevronRight, Database, Filter, Folder, Plus, RefreshCw, Search, Table2, Type } from "lucide-react";
+import { CheckCircle2, ChevronRight, Database, Filter, Folder, Plus, RefreshCw, Search, Table2, Trash2, Type } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   DB_PROFILE_SOURCE_OPTIONS,
@@ -6,10 +6,12 @@ import {
   dbProfileSourceLabel,
   dbProfileSourceUsesPath,
 } from "../../types/workspace";
-import type { DbProfileSource } from "../../types/workspace";
+import type { DbInventoryTable, DbProfileSource } from "../../types/workspace";
 import type { DbProfileControls, VisualMapControls } from "../../types/controls";
 import { focusDbProfileSetup as focusDbProfileInput } from "../common/focusSourceSetup";
 import { PanelHeader } from "../common/PanelHeader";
+
+const DB_TABLE_LIST_LIMIT = 80;
 
 export function DatabaseSourceSection({
   dbProfileControls,
@@ -51,9 +53,11 @@ export function DatabaseSourceSection({
   const requirementCopy = isSnapshotInventory
     ? "저장된 DB 구조를 복구했습니다. 다시 읽으려면 DB 연결을 저장하세요."
     : dbRequirementCopy(sourceCopy.required, hasInventory, hasTables, hasColumns, sourceUsesPath);
-  const tables = filter
+  const matchingTables = filter
     ? allTables.filter((table) => dbInventoryTableKey(table).toLowerCase().includes(filter))
     : allTables;
+  const tables = limitedTables(matchingTables, dbProfileControls.selectedTableKey, DB_TABLE_LIST_LIMIT);
+  const hiddenTableCount = Math.max(0, matchingTables.length - tables.length);
   const focusedMapId = visualMapControls.selectedNode?.id ?? visualMapControls.currentMap?.focus ?? "";
   const nextAction = dbNextAction(dbProfileControls, hasProfile, hasInventory, hasTables, hasColumns, missingColumnTables);
   const compactReady = hasInventory && (profileMatchesForm || isSnapshotInventory);
@@ -256,7 +260,7 @@ export function DatabaseSourceSection({
                       disabled={!dbProfileControls.canTestConnection || dbProfileControls.busy}
                       title={dbProfileControls.dbIndexBlockedReason ?? undefined}
                     >
-                      {dbProfileControls.testing ? "테스트 중" : "연결 테스트"}
+                      {dbProfileControls.testing ? "테스트 중" : "구조 테스트"}
                       <Database size={13} />
                     </button>
                     <button
@@ -270,6 +274,18 @@ export function DatabaseSourceSection({
                       {dbProfileControls.indexing ? "읽는 중" : "다시 읽기"}
                     </button>
                   </div>
+                  {dbProfileControls.activeProfile && (
+                    <button
+                      className="outline-action compact danger-action source-delete-action"
+                      type="button"
+                      onClick={confirmDeleteProfile}
+                      disabled={dbProfileControls.busy}
+                      title="저장된 DB 연결과 로컬 구조 캐시 삭제"
+                    >
+                      <Trash2 size={13} />
+                      {dbProfileControls.deleting ? "삭제 중" : "DB 연결 삭제"}
+                    </button>
+                  )}
                 </details>
               ) : (
                 <>
@@ -312,6 +328,18 @@ export function DatabaseSourceSection({
                   )}
                   <span className={`secret-note ${hasInventory ? "ready-note" : ""}`}>{requirementCopy}</span>
                   {sourceSettings}
+                  {dbProfileControls.activeProfile && (
+                    <button
+                      className="outline-action compact danger-action source-delete-action"
+                      type="button"
+                      onClick={confirmDeleteProfile}
+                      disabled={dbProfileControls.busy}
+                      title="저장된 DB 연결과 로컬 구조 캐시 삭제"
+                    >
+                      <Trash2 size={13} />
+                      {dbProfileControls.deleting ? "삭제 중" : "DB 연결 삭제"}
+                    </button>
+                  )}
                 </>
               )}
             </>
@@ -325,7 +353,7 @@ export function DatabaseSourceSection({
                 disabled={!dbProfileControls.canTestConnection || dbProfileControls.busy}
                 title={dbProfileControls.dbIndexBlockedReason ?? undefined}
               >
-                {dbProfileControls.testing ? "테스트 중" : "연결 테스트"}
+                {dbProfileControls.testing ? "테스트 중" : "구조 테스트"}
                 <Database size={13} />
               </button>
               <button
@@ -395,7 +423,8 @@ export function DatabaseSourceSection({
                         type="button"
                         aria-expanded={active}
                         aria-label={needsColumns ? `${table.name} 컬럼 대기` : undefined}
-                        onClick={() => selectTableFocus(tableKey)}
+                        title={`${tableKey} · ${needsColumns ? "컬럼 대기" : `${table.columns.length}개 컬럼`}`}
+                        onClick={() => dbProfileControls.openTable(tableKey)}
                       >
                         <ChevronRight size={13} />
                         <Table2 size={14} />
@@ -421,7 +450,7 @@ export function DatabaseSourceSection({
                             type="button"
                             key={`${tableKey}:${column.name}`}
                             aria-label={`${table.name}.${column.name} 컬럼 선택`}
-                            onClick={() => selectColumnFocus(tableKey, column.name)}
+                            onClick={() => dbProfileControls.openColumn(tableKey, column.name)}
                           >
                             <Type size={12} />
                             <span>{column.name}</span>
@@ -438,6 +467,11 @@ export function DatabaseSourceSection({
                     </div>
                   );
                 })}
+                {hiddenTableCount > 0 && (
+                  <span className="workspace-empty">
+                    {tables.length}개 표시 · +{hiddenTableCount}개 · 필터로 좁히세요
+                  </span>
+                )}
                 {tables.length === 0 && (
                   <span className="workspace-empty">
                     {allTables.length > 0 ? "필터와 일치하는 테이블이 없습니다" : "테이블 목록이 비어 있습니다"}
@@ -451,15 +485,30 @@ export function DatabaseSourceSection({
     </section>
   );
 
-  function selectTableFocus(tableKey: string) {
-    dbProfileControls.selectTable(tableKey);
-    visualMapControls.showMode("table-usage", `db:table:${tableKey}`);
+  function confirmDeleteProfile() {
+    const profile = dbProfileControls.activeProfile;
+    if (!profile) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `\"${profile.name}\" DB 연결을 삭제할까요?\n\n저장된 연결 정보와 로컬 구조 캐시만 삭제하며 DB 서버나 원본 파일은 변경하지 않습니다.`,
+    );
+    if (confirmed) {
+      dbProfileControls.deleteProfile();
+    }
   }
+}
 
-  function selectColumnFocus(tableKey: string, columnName: string) {
-    dbProfileControls.selectColumn(tableKey, columnName);
-    visualMapControls.showMode("column-impact", `db:column:${tableKey}:${columnName}`);
+function limitedTables(items: DbInventoryTable[], selectedKey: string | null, limit: number): DbInventoryTable[] {
+  const visible = items.slice(0, limit);
+  if (!selectedKey) {
+    return visible;
   }
+  if (visible.some((item) => dbInventoryTableKey(item) === selectedKey)) {
+    return visible;
+  }
+  const selected = items.find((item) => dbInventoryTableKey(item) === selectedKey);
+  return selected ? [selected, ...visible.slice(0, Math.max(0, limit - 1))] : visible;
 }
 
 function dbNextAction(

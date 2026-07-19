@@ -1,7 +1,8 @@
-import { Folder, GitBranch, Plus, RefreshCw } from "lucide-react";
+import { Folder, GitBranch, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { tauriUnavailableMessage } from "../../app/tauriRuntime";
 import type { WorkspaceControls } from "../../types/controls";
+import { workspaceRepoInputValue } from "../../types/workspace";
 import { PanelHeader } from "../common/PanelHeader";
 
 type WorkspaceAction = {
@@ -20,7 +21,7 @@ export function WorkspaceCard({ workspaceControls }: { workspaceControls: Worksp
   const currentWorkspaceMatchesForm = Boolean(
     workspaceControls.currentWorkspace &&
       workspaceControls.currentWorkspace.name === workspaceControls.workspaceName.trim() &&
-      workspaceControls.currentWorkspace.repoPath === workspaceControls.repoPath.trim(),
+      workspaceRepoInputValue(workspaceControls.currentWorkspace) === workspaceControls.repoPath.trim(),
   );
   const repoMessage =
     workspaceControls.repoPathError ??
@@ -134,7 +135,11 @@ export function WorkspaceCard({ workspaceControls }: { workspaceControls: Worksp
           <div className="source-next workspace-ready">
             <span>
               <b>{workspaceControls.currentWorkspace?.name}</b>
-              <small>{workspaceControls.currentWorkspace?.repoPath}</small>
+              <small>
+                {workspaceControls.currentWorkspace
+                  ? workspaceRepoInputValue(workspaceControls.currentWorkspace)
+                  : null}
+              </small>
             </span>
             {hasSavedWorkspaces && (
               <button
@@ -148,9 +153,44 @@ export function WorkspaceCard({ workspaceControls }: { workspaceControls: Worksp
               </button>
             )}
           </div>
+          {workspaceControls.currentWorkspace?.repoSource === "github" && (
+            <div className="workspace-managed-action">
+              <button
+                className="outline-action compact"
+                type="button"
+                onClick={workspaceControls.refreshGithubWorkspace}
+                disabled={workspaceControls.busy}
+              >
+                {workspaceControls.refreshing || workspaceControls.codeIndexing ? (
+                  <RefreshCw size={13} className="spin" />
+                ) : (
+                  <RefreshCw size={13} />
+                )}
+                {workspaceControls.refreshing
+                  ? "업데이트 중"
+                  : workspaceControls.codeIndexing
+                    ? "코드 다시 읽는 중"
+                    : "GitHub 업데이트"}
+              </button>
+              <small>로컬 변경이 없을 때만 최신 커밋을 받고 코드를 다시 읽습니다.</small>
+            </div>
+          )}
           <details className="source-advanced">
             <summary>다른 프로젝트 열기</summary>
             {setupFields}
+          </details>
+          <details className="source-advanced danger-zone">
+            <summary>현재 프로젝트 관리</summary>
+            <span className="secret-note">앱의 읽기 결과와 캐시만 제거합니다. 로컬 원본 폴더는 삭제하지 않습니다.</span>
+            <button
+              className="outline-action compact danger-action source-delete-action"
+              type="button"
+              onClick={confirmDeleteWorkspace}
+              disabled={workspaceControls.busy}
+            >
+              <Trash2 size={13} />
+              {workspaceControls.deleting ? "제거 중" : "현재 프로젝트 제거"}
+            </button>
           </details>
         </>
       ) : (
@@ -204,7 +244,7 @@ export function WorkspaceCard({ workspaceControls }: { workspaceControls: Worksp
               onClick={() => workspaceControls.openWorkspace(workspace.id)}
             >
               <span>{workspace.name}</span>
-              <small>{workspace.repoPath}</small>
+              <small>{workspaceRepoInputValue(workspace)}</small>
             </button>
           ))}
         </div>
@@ -247,6 +287,19 @@ export function WorkspaceCard({ workspaceControls }: { workspaceControls: Worksp
     }
     event.preventDefault();
     workspaceControls.createWorkspace();
+  }
+
+  function confirmDeleteWorkspace() {
+    const workspace = workspaceControls.currentWorkspace;
+    if (!workspace) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `\"${workspace.name}\" 프로젝트를 목록에서 제거할까요?\n\n로컬 원본 폴더는 삭제하지 않습니다. 앱이 만든 읽기 결과와 GitHub 복제본은 함께 제거됩니다.`,
+    );
+    if (confirmed) {
+      workspaceControls.deleteWorkspace(workspace.id);
+    }
   }
 }
 

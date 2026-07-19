@@ -96,3 +96,10 @@ jobs:
       - name: Exact Windows database engine contract
         shell: pwsh
         run: .\scripts\smoke-rdb-productization.ps1 -DatabaseMemory .\src-tauri\engines\database-memory.exe
+
+      - name: Build local release-mode installer
+        run: npm run tauri build
+
+      - name: Smoke local installer bundle
+        shell: pwsh
+        run: .\scripts\release-smoke.ps1 -ExerciseInstall -AcknowledgeSystemChanges

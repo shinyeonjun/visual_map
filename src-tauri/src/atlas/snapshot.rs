@@ -3,16 +3,18 @@ use crate::{
     paths::base_paths,
     workspace::{
         validate_workspace_id, CodeInventory, CodeInventoryItem, DbConstraint, DbForeignKey,
-        DbIndex, DbInventory, Workspace,
+        DbIndex, DbInventory, DbProfile, DbSource, Workspace,
     },
 };
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{btree_map::Entry, BTreeMap, BTreeSet, HashMap},
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
+    process::Command,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
@@ -28,8 +30,8 @@ use super::model::{
 const REINDEX_REASON: &str = "스냅샷 형식이 호환되지 않아 다시 읽어야 합니다";
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 static SNAPSHOT_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedSnapshot>>> = OnceLock::new();
-// Large code inventories can occupy tens of MB after deserialization. Two entries cover a
-// workspace switch without turning this process-wide cache into an unbounded memory reserve.
+// Keep at most two idle inventories. Entries held by active commands may temporarily exceed
+// the limit so concurrent workspace reads do not evict data still in use.
 const SNAPSHOT_CACHE_LIMIT: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +47,7 @@ struct CachedSnapshot {
     snapshot: Arc<InventorySnapshot>,
 }
 
-pub fn build_inventory_snapshot(
+pub(crate) fn build_inventory_snapshot(
     workspace_id: String,
     code: Option<&CodeInventory>,
     db: Option<&DbInventory>,
@@ -74,6 +76,8 @@ pub fn build_inventory_snapshot(
             result_count: None,
             total_tables: None,
             truncated: None,
+            source_revision: None,
+            source_revision_label: None,
             source_path: None,
             source_type: "unknown".to_string(),
             profile_id: None,
@@ -117,8 +121,12 @@ pub fn build_inventory_snapshot(
                 .map(|entry| code_item(entry, "module", "code", &code.project)),
         );
         snapshot.items.extend(code.unknown.iter().map(|entry| {
-            let kind = entry.engine_label.to_ascii_lowercase();
-            let kind = if kind.is_empty() { "code" } else { &kind };
+            let engine_kind = entry.engine_label.to_ascii_lowercase();
+            let kind = if entry.kind.eq_ignore_ascii_case("unknown") || engine_kind.is_empty() {
+                "code"
+            } else {
+                &engine_kind
+            };
             code_item(entry, kind, "code", &code.project)
         }));
         snapshot.items.extend(
@@ -164,6 +172,8 @@ pub fn build_inventory_snapshot(
             result_count: db.result_count,
             total_tables: db.total_tables,
             truncated: db.truncated,
+            source_revision: None,
+            source_revision_label: None,
             source_path: None,
             source_type: "unknown".to_string(),
             profile_id: Some(db.profile_id.clone()),
@@ -172,7 +182,7 @@ pub fn build_inventory_snapshot(
             snapshot.metadata.gaps.push(gap(
                 format!("gap:db-capability:{index}"),
                 "db-capability",
-                warning,
+                localized_db_capability_warning(warning),
                 Vec::new(),
             ));
         }
@@ -473,7 +483,7 @@ pub(crate) fn normalize_inventory(
     build_inventory_snapshot(workspace_id, code, db)
 }
 
-pub fn snapshot_with_metadata(
+pub(crate) fn snapshot_with_metadata(
     mut snapshot: InventorySnapshot,
     workspace: &Workspace,
     registry: &EngineRegistry,
@@ -483,6 +493,14 @@ pub fn snapshot_with_metadata(
         || snapshot.items.iter().any(|entry| entry.source == "code");
     let has_db =
         snapshot.metadata.db.is_some() || snapshot.items.iter().any(|entry| entry.source == "db");
+    let code_revision = has_code.then(|| code_source_revision(workspace)).flatten();
+    let profile = workspace.active_db_profile_id.as_deref().and_then(|id| {
+        workspace
+            .db_profiles
+            .iter()
+            .find(|profile| profile.id == id)
+    });
+    let db_revision = profile.and_then(db_source_revision);
     snapshot.saved_at = saved_at.clone();
     snapshot.metadata.code = has_code.then(|| SnapshotSourceMetadata {
         saved_at: saved_at.clone(),
@@ -497,6 +515,8 @@ pub fn snapshot_with_metadata(
         result_count: None,
         total_tables: None,
         truncated: None,
+        source_revision: code_revision.as_ref().map(|(revision, _)| revision.clone()),
+        source_revision_label: code_revision.map(|(_, label)| label),
         source_path: Some(workspace.repo_path.clone()),
         source_type: code_source_type(workspace),
         profile_id: None,
@@ -508,51 +528,47 @@ pub fn snapshot_with_metadata(
     let db_snapshot_key = previous_db_metadata
         .as_ref()
         .and_then(|metadata| metadata.snapshot_key.clone());
-    snapshot.metadata.db = has_db.then(|| {
-        let profile = workspace.active_db_profile_id.as_deref().and_then(|id| {
-            workspace
-                .db_profiles
-                .iter()
-                .find(|profile| profile.id == id)
-        });
-        SnapshotSourceMetadata {
-            saved_at: saved_at.clone(),
-            engine_id: Some("database-memory".to_string()),
-            engine_version: engine_version(registry, "database-memory"),
-            engine_checksum: engine_checksum(registry, "database-memory"),
-            contract_version: db_contract_version
-                .or_else(|| engine_contract_version(registry, "database-memory")),
-            snapshot_key: db_snapshot_key,
-            limit_requested: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.limit_requested),
-            limit_applied: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.limit_applied),
-            limit_clamped: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.limit_clamped),
-            result_count: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.result_count),
-            total_tables: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.total_tables),
-            truncated: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.truncated),
-            source_path: profile.and_then(|profile| profile.path.clone()),
-            source_type: profile
-                .map(|profile| db_source_key(&profile.source))
-                .unwrap_or_else(|| "unknown".to_string()),
-            profile_id: profile.map(|profile| profile.id.clone()),
-        }
+    snapshot.metadata.db = has_db.then(|| SnapshotSourceMetadata {
+        saved_at: saved_at.clone(),
+        engine_id: Some("database-memory".to_string()),
+        engine_version: engine_version(registry, "database-memory"),
+        engine_checksum: engine_checksum(registry, "database-memory"),
+        contract_version: db_contract_version
+            .or_else(|| engine_contract_version(registry, "database-memory")),
+        snapshot_key: db_snapshot_key,
+        limit_requested: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.limit_requested),
+        limit_applied: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.limit_applied),
+        limit_clamped: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.limit_clamped),
+        result_count: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.result_count),
+        total_tables: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.total_tables),
+        truncated: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.truncated),
+        source_revision: db_revision.as_ref().map(|(revision, _)| revision.clone()),
+        source_revision_label: db_revision
+            .map(|(_, label)| label)
+            .or_else(|| profile.map(|_| "외부 DB · 마지막 읽기 기준".to_string())),
+        source_path: profile.and_then(|profile| profile.path.clone()),
+        source_type: profile
+            .map(|profile| db_source_key(&profile.source))
+            .unwrap_or_else(|| "unknown".to_string()),
+        profile_id: profile.map(|profile| profile.id.clone()),
     });
     snapshot.stale_reasons.clear();
     canonicalize_snapshot(snapshot)
 }
 
-pub fn mark_snapshot_staleness(
+pub(crate) fn mark_snapshot_staleness(
     mut snapshot: InventorySnapshot,
     workspace: &Workspace,
     registry: &EngineRegistry,
@@ -561,7 +577,7 @@ pub fn mark_snapshot_staleness(
     snapshot
 }
 
-pub fn snapshot_staleness_reasons(
+pub(crate) fn snapshot_staleness_reasons(
     snapshot: &InventorySnapshot,
     workspace: &Workspace,
     registry: &EngineRegistry,
@@ -575,8 +591,20 @@ pub fn snapshot_staleness_reasons(
     if has_code {
         match &snapshot.metadata.code {
             Some(code) => {
-                if code.source_path.as_deref() != Some(workspace.repo_path.as_str()) {
+                let same_path = code.source_path.as_deref() == Some(workspace.repo_path.as_str());
+                if !same_path {
                     push_unique(&mut reasons, "코드 프로젝트 경로가 바뀌었습니다");
+                } else {
+                    let current_revision = code_source_revision(workspace);
+                    mark_source_revision_staleness(
+                        code.source_revision.as_deref(),
+                        current_revision.as_ref(),
+                        Path::new(&workspace.repo_path).is_dir(),
+                        "코드 소스 지문이 없어 다시 읽어야 합니다",
+                        "코드 파일이 마지막 읽기 이후 바뀌었습니다",
+                        "코드 변경 상태를 확인할 수 없습니다",
+                        &mut reasons,
+                    );
                 }
                 mark_engine_staleness(code, registry, "codebase-memory", "코드", &mut reasons);
             }
@@ -603,6 +631,21 @@ pub fn snapshot_staleness_reasons(
                         }
                         if db.source_path.as_deref() != profile.path.as_deref() {
                             push_unique(&mut reasons, "DB 연결 경로가 바뀌었습니다");
+                        } else if profile.path.is_some() {
+                            let current_revision = db_source_revision(profile);
+                            let source_exists = profile
+                                .path
+                                .as_deref()
+                                .is_some_and(|path| Path::new(path).exists());
+                            mark_source_revision_staleness(
+                                db.source_revision.as_deref(),
+                                current_revision.as_ref(),
+                                source_exists,
+                                "DB 소스 지문이 없어 다시 읽어야 합니다",
+                                "DB 파일이 마지막 읽기 이후 바뀌었습니다",
+                                "DB 파일 변경 상태를 확인할 수 없습니다",
+                                &mut reasons,
+                            );
                         }
                     }
                     None => push_unique(&mut reasons, "DB 연결을 찾을 수 없습니다"),
@@ -619,7 +662,7 @@ pub fn snapshot_staleness_reasons(
     reasons
 }
 
-pub fn save_inventory_snapshot(
+pub(crate) fn save_inventory_snapshot(
     app_data_dir: impl AsRef<Path>,
     snapshot: &InventorySnapshot,
 ) -> Result<(), String> {
@@ -640,14 +683,77 @@ pub fn save_inventory_snapshot(
     Ok(())
 }
 
-pub fn load_inventory_snapshot(
+pub(crate) fn load_inventory_snapshot(
     app_data_dir: impl AsRef<Path>,
     workspace_id: &str,
 ) -> Result<InventorySnapshot, String> {
     Ok((*load_inventory_snapshot_cached(app_data_dir, workspace_id)?).clone())
 }
 
-pub fn load_inventory_snapshot_cached(
+pub(crate) fn load_inventory_snapshot_optional(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+) -> Result<Option<InventorySnapshot>, String> {
+    validate_workspace_id(workspace_id)?;
+    let path = snapshot_path(app_data_dir.as_ref(), workspace_id);
+    if !path.is_file() && !snapshot_backup_path(&path).is_file() {
+        return Ok(None);
+    }
+    load_inventory_snapshot(app_data_dir, workspace_id).map(Some)
+}
+
+pub(crate) fn remove_db_inventory_snapshot(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+) -> Result<(), String> {
+    let app_data_dir = app_data_dir.as_ref();
+    let Some(mut snapshot) = load_inventory_snapshot_optional(app_data_dir, workspace_id)? else {
+        return Ok(());
+    };
+
+    snapshot.items.retain(|item| item.source != "db");
+    let retained_ids = snapshot
+        .items
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+    snapshot.links.retain(|link| {
+        retained_ids.contains(link.from.as_str()) && retained_ids.contains(link.to.as_str())
+    });
+    snapshot.metadata.db = None;
+    snapshot.metadata.gaps.retain(|gap| {
+        !gap.id.starts_with("gap:db")
+            && !gap.kind.starts_with("db-")
+            && gap
+                .related_ids
+                .iter()
+                .all(|id| retained_ids.contains(id.as_str()))
+    });
+    snapshot.stale_reasons.clear();
+
+    let path = snapshot_path(app_data_dir, workspace_id);
+    if snapshot.items.is_empty() {
+        remove_file_if_exists(&path)?;
+        remove_file_if_exists(&snapshot_backup_path(&path))?;
+        invalidate_cached_snapshot(&path);
+        return Ok(());
+    }
+
+    save_inventory_snapshot(app_data_dir, &snapshot)?;
+    fs::copy(&path, snapshot_backup_path(&path))
+        .map_err(|error| format!("DB 구조 백업을 정리하지 못했습니다: {error}"))?;
+    Ok(())
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+pub(crate) fn load_inventory_snapshot_cached(
     app_data_dir: impl AsRef<Path>,
     workspace_id: &str,
 ) -> Result<Arc<InventorySnapshot>, String> {
@@ -668,10 +774,13 @@ pub fn load_inventory_snapshot_cached(
 
     let snapshot = Arc::new(load_inventory_snapshot_uncached(&path, workspace_id)?);
     if let Ok(mut cache) = cache.lock() {
-        if cache.len() >= SNAPSHOT_CACHE_LIMIT && !cache.contains_key(&path) {
-            if let Some(evicted) = cache.keys().next().cloned() {
-                cache.remove(&evicted);
-            }
+        while cache.len() >= SNAPSHOT_CACHE_LIMIT && !cache.contains_key(&path) {
+            let Some(evicted) = cache.iter().find_map(|(cached_path, entry)| {
+                (Arc::strong_count(&entry.snapshot) == 1).then(|| cached_path.clone())
+            }) else {
+                break;
+            };
+            cache.remove(&evicted);
         }
         cache.insert(
             path,
@@ -1605,6 +1714,268 @@ fn mark_engine_staleness(
     }
 }
 
+fn mark_source_revision_staleness(
+    saved: Option<&str>,
+    current: Option<&(String, String)>,
+    source_exists: bool,
+    missing_reason: &str,
+    changed_reason: &str,
+    unavailable_reason: &str,
+    reasons: &mut Vec<String>,
+) {
+    match (saved, current) {
+        (Some(saved), Some((current, _))) if saved != current => {
+            push_unique(reasons, changed_reason)
+        }
+        (Some(_), None) => push_unique(reasons, unavailable_reason),
+        (None, Some(_)) => push_unique(reasons, missing_reason),
+        (None, None) if source_exists => push_unique(reasons, missing_reason),
+        (None, None) => push_unique(reasons, unavailable_reason),
+        _ => {}
+    }
+}
+
+fn code_source_revision(workspace: &Workspace) -> Option<(String, String)> {
+    let root = Path::new(&workspace.repo_path);
+    git_source_revision(root).or_else(|| folder_source_revision(root))
+}
+
+fn git_source_revision(root: &Path) -> Option<(String, String)> {
+    let head = git_output(root, &["rev-parse", "HEAD"])?;
+    let head = String::from_utf8(head).ok()?.trim().to_string();
+    if head.len() < 7 {
+        return None;
+    }
+    let status = git_output(
+        root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    let paths = git_changed_paths(&status)?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"git\0");
+    hasher.update(head.as_bytes());
+    hasher.update(b"\0status\0");
+    hasher.update(&status);
+    for relative in &paths {
+        hasher.update(b"\0path\0");
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hash_path_state(&mut hasher, &root.join(relative))?;
+    }
+    let revision = format!("{:X}", hasher.finalize());
+    let state = if paths.is_empty() {
+        "clean".to_string()
+    } else {
+        format!("변경 {}개", paths.len())
+    };
+    Some((revision, format!("git {} · {state}", &head[..7])))
+}
+
+fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .ok()?;
+    output.status.success().then_some(output.stdout)
+}
+
+fn git_changed_paths(status: &[u8]) -> Option<BTreeSet<PathBuf>> {
+    let records = status
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .collect::<Vec<_>>();
+    let mut paths = BTreeSet::new();
+    let mut index = 0;
+    while index < records.len() {
+        let record = records[index];
+        if record.len() < 4 || record[2] != b' ' {
+            return None;
+        }
+        let relative = PathBuf::from(String::from_utf8_lossy(&record[3..]).into_owned());
+        if relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return None;
+        }
+        paths.insert(relative);
+        if matches!(record[0], b'R' | b'C') || matches!(record[1], b'R' | b'C') {
+            index += 1;
+        }
+        index += 1;
+    }
+    Some(paths)
+}
+
+fn folder_source_revision(root: &Path) -> Option<(String, String)> {
+    let root = fs::canonicalize(root).ok()?;
+    let mut files = Vec::new();
+    // ponytail: non-Git folders are scanned in full; add a persisted manifest cache only if
+    // measured startup time becomes material on very large source trees.
+    collect_source_files(&root, &mut files)?;
+    files.sort();
+    let mut hasher = Sha256::new();
+    hasher.update(b"folder\0");
+    for path in &files {
+        let relative = path.strip_prefix(&root).ok()?;
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hash_path_state(&mut hasher, path)?;
+    }
+    let revision = format!("{:X}", hasher.finalize());
+    Some((
+        revision.clone(),
+        format!("파일 {}개 · {}", files.len(), short_revision(&revision)),
+    ))
+}
+
+fn collect_source_files(directory: &Path, files: &mut Vec<PathBuf>) -> Option<()> {
+    collect_files(directory, files, ignored_source_directory)
+}
+
+fn collect_files(
+    directory: &Path,
+    files: &mut Vec<PathBuf>,
+    skip_directory: fn(&str) -> bool,
+) -> Option<()> {
+    let mut entries = fs::read_dir(directory)
+        .ok()?
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let file_type = entry.file_type().ok()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            if !skip_directory(&entry.file_name().to_string_lossy()) {
+                collect_files(&path, files, skip_directory)?;
+            }
+        } else if file_type.is_file() {
+            files.push(path);
+        }
+    }
+    Some(())
+}
+
+fn ignored_source_directory(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        ".git"
+            | ".codex"
+            | ".idea"
+            | ".next"
+            | ".openai"
+            | ".venv"
+            | ".vscode"
+            | "__pycache__"
+            | "build"
+            | "coverage"
+            | "dist"
+            | "node_modules"
+            | "out"
+            | "target"
+            | "venv"
+    )
+}
+
+fn db_source_revision(profile: &DbProfile) -> Option<(String, String)> {
+    let path = Path::new(profile.path.as_deref()?);
+    match &profile.source {
+        DbSource::DdlSqlite => ddl_source_revision(path),
+        DbSource::Sqlite => {
+            let metadata = path.metadata().ok()?;
+            let modified = metadata
+                .modified()
+                .ok()?
+                .duration_since(UNIX_EPOCH)
+                .ok()?
+                .as_nanos();
+            let mut hasher = Sha256::new();
+            hasher.update(metadata.len().to_le_bytes());
+            hasher.update(modified.to_le_bytes());
+            let revision = format!("{:X}", hasher.finalize());
+            Some((
+                revision.clone(),
+                format!("SQLite {}", short_revision(&revision)),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn ddl_source_revision(path: &Path) -> Option<(String, String)> {
+    if path.is_file() {
+        let revision = hash_file(path)?;
+        return Some((
+            revision.clone(),
+            format!("DDL {}", short_revision(&revision)),
+        ));
+    }
+    if !path.is_dir() {
+        return None;
+    }
+
+    let root = fs::canonicalize(path).ok()?;
+    let mut files = Vec::new();
+    collect_files(&root, &mut files, |_| false)?;
+    files.sort();
+    let mut hasher = Sha256::new();
+    hasher.update(b"ddl-directory\0");
+    for file in &files {
+        let relative = file.strip_prefix(&root).ok()?;
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hash_path_state(&mut hasher, file)?;
+    }
+    let revision = format!("{:X}", hasher.finalize());
+    Some((
+        revision.clone(),
+        format!("DDL {} · 파일 {}개", short_revision(&revision), files.len()),
+    ))
+}
+
+fn hash_file(path: &Path) -> Option<String> {
+    if !path.is_file() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hash_path_state(&mut hasher, path)?;
+    Some(format!("{:X}", hasher.finalize()))
+}
+
+fn hash_path_state(hasher: &mut Sha256, path: &Path) -> Option<()> {
+    if !path.exists() {
+        hasher.update(b"\0missing");
+        return Some(());
+    }
+    if path.is_dir() {
+        hasher.update(b"\0directory");
+        return Some(());
+    }
+    let mut file = fs::File::open(path).ok()?;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Some(())
+}
+
+fn short_revision(revision: &str) -> &str {
+    revision.get(..8).unwrap_or(revision)
+}
+
 fn code_source_type(workspace: &Workspace) -> String {
     let normalized = workspace.repo_path.replace('\\', "/");
     if normalized.ends_with(&format!("/workspaces/{}/repo", workspace.id)) {
@@ -1619,6 +1990,24 @@ fn db_source_key(source: &impl Serialize) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn localized_db_capability_warning(value: &str) -> &str {
+    match value {
+        "cross-object dependency metadata is not tracked by the ddl-sqlite adapter." => {
+            "이 DDL 어댑터는 객체 간 일반 의존성을 추적하지 않습니다."
+        }
+        "routine dependency metadata is not tracked by the ddl-sqlite adapter." => {
+            "이 DDL 어댑터는 프로시저와 함수 의존성을 추적하지 않습니다."
+        }
+        "trigger dependency metadata is not tracked by the ddl-sqlite adapter." => {
+            "이 DDL 어댑터는 트리거 의존성을 추적하지 않습니다."
+        }
+        "view dependency metadata is not tracked by the ddl-sqlite adapter." => {
+            "이 DDL 어댑터는 뷰 의존성을 추적하지 않습니다."
+        }
+        _ => value,
+    }
 }
 
 pub(crate) fn item(

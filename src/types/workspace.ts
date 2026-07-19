@@ -29,6 +29,7 @@ const CODE_KIND_CHIPS: Record<string, string> = {
   repository: "REPO",
   handler: "HNDL",
   controller: "CTRL",
+  unknown: "CHECK",
 };
 
 export function codeKindChip(kind: string): string {
@@ -36,10 +37,17 @@ export function codeKindChip(kind: string): string {
   return CODE_KIND_CHIPS[key] ?? kind.slice(0, 5).toUpperCase();
 }
 
+export function isApiCodeItem(item: { kind: string }): boolean {
+  const kind = item.kind.trim().toLowerCase();
+  return kind === "route" || kind === "api";
+}
+
 export type Workspace = {
   id: string;
   name: string;
   repoPath: string;
+  repoSource: RepoSourceMode;
+  repoOrigin?: string | null;
   codeProject?: string | null;
   engineCache?: WorkspaceEngineCache | null;
   dbProfiles: DbProfile[];
@@ -55,12 +63,16 @@ export type WorkspaceRecoveryWarning = {
   action: "repair-from-backup" | "recreate-workspace" | string;
 };
 
-export type WorkspaceEngineCache = {
+type WorkspaceEngineCache = {
   codeCachePath?: string | null;
   dbCacheDir?: string | null;
 };
 
 export type RepoSourceMode = "local" | "github";
+
+export function workspaceRepoInputValue(workspace: Workspace): string {
+  return workspace.repoOrigin ?? workspace.repoPath;
+}
 
 export type DbProfile = {
   id: string;
@@ -161,7 +173,7 @@ export type DbIndex = {
   expression?: string | null;
 };
 
-export type DbInventoryGap = {
+type DbInventoryGap = {
   id: string;
   kind: string;
   message: string;
@@ -271,6 +283,11 @@ export function codeInventoryDefaultRoute(
   return best;
 }
 
+export function codeRouteMethod(route: CodeInventoryItem): string | null {
+  const identity = `${route.qualifiedName ?? ""} ${route.id}`;
+  return identity.match(/__route__([A-Z]+)__/i)?.[1]?.toUpperCase() ?? null;
+}
+
 function routeSpecificity(route: CodeInventoryItem): number {
   const segments = route.name.split(/[/?]/).filter(Boolean);
   const staticSegments = segments.filter((segment) => !segment.startsWith(":") && !segment.startsWith("{")).length;
@@ -278,18 +295,18 @@ function routeSpecificity(route: CodeInventoryItem): number {
   return staticSegments * 120 + Math.min(route.name.length, 80) - (route.id.includes("__route__ANY__") ? 500 : 0);
 }
 
-export type CodeCall = {
+type CodeCall = {
   from: string;
   to: string;
 };
 
 /** Raw engine HANDLES direction: handler -> route. Product projections reverse it to Route -> Handler. */
-export type CodeHandle = {
+type CodeHandle = {
   handler: string;
   route: string;
 };
 
-export type CodeInventorySummary = {
+type CodeInventorySummary = {
   routes: number;
   handlers: number;
   services: number;

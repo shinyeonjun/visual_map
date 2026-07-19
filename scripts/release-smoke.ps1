@@ -92,10 +92,10 @@ if ($ExerciseInstall) {
     }
     $process = Start-Process -FilePath $app.FullName -PassThru -WindowStyle Hidden
     Start-Sleep -Seconds 5
-    if ($process.HasExited -and $process.ExitCode -ne 0) {
-      throw "Installed application exited with code $($process.ExitCode)."
+    if ($process.HasExited) {
+      throw "Installed application exited before the smoke window completed with code $($process.ExitCode)."
     }
-    if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+    Stop-Process -Id $process.Id -Force
 
     $uninstaller = Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter "*uninstall*.exe" -File -Recurse | Select-Object -First 1
     if (-not $uninstaller) { throw "Uninstaller was not found." }

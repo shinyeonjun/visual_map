@@ -1,7 +1,7 @@
 import { Code2, Filter, RefreshCw, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { codeInventoryCodeItems, codeInventoryItemCount, codeKindChip } from "../../types/workspace";
-import type { VisualMapControls, WorkspaceControls } from "../../types/controls";
+import { codeInventoryCodeItems, codeInventoryItemCount, codeKindChip, codeRouteMethod } from "../../types/workspace";
+import type { WorkspaceControls } from "../../types/controls";
 import { PanelHeader } from "../common/PanelHeader";
 
 type CodeTab = "routes" | "services" | "files";
@@ -12,24 +12,26 @@ const codeTabs: { id: CodeTab; label: string }[] = [
   { id: "files", label: "파일" },
 ];
 
+const CODE_LIST_LIMIT = 80;
+
 export function CodeSourceSection({
   workspaceControls,
-  visualMapControls,
 }: {
   workspaceControls: WorkspaceControls;
-  visualMapControls: VisualMapControls;
 }) {
   const operationMessageRef = useRef<HTMLSpanElement>(null);
   const [codeTab, setCodeTab] = useState<CodeTab>("routes");
   const [codeFilter, setCodeFilter] = useState("");
   const codeInventory = workspaceControls.codeInventory;
   const codeBucketItems = codeInventoryCodeItems(codeInventory);
+  const unknownCodeIds = new Set((codeInventory?.unknown ?? []).map((item) => item.id));
   const tabCounts: Record<CodeTab, number> = {
     routes: codeInventory?.routes.length ?? 0,
     services: codeBucketItems.length,
     files: codeInventory?.files.length ?? 0,
   };
   const allCodeItems = codeTab === "services" ? codeBucketItems : (codeInventory?.[codeTab] ?? []);
+  const confirmedRouteIds = new Set((codeInventory?.handles ?? []).map((handle) => handle.route));
   const filter = codeFilter.trim().toLowerCase();
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
   const hasCodeInventory = Boolean(codeInventory);
@@ -40,13 +42,19 @@ export function CodeSourceSection({
       workspaceControls.codeLoading ||
       (!hasCodeInventory && workspaceControls.codeStatus),
   );
-  const codeItems = filter
+  const matchingCodeItems = filter
     ? allCodeItems.filter(
         (item) =>
           item.name.toLowerCase().includes(filter) ||
           (item.filePath ?? "").toLowerCase().includes(filter),
       )
     : allCodeItems;
+  const codeItems = limitedCodeItems(
+    matchingCodeItems,
+    workspaceControls.selectedCodeItem?.id ?? null,
+    CODE_LIST_LIMIT,
+  );
+  const hiddenCodeItemCount = Math.max(0, matchingCodeItems.length - codeItems.length);
   const nextAction = codeNextAction(workspaceControls, hasWorkspace, hasCodeInventory);
   const sourceSettings = (
     <>
@@ -185,22 +193,40 @@ export function CodeSourceSection({
             <Filter size={13} />
           </div>
           <div className="list">
-            {codeItems.map((item) => (
-              <button
-                className={`route-row route-row-button ${
-                  item.id === workspaceControls.selectedCodeItem?.id ? "active" : ""
-                }`}
-                key={item.id}
-                type="button"
-                onClick={() => selectCodeFocus(item)}
-              >
-                <span className="method get">{codeKindChip(item.kind)}</span>
-                <span className="route-copy">
-                  <span className="route-path">{item.name}</span>
-                  {codeItemLocation(item) && <small>{codeItemLocation(item)}</small>}
-                </span>
-              </button>
-            ))}
+            {codeItems.map((item) => {
+              const method = codeTab === "routes" ? codeRouteMethod(item) : null;
+              const confirmed = confirmedRouteIds.has(item.id);
+              const unverified = unknownCodeIds.has(item.id);
+              const meta = codeTab === "routes"
+                ? routeEvidenceMeta(item, method, confirmed)
+                : unverified
+                  ? "근거 미확인"
+                  : codeItemLocation(item);
+              return (
+                <button
+                  className={`route-row route-row-button ${
+                    item.id === workspaceControls.selectedCodeItem?.id ? "active" : ""
+                  }`}
+                  key={item.id}
+                  type="button"
+                  onClick={() => workspaceControls.openCodeItem(item)}
+                  title={`${method === "ANY" ? "ANY?" : method ?? codeKindChip(item.kind)} ${item.name}${meta ? `\n${meta}` : ""}`}
+                >
+                  <span className={`method ${(method ?? "code").toLowerCase()}`}>
+                    {method === "ANY" ? "ANY?" : method ?? codeKindChip(item.kind)}
+                  </span>
+                  <span className="route-copy">
+                    <span className="route-path">{item.name}</span>
+                    {meta && <small className={confirmed ? "confirmed" : "unverified"}>{meta}</small>}
+                  </span>
+                </button>
+              );
+            })}
+            {hiddenCodeItemCount > 0 && (
+              <span className="workspace-empty">
+                {codeItems.length}개 표시 · +{hiddenCodeItemCount}개 · 필터로 좁히세요
+              </span>
+            )}
             {codeItems.length === 0 && (
               <span className="workspace-empty">{filter ? "필터와 일치하는 항목이 없습니다" : codeTabEmptyText(codeTab)}</span>
             )}
@@ -211,16 +237,15 @@ export function CodeSourceSection({
       )}
     </section>
   );
-
-  function selectCodeFocus(item: NonNullable<typeof codeInventory>["routes"][number]) {
-    workspaceControls.selectCodeItem(item);
-    visualMapControls.showMode(codeTab === "routes" || isApiItem(item) ? "api-flow" : "search-focus", `code:${item.id}`);
-  }
 }
 
-function isApiItem(item: { kind: string }): boolean {
-  const kind = item.kind.trim().toLowerCase();
-  return kind === "route" || kind === "api";
+function limitedCodeItems<T extends { id: string }>(items: T[], selectedId: string | null, limit: number): T[] {
+  const visible = items.slice(0, limit);
+  if (!selectedId || visible.some((item) => item.id === selectedId)) {
+    return visible;
+  }
+  const selected = items.find((item) => item.id === selectedId);
+  return selected ? [selected, ...visible.slice(0, Math.max(0, limit - 1))] : visible;
 }
 
 function codeItemLocation(item: { filePath?: string | null; line?: number | null }): string | null {
@@ -229,6 +254,21 @@ function codeItemLocation(item: { filePath?: string | null; line?: number | null
     return item.line ? `L${item.line}` : null;
   }
   return item.line ? `${path}:L${item.line}` : path;
+}
+
+function routeEvidenceMeta(
+  item: { filePath?: string | null; line?: number | null },
+  method: string | null,
+  confirmed: boolean,
+): string {
+  const location = codeItemLocation(item);
+  if (confirmed) {
+    return `확정 HANDLES${location ? ` · ${location}` : ""}`;
+  }
+  if (method === "ANY" && !location) {
+    return "메서드 미확인 참조 · 소스 위치 없음";
+  }
+  return `HANDLES 미확인${location ? ` · ${location}` : " · 소스 위치 없음"}`;
 }
 
 function codeTabEmptyText(tab: CodeTab): string {

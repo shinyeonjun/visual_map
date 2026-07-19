@@ -243,7 +243,7 @@ fn engine_ascii(value: &str) -> String {
         .collect()
 }
 
-pub fn candidate_links(snapshot: &InventorySnapshot) -> Vec<CandidateLink> {
+pub(super) fn candidate_links(snapshot: &InventorySnapshot) -> Vec<CandidateLink> {
     let tables = snapshot
         .items
         .iter()

@@ -130,6 +130,7 @@ function codeKindLabel(kind: string): string {
   if (key === "handler" || key === "controller") return "핸들러";
   if (key === "module") return "모듈";
   if (key === "file") return "파일";
+  if (key === "unknown") return "미확인";
   return "코드";
 }
 

@@ -20,7 +20,7 @@ use super::store::{
 const DB_INVENTORY_LIMIT: usize = 1_000;
 // ponytail: legacy fallback starts one process per table; bulk inventory removes this ceiling.
 const MAX_FALLBACK_DESCRIBED_TABLES: usize = 200;
-pub fn save_db_profile(
+pub(crate) fn save_db_profile(
     app_data_dir: impl AsRef<Path>,
     request: SaveDbProfileRequest,
 ) -> Result<Workspace, String> {
@@ -85,7 +85,39 @@ pub fn save_db_profile(
     Ok(workspace)
 }
 
-pub fn index_db_profile(
+pub(crate) fn delete_db_profile(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+    profile_id: &str,
+) -> Result<Workspace, String> {
+    validate_workspace_id(workspace_id)?;
+    validate_workspace_id(profile_id)?;
+    let paths = base_paths(app_data_dir);
+    let mut workspace = read_workspace_by_id(&paths.workspaces_dir, workspace_id)?;
+    let profile_index = workspace
+        .db_profiles
+        .iter()
+        .position(|profile| profile.id == profile_id)
+        .ok_or_else(|| "삭제할 DB 연결을 찾을 수 없습니다".to_string())?;
+    let cache_dir = db_cache_path(&paths.workspaces_dir, workspace_id, profile_id)
+        .parent()
+        .map(Path::to_path_buf);
+
+    if let Some(cache_dir) = cache_dir.filter(|path| path.is_dir()) {
+        fs::remove_dir_all(cache_dir)
+            .map_err(|error| format!("DB 연결 캐시를 삭제하지 못했습니다: {error}"))?;
+    }
+    workspace.db_profiles.remove(profile_index);
+    workspace.active_db_profile_id = workspace
+        .db_profiles
+        .first()
+        .map(|profile| profile.id.clone());
+    workspace.updated_at = timestamp();
+    write_workspace(&paths.workspaces_dir, &workspace)?;
+    Ok(workspace)
+}
+
+pub(crate) fn index_db_profile(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
     request: IndexDbProfileRequest,
@@ -119,7 +151,27 @@ pub fn index_db_profile(
         .find(|engine| engine.id == "database-memory")
         .ok_or_else(|| "DB 읽기 도구가 등록되지 않았습니다".to_string())?;
 
-    let run = engine::run_engine_command(db_engine, &args, Duration::from_secs(120))?;
+    let run = if db_source_uses_path(&profile.source) {
+        engine::run_engine_command(db_engine, &args, Duration::from_secs(120))?
+    } else {
+        let connection_string = request
+            .connection_string
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "DB 연결 문자열이 필요합니다".to_string())?;
+        let config_path = db_connection_config_path(&cache_path);
+        write_db_connection_config(&profile, &config_path)?;
+        let env_name = db_connection_env_var(&profile.id);
+        let result = engine::run_engine_command_with_env(
+            db_engine,
+            &args,
+            Duration::from_secs(120),
+            &[(env_name.as_str(), connection_string)],
+        );
+        let _ = fs::remove_file(config_path);
+        result?
+    };
 
     if run.ok {
         workspace.db_profiles[profile_index].last_indexed_at = Some(timestamp());
@@ -136,7 +188,7 @@ pub fn index_db_profile(
     })
 }
 
-pub fn db_inventory(
+pub(crate) fn db_inventory(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
     workspace_id: &str,
@@ -491,13 +543,13 @@ pub(crate) fn db_index_args(
             .ok_or_else(|| "DB 경로가 필요합니다".to_string())?;
         args.extend(["--path".to_string(), path.to_string()]);
     } else {
-        let connection_string = connection_string
+        connection_string
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| format!("{source} 연결에는 DB 연결 문자열이 필요합니다"))?;
         args.extend([
-            "--connection-string".to_string(),
-            connection_string.to_string(),
+            "--config-path".to_string(),
+            db_connection_config_path(cache_path).display().to_string(),
         ]);
     }
 
@@ -509,6 +561,31 @@ pub(crate) fn db_index_args(
     ]);
 
     Ok(args)
+}
+
+pub(crate) fn db_connection_config_path(cache_path: &Path) -> PathBuf {
+    cache_path.with_file_name("database-memory-profile.toml")
+}
+
+pub(crate) fn db_connection_env_var(alias: &str) -> String {
+    let alias = alias
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("DATABASE_MEMORY_{alias}_CONNECTION_STRING")
+}
+
+fn write_db_connection_config(profile: &DbProfile, path: &Path) -> Result<(), String> {
+    let source = db_cli_source(profile)?;
+    let contents = format!("[{}]\nsource = \"{}\"\n", profile.id, source);
+    fs::write(path, contents)
+        .map_err(|error| format!("DB 연결 준비 파일을 만들지 못했습니다: {error}"))
 }
 
 fn db_source_uses_path(source: &DbSource) -> bool {

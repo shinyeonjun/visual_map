@@ -23,14 +23,14 @@ const MAX_ENGINE_STREAM_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum EngineRuntimeMode {
+pub(crate) enum EngineRuntimeMode {
     Dev,
     Internal,
     Production,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EngineSpec {
+pub(crate) struct EngineSpec {
     pub id: &'static str,
     pub label: &'static str,
     pub role: &'static str,
@@ -39,14 +39,14 @@ pub struct EngineSpec {
     pub expected_contract_version: &'static str,
 }
 
-pub const CODEBASE_MEMORY_VERSION: &str = "0.8.1";
-pub const CODEBASE_MEMORY_CONTRACT_VERSION: &str = "1";
-pub const DATABASE_MEMORY_VERSION: &str = "0.1.1";
-pub const DATABASE_MEMORY_CONTRACT_VERSION: &str = "1";
+pub(crate) const CODEBASE_MEMORY_VERSION: &str = "0.8.1";
+pub(crate) const CODEBASE_MEMORY_CONTRACT_VERSION: &str = "1";
+pub(crate) const DATABASE_MEMORY_VERSION: &str = "0.1.1";
+pub(crate) const DATABASE_MEMORY_CONTRACT_VERSION: &str = "1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EngineRegistry {
+pub(crate) struct EngineRegistry {
     pub mode: EngineRuntimeMode,
     pub engine_dir: String,
     pub engines: Vec<EngineAvailability>,
@@ -54,7 +54,7 @@ pub struct EngineRegistry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EngineAvailability {
+pub(crate) struct EngineAvailability {
     pub id: String,
     pub label: String,
     pub role: String,
@@ -104,7 +104,7 @@ struct DevelopmentArtifact {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EngineRunResult {
+pub(crate) struct EngineRunResult {
     pub ok: bool,
     pub stdout: String,
     pub stderr: String,
@@ -113,7 +113,7 @@ pub struct EngineRunResult {
     pub finished_at: String,
 }
 
-pub const ENGINE_SPECS: &[EngineSpec] = &[
+pub(crate) const ENGINE_SPECS: &[EngineSpec] = &[
     EngineSpec {
         id: "codebase-memory",
         label: "codebase-memory",
@@ -132,7 +132,7 @@ pub const ENGINE_SPECS: &[EngineSpec] = &[
     },
 ];
 
-pub fn resolve_engine_dir(
+pub(crate) fn resolve_engine_dir(
     mode: EngineRuntimeMode,
     app_data_dir: impl AsRef<Path>,
     resource_dir: Option<&Path>,
@@ -160,7 +160,7 @@ pub fn resolve_engine_dir(
     }
 }
 
-pub fn engine_registry(
+pub(crate) fn engine_registry(
     mode: EngineRuntimeMode,
     app_data_dir: impl AsRef<Path>,
     resource_dir: Option<&Path>,
@@ -459,7 +459,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(hash)
 }
 
-pub fn sidecar_args<const N: usize>(args: [&str; N]) -> Result<Vec<String>, String> {
+pub(crate) fn sidecar_args<const N: usize>(args: [&str; N]) -> Result<Vec<String>, String> {
     let args = args
         .iter()
         .map(|value| value.to_string())
@@ -468,7 +468,7 @@ pub fn sidecar_args<const N: usize>(args: [&str; N]) -> Result<Vec<String>, Stri
     Ok(args)
 }
 
-pub fn run_engine_command(
+pub(crate) fn run_engine_command(
     engine: &EngineAvailability,
     args: &[String],
     timeout: Duration,
@@ -483,7 +483,7 @@ pub fn run_engine_command(
     run_command(Path::new(&engine.path), &arg_refs, timeout)
 }
 
-pub fn run_engine_command_with_env(
+pub(crate) fn run_engine_command_with_env(
     engine: &EngineAvailability,
     args: &[String],
     timeout: Duration,
@@ -520,7 +520,7 @@ fn validate_sidecar_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-pub fn run_command(
+pub(crate) fn run_command(
     executable: &Path,
     args: &[&str],
     timeout: Duration,
@@ -528,7 +528,7 @@ pub fn run_command(
     run_command_with_env(executable, args, timeout, &[])
 }
 
-pub fn run_command_with_env(
+pub(crate) fn run_command_with_env(
     executable: &Path,
     args: &[&str],
     timeout: Duration,
@@ -651,7 +651,7 @@ fn collect_process_streams(
     Ok((stdout.bytes, stderr.bytes))
 }
 
-pub fn redact_secrets(input: &str) -> String {
+pub(crate) fn redact_secrets(input: &str) -> String {
     let mut redacted = redact_key_values(input);
     redacted = redact_url_passwords(&redacted);
     redacted = redact_oracle_connect_strings(&redacted);

@@ -11,21 +11,21 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use super::model::{CreateWorkspaceRequest, Workspace, WorkspaceEngineCache};
+use super::model::{CreateWorkspaceRequest, RepoSource, Workspace, WorkspaceEngineCache};
 
 static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_WORKSPACE_WRITE_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkspaceRecoveryWarning {
+pub(crate) struct WorkspaceRecoveryWarning {
     pub workspace_id: String,
     pub kind: String,
     pub message: String,
     pub action: String,
 }
 
-pub fn create_workspace(
+pub(crate) fn create_workspace(
     app_data_dir: impl AsRef<Path>,
     request: CreateWorkspaceRequest,
 ) -> Result<Workspace, String> {
@@ -44,20 +44,30 @@ pub fn create_workspace(
 
     let now = timestamp();
     let id = workspace_id(name);
-    let repo_path = if is_remote_url(requested_repo_path) {
+    let (repo_path, repo_source, repo_origin) = if is_remote_url(requested_repo_path) {
         let Some(_) = github_repo_name(requested_repo_path) else {
             return Err("지원하는 GitHub URL 형식이 아닙니다".to_string());
         };
         let target = workspace_repo_dir(&paths.workspaces_dir, &id);
         clone_github_repo(requested_repo_path, &target)?;
-        target.display().to_string()
+        (
+            path_for_storage(&target),
+            RepoSource::Github,
+            Some(requested_repo_path.to_string()),
+        )
     } else {
-        requested_repo_path.to_string()
+        (
+            canonical_local_repo_path(requested_repo_path)?,
+            RepoSource::Local,
+            None,
+        )
     };
     let workspace = Workspace {
         id: id.clone(),
         name: name.to_string(),
         repo_path,
+        repo_source,
+        repo_origin,
         code_project: None,
         engine_cache: WorkspaceEngineCache {
             code_cache_path: Some(
@@ -82,7 +92,56 @@ pub fn create_workspace(
     Ok(workspace)
 }
 
-pub fn open_workspace(
+pub(crate) fn refresh_github_workspace(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+) -> Result<Workspace, String> {
+    validate_workspace_id(workspace_id)?;
+    let paths = base_paths(app_data_dir);
+    let mut workspace = read_workspace_by_id(&paths.workspaces_dir, workspace_id)?;
+    if workspace.repo_source != RepoSource::Github {
+        return Err("앱이 복제한 GitHub 프로젝트만 업데이트할 수 있습니다".to_string());
+    }
+
+    let expected_repo = workspace_repo_dir(&paths.workspaces_dir, workspace_id);
+    let actual_repo = fs::canonicalize(&workspace.repo_path)
+        .map_err(|error| format!("GitHub 복제본을 찾을 수 없습니다: {error}"))?;
+    let expected_repo = fs::canonicalize(expected_repo)
+        .map_err(|error| format!("관리 GitHub 복제본을 찾을 수 없습니다: {error}"))?;
+    if actual_repo != expected_repo || !actual_repo.join(".git").exists() {
+        return Err("앱이 관리하는 GitHub 복제본 경로가 아닙니다".to_string());
+    }
+
+    let repo = path_for_storage(&actual_repo);
+    let status = run_git(
+        &["-C", repo.as_str(), "status", "--porcelain"],
+        Duration::from_secs(30),
+    )?;
+    if !status.ok {
+        return Err(git_failure("GitHub 프로젝트 상태 확인 실패", &status));
+    }
+    if !status.stdout.trim().is_empty() {
+        return Err(
+            "로컬 변경이 있어 업데이트를 중단했습니다. 변경을 커밋하거나 별도로 보관한 뒤 다시 시도하세요"
+                .to_string(),
+        );
+    }
+
+    let pull = run_git(
+        &["-C", repo.as_str(), "pull", "--ff-only"],
+        Duration::from_secs(180),
+    )?;
+    if !pull.ok {
+        return Err(git_failure("GitHub 프로젝트 업데이트 실패", &pull));
+    }
+
+    workspace.repo_path = repo;
+    workspace.updated_at = timestamp();
+    write_workspace(&paths.workspaces_dir, &workspace)?;
+    Ok(workspace)
+}
+
+pub(crate) fn open_workspace(
     app_data_dir: impl AsRef<Path>,
     workspace_id: &str,
 ) -> Result<Workspace, String> {
@@ -90,7 +149,7 @@ pub fn open_workspace(
     read_workspace_by_id(&paths.workspaces_dir, workspace_id)
 }
 
-pub fn list_workspaces(app_data_dir: impl AsRef<Path>) -> Result<Vec<Workspace>, String> {
+pub(crate) fn list_workspaces(app_data_dir: impl AsRef<Path>) -> Result<Vec<Workspace>, String> {
     let paths = base_paths(app_data_dir);
     ensure_base_dirs(&paths).map_err(|error| error.to_string())?;
 
@@ -122,7 +181,23 @@ pub fn list_workspaces(app_data_dir: impl AsRef<Path>) -> Result<Vec<Workspace>,
     Ok(workspaces)
 }
 
-pub fn workspace_recovery_warnings(
+pub(crate) fn delete_workspace(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+) -> Result<(), String> {
+    validate_workspace_id(workspace_id)?;
+    let paths = base_paths(app_data_dir);
+    let workspace_dir = paths.workspaces_dir.join(workspace_id);
+    if !workspace_file(&paths.workspaces_dir, workspace_id).is_file()
+        && !workspace_backup_file(&paths.workspaces_dir, workspace_id).is_file()
+    {
+        return Err("삭제할 프로젝트를 찾을 수 없습니다".to_string());
+    }
+    fs::remove_dir_all(workspace_dir)
+        .map_err(|error| format!("프로젝트 메타데이터를 삭제하지 못했습니다: {error}"))
+}
+
+pub(crate) fn workspace_recovery_warnings(
     app_data_dir: impl AsRef<Path>,
 ) -> Result<Vec<WorkspaceRecoveryWarning>, String> {
     let paths = base_paths(app_data_dir);
@@ -179,7 +254,7 @@ pub fn workspace_recovery_warnings(
     Ok(warnings)
 }
 
-pub fn repair_workspace_from_backup(
+pub(crate) fn repair_workspace_from_backup(
     app_data_dir: impl AsRef<Path>,
     workspace_id: &str,
 ) -> Result<Workspace, String> {
@@ -308,12 +383,29 @@ pub(crate) fn read_workspace_by_id(
 }
 
 fn read_workspace_for_id(file: &Path, workspace_id: &str) -> Result<Workspace, String> {
-    let workspace = read_workspace(file)?;
+    let mut workspace = read_workspace(file)?;
     validate_workspace_id(&workspace.id)?;
     if workspace.id != workspace_id {
         return Err("프로젝트 파일 ID가 경로와 일치하지 않습니다".to_string());
     }
+    if workspace.repo_source == RepoSource::Local && is_legacy_managed_clone(file, &workspace) {
+        workspace.repo_source = RepoSource::Github;
+    }
     Ok(workspace)
+}
+
+fn is_legacy_managed_clone(workspace_file: &Path, workspace: &Workspace) -> bool {
+    let Some(workspace_dir) = workspace_file.parent() else {
+        return false;
+    };
+    let expected_repo = workspace_dir.join("repo");
+    let Ok(actual_repo) = fs::canonicalize(&workspace.repo_path) else {
+        return false;
+    };
+    let Ok(expected_repo) = fs::canonicalize(expected_repo) else {
+        return false;
+    };
+    actual_repo == expected_repo && actual_repo.join(".git").exists()
 }
 
 fn workspace_file(workspaces_dir: &Path, workspace_id: &str) -> PathBuf {
@@ -420,7 +512,7 @@ fn replace_invalid_workspace(primary: &Path, temp: &Path, sequence: u64) -> Resu
     Ok(())
 }
 
-pub fn validate_workspace_id(workspace_id: &str) -> Result<(), String> {
+pub(crate) fn validate_workspace_id(workspace_id: &str) -> Result<(), String> {
     if workspace_id.is_empty() {
         return Err("프로젝트 ID가 필요합니다".to_string());
     }
@@ -478,6 +570,29 @@ fn is_remote_url(value: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("git@")
 }
 
+fn canonical_local_repo_path(value: &str) -> Result<String, String> {
+    let path = fs::canonicalize(value)
+        .map_err(|error| format!("프로젝트 폴더를 찾을 수 없습니다: {error}"))?;
+    if !path.is_dir() {
+        return Err("프로젝트 경로는 폴더여야 합니다".to_string());
+    }
+    Ok(path_for_storage(&path))
+}
+
+#[cfg(windows)]
+fn path_for_storage(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    value.strip_prefix(r"\\?\").unwrap_or(&value).to_string()
+}
+
+#[cfg(not(windows))]
+fn path_for_storage(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
 fn clone_github_repo(url: &str, target: &Path) -> Result<(), String> {
     if target.exists() {
         return Err("관리 프로젝트 폴더가 이미 있어 복제할 수 없습니다".to_string());
@@ -490,24 +605,32 @@ fn clone_github_repo(url: &str, target: &Path) -> Result<(), String> {
 
     let target_string = target.display().to_string();
     let args = ["clone", "--depth", "1", url, target_string.as_str()];
-    let run = engine::run_command_with_env(
-        Path::new("git"),
-        &args,
-        Duration::from_secs(180),
-        &[("GIT_TERMINAL_PROMPT", "0")],
-    )
-    .map_err(|error| format!("git 실행 실패: {error}"))?;
+    let run = run_git(&args, Duration::from_secs(180))?;
 
     if run.ok {
         Ok(())
     } else {
-        let detail = if run.stderr.trim().is_empty() {
-            run.stdout.trim()
-        } else {
-            run.stderr.trim()
-        };
-        Err(format!("GitHub 프로젝트 복제 실패: {detail}"))
+        Err(git_failure("GitHub 프로젝트 복제 실패", &run))
     }
+}
+
+fn run_git(args: &[&str], timeout: Duration) -> Result<engine::EngineRunResult, String> {
+    engine::run_command_with_env(
+        Path::new("git"),
+        args,
+        timeout,
+        &[("GIT_TERMINAL_PROMPT", "0")],
+    )
+    .map_err(|error| format!("git 실행 실패: {error}"))
+}
+
+fn git_failure(context: &str, run: &engine::EngineRunResult) -> String {
+    let detail = if run.stderr.trim().is_empty() {
+        run.stdout.trim()
+    } else {
+        run.stderr.trim()
+    };
+    format!("{context}: {detail}")
 }
 
 fn slugify(value: &str) -> String {

@@ -19,7 +19,7 @@ function engineState(registry: EngineRegistry | null, engine: EngineAvailability
 
 function engineText(state: EngineState, missingText?: string): string {
   if (state === "ok") {
-    return "정상";
+    return "실행 가능";
   }
   if (state === "missing") {
     return missingText ?? "설치 필요";
@@ -83,27 +83,6 @@ export function EngineStatus({
       <b className={displayState}>
         {integrityLabel ?? engineText(state, missingText)}
       </b>
-    </span>
-  );
-}
-
-export function EngineMiniStatus({
-  label,
-  role,
-  registry,
-  error,
-}: {
-  label: string;
-  role: EngineRole;
-  registry: EngineRegistry | null;
-  error: string | null;
-}) {
-  const engine = engineForRole(registry, role);
-  const state = engineState(registry, engine, error);
-
-  return (
-    <span className={`engine-mini ${state}`} title={engineTitle(registry, engine, error)}>
-      {label}
     </span>
   );
 }

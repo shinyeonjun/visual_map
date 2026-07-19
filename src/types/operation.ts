@@ -1,4 +1,4 @@
-export type OperationPhase = "idle" | "running" | "success" | "error";
+type OperationPhase = "idle" | "running" | "success" | "error";
 
 export type OperationStatus = {
   phase: OperationPhase;
@@ -10,4 +10,12 @@ export type OperationStatus = {
 export type UserError = {
   message: string;
   details: string;
+  code?: string;
+};
+
+export type CommandErrorPayload = {
+  code: string;
+  message: string;
+  detail: string;
+  retryable: boolean;
 };

@@ -90,7 +90,7 @@ function isRemoteUrl(value: string): boolean {
   return /^https?:\/\//i.test(value) || /^git@/i.test(value);
 }
 
-function githubRepoName(value: string): string | null {
+export function githubRepoName(value: string): string | null {
   const trimmed = value.trim().replace(/\/$/, "");
   const path =
     trimmed.match(/^https:\/\/github\.com\/(.+)$/i)?.[1] ?? trimmed.match(/^git@github\.com:(.+)$/i)?.[1];

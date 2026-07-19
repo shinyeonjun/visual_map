@@ -3,8 +3,8 @@ use crate::{
     engine::{EngineAvailability, EngineRegistry, EngineRuntimeMode},
     workspace::{
         CodeHandle, CodeInventory, CodeInventoryItem, CodeInventorySummary, DbConstraint,
-        DbForeignKey, DbIndex, DbInventory, DbInventoryColumn, DbInventoryTable, Workspace,
-        WorkspaceEngineCache,
+        DbForeignKey, DbIndex, DbInventory, DbInventoryColumn, DbInventoryTable, DbProfile,
+        DbSource, Workspace, WorkspaceEngineCache,
     },
 };
 use std::{
@@ -159,6 +159,36 @@ fn inventory_snapshot_serializes_as_camel_case() {
 }
 
 #[test]
+fn missing_inventory_snapshot_is_an_empty_state() {
+    let root = temp_root("missing-snapshot");
+
+    assert_eq!(
+        load_inventory_snapshot_optional(&root, "workspace-1").unwrap(),
+        None
+    );
+}
+
+#[test]
+fn removing_db_snapshot_preserves_code_and_scrubs_backups() {
+    let root = temp_root("remove-db-snapshot");
+    let snapshot = fixture_inventory("workspace-1".to_string());
+    save_inventory_snapshot(&root, &snapshot).unwrap();
+
+    remove_db_inventory_snapshot(&root, "workspace-1").unwrap();
+
+    let restored = load_inventory_snapshot(&root, "workspace-1").unwrap();
+    let backup: InventorySnapshot = serde_json::from_str(
+        &fs::read_to_string(snapshot_backup_path(&snapshot_path(&root, "workspace-1"))).unwrap(),
+    )
+    .unwrap();
+    assert!(restored.items.iter().all(|item| item.source != "db"));
+    assert!(restored.items.iter().any(|item| item.source == "code"));
+    assert!(restored.metadata.db.is_none());
+    assert_eq!(backup, restored);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
     let route = code_test_item(
         "shop.routes.create_order",
@@ -176,6 +206,10 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
         20,
         46,
     );
+    let mut unverified_route =
+        code_test_item("docs.route_string", "Route", "/api/v1/sessions", "", 1, 1);
+    unverified_route.kind = "unknown".to_string();
+    unverified_route.file_path = None;
     let code = CodeInventory {
         project: "shop".to_string(),
         routes: vec![route],
@@ -186,7 +220,7 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
         functions: Vec::new(),
         classes: Vec::new(),
         modules: Vec::new(),
-        unknown: Vec::new(),
+        unknown: vec![unverified_route],
         summary: CodeInventorySummary {
             routes: 1,
             handlers: 1,
@@ -196,7 +230,7 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
             classes: 0,
             modules: 0,
             files: 0,
-            unknown: 0,
+            unknown: 1,
         },
         architecture: Some(serde_json::json!({ "modules": ["orders"] })),
         calls: Vec::new(),
@@ -221,6 +255,11 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
         .iter()
         .find(|link| link.kind == "code_handle")
         .unwrap();
+    let unverified_route = snapshot
+        .items
+        .iter()
+        .find(|entry| entry.id == "code:docs.route_string")
+        .unwrap();
 
     assert_eq!(
         snapshot.schema_version,
@@ -234,6 +273,8 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
     assert_eq!(handler.location.as_ref().unwrap().column, Some(3));
     assert_eq!(handler.location.as_ref().unwrap().end_line, Some(46));
     assert_eq!(handler.location.as_ref().unwrap().end_column, Some(18));
+    assert_eq!(unverified_route.kind, "code");
+    assert_eq!(unverified_route.engine_label.as_deref(), Some("Route"));
     assert_eq!(handles.from, "code:shop.routes.create_order");
     assert_eq!(handles.to, "code:shop.handlers.create_order");
     assert_eq!(handles.truth_class, "confirmed");
@@ -417,6 +458,178 @@ fn snapshot_marks_code_stale_when_repo_path_changes() {
         stale.stale_reasons,
         vec!["코드 프로젝트 경로가 바뀌었습니다"]
     );
+}
+
+#[test]
+fn snapshot_marks_code_stale_when_source_contents_change() {
+    let root = temp_root("code-source-revision");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let workspace = test_workspace(root.to_str().unwrap());
+    let snapshot = snapshot_with_metadata(
+        InventorySnapshot {
+            schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+            workspace_id: workspace.id.clone(),
+            saved_at: "1".to_string(),
+            metadata: Default::default(),
+            stale_reasons: Vec::new(),
+            links: Vec::new(),
+            items: vec![item(
+                "code:file:main",
+                "file",
+                "main.rs",
+                "code",
+                "code",
+                None,
+                Some("src/main.rs"),
+            )],
+        },
+        &workspace,
+        &test_registry(),
+    );
+    assert!(snapshot
+        .metadata
+        .code
+        .as_ref()
+        .and_then(|metadata| metadata.source_revision.as_ref())
+        .is_some());
+
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() { println!(\"changed\"); }\n",
+    )
+    .unwrap();
+    let missing_snapshot = snapshot.clone();
+    let stale = mark_snapshot_staleness(snapshot, &workspace, &test_registry());
+
+    assert!(stale
+        .stale_reasons
+        .iter()
+        .any(|reason| reason.contains("코드 파일")));
+    fs::remove_dir_all(root).unwrap();
+    let missing = mark_snapshot_staleness(missing_snapshot, &workspace, &test_registry());
+    assert!(missing
+        .stale_reasons
+        .iter()
+        .any(|reason| reason.contains("확인할 수 없습니다")));
+}
+
+#[test]
+fn snapshot_marks_ddl_stale_when_file_contents_change() {
+    let root = temp_root("ddl-source-revision");
+    fs::create_dir_all(&root).unwrap();
+    let ddl = root.join("schema.sql");
+    fs::write(&ddl, "create table orders(id integer primary key);\n").unwrap();
+    let mut workspace = test_workspace(root.to_str().unwrap());
+    workspace.db_profiles.push(DbProfile {
+        id: "ddl".to_string(),
+        name: "schema".to_string(),
+        source: DbSource::DdlSqlite,
+        path: Some(ddl.display().to_string()),
+        host: None,
+        port: None,
+        database: None,
+        username: None,
+        cache_path: "db/schema.sqlite".to_string(),
+        last_indexed_at: Some("1".to_string()),
+        password_stored: false,
+    });
+    workspace.active_db_profile_id = Some("ddl".to_string());
+    let snapshot = snapshot_with_metadata(
+        InventorySnapshot {
+            schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+            workspace_id: workspace.id.clone(),
+            saved_at: "1".to_string(),
+            metadata: Default::default(),
+            stale_reasons: Vec::new(),
+            links: Vec::new(),
+            items: vec![item(
+                "db:table:orders",
+                "table",
+                "orders",
+                "data",
+                "db",
+                None,
+                Some("main"),
+            )],
+        },
+        &workspace,
+        &test_registry(),
+    );
+
+    fs::write(
+        &ddl,
+        "create table orders(id integer primary key, status text);\n",
+    )
+    .unwrap();
+    let stale = mark_snapshot_staleness(snapshot, &workspace, &test_registry());
+
+    assert!(stale
+        .stale_reasons
+        .iter()
+        .any(|reason| reason.contains("DB 파일")));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn snapshot_marks_ddl_directory_stale_when_a_schema_file_changes() {
+    let root = temp_root("ddl-directory-source-revision");
+    let ddl = root.join("schema");
+    fs::create_dir_all(&ddl).unwrap();
+    fs::write(
+        ddl.join("orders.sql"),
+        "create table orders(id integer primary key);\n",
+    )
+    .unwrap();
+    let mut workspace = test_workspace(root.to_str().unwrap());
+    workspace.db_profiles.push(DbProfile {
+        id: "ddl-directory".to_string(),
+        name: "schema directory".to_string(),
+        source: DbSource::DdlSqlite,
+        path: Some(ddl.display().to_string()),
+        host: None,
+        port: None,
+        database: None,
+        username: None,
+        cache_path: "db/schema-directory.sqlite".to_string(),
+        last_indexed_at: Some("1".to_string()),
+        password_stored: false,
+    });
+    workspace.active_db_profile_id = Some("ddl-directory".to_string());
+    let snapshot = snapshot_with_metadata(
+        InventorySnapshot {
+            schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+            workspace_id: workspace.id.clone(),
+            saved_at: "1".to_string(),
+            metadata: Default::default(),
+            stale_reasons: Vec::new(),
+            links: Vec::new(),
+            items: vec![item(
+                "db:table:orders",
+                "table",
+                "orders",
+                "data",
+                "db",
+                None,
+                Some("main"),
+            )],
+        },
+        &workspace,
+        &test_registry(),
+    );
+
+    fs::write(
+        ddl.join("orders.sql"),
+        "create table orders(id integer primary key, status text);\n",
+    )
+    .unwrap();
+    let stale = mark_snapshot_staleness(snapshot, &workspace, &test_registry());
+
+    assert!(stale
+        .stale_reasons
+        .iter()
+        .any(|reason| reason.contains("DB 파일")));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -1529,6 +1742,43 @@ fn change_impact_db_only_and_empty_facts_are_unknown_not_confirmed_absence() {
 }
 
 #[test]
+fn change_impact_checks_follow_the_selected_change_scenario() {
+    let snapshot = fixture_inventory("workspace-1".to_string());
+    let rename_map = visual_map_with_change(
+        &snapshot,
+        Some("db:column:orders:customer_id".to_string()),
+        "column-impact".to_string(),
+        Some(ChangeIntent {
+            kind: "rename".to_string(),
+            value: Some("buyer_id".to_string()),
+        }),
+    );
+    let rename_board = rename_map.review_board.as_ref().unwrap();
+    assert_eq!(rename_board.change_intent.as_ref().unwrap().kind, "rename");
+    assert!(rename_board.markdown_summary.contains("buyer_id"));
+    assert!(review_lane(rename_board, "checks")
+        .items
+        .iter()
+        .any(|item| item.id == "check:change:rename-target"));
+
+    let drop_map = visual_map_with_change(
+        &snapshot,
+        Some("db:column:orders:customer_id".to_string()),
+        "column-impact".to_string(),
+        Some(ChangeIntent {
+            kind: "drop".to_string(),
+            value: None,
+        }),
+    );
+    let drop_board = drop_map.review_board.as_ref().unwrap();
+    assert!(drop_board.markdown_summary.contains("컬럼 삭제"));
+    assert!(review_lane(drop_board, "checks")
+        .items
+        .iter()
+        .any(|item| item.id == "check:change:drop-data"));
+}
+
+#[test]
 fn change_impact_review_lanes_are_independently_bounded() {
     let mut snapshot = fixture_inventory("workspace-1".to_string());
     for index in 0..24 {
@@ -1743,6 +1993,8 @@ fn api_flow_surfaces_snapshot_coverage_risks_and_reindex_action() {
         result_count: Some(5_000),
         total_tables: Some(6_000),
         truncated: Some(true),
+        source_revision: None,
+        source_revision_label: None,
         source_path: None,
         source_type: "postgres".to_string(),
         profile_id: Some("test".to_string()),
@@ -2241,7 +2493,12 @@ fn api_flow_is_cycle_safe_preserves_evidence_and_limits_db_candidates_to_reachab
         .any(|evidence| evidence.kind == "engine-edge"));
     assert!(answer.steps.iter().any(|step| step.item.node_id.as_deref()
         == Some("code:class:OrderRepository")
-        && step.lane == "repository-query"));
+        && step.lane == "repository-query"
+        && step.lane_basis == "name-inferred"));
+    assert!(answer
+        .steps
+        .iter()
+        .any(|step| step.lane == "handler" && step.lane_basis == "confirmed-handles"));
     assert!(!answer
         .db_candidates
         .iter()
@@ -2278,12 +2535,108 @@ fn visual_map_without_focus_returns_overview() {
     assert!(map
         .warnings
         .iter()
-        .any(|warning| warning.contains("도메인 카드")));
+        .any(|warning| warning.contains("보조 그룹")));
     assert!(map
         .edges
         .iter()
         .all(|edge| node_ids.contains(edge.from.as_str()) && node_ids.contains(edge.to.as_str())));
     assert_eq!(map, visual_map(&snapshot, None, "atlas".to_string()));
+}
+
+#[test]
+fn atlas_prefers_engine_packages_and_db_schemas_over_name_groups() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot.metadata.architecture = Some(serde_json::json!({
+        "packages": [
+            { "name": "server", "node_count": 12 },
+            { "name": "app", "node_count": 40 }
+        ]
+    }));
+    for code in snapshot
+        .items
+        .iter_mut()
+        .filter(|item| item.source == "code")
+    {
+        code.group_id = Some("server.app.orders".to_string());
+    }
+
+    let map = visual_map(&snapshot, None, "atlas".to_string());
+
+    assert!(map.nodes.iter().any(|node| node.id == "group:package:app"));
+    assert!(map
+        .nodes
+        .iter()
+        .any(|node| node.id == "group:db-schema:public" && node.title == "DB · public"));
+    assert!(!map
+        .nodes
+        .iter()
+        .any(|node| node.id.starts_with("group:domain:")));
+    assert!(map
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("코드 엔진 패키지와 DB 스키마")));
+}
+
+#[test]
+fn atlas_overview_uses_primary_code_symbols_only() {
+    let mut function = item(
+        "code:function:process-order",
+        "function",
+        "processOrder",
+        "code",
+        "code",
+        None,
+        Some("src/app/orders.rs"),
+    );
+    let mut field = item(
+        "code:field:order-id",
+        "field",
+        "order_id",
+        "code",
+        "code",
+        None,
+        Some("src/app/orders.rs"),
+    );
+    let mut decorator = item(
+        "code:decorator:command",
+        "decorator",
+        "#[tauri::command]",
+        "code",
+        "code",
+        None,
+        Some("src/app/orders.rs"),
+    );
+    for value in [&mut function, &mut field, &mut decorator] {
+        value.group_id = Some("app".to_string());
+    }
+    let snapshot = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: "workspace-1".to_string(),
+        saved_at: "1".to_string(),
+        metadata: super::model::SnapshotMetadata {
+            architecture: Some(serde_json::json!({ "packages": ["app"] })),
+            ..Default::default()
+        },
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items: vec![function, field, decorator],
+    };
+
+    let map = visual_map(&snapshot, None, "atlas".to_string());
+    let app = map
+        .nodes
+        .iter()
+        .find(|node| node.id == "group:package:app")
+        .unwrap();
+    let subtitle = app.subtitle.as_deref().unwrap();
+
+    assert!(subtitle.starts_with("API 0 · 코드 1 · DB 0|"));
+    assert!(subtitle.contains("processOrder"));
+    assert!(!subtitle.contains("order_id"));
+    assert!(!subtitle.contains("tauri::command"));
+    assert!(map.warnings.iter().any(|warning| {
+        warning.contains("하위 코드 심벌 2개") && warning.contains("코드 검색에 보존")
+    }));
 }
 
 #[test]
@@ -2523,6 +2876,98 @@ fn large_snapshot_projection_stays_bounded_and_has_no_dangling_edges() {
     );
     assert!(focus_elapsed < limit, "focus projection exceeded {limit:?}");
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "manual 10k/50k/100k projection performance matrix"]
+fn projection_scale_matrix_covers_10k_50k_and_100k_items() {
+    for item_count in [10_000, 50_000, 100_000] {
+        let snapshot = projection_scale_snapshot(item_count);
+        let overview_started = Instant::now();
+        let overview = visual_map(&snapshot, None, "atlas".to_string());
+        let overview_elapsed = overview_started.elapsed();
+        let overview_ids = overview
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+
+        let focus_started = Instant::now();
+        let focused = visual_map(
+            &snapshot,
+            Some("code:function:domain_0:0".to_string()),
+            "search-focus".to_string(),
+        );
+        let focus_elapsed = focus_started.elapsed();
+        let focused_ids = focused
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+
+        eprintln!(
+            "projection_scale items={item_count} links={} overview_ms={} focus_ms={}",
+            snapshot.links.len(),
+            overview_elapsed.as_millis(),
+            focus_elapsed.as_millis()
+        );
+        assert!(overview.nodes.len() <= 40);
+        assert!(overview.edges.len() <= 80);
+        assert!(overview.edges.iter().all(|edge| {
+            overview_ids.contains(edge.from.as_str()) && overview_ids.contains(edge.to.as_str())
+        }));
+        assert!(focused.nodes.len() <= 36);
+        assert!(focused.edges.iter().all(|edge| {
+            focused_ids.contains(edge.from.as_str()) && focused_ids.contains(edge.to.as_str())
+        }));
+        assert!(overview_elapsed < Duration::from_secs(30));
+        assert!(focus_elapsed < Duration::from_secs(30));
+    }
+}
+
+fn projection_scale_snapshot(item_count: usize) -> InventorySnapshot {
+    let items = (0..item_count)
+        .map(|index| {
+            let domain = index % 64;
+            item(
+                &format!("code:function:domain_{domain}:{index}"),
+                "function",
+                &format!("domain_{domain}_function_{index}"),
+                "code",
+                "code",
+                None,
+                Some(&format!("src/domain_{domain}/service.rs")),
+            )
+        })
+        .collect::<Vec<_>>();
+    let links = (0..item_count.saturating_sub(1))
+        .map(|index| {
+            let from_domain = index % 64;
+            let to = index + 1;
+            let to_domain = to % 64;
+            super::model::SnapshotLink {
+                id: format!("scale-call:{index}"),
+                from: format!("code:function:domain_{from_domain}:{index}"),
+                to: format!("code:function:domain_{to_domain}:{to}"),
+                kind: "code_call".to_string(),
+                label: Some("CALLS".to_string()),
+                truth_class: "confirmed".to_string(),
+                direction: "outbound".to_string(),
+                engine_edge_type: Some("CALLS".to_string()),
+                evidence: Vec::new(),
+            }
+        })
+        .collect();
+
+    InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: format!("scale-{item_count}"),
+        saved_at: "1".to_string(),
+        metadata: Default::default(),
+        stale_reasons: Vec::new(),
+        links,
+        items,
+    }
 }
 
 #[test]
@@ -3031,6 +3476,8 @@ fn test_workspace(repo_path: &str) -> Workspace {
         id: "workspace-1".to_string(),
         name: "shop-api".to_string(),
         repo_path: repo_path.to_string(),
+        repo_source: crate::workspace::RepoSource::Local,
+        repo_origin: None,
         code_project: None,
         engine_cache: WorkspaceEngineCache::default(),
         db_profiles: Vec::new(),

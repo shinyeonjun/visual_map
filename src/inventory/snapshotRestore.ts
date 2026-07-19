@@ -1,5 +1,4 @@
 import {
-  dbInventoryTableKey,
   type CodeInventory,
   type CodeInventoryItem,
   type DbConstraint,
@@ -13,6 +12,15 @@ import type { InventoryItem, InventorySnapshot, SnapshotLink } from "../types/vi
 export function codeInventoryFromSnapshot(snapshot: InventorySnapshot, project: string): CodeInventory {
   const codeItems = snapshot.items.filter((item) => item.source === "code");
   const routes = codeItems.filter((item) => item.layer === "api").map((item) => codeItemFromSnapshot(item, project));
+  const confirmedRouteIds = new Set(
+    (snapshot.links ?? [])
+      .filter((link) => link.kind === "code_handle")
+      .map((link) => link.from.replace(/^code:/, "")),
+  );
+  routes.sort((left, right) =>
+    Number(!confirmedRouteIds.has(left.id)) - Number(!confirmedRouteIds.has(right.id)) ||
+    left.id.localeCompare(right.id),
+  );
   const codeSymbols = codeItems
     .filter((item) => item.layer === "code" && item.kind !== "file")
     .map((item) => codeItemFromSnapshot(item, project));
@@ -121,10 +129,6 @@ export function dbInventoryFromSnapshot(snapshot: InventorySnapshot, profileId: 
         tableKey: gap.relatedIds?.find((id) => id.startsWith("db:table:"))?.replace(/^db:table:/, "") ?? null,
       })),
   };
-}
-
-export function firstTableKey(inventory: DbInventory): string | null {
-  return inventory.tables[0] ? dbInventoryTableKey(inventory.tables[0]) : null;
 }
 
 function codeItemFromSnapshot(item: InventoryItem, project: string): CodeInventoryItem {

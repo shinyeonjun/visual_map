@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/main.tsx",
+    "src/**/*.test.{ts,tsx}",
+    "scripts/run-sidecar-json.mjs",
+    "scripts/tauri-cdp-smoke.mjs",
+    "design/ui-concepts/build-figma-concept-01.mjs"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx}",
+    "scripts/**/*.mjs",
+    "design/ui-concepts/**/*.mjs"
+  ],
+  "ignoreBinaries": ["powershell"]
+}

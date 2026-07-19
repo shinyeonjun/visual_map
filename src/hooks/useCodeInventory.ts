@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { toUserError } from "../app/operationStatus";
 import {
   codeInventoryCodeItems,
+  codeInventoryDefaultRoute,
   codeInventoryItemCount,
   type CodeInventory,
   type CodeInventoryItem,
@@ -32,9 +33,10 @@ export function useCodeInventory({
   const [codeError, setCodeError] = useState<string | null>(null);
   const [codeErrorDetail, setCodeErrorDetail] = useState<string | null>(null);
   const [codeInventory, setCodeInventory] = useState<CodeInventory | null>(null);
+  const [inventoryWorkspaceId, setInventoryWorkspaceId] = useState<string | null>(null);
   const [selectedCodeItem, setSelectedCodeItem] = useState<CodeInventoryItem | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     clearCodeInventory();
     setCodeStatus(null);
     setCodeError(null);
@@ -109,12 +111,14 @@ export function useCodeInventory({
 
   function clearCodeInventory() {
     setCodeInventory(null);
+    setInventoryWorkspaceId(null);
     setSelectedCodeItem(null);
   }
 
   function restoreCodeInventory(inventory: CodeInventory) {
     setCodeInventory(inventory);
-    setSelectedCodeItem(null);
+    setInventoryWorkspaceId(currentWorkspace?.id ?? null);
+    setSelectedCodeItem(firstCodeInventoryItem(inventory));
     setCodeStatus(codeInventoryStatus(inventory, "불러옴"));
     setCodeError(null);
     setCodeErrorDetail(null);
@@ -123,19 +127,20 @@ export function useCodeInventory({
   async function loadCodeInventoryForWorkspace(workspaceId: string, action: string) {
     const inventory = await invoke<CodeInventory>("get_code_inventory", { workspaceId });
     setCodeInventory(inventory);
+    setInventoryWorkspaceId(workspaceId);
     setSelectedCodeItem(firstCodeInventoryItem(inventory));
     setCodeStatus(codeInventoryStatus(inventory, action));
     setCodeError(null);
     setCodeErrorDetail(null);
-    void saveInventorySnapshot(workspaceId, inventory, getDbInventory());
+    await saveInventorySnapshot(workspaceId, inventory, getDbInventory());
   }
 
   return {
     codeStatus,
     codeError,
     codeErrorDetail,
-    codeInventory,
-    selectedCodeItem,
+    codeInventory: inventoryWorkspaceId === currentWorkspace?.id ? codeInventory : null,
+    selectedCodeItem: inventoryWorkspaceId === currentWorkspace?.id ? selectedCodeItem : null,
     setSelectedCodeItem,
     restoreCodeInventory,
     indexCodeRepository,
@@ -145,7 +150,7 @@ export function useCodeInventory({
 }
 
 function firstCodeInventoryItem(inventory: CodeInventory): CodeInventoryItem | null {
-  return inventory.routes[0] ?? codeInventoryCodeItems(inventory)[0] ?? inventory.files[0] ?? null;
+  return codeInventoryDefaultRoute(inventory) ?? codeInventoryCodeItems(inventory)[0] ?? inventory.files[0] ?? null;
 }
 
 function codeInventoryStatus(inventory: CodeInventory, action: string): string {

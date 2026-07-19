@@ -1,11 +1,15 @@
+#![warn(unreachable_pub)]
+
 mod atlas;
+mod command_error;
 mod engine;
 mod paths;
 mod source;
 mod workspace;
 
-use atlas::{InventorySnapshot, VisualMap};
-pub use engine::{EngineRegistry, EngineRuntimeMode};
+use atlas::{ChangeIntent, InventorySnapshot, VisualMap};
+use command_error::CommandResult;
+use engine::{EngineRegistry, EngineRuntimeMode};
 use paths::{base_paths, ensure_base_dirs, migrate_roaming_data_to_local, AppPaths};
 use source::{OpenSourceLocationRequest, RevealSourceLocationRequest, SourceActionResult};
 use std::{
@@ -38,7 +42,7 @@ fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn get_app_paths(app: tauri::AppHandle) -> Result<AppPaths, String> {
+fn get_app_paths(app: tauri::AppHandle) -> CommandResult<AppPaths> {
     let app_data_dir = app_data_dir(&app)?;
     let paths = base_paths(app_data_dir);
 
@@ -47,8 +51,8 @@ fn get_app_paths(app: tauri::AppHandle) -> Result<AppPaths, String> {
     Ok(paths.into())
 }
 
-#[tauri::command]
-fn get_engine_availability(app: tauri::AppHandle) -> Result<EngineRegistry, String> {
+#[tauri::command(async)]
+fn get_engine_availability(app: tauri::AppHandle) -> CommandResult<EngineRegistry> {
     let app_data_dir = app_data_dir(&app)?;
     let paths = base_paths(&app_data_dir);
 
@@ -80,73 +84,82 @@ fn get_engine_availability(app: tauri::AppHandle) -> Result<EngineRegistry, Stri
 fn save_db_profile(
     app: tauri::AppHandle,
     request: SaveDbProfileRequest,
-) -> Result<Workspace, String> {
+) -> CommandResult<Workspace> {
     let app_data_dir = app_data_dir(&app)?;
 
-    workspace::save_db_profile(app_data_dir, request)
+    Ok(workspace::save_db_profile(app_data_dir, request)?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn index_db_profile(
     app: tauri::AppHandle,
     request: IndexDbProfileRequest,
-) -> Result<DbIndexResult, String> {
+) -> CommandResult<DbIndexResult> {
     let app_data_dir = app_data_dir(&app)?;
     let registry = get_engine_availability(app)?;
 
-    workspace::index_db_profile(app_data_dir, &registry, request)
+    Ok(workspace::index_db_profile(
+        app_data_dir,
+        &registry,
+        request,
+    )?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_db_inventory(
     app: tauri::AppHandle,
     workspace_id: String,
     profile_id: Option<String>,
-) -> Result<DbInventory, String> {
+) -> CommandResult<DbInventory> {
     let app_data_dir = app_data_dir(&app)?;
     let registry = get_engine_availability(app)?;
 
-    workspace::db_inventory(
+    Ok(workspace::db_inventory(
         app_data_dir,
         &registry,
         &workspace_id,
         profile_id.as_deref(),
-    )
+    )?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn index_code_repository(
     app: tauri::AppHandle,
     request: IndexCodeRequest,
-) -> Result<CodeIndexResult, String> {
+) -> CommandResult<CodeIndexResult> {
     let app_data_dir = app_data_dir(&app)?;
     let registry = get_engine_availability(app)?;
 
-    workspace::index_code_repository(app_data_dir, &registry, request)
+    Ok(workspace::index_code_repository(
+        app_data_dir,
+        &registry,
+        request,
+    )?)
 }
 
-#[tauri::command]
-fn get_code_inventory(
-    app: tauri::AppHandle,
-    workspace_id: String,
-) -> Result<CodeInventory, String> {
+#[tauri::command(async)]
+fn get_code_inventory(app: tauri::AppHandle, workspace_id: String) -> CommandResult<CodeInventory> {
     let app_data_dir = app_data_dir(&app)?;
     let registry = get_engine_availability(app)?;
 
-    workspace::code_inventory(app_data_dir, &registry, &workspace_id)
+    Ok(workspace::code_inventory(
+        app_data_dir,
+        &registry,
+        &workspace_id,
+    )?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_inventory_snapshot(
     app: tauri::AppHandle,
     workspace_id: String,
     code: Option<CodeInventory>,
     db: Option<DbInventory>,
-) -> Result<InventorySnapshot, String> {
+) -> CommandResult<InventorySnapshot> {
     let app_data_dir = app_data_dir(&app)?;
     let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
     if code.is_none() && db.is_none() {
-        return Err("저장할 코드 또는 DB 읽기 결과가 없습니다".to_string());
+        return Err("저장할 코드 또는 DB 읽기 결과가 없습니다".into());
     }
     let registry = get_engine_availability(app)?;
     let snapshot = atlas::build_inventory_snapshot(workspace_id, code.as_ref(), db.as_ref());
@@ -156,29 +169,33 @@ fn save_inventory_snapshot(
     Ok(snapshot)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_inventory_snapshot(
     app: tauri::AppHandle,
     workspace_id: String,
-) -> Result<InventorySnapshot, String> {
+) -> CommandResult<Option<InventorySnapshot>> {
     let app_data_dir = app_data_dir(&app)?;
     let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
     let registry = get_engine_availability(app)?;
-    let snapshot = atlas::load_inventory_snapshot(&app_data_dir, &workspace_id)?;
+    let Some(snapshot) = atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace_id)?
+    else {
+        return Ok(None);
+    };
 
-    Ok(atlas::mark_snapshot_staleness(
+    Ok(Some(atlas::mark_snapshot_staleness(
         snapshot, &workspace, &registry,
-    ))
+    )))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_visual_map(
     app: tauri::AppHandle,
     workspace_id: String,
     focus_id: Option<String>,
     mode: String,
+    change_intent: Option<ChangeIntent>,
     enrich_code_evidence: Option<bool>,
-) -> Result<VisualMap, String> {
+) -> CommandResult<VisualMap> {
     let app_data_dir = app_data_dir(&app)?;
     let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
     let registry = get_engine_availability(app)?;
@@ -189,8 +206,10 @@ fn get_visual_map(
         return Err(format!(
             "코드/DB 읽기 결과가 최신이 아닙니다: {}",
             stale_reasons.join(", ")
-        ));
+        )
+        .into());
     }
+    let change_intent = normalized_change_intent(change_intent)?;
 
     if enrich_code_evidence.unwrap_or(false)
         && matches!(mode.as_str(), "table-usage" | "column-impact")
@@ -205,10 +224,55 @@ fn get_visual_map(
             &mode,
             &mut enriched_snapshot,
         );
-        return Ok(atlas::visual_map(&enriched_snapshot, focus_id, mode));
+        return Ok(atlas::visual_map_with_change(
+            &enriched_snapshot,
+            focus_id,
+            mode,
+            change_intent,
+        ));
     }
 
-    Ok(atlas::visual_map(&snapshot, focus_id, mode))
+    Ok(atlas::visual_map_with_change(
+        &snapshot,
+        focus_id,
+        mode,
+        change_intent,
+    ))
+}
+
+fn normalized_change_intent(intent: Option<ChangeIntent>) -> Result<Option<ChangeIntent>, String> {
+    let Some(mut intent) = intent else {
+        return Ok(None);
+    };
+    if !matches!(
+        intent.kind.as_str(),
+        "rename" | "drop" | "type" | "nullability"
+    ) {
+        return Err("지원하는 변경 종류는 이름 변경, 삭제, 타입 변경, NULL 제약입니다".to_string());
+    }
+    intent.value = intent
+        .value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if intent
+        .value
+        .as_deref()
+        .is_some_and(|value| value.len() > 128 || value.chars().any(char::is_control))
+    {
+        return Err("변경 대상 값은 제어 문자 없이 128자 이하여야 합니다".to_string());
+    }
+    if intent.kind == "nullability"
+        && intent
+            .value
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "nullable" | "required"))
+    {
+        return Err("NULL 제약 값은 nullable 또는 required여야 합니다".to_string());
+    }
+    if intent.kind == "drop" {
+        intent.value = None;
+    }
+    Ok(Some(intent))
 }
 
 fn enrich_snapshot_code_evidence(
@@ -397,7 +461,8 @@ fn escape_regex(value: &str) -> String {
 
 #[cfg(test)]
 mod code_evidence_tests {
-    use super::focused_code_path_filter;
+    use super::{focused_code_path_filter, normalized_change_intent};
+    use crate::atlas::ChangeIntent;
 
     #[test]
     fn column_search_path_filter_is_exact_deduplicated_and_bounded() {
@@ -415,61 +480,131 @@ mod code_evidence_tests {
         assert!(filter.len() <= 512);
         assert_eq!(omitted, 4);
     }
+
+    #[test]
+    fn change_intent_is_bounded_and_normalized() {
+        let intent = normalized_change_intent(Some(ChangeIntent {
+            kind: "rename".to_string(),
+            value: Some("  display_name  ".to_string()),
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(intent.value.as_deref(), Some("display_name"));
+
+        assert!(normalized_change_intent(Some(ChangeIntent {
+            kind: "nullability".to_string(),
+            value: Some("sometimes".to_string()),
+        }))
+        .is_err());
+        assert!(normalized_change_intent(Some(ChangeIntent {
+            kind: "rename".to_string(),
+            value: Some("x".repeat(129)),
+        }))
+        .is_err());
+    }
 }
 
 #[tauri::command]
 fn open_source_location(
     app: tauri::AppHandle,
     request: OpenSourceLocationRequest,
-) -> Result<SourceActionResult, String> {
-    source::open_source_location(app_data_dir(&app)?, request)
+) -> CommandResult<SourceActionResult> {
+    Ok(source::open_source_location(app_data_dir(&app)?, request)?)
 }
 
 #[tauri::command]
 fn reveal_source_location(
     app: tauri::AppHandle,
     request: RevealSourceLocationRequest,
-) -> Result<SourceActionResult, String> {
-    source::reveal_source_location(app_data_dir(&app)?, request)
+) -> CommandResult<SourceActionResult> {
+    Ok(source::reveal_source_location(
+        app_data_dir(&app)?,
+        request,
+    )?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_workspace(
     app: tauri::AppHandle,
     request: CreateWorkspaceRequest,
-) -> Result<Workspace, String> {
+) -> CommandResult<Workspace> {
     let app_data_dir = app_data_dir(&app)?;
 
-    workspace::create_workspace(app_data_dir, request)
+    Ok(workspace::create_workspace(app_data_dir, request)?)
 }
 
 #[tauri::command]
-fn open_workspace(app: tauri::AppHandle, workspace_id: String) -> Result<Workspace, String> {
+fn open_workspace(app: tauri::AppHandle, workspace_id: String) -> CommandResult<Workspace> {
     let app_data_dir = app_data_dir(&app)?;
 
-    workspace::open_workspace(app_data_dir, &workspace_id)
+    Ok(workspace::open_workspace(app_data_dir, &workspace_id)?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
+fn refresh_github_workspace(
+    app: tauri::AppHandle,
+    workspace_id: String,
+) -> CommandResult<Workspace> {
+    Ok(workspace::refresh_github_workspace(
+        app_data_dir(&app)?,
+        &workspace_id,
+    )?)
+}
+
+#[tauri::command(async)]
 fn get_workspace_recovery_warnings(
     app: tauri::AppHandle,
-) -> Result<Vec<workspace::WorkspaceRecoveryWarning>, String> {
-    workspace::workspace_recovery_warnings(app_data_dir(&app)?)
+) -> CommandResult<Vec<workspace::WorkspaceRecoveryWarning>> {
+    Ok(workspace::workspace_recovery_warnings(app_data_dir(&app)?)?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn repair_workspace_from_backup(
     app: tauri::AppHandle,
     workspace_id: String,
-) -> Result<Workspace, String> {
-    workspace::repair_workspace_from_backup(app_data_dir(&app)?, &workspace_id)
+) -> CommandResult<Workspace> {
+    Ok(workspace::repair_workspace_from_backup(
+        app_data_dir(&app)?,
+        &workspace_id,
+    )?)
 }
 
-#[tauri::command]
-fn list_workspaces(app: tauri::AppHandle) -> Result<Vec<Workspace>, String> {
+#[tauri::command(async)]
+fn delete_workspace(app: tauri::AppHandle, workspace_id: String) -> CommandResult<()> {
+    Ok(workspace::delete_workspace(
+        app_data_dir(&app)?,
+        &workspace_id,
+    )?)
+}
+
+#[tauri::command(async)]
+fn delete_db_profile(
+    app: tauri::AppHandle,
+    workspace_id: String,
+    profile_id: String,
+) -> CommandResult<Workspace> {
+    let app_data_dir = app_data_dir(&app)?;
+    let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
+    if !workspace
+        .db_profiles
+        .iter()
+        .any(|profile| profile.id == profile_id)
+    {
+        return Err("삭제할 DB 연결을 찾을 수 없습니다".into());
+    }
+    atlas::remove_db_inventory_snapshot(&app_data_dir, &workspace_id)?;
+    Ok(workspace::delete_db_profile(
+        app_data_dir,
+        &workspace_id,
+        &profile_id,
+    )?)
+}
+
+#[tauri::command(async)]
+fn list_workspaces(app: tauri::AppHandle) -> CommandResult<Vec<Workspace>> {
     let app_data_dir = app_data_dir(&app)?;
 
-    workspace::list_workspaces(app_data_dir)
+    Ok(workspace::list_workspaces(app_data_dir)?)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -491,9 +626,12 @@ pub fn run() {
             reveal_source_location,
             create_workspace,
             open_workspace,
+            refresh_github_workspace,
             list_workspaces,
             get_workspace_recovery_warnings,
-            repair_workspace_from_backup
+            repair_workspace_from_backup,
+            delete_workspace,
+            delete_db_profile
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

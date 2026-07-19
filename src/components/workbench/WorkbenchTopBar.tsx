@@ -1,208 +1,202 @@
 import {
   ChevronDown,
   CircleCheck,
-  Database,
+  Clock3,
   Folder,
+  FolderCog,
   Network,
   RefreshCw,
   Search,
+  TriangleAlert,
 } from "lucide-react";
 import { useSearchHotkey } from "../../hooks/useSearchHotkey";
-import { codeInventoryItemCount, dbProfileSourceLabel } from "../../types/workspace";
+import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
+import { codeInventoryItemCount } from "../../types/workspace";
 import { searchScopeText } from "../../visual/search";
-import type { VisualMapControls } from "../../types/controls";
-import type { DbProfileControls, WorkspaceControls } from "../../types/controls";
 import { SearchResultsPopover, focusFirstSearchResult } from "../common/SearchResultsPopover";
-import type { View } from "../common/ViewSwitch";
-import { ViewSwitch } from "../common/ViewSwitch";
 
 export function WorkbenchTopBar({
-  view,
-  setView,
+  sourceManagerOpen,
+  onToggleSourceManager,
   workspaceControls,
   dbProfileControls,
   visualMapControls,
 }: {
-  view: View;
-  setView: (view: View) => void;
+  sourceManagerOpen: boolean;
+  onToggleSourceManager: () => void;
   workspaceControls: WorkspaceControls;
   dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
 }) {
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
-  const workspaceName = workspaceControls.currentWorkspace?.name ?? "프로젝트 열기";
-  const activeSource = dbProfileControls.activeProfile?.source;
-  const dbSourceLabel = activeSource ? dbProfileSourceLabel(activeSource) : dbProfileControls.inventory ? "저장된 구조" : null;
-  const dbTables = dbProfileControls.inventory?.tables ?? null;
-  const dbTableCount = dbTables?.length ?? null;
-  const dbColumnCount = dbTables?.reduce((sum, table) => sum + table.columns.length, 0) ?? null;
-  const dbMissingColumnTables = dbTables?.filter((table) => table.columns.length === 0).length ?? 0;
-  const dbProfileName = dbProfileControls.activeProfile?.name ?? (dbTableCount !== null ? "저장된 구조" : "연결 전");
-  const dbNeedsColumns = dbTableCount !== null && dbTableCount > 0 && (dbColumnCount ?? 0) === 0;
-  const dbPartialColumns = dbMissingColumnTables > 0 && (dbColumnCount ?? 0) > 0;
-  const dbReady = dbTableCount !== null && dbTableCount > 0 && !dbNeedsColumns && !dbPartialColumns;
-  const updatedAt = workspaceControls.currentWorkspace
-    ? formatWorkspaceUpdatedAt(workspaceControls.currentWorkspace.updatedAt)
-    : null;
-  const searchInputRef = useSearchHotkey(visualMapControls.openSearchPopover);
-  const hasCodeItems = codeInventoryItemCount(workspaceControls.codeInventory) > 0;
-  const canSearch = hasCodeItems || Boolean(dbProfileControls.inventory?.tables.length);
-  const showDbState = hasCodeItems || Boolean(activeSource) || dbTableCount !== null;
+  const hasInventory =
+    codeInventoryItemCount(workspaceControls.codeInventory) > 0 ||
+    Boolean(dbProfileControls.inventory?.tables.length);
   const searchScope = searchScopeText(workspaceControls.codeInventory, dbProfileControls.inventory);
-  const searchPlaceholder = `${searchScope} 찾기`;
-  const hasWorkspaceChoices = hasWorkspace || workspaceControls.workspaces.length > 0;
-  const workspaceSelectDisabled = workspaceControls.busy || (!hasWorkspace && workspaceControls.workspaces.length === 0);
-  const workspacePendingLabel = workspaceControls.canCreateWorkspace
-    ? workspaceControls.repoSourceMode === "github"
-      ? "복제 준비"
-      : "열기 준비"
-    : workspaceControls.repoSourceMode === "github"
-      ? "URL 필요"
-      : "폴더 필요";
-  const workspaceSelectLabel = workspaceSelectDisabled ? workspacePendingLabel : workspaceName;
-  const workspaceState = workspaceControls.busy ? "busy" : workspaceControls.currentWorkspace ? "ready" : "pending";
-  const WorkspaceStateIcon = workspaceState === "ready" ? CircleCheck : workspaceState === "busy" ? RefreshCw : Folder;
-  const workspaceRequiredText = workspaceControls.repoSourceMode === "github" ? "GitHub URL 필요" : "로컬 폴더 필요";
-  const workspaceStateText =
-    workspaceState === "busy"
-      ? "작업 진행 중"
-      : workspaceState === "ready"
-        ? "프로젝트 열림"
-        : workspaceControls.canCreateWorkspace
-          ? workspaceControls.repoSourceMode === "github"
-            ? "저장소 복제 준비"
-            : "프로젝트 열기 준비"
-          : workspaceRequiredText;
-  const dbStateText =
-    dbTableCount !== null
-      ? dbReady
-        ? `DB: ${dbProfileName} · 테이블 ${dbTableCount}개 · 컬럼 ${dbColumnCount ?? 0}개`
-        : dbPartialColumns
-          ? `DB: ${dbProfileName} · 컬럼 일부 대기 ${dbMissingColumnTables}/${dbTableCount}`
-        : dbNeedsColumns
-          ? `DB: ${dbProfileName} · 컬럼 대기 · 테이블 ${dbTableCount}개`
-        : `DB: ${dbProfileName} · 테이블 없음`
-      : activeSource
-        ? `DB: 읽기 대기 · ${dbProfileName}`
-        : hasCodeItems
-          ? "DB: 연결하면 영향 범위"
-          : "DB: 연결 전";
-  const dbStateTitle = dbSourceLabel ? `${dbStateText} · 연결: ${dbSourceLabel}` : dbStateText;
+  const { searchInputRef, queueSearch, flushSearch } = useSearchHotkey(
+    visualMapControls.openSearchPopover,
+    visualMapControls.searchQuery,
+    visualMapControls.setSearchQuery,
+  );
+  const freshness = sourceFreshness(workspaceControls, visualMapControls, hasInventory);
+  const FreshnessIcon = freshness.icon;
+  const sourceManagerActive = sourceManagerOpen || (!hasWorkspace && workspaceControls.initialized);
 
   return (
-    <header className="topbar">
-      <div className="brand-mark">
-        <Network size={18} />
+    <header className="topbar product-topbar">
+      <div className="product-identity">
+        <span className="brand-mark" aria-hidden="true">
+          <Network size={18} />
+        </span>
+        <strong className="product-name">백엔드 비주얼 맵</strong>
       </div>
-      <strong className="product-name">백엔드 비주얼 맵</strong>
-      {hasWorkspaceChoices && (
-        <label
-          className={`top-select select-shell ${workspaceSelectDisabled ? "disabled" : ""}`}
-          title={workspaceSelectDisabled ? "프로젝트를 열면 선택할 수 있습니다" : undefined}
+
+      <label className={`top-select select-shell ${hasWorkspace ? "" : "empty"}`}>
+        <Folder size={15} />
+        <select
+          aria-label="프로젝트"
+          value={workspaceControls.currentWorkspace?.id ?? ""}
+          disabled={workspaceControls.busy || workspaceControls.workspaces.length === 0}
+          onChange={(event) => workspaceControls.openWorkspace(event.currentTarget.value)}
         >
-          <Folder size={15} />
-          <select
-            aria-label="프로젝트"
-            value={workspaceControls.currentWorkspace?.id ?? ""}
-            disabled={workspaceSelectDisabled}
-            onChange={(event) => workspaceControls.openWorkspace(event.currentTarget.value)}
-          >
-            <option value="" disabled>
-              {workspaceSelectLabel}
+          <option value="">
+            {hasWorkspace
+              ? workspaceControls.currentWorkspace?.name
+              : workspaceControls.initialized
+                ? "프로젝트 없음"
+                : "프로젝트 확인 중"}
+          </option>
+          {workspaceControls.workspaces.map((workspace) => (
+            <option value={workspace.id} key={workspace.id}>
+              {workspace.name}
             </option>
-            {workspaceControls.workspaces.map((workspace) => (
-              <option value={workspace.id} key={workspace.id}>
-                {workspace.name}
-              </option>
-            ))}
-          </select>
-          <ChevronDown size={13} />
-        </label>
-      )}
-      {(hasWorkspace || workspaceControls.busy) && (
-        <span className={`scan-pill workspace-state-pill ${workspaceState}`} title={workspaceStateText}>
-          <WorkspaceStateIcon size={14} className={workspaceState === "busy" ? "spin" : undefined} />
-          <span className="scan-pill-text">{workspaceStateText}</span>
-        </span>
-      )}
-      {showDbState && (
-        <span
-          className={`scan-pill db-state-pill ${dbReady ? "ready" : "pending"}`}
-          title={dbStateTitle}
-        >
-          <Database size={14} />
-          <span className="scan-pill-text">{dbStateText}</span>
-        </span>
-      )}
-      {updatedAt && (
-        <span className="top-time">
-          {updatedAt}
-          <RefreshCw size={12} className={workspaceControls.busy ? "spin" : undefined} />
-        </span>
-      )}
-      {canSearch && (
-        <>
-          <ViewSwitch canOpenAtlas={hasWorkspace} view={view} setView={setView} />
-          <div
-            className="search-shell"
-            onBlur={(event) => {
-              const nextTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
-              if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+          ))}
+        </select>
+        <ChevronDown size={13} />
+      </label>
+
+      <span className={`source-freshness ${freshness.tone}`} title={freshness.detail}>
+        <FreshnessIcon size={14} className={freshness.spin ? "spin" : undefined} />
+        <span>{freshness.label}</span>
+      </span>
+
+      <div
+        className={`search-shell product-search ${hasInventory ? "" : "disabled"}`}
+        onBlur={(event) => {
+          const nextTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+          if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+            flushSearch(searchInputRef.current?.value ?? visualMapControls.searchQuery);
+            visualMapControls.closeSearchPopover();
+          }
+        }}
+      >
+        <label className="global-search">
+          <Search size={15} />
+          <input
+            id="global-inventory-search"
+            ref={searchInputRef}
+            aria-label="API, 함수, 파일, 테이블, 컬럼 검색"
+            defaultValue={visualMapControls.searchQuery}
+            disabled={!hasInventory}
+            onFocus={() => hasInventory && visualMapControls.openSearchPopover()}
+            onChange={(event) => queueSearch(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                if (event.currentTarget.value !== visualMapControls.searchQuery) {
+                  flushSearch(event.currentTarget.value);
+                  return;
+                }
+                const firstResult = visualMapControls.searchGroups[0]?.results[0];
+                firstResult ? visualMapControls.selectSearchResult(firstResult) : visualMapControls.runSearch();
+              } else if (event.key === "ArrowDown" && visualMapControls.searchGroups.length > 0) {
+                if (event.currentTarget.value !== visualMapControls.searchQuery) {
+                  event.preventDefault();
+                  flushSearch(event.currentTarget.value);
+                  return;
+                }
+                event.preventDefault();
+                focusFirstSearchResult();
+              } else if (event.key === "Escape") {
+                flushSearch(event.currentTarget.value);
                 visualMapControls.closeSearchPopover();
               }
             }}
-          >
-            <label className="global-search">
-              <Search size={14} />
-              <input
-                id="global-inventory-search"
-                ref={searchInputRef}
-                aria-label="프로젝트 항목 검색"
-                value={visualMapControls.searchQuery}
-                onFocus={visualMapControls.openSearchPopover}
-                onChange={(event) => visualMapControls.setSearchQuery(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    const firstResult = visualMapControls.searchGroups[0]?.results[0];
-                    firstResult ? visualMapControls.selectSearchResult(firstResult) : visualMapControls.runSearch();
-                  } else if (event.key === "ArrowDown" && visualMapControls.searchGroups.length > 0) {
-                    event.preventDefault();
-                    focusFirstSearchResult();
-                  } else if (event.key === "Escape") {
-                    visualMapControls.closeSearchPopover();
-                  }
-                }}
-                placeholder={searchPlaceholder}
-                title="Ctrl+K로 검색"
-              />
-              <kbd aria-hidden="true">Ctrl K</kbd>
-            </label>
-            <SearchResultsPopover
-              visualMapControls={visualMapControls}
-              searchScope={searchScope}
-            />
-          </div>
-        </>
-      )}
+            placeholder={hasInventory ? `${searchScope} 검색` : "소스를 연결하면 검색할 수 있습니다"}
+            title="Ctrl+K로 검색"
+          />
+          <kbd aria-hidden="true">Ctrl K</kbd>
+        </label>
+        {hasInventory && (
+          <SearchResultsPopover visualMapControls={visualMapControls} searchScope={searchScope} />
+        )}
+      </div>
+
+      <button
+        className={`source-manager-trigger ${sourceManagerActive ? "active" : ""}`}
+        type="button"
+        aria-pressed={hasWorkspace ? sourceManagerOpen : undefined}
+        aria-current={!hasWorkspace && workspaceControls.initialized ? "page" : undefined}
+        disabled={!workspaceControls.initialized}
+        onClick={() => {
+          if (!hasWorkspace) {
+            document.querySelector<HTMLInputElement>("#workspace-repo-input")?.focus();
+            return;
+          }
+          onToggleSourceManager();
+        }}
+      >
+        <FolderCog size={16} />
+        <span>소스 관리</span>
+      </button>
     </header>
   );
 }
 
-function formatWorkspaceUpdatedAt(value?: string | null) {
-  if (!value) {
-    return null;
+function sourceFreshness(
+  workspaceControls: WorkspaceControls,
+  visualMapControls: VisualMapControls,
+  hasInventory: boolean,
+): {
+  label: string;
+  detail: string;
+  tone: "fresh" | "stale" | "busy" | "pending" | "error";
+  icon: typeof CircleCheck;
+  spin?: boolean;
+} {
+  if (!workspaceControls.initialized) {
+    return { label: "준비 중", detail: "프로젝트 목록을 확인하고 있습니다.", tone: "busy", icon: RefreshCw, spin: true };
   }
-
-  const trimmed = value.trim();
-  const numericTimestamp = /^\d+$/.test(trimmed) ? Number(trimmed) : null;
-  const date =
-    numericTimestamp !== null && Number.isFinite(numericTimestamp)
-      ? new Date(trimmed.length <= 10 ? numericTimestamp * 1000 : numericTimestamp)
-      : new Date(trimmed);
-
-  if (Number.isNaN(date.getTime())) {
-    return "업데이트 시간 확인 필요";
+  if (workspaceControls.busy) {
+    return { label: "분석 중", detail: "프로젝트 소스를 읽고 있습니다.", tone: "busy", icon: RefreshCw, spin: true };
   }
-
-  return new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" }).format(date);
+  if (workspaceControls.operationStatus.phase === "error") {
+    return {
+      label: "확인 필요",
+      detail: workspaceControls.operationStatus.message,
+      tone: "error",
+      icon: TriangleAlert,
+    };
+  }
+  if (visualMapControls.snapshotStaleReasons.length > 0) {
+    return {
+      label: "오래됨",
+      detail: visualMapControls.snapshotStaleReasons.join(" · "),
+      tone: "stale",
+      icon: TriangleAlert,
+    };
+  }
+  if (visualMapControls.snapshotSavedAt || hasInventory) {
+    return {
+      label: "마지막 읽기",
+      detail: visualMapControls.snapshotSourceSummary ?? "마지막으로 읽은 코드와 DB 구조를 표시합니다.",
+      tone: "fresh",
+      icon: CircleCheck,
+    };
+  }
+  return {
+    label: "분석 전",
+    detail: "코드 또는 데이터베이스 소스를 연결하세요.",
+    tone: "pending",
+    icon: Clock3,
+  };
 }

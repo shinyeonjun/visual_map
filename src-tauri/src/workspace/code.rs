@@ -59,7 +59,7 @@ pub(crate) const CALLS_QUERY: &str = "MATCH (caller)-[:CALLS]->(callee) RETURN c
 pub(crate) const HANDLES_QUERY: &str = "MATCH (handler)-[:HANDLES]->(route) RETURN handler.qualified_name AS source, route.qualified_name AS target LIMIT 100000";
 pub(crate) const SOURCE_LOCATIONS_QUERY: &str = "MATCH (node) RETURN node.qualified_name AS source, node.file_path AS path, node.start_line AS start_line, node.start_column AS start_column, node.end_line AS end_line, node.end_column AS end_column LIMIT 100000";
 
-pub fn index_code_repository(
+pub(crate) fn index_code_repository(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
     request: IndexCodeRequest,
@@ -101,7 +101,7 @@ pub fn index_code_repository(
     Ok(CodeIndexResult { workspace, run })
 }
 
-pub fn code_inventory(
+pub(crate) fn code_inventory(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
     workspace_id: &str,
@@ -187,10 +187,11 @@ pub fn code_inventory(
     inventory.calls = extract_code_calls(&calls, &inventory);
     attach_code_handles(&handles, &mut inventory);
     enrich_code_locations(&locations, &mut inventory)?;
+    downgrade_unverified_routes(&mut inventory);
     Ok(inventory)
 }
 
-pub fn focused_code_search(
+pub(crate) fn focused_code_search(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
     workspace_id: &str,
@@ -727,6 +728,27 @@ pub(crate) fn enrich_code_locations(
     Ok(())
 }
 
+pub(crate) fn downgrade_unverified_routes(inventory: &mut CodeInventory) {
+    let handled_routes = inventory
+        .handles
+        .iter()
+        .map(|handle| handle.route.as_str())
+        .collect::<HashSet<_>>();
+    let (routes, mut unverified): (Vec<_>, Vec<_>) = std::mem::take(&mut inventory.routes)
+        .into_iter()
+        .partition(|route| route.file_path.is_some() || handled_routes.contains(route.id.as_str()));
+
+    for route in &mut unverified {
+        route.kind = "unknown".to_string();
+    }
+    inventory.routes = routes;
+    inventory.unknown.append(&mut unverified);
+    inventory
+        .unknown
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    inventory.summary = code_inventory_summary(inventory);
+}
+
 fn source_location_row(value: &serde_json::Value) -> Option<CodeSourceLocation> {
     if let Some(items) = value.as_array() {
         let (column, end_line, end_column) = if items.len() >= 6 {
@@ -891,6 +913,9 @@ fn extract_labeled_items(
                 item.qualified_name
             ));
         }
+        if is_obvious_inventory_noise(&item) {
+            continue;
+        }
 
         match seen.get(&item.qualified_name) {
             Some(label) if label == &item.engine_label => continue,
@@ -908,6 +933,13 @@ fn extract_labeled_items(
     }
     items.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(items)
+}
+
+fn is_obvious_inventory_noise(item: &CodeInventoryItem) -> bool {
+    (item.engine_label == "Route" && item.name.contains("://"))
+        || (item.engine_label == "Decorator"
+            && item.name.starts_with("#[")
+            && !item.name.ends_with(']'))
 }
 
 fn code_item(project: &str, value: &serde_json::Value) -> Result<CodeInventoryItem, String> {
@@ -954,15 +986,8 @@ fn category_items(items: &[CodeInventoryItem], category: &str) -> Vec<CodeInvent
 }
 
 fn code_category(item: &CodeInventoryItem) -> &'static str {
-    let text = format!("{} {}", item.kind, item.name).to_ascii_lowercase();
     let kind = item.engine_label.to_ascii_lowercase();
-    if text.contains("handler") || text.contains("controller") {
-        "handler"
-    } else if text.contains("repository") || text.contains("repo") || text.contains("dao") {
-        "repository"
-    } else if text.contains("service") {
-        "service"
-    } else if matches!(
+    if matches!(
         kind.as_str(),
         "function" | "method" | "constructor" | "subroutine" | "procedure"
     ) {
@@ -979,11 +1004,33 @@ fn code_category(item: &CodeInventoryItem) -> &'static str {
             | "type"
             | "union"
     ) {
-        "class"
+        class_role(&item.name).unwrap_or("class")
     } else if matches!(kind.as_str(), "module" | "package" | "namespace") {
         "module"
     } else {
         "code"
+    }
+}
+
+fn class_role(name: &str) -> Option<&'static str> {
+    let compact = name
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let role_name = compact.strip_suffix("impl").unwrap_or(&compact);
+
+    if role_name.ends_with("handler") || role_name.ends_with("controller") {
+        Some("handler")
+    } else if role_name.ends_with("repository")
+        || role_name.ends_with("repo")
+        || role_name.ends_with("dao")
+    {
+        Some("repository")
+    } else if role_name.ends_with("service") {
+        Some("service")
+    } else {
+        None
     }
 }
 

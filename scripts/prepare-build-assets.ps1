@@ -25,7 +25,7 @@ try {
     Invoke-Checked "locked dependency inventory" {
       & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\generate-dependency-inventory.ps1 -VerifyOnly
     }
-    Write-Warning "INTERNAL BUILD ONLY: database-memory is a declared development artifact. Do not redistribute this installer."
+    Write-Warning "INTERNAL BUILD ONLY: use the release build path before redistributing this installer."
   } else {
     Invoke-Checked "release engine gate" { & npm run verify:release-engines }
     Invoke-Checked "release notices" {

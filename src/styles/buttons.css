@@ -81,11 +81,6 @@
   background: color-mix(in srgb, var(--accent) 9%, var(--bg-raised));
   color: var(--accent-ink);
 }
-.outline-action.accent { border-color: rgba(91, 157, 255, 0.45); color: var(--blue-ink); background: rgba(91, 157, 255, 0.14); }
-.db-load-action {
-  width: 100%;
-  margin-top: 6px;
-}
 .table-button {
   width: 100%;
   border: 0;

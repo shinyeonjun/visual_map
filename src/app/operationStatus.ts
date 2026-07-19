@@ -1,15 +1,19 @@
-import type { OperationStatus, UserError } from "../types/operation";
+import type { CommandErrorPayload, OperationStatus, UserError } from "../types/operation";
 
 const actionLabels: Record<string, string> = {
   "workspace-create": "프로젝트 열기",
   "workspace-clone": "GitHub 저장소 복제",
   "workspace-open": "프로젝트 열기",
+  "workspace-refresh": "GitHub 업데이트",
+  "workspace-delete": "프로젝트 제거",
+  "snapshot-restore": "저장 결과 확인",
   "code-index": "코드 읽기",
   "code-load": "코드 불러오기",
   "db-save": "DB 연결 저장",
   "db-test": "DB 구조 테스트",
   "db-index": "DB 구조 읽기",
   "db-load": "테이블 불러오기",
+  "db-delete": "DB 연결 삭제",
 };
 
 export function runningOperation(action: string | null): OperationStatus | null {
@@ -34,6 +38,14 @@ export function idleOperation(): OperationStatus {
 }
 
 export function toUserError(error: unknown, fallback: string): UserError {
+  const commandError = commandErrorPayload(error);
+  if (commandError) {
+    return {
+      message: `${fallback}: ${commandError.message}`,
+      details: commandError.detail,
+      code: commandError.code,
+    };
+  }
   const details = String(error);
   const lower = details.toLowerCase();
 
@@ -51,4 +63,36 @@ export function toUserError(error: unknown, fallback: string): UserError {
   }
 
   return { message: fallback, details };
+}
+
+export function commandErrorCode(error: unknown): string | null {
+  return commandErrorPayload(error)?.code ?? null;
+}
+
+function commandErrorPayload(error: unknown): CommandErrorPayload | null {
+  if (isCommandErrorPayload(error)) {
+    return error;
+  }
+  if (typeof error !== "string" || !error.trim().startsWith("{")) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(error);
+    return isCommandErrorPayload(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isCommandErrorPayload(value: unknown): value is CommandErrorPayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<CommandErrorPayload>;
+  return (
+    typeof candidate.code === "string" &&
+    typeof candidate.message === "string" &&
+    typeof candidate.detail === "string" &&
+    typeof candidate.retryable === "boolean"
+  );
 }

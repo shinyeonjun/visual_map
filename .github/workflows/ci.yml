@@ -41,6 +41,12 @@ jobs:
       - name: Typecheck frontend
         run: npm run typecheck
 
+      - name: Check dead frontend code
+        run: npm run deadcode
+
+      - name: Test frontend
+        run: npm test
+
       - name: Build frontend
         run: npm run build
 
@@ -74,3 +80,6 @@ jobs:
 
       - name: Test Rust
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Build release-mode desktop binary
+        run: npx tauri build --no-bundle

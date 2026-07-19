@@ -156,17 +156,7 @@ function Invoke-IndexSmoke {
 try {
   New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
   Test-ProductContract
-  $ddlSmokePath = Join-Path $tempRoot "schema.sql"
-  @"
-CREATE TABLE users (
-  id INTEGER PRIMARY KEY,
-  email TEXT NOT NULL
-);
-CREATE TABLE orders (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id)
-);
-"@ | Set-Content -LiteralPath $ddlSmokePath -Encoding UTF8
+  $ddlSmokePath = Join-Path $PSScriptRoot "fixtures\product-smoke-schema.sql"
 
   Invoke-IndexSmoke `
     -Label "SQLite" `

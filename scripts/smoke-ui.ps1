@@ -30,10 +30,18 @@ $atlasExpression = @'
     throw new Error(`Timed out waiting for ${selector}`);
   };
 
-  const atlasView = document.querySelector('button[data-view="atlas"]');
-  if (atlasView) atlasView.click();
   const overview = await waitFor('button[data-mode-id="atlas"]');
   overview.click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const resetStarted = Date.now();
+  while (!document.querySelector('.at-domain-card') && Date.now() - resetStarted < 8000) {
+    const back = document.querySelector('button[data-atlas-action="overview"]');
+    if (back && !back.disabled) {
+      back.click();
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   const card = await waitFor('.at-domain-card');
   card.click();
   await waitFor('.at-domain-band');
@@ -58,8 +66,20 @@ $impactExpression = @'
     throw new Error(`Timed out waiting for ${selector}`);
   };
 
-  document.querySelector('button[data-view="atlas"]')?.click();
-  await waitFor('.mode-card');
+  await waitFor('.product-nav-list');
+  const overview = await waitFor('button[data-mode-id="atlas"]');
+  overview.click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const resetStarted = Date.now();
+  while (!document.querySelector('.at-domain-card') && Date.now() - resetStarted < 8000) {
+    const back = document.querySelector('button[data-atlas-action="overview"]');
+    if (back && !back.disabled) {
+      back.click();
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await waitFor('.at-domain-card');
   const mode = document.querySelector('button[data-mode-id="impact"]');
   if (!mode || mode.disabled) throw new Error('Column impact mode is not available for the loaded workspace');
   mode.click();
@@ -86,6 +106,16 @@ $impactExpression = @'
       return rect.left < surfaceRect.left - 2 || rect.right > surfaceRect.right + 2;
     });
   if (clipped) throw new Error('Impact lane is horizontally clipped');
+  const enrichmentStarted = Date.now();
+  while (document.querySelector('.status-quality')?.getAttribute('data-enriching') === 'true' && Date.now() - enrichmentStarted < 8000) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  if (document.querySelector('.status-quality')?.getAttribute('data-enriching') === 'true') {
+    throw new Error('Code evidence enrichment did not settle');
+  }
+  mode.click();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  if (document.querySelector('.is-transitioning')) throw new Error('Clicking the active impact mode restarted loading');
   if (document.documentElement.scrollWidth > window.innerWidth + 2) throw new Error('Root document overflows horizontally');
   return { ok: true, labels };
 })()
@@ -103,8 +133,20 @@ $apiExpression = @'
     throw new Error(`Timed out waiting for ${selector}`);
   };
 
-  document.querySelector('button[data-view="atlas"]')?.click();
-  await waitFor('.mode-card');
+  await waitFor('.product-nav-list');
+  const overview = await waitFor('button[data-mode-id="atlas"]');
+  overview.click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const resetStarted = Date.now();
+  while (!document.querySelector('.at-domain-card') && Date.now() - resetStarted < 8000) {
+    const back = document.querySelector('button[data-atlas-action="overview"]');
+    if (back && !back.disabled) {
+      back.click();
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await waitFor('.at-domain-card');
   const mode = document.querySelector('button[data-mode-id="api"]');
   if (!mode || mode.disabled) throw new Error('API flow mode is not available for the loaded workspace');
   mode.click();
@@ -132,6 +174,9 @@ $apiExpression = @'
       return rect.left < surfaceRect.left - 2 || rect.right > surfaceRect.right + 2;
     });
   if (clipped) throw new Error('API lane is horizontally clipped');
+  mode.click();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  if (document.querySelector('.is-transitioning')) throw new Error('Clicking the active API mode restarted loading');
   if (document.documentElement.scrollWidth > window.innerWidth + 2) throw new Error('Root document overflows horizontally');
   return { ok: true, labels };
 })()
@@ -150,10 +195,18 @@ $sourceJumpExpression = @'
     throw new Error(`Timed out waiting for ${selector}`);
   };
 
-  const atlasView = document.querySelector('button[data-view="atlas"]');
-  if (atlasView) atlasView.click();
   const overview = await waitFor('button[data-mode-id="atlas"]');
   overview.click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const resetStarted = Date.now();
+  while (!document.querySelector('.at-domain-card') && Date.now() - resetStarted < 8000) {
+    const back = document.querySelector('button[data-atlas-action="overview"]');
+    if (back && !back.disabled) {
+      back.click();
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   const card = await waitFor('.at-domain-card');
   card.click();
   const sourceNode = await waitFor('.at-domain-band[data-domain-band="2"] .at-domain-member');
@@ -175,7 +228,7 @@ $sourceJumpExpression = @'
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   if (toggle.getAttribute('aria-pressed') === checkedBefore) throw new Error('Investigation checked state did not update');
-  if (!tray.querySelector('[data-investigation-storage="path-evidence-id-only"]')) throw new Error('Investigation privacy boundary is missing');
+  if (!tray.querySelector('[data-investigation-storage="source-location-evidence-check-state-only"]')) throw new Error('Investigation privacy boundary is missing');
   const evidence = item.querySelector('code');
   if (!evidence || !evidence.textContent || !evidence.textContent.trim()) throw new Error('Investigation evidence ID is missing');
   const storageKey = Object.keys(localStorage).find((key) => key.startsWith('backend-visual-map:investigation:v1:'));
@@ -216,10 +269,18 @@ $largeRepoExpression = @'
     throw new Error(`Timed out waiting for ${selector}`);
   };
 
-  const atlasView = document.querySelector('button[data-view="atlas"]');
-  if (atlasView) atlasView.click();
   const overview = await waitFor('button[data-mode-id="atlas"]');
   overview.click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const resetStarted = Date.now();
+  while (!document.querySelector('.at-domain-card') && Date.now() - resetStarted < 8000) {
+    const back = document.querySelector('button[data-atlas-action="overview"]');
+    if (back && !back.disabled) {
+      back.click();
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   await waitFor('.at-domain-card');
   const cards = document.querySelectorAll('.at-domain-card').length;
   if (cards > 40) throw new Error(`Overview exceeds 40 cards: ${cards}`);

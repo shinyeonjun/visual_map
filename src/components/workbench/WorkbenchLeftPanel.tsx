@@ -20,7 +20,7 @@ export function WorkbenchLeftPanel({
 }) {
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
   const setupSteps = workbenchSetupSteps(workspaceControls, dbProfileControls, visualMapControls);
-  const showSetupRail = hasWorkspace && setupSteps.some((step) => step.state === "active" || step.state === "optional");
+  const showSetupRail = setupSteps.some((step) => step.state === "active" || step.state === "optional");
   const activeStepDetail =
     setupSteps.find((step) => step.state === "active")?.detail ??
     setupSteps.find((step) => step.state === "optional")?.detail ??
@@ -50,14 +50,12 @@ export function WorkbenchLeftPanel({
       )}
       <WorkspaceCard workspaceControls={workspaceControls} />
       {hasWorkspace && (
-        <>
-          <CodeSourceSection workspaceControls={workspaceControls} visualMapControls={visualMapControls} />
-          <DatabaseSourceSection
-            dbProfileControls={dbProfileControls}
-            visualMapControls={visualMapControls}
-          />
-        </>
+        <CodeSourceSection workspaceControls={workspaceControls} />
       )}
+      <DatabaseSourceSection
+        dbProfileControls={dbProfileControls}
+        visualMapControls={visualMapControls}
+      />
     </aside>
   );
 }
@@ -127,7 +125,7 @@ function workbenchSetupSteps(
     },
     {
       label: "답",
-      detail: hasAnswers ? "캔버스와 답 패널에서 직접/후보 근거를 확인합니다." : "검색하거나 카드를 선택해 답 기준을 좁힙니다.",
+      detail: hasAnswers ? "중앙 답과 오른쪽 선택 근거에서 직접/후보를 확인합니다." : "검색하거나 카드를 선택해 답 기준을 좁힙니다.",
       state: hasAnswers && canFindAnswers ? "done" : activeStep === "answers" ? "active" : "",
     },
   ];
