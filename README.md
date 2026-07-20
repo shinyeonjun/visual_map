@@ -1,13 +1,28 @@
-# 백엔드 비주얼 맵
+# Backend Visual Map
 
-백엔드 코드와 관계형 데이터베이스 메타데이터의 관계를 시각화하는 Windows 우선 Tauri + React 데스크톱 앱입니다.
+백엔드 코드와 관계형 데이터베이스 메타데이터의 관계를 **근거와 함께** 탐색하는 Windows 우선 Tauri + React 데스크톱 앱입니다.
 
-## 빠른 시작
+![Backend Visual Map workbench](docs/reports/screenshots/ui-light-default/workbench.png)
 
-1. Windows 설치 파일을 실행합니다.
-   - 빌드 산출물: `src-tauri/target/release/bundle/nsis/Backend Visual Map_0.1.0_x64-setup.exe`
+## Why it exists
+
+큰 백엔드 저장소에서 "이 API가 어떤 테이블과 컬럼에 영향을 주는가?"를 코드·스키마를 오가며 추적하는 비용을 줄입니다. raw dependency graph를 그대로 던지지 않고, Workbench와 Atlas에서 API Flow, Table Usage, Column Impact를 focused view로 보여줍니다.
+
+**Product boundary:** row data는 읽지 않고, DB 비밀번호·토큰·연결 secret은 workspace 파일에 저장하지 않습니다.
+
+## What it does
+
+- local folder 또는 GitHub URL로 workspace 생성 후 코드 인덱싱
+- SQLite/DDL, PostgreSQL, MySQL/MariaDB, SQL Server, Oracle 메타데이터 인덱싱
+- API Flow, Table Usage, Column Impact를 evidence-backed map으로 탐색
+- bundled codebase/database engine을 sidecar로 실행
+
+## Quick start
+
+1. Windows에서 source를 build하거나 내부 검증용 installer를 생성합니다.
+   - 이 저장소는 source와 local build를 공개하며, 공식 installer binary를 배포하지 않습니다.
+   - `npm run build:internal`은 내부 검증용 installer를 `src-tauri/target/release/bundle/nsis/`에 생성합니다.
    - 설치 앱에는 `codebase-memory-mcp.exe`와 `database-memory.exe`가 내부 엔진으로 포함됩니다.
-   - 공개 배포본은 MIT 라이선스와 manifest에 고정된 공개 엔진 release를 포함합니다.
 2. 앱을 열고 Workbench에서 워크스페이스를 만듭니다.
    - 로컬 폴더: 저장소 전체 경로를 입력합니다.
    - GitHub URL: 앱이 먼저 로컬로 clone한 뒤 그 로컬 복사본을 인덱싱합니다.
@@ -18,17 +33,7 @@
 5. `메타데이터 인덱싱`을 누른 뒤 `테이블 불러오기`를 누릅니다.
 6. Workbench 또는 Atlas에서 overview/API Flow/Table Usage/Column Impact를 확인합니다.
 
-## 현재 기능
-
-- 로컬 워크스페이스 생성/열기 및 GitHub URL clone 기반 워크스페이스 생성
-- SQLite, SQLite DDL, PostgreSQL, MySQL/MariaDB, SQL Server, Oracle DB 메타데이터 프로필 저장
-- DB 비밀번호를 워크스페이스 파일에 저장하지 않는 세션 전용 연결 문자열 입력
-- 번들된 codebase-memory / database-memory 엔진 확인 및 실행
-- 실데이터 인벤토리 기반 grouped/focused 코드 -> DB 비주얼 맵 렌더링
-- Workbench와 Atlas 탐색 화면
-- API Flow, Table Usage, Column Impact focused map
-
-## 개발 확인
+## Develop and verify
 
 ```powershell
 npm run typecheck
