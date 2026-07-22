@@ -71,7 +71,7 @@ export function buildTargetCatalog(
     code: [
       ...codeInventoryCodeItems(codeInventory),
       ...(codeInventory?.files ?? []),
-    ].sort(compareCodeTargets).map((item) => ({
+    ].filter(isBrowsableCodeTarget).sort(compareCodeTargets).map((item) => ({
       id: `code:${item.id}`,
       kind: "code",
       badge: codeKindChip(item.kind),
@@ -107,6 +107,10 @@ export function buildTargetCatalog(
       }));
     }),
   };
+}
+
+function isBrowsableCodeTarget(item: CodeInventory["functions"][number]): boolean {
+  return !item.filePath?.trim().startsWith("<");
 }
 
 function compareCodeTargets(left: CodeInventory["functions"][number], right: CodeInventory["functions"][number]): number {

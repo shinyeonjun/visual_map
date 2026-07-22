@@ -62,6 +62,17 @@ describe("targetModel", () => {
         ["FILE", "파일"],
       ]);
   });
+
+  it("keeps engine-only builtins out of user-selectable code targets", () => {
+    const inventory = codeInventory();
+    inventory.functions.push({
+      ...codeItem("function", "len"),
+      filePath: "<python-builtins>",
+    });
+
+    expect(buildTargetCatalog(inventory, null).code.map((item) => item.title)).toEqual(["loadOrders"]);
+    expect(inventory.functions.map((item) => item.name)).toContain("len");
+  });
 });
 
 function codeInventory(): CodeInventory {

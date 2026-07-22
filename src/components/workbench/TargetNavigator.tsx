@@ -9,6 +9,7 @@ import {
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
+import { codeInventoryCodeItems } from "../../types/workspace";
 import {
   buildTargetCatalog,
   firstAvailableTargetKind,
@@ -83,6 +84,11 @@ export function TargetNavigator({
       .some((value) => value?.toLocaleLowerCase("ko-KR").includes(normalizedQuery)),
   );
   const items = visibleTargetItems(matchingItems, kind, Boolean(normalizedQuery));
+  const hiddenEngineCodeCount = kind === "code"
+    ? codeInventoryCodeItems(workspaceControls.codeInventory).length
+      + (workspaceControls.codeInventory?.files.length ?? 0)
+      - catalog.code.length
+    : 0;
   const committedFocus = visualMapControls.loading && visualMapControls.currentMap
     ? visualMapControls.currentMap.focus
     : visualMapControls.focusId ?? visualMapControls.currentMap?.focus ?? null;
@@ -194,7 +200,10 @@ export function TargetNavigator({
         {matchingItems.length > items.length ? (
           <small>{items.length}개 표시 · 검색으로 범위를 좁히세요</small>
         ) : (
-          <small>{matchingItems.length.toLocaleString("ko-KR")}개</small>
+          <small>
+            {matchingItems.length.toLocaleString("ko-KR")}개
+            {hiddenEngineCodeCount > 0 ? ` · 내장 심볼 ${hiddenEngineCodeCount}개 제외` : ""}
+          </small>
         )}
         <button type="button" title="여러 대상을 선택해 관계 보기" onClick={onOpenRelations}>
           <GitCompareArrows size={15} />
