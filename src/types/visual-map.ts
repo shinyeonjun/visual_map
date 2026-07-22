@@ -13,6 +13,7 @@ export type VisualMap = {
 export type ApiReadingAnswer = {
   subject: string;
   steps: ApiReadingStep[];
+  dbRelations?: ImpactReviewItem[];
   dbCandidates: ImpactReviewItem[];
   unknowns: ImpactReviewItem[];
   recommendedChecks: ImpactReviewItem[];

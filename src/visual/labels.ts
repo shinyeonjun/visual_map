@@ -5,6 +5,7 @@ export function visualMapModeLabel(mode: VisualMap["mode"]): string {
   if (mode === "table-usage") return "테이블 연결";
   if (mode === "column-impact") return "컬럼 변경 범위";
   if (mode === "search-focus") return "대상 주변 근거";
+  if (mode === "composition") return "관계 분석";
   return "전체 구조";
 }
 
@@ -31,6 +32,9 @@ export function visualEdgeKindLabel(edge: VisualEdge): string {
   if (edge.kind === "db_dependency") return "DB 의존성";
   if (edge.kind === "db_trigger") return "DB 트리거";
   if (edge.kind.startsWith("db_")) return "DB 관계";
+  if (edge.kind === "code_db_read") return "DB 조회";
+  if (edge.kind === "code_db_write") return "DB 변경";
+  if (edge.kind === "code_db_uses_column") return "컬럼 사용";
   if (edge.kind === "code_call" || edge.kind.endsWith("_code_call")) return "코드 호출";
   if (edge.kind === "code_handle" || edge.kind.endsWith("_code_handle")) return "라우트 처리";
   if (edge.kind === "code_flow") return "이름 단서";

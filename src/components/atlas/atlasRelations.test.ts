@@ -56,6 +56,24 @@ describe("atlas relation policy", () => {
     ]);
   });
 
+  it("shows the relationship meaning separately from its trust tone", () => {
+    const map: VisualMap = {
+      id: "semantic-map",
+      workspaceId: "workspace",
+      mode: "composition",
+      focus: "code:handler",
+      nodes,
+      edges: [edge("read", "code_db_read", "code:handler", "db:table:public.orders", "explicit SQL")],
+      warnings: [],
+    };
+
+    expect(relationLedgerRows(map, null, null, null)[0]).toMatchObject({
+      label: "DB 조회",
+      tone: "confirmed",
+      to: "public.orders",
+    });
+  });
+
   it("keeps a pinned item visible without exceeding the display cap", () => {
     const items = ["a", "b", "c", "d"];
     expect(takeWithPinned(items, new Set(["d"]), (item) => item, 2)).toEqual(["d", "a"]);

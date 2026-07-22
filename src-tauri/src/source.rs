@@ -111,7 +111,7 @@ fn positive_position(value: Option<u64>, label: &str) -> Result<u64, String> {
     Ok(value)
 }
 
-fn resolve_repo_source(repo_path: &str, source_path: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_repo_source(repo_path: &str, source_path: &str) -> Result<PathBuf, String> {
     let root = Path::new(repo_path)
         .canonicalize()
         .map_err(|error| format!("프로젝트 경로를 확인하지 못했습니다: {error}"))?;

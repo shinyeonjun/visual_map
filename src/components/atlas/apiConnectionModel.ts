@@ -15,7 +15,7 @@ type DiagramItem = {
 export type ApiConnectionModel = {
   primaryPath: DiagramItem[];
   primaryEdges: VisualEdge[];
-  primaryCandidate: (DiagramItem & { edge: VisualEdge }) | null;
+  primaryDatabase: (DiagramItem & { edge: VisualEdge }) | null;
   additionalEdges: VisualEdge[];
   gap: ImpactReviewItem | null;
 };
@@ -27,10 +27,12 @@ export function buildApiConnectionModel(answer: ApiReadingAnswer, map: VisualMap
   );
   const confirmedEdges = map.edges.filter(isConfirmedApiEdge);
   const candidateEdges = map.edges.filter(isCandidateEdge);
+  const directDatabaseEdges = map.edges.filter(isDirectDatabaseEdge);
+  const databaseEdges = [...directDatabaseEdges, ...candidateEdges];
   const startId = stepsByNodeId.has(map.focus)
     ? map.focus
     : answer.steps.find((step) => step.lane === "route")?.nodeId ?? answer.steps[0]?.nodeId ?? null;
-  const pathIds = startId ? choosePrimaryPath(startId, confirmedEdges, stepsByNodeId, candidateEdges) : [];
+  const pathIds = startId ? choosePrimaryPath(startId, confirmedEdges, stepsByNodeId, databaseEdges) : [];
   const primaryPath = pathIds.flatMap((nodeId) => {
     const item = stepsByNodeId.get(nodeId);
     const node = nodesById.get(nodeId);
@@ -42,33 +44,35 @@ export function buildApiConnectionModel(answer: ApiReadingAnswer, map: VisualMap
     return edge ? [edge] : [];
   });
   const pathIndex = new Map(pathIds.map((nodeId, index) => [nodeId, index]));
-  const candidatesByNodeId = new Map(
-    answer.dbCandidates.flatMap((item) => (item.nodeId ? [[item.nodeId, item] as const] : [])),
+  const databaseItemsByNodeId = new Map(
+    [...(answer.dbRelations ?? []), ...answer.dbCandidates]
+      .flatMap((item) => (item.nodeId ? [[item.nodeId, item] as const] : [])),
   );
-  const primaryCandidateEdge = [...candidateEdges]
-    .filter((edge) => pathIndex.has(edge.from) && candidatesByNodeId.has(edge.to) && nodesById.has(edge.to))
+  const primaryDatabaseEdge = [...databaseEdges]
+    .filter((edge) => pathIndex.has(edge.from) && databaseItemsByNodeId.has(edge.to) && nodesById.has(edge.to))
     .sort((left, right) => {
+      const truthOrder = Number(isCandidateEdge(left)) - Number(isCandidateEdge(right));
       const leftDepth = pathIndex.get(left.from) ?? -1;
       const rightDepth = pathIndex.get(right.from) ?? -1;
-      const leftRank = candidatesByNodeId.get(left.to)?.rank ?? Number.MAX_SAFE_INTEGER;
-      const rightRank = candidatesByNodeId.get(right.to)?.rank ?? Number.MAX_SAFE_INTEGER;
-      return rightDepth - leftDepth || leftRank - rightRank || left.id.localeCompare(right.id);
+      const leftRank = databaseItemsByNodeId.get(left.to)?.rank ?? Number.MAX_SAFE_INTEGER;
+      const rightRank = databaseItemsByNodeId.get(right.to)?.rank ?? Number.MAX_SAFE_INTEGER;
+      return truthOrder || rightDepth - leftDepth || leftRank - rightRank || left.id.localeCompare(right.id);
     })[0] ?? null;
-  const primaryCandidate = primaryCandidateEdge
+  const primaryDatabase = primaryDatabaseEdge
     ? {
-        item: candidatesByNodeId.get(primaryCandidateEdge.to)!,
-        node: nodesById.get(primaryCandidateEdge.to)!,
-        edge: primaryCandidateEdge,
+        item: databaseItemsByNodeId.get(primaryDatabaseEdge.to)!,
+        node: nodesById.get(primaryDatabaseEdge.to)!,
+        edge: primaryDatabaseEdge,
       }
     : null;
   const usedEdgeIds = new Set([
     ...primaryEdges.map((edge) => edge.id),
-    ...(primaryCandidate ? [primaryCandidate.edge.id] : []),
+    ...(primaryDatabase ? [primaryDatabase.edge.id] : []),
   ]);
   const additionalEdges = map.edges.filter((edge) => !usedEdgeIds.has(edge.id));
   const gap = answer.unknowns.find((item) => item.kind === "handler-gap") ?? null;
 
-  return { primaryPath, primaryEdges, primaryCandidate, additionalEdges, gap };
+  return { primaryPath, primaryEdges, primaryDatabase, additionalEdges, gap };
 }
 
 function choosePrimaryPath(
@@ -135,4 +139,8 @@ function isConfirmedApiEdge(edge: VisualEdge): boolean {
 
 function isCandidateEdge(edge: VisualEdge): boolean {
   return edge.kind.startsWith("candidate");
+}
+
+function isDirectDatabaseEdge(edge: VisualEdge): boolean {
+  return edge.kind === "code_db_read" || edge.kind === "code_db_write";
 }

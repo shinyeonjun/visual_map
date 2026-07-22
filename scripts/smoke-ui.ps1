@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("atlas-drilldown", "api-flow", "change-impact", "source-jump", "large-repo", "stable-navigation")]
+  [ValidateSet("atlas-drilldown", "api-flow", "change-impact", "source-jump", "large-repo", "stable-navigation", "semantic-composition")]
   [string]$Scenario,
   [int]$Port = 9222,
   [ValidateRange(800, 3840)]
@@ -547,6 +547,97 @@ $stableNavigationExpression = @'
 })()
 '@
 
+$compositionExpression = @'
+(async () => {
+  const waitFor = async (selector, timeout = 10000) => {
+    const started = Date.now();
+    while (Date.now() - started < timeout) {
+      const node = document.querySelector(selector);
+      if (node) return node;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`Timed out waiting for ${selector}`);
+  };
+  const waitForSettled = async () => {
+    const started = Date.now();
+    while (Date.now() - started < 12000) {
+      const busy = document.querySelector('.canvas[aria-busy="true"]');
+      const enriching = document.querySelector('.status-quality')?.getAttribute('data-enriching') === 'true';
+      if (!busy && !enriching) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('Composition projection did not settle');
+  };
+
+  const mode = await waitFor('button[data-mode-id="composition"]');
+  if (mode.disabled) throw new Error('Composition mode is not available for the loaded workspace');
+  mode.click();
+  await waitFor('button[data-mode-id="composition"].active');
+  await waitForSettled();
+  const reset = document.querySelector('.composition-clear:not(:disabled)');
+  if (reset) {
+    reset.click();
+    await waitFor('.composition-selection-empty');
+  }
+
+  let context = await waitFor('.product-context-browser');
+  if (window.innerWidth <= 820 && !context.classList.contains('compact-open')) {
+    (await waitFor('.product-context-toggle')).click();
+    context = await waitFor('.product-context-browser.compact-open');
+  }
+  const codeOptions = [...context.querySelectorAll('[data-context-id^="code:"]')];
+  const dbOptions = [...context.querySelectorAll('[data-context-id^="db:table:"]')];
+  const codeOption = codeOptions.find((option) => option.textContent?.includes('loadOrder'));
+  const dbOption = dbOptions.find((option) => option.textContent?.includes('orders'));
+  const codeInput = codeOption?.querySelector('input[type="checkbox"]');
+  const dbInput = dbOption?.querySelector('input[type="checkbox"]');
+  if (!codeInput || !dbInput) throw new Error('Composition smoke needs loadOrder and orders from the semantic fixture');
+  codeInput.click();
+  if (!codeInput.checked) throw new Error('First composition subject was not retained');
+  dbInput.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitForSettled();
+
+  const closeContext = document.querySelector('.product-context-close');
+  if (window.innerWidth <= 820) {
+    if (!closeContext || getComputedStyle(closeContext).display === 'none') throw new Error('Compact subject list has no visible close control');
+    closeContext.click();
+    const closeStarted = Date.now();
+    while (document.querySelector('.product-context-browser.compact-open') && Date.now() - closeStarted < 2000) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (document.querySelector('.product-context-browser.compact-open')) throw new Error('Compact subject list did not close');
+  }
+  const toolbar = await waitFor('.composition-toolbar');
+  const chips = toolbar.querySelectorAll('.composition-targets > button');
+  if (chips.length !== 2) throw new Error(`Expected 2 composition chips, got ${chips.length}`);
+  const viewButtons = [...toolbar.querySelectorAll('.composition-view-switch button')];
+  if (viewButtons.length !== 4) throw new Error(`Expected 4 relationship views, got ${viewButtons.length}`);
+  const dataView = viewButtons.find((button) => button.textContent?.trim() === '\uB370\uC774\uD130');
+  if (!dataView) throw new Error('Data relationship view is missing');
+  dataView.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitForSettled();
+  const selectedDataView = await waitFor('.composition-view-switch button.active[aria-pressed="true"]');
+  if (selectedDataView?.getAttribute('aria-pressed') !== 'true') throw new Error('Data relationship view did not remain selected');
+  if (document.querySelector('.composition-selection-empty')) throw new Error('Composition returned to the target-selection empty state');
+  if (document.querySelector('.setup-empty')) throw new Error('Composition did not produce a relationship map');
+  const cards = document.querySelectorAll('.at-map-surface .at-card');
+  if (cards.length < 2) throw new Error(`Expected at least 2 composition nodes, got ${cards.length}`);
+  const relationRows = [...document.querySelectorAll('.at-edge-row')];
+  const readRelation = relationRows.find((row) => row.textContent?.includes('\u0044\u0042 \uC870\uD68C'));
+  if (!readRelation) throw new Error('Confirmed DB read relationship is missing from the composition ledger');
+  if (!readRelation.classList.contains('confirmed')) throw new Error('DB read relationship is not marked confirmed');
+  if (document.querySelectorAll('.product-context-option input:checked').length !== 2) {
+    throw new Error('Composition subjects were lost after changing HOW');
+  }
+  const toolbarRect = toolbar.getBoundingClientRect();
+  if (toolbarRect.left < -1 || toolbarRect.right > window.innerWidth + 1) throw new Error('Composition toolbar is clipped');
+  if (document.documentElement.scrollWidth > window.innerWidth + 2) throw new Error('Root document overflows horizontally');
+  return { ok: true, labels: [`subjects:${chips.length}`, `nodes:${cards.length}`, `relations:${relationRows.length}`, `views:${viewButtons.length}`, 'how:data', 'proof:confirmed-read'] };
+})()
+'@
+
 $expression = if ($Scenario -eq "change-impact") {
   $impactExpression
 }
@@ -561,6 +652,9 @@ elseif ($Scenario -eq "large-repo") {
 }
 elseif ($Scenario -eq "stable-navigation") {
   $stableNavigationExpression
+}
+elseif ($Scenario -eq "semantic-composition") {
+  $compositionExpression
 }
 else {
   $atlasExpression

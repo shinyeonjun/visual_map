@@ -2834,6 +2834,40 @@ fn api_flow_without_handles_reports_an_unknown_gap_without_name_fallback() {
 }
 
 #[test]
+fn api_flow_prefers_confirmed_static_sql_over_a_db_candidate() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot.links.push(confirmed_api_link(
+        "reads:order-service->orders",
+        "code:class:OrderService",
+        "db:table:orders",
+        "code_db_read",
+        "READS",
+    ));
+
+    let map = visual_map(
+        &snapshot,
+        Some("code:route:orders:create".to_string()),
+        "api-flow".to_string(),
+    );
+    let answer = map.api_reading.as_ref().unwrap();
+
+    assert_eq!(answer.db_relations.len(), 1);
+    assert_eq!(
+        answer.db_relations[0].node_id.as_deref(),
+        Some("db:table:orders")
+    );
+    assert!(answer
+        .db_candidates
+        .iter()
+        .all(|candidate| candidate.node_id.as_deref() != Some("db:table:orders")));
+    assert!(map
+        .edges
+        .iter()
+        .any(|edge| edge.kind == "code_db_read" && edge.to == "db:table:orders"));
+    assert!(!answer.unknowns.iter().any(|item| item.kind == "db-gap"));
+}
+
+#[test]
 fn api_flow_rejects_untrusted_and_malformed_engine_edges() {
     for truth_class in ["candidate", "unknown", "structural"] {
         let mut snapshot = fixture_inventory("workspace-1".to_string());
@@ -4031,11 +4065,29 @@ fn projection_scale_matrix_covers_10k_50k_and_100k_items() {
             .map(|node| node.id.as_str())
             .collect::<std::collections::HashSet<_>>();
 
+        let composition_started = Instant::now();
+        let composition = composition_map(
+            &snapshot,
+            vec![
+                "code:function:domain_0:0".to_string(),
+                "code:function:domain_8:8".to_string(),
+            ],
+            "calls",
+        )
+        .unwrap();
+        let composition_elapsed = composition_started.elapsed();
+        let composition_ids = composition
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+
         eprintln!(
-            "projection_scale items={item_count} links={} overview_ms={} focus_ms={}",
+            "projection_scale items={item_count} links={} overview_ms={} focus_ms={} composition_ms={}",
             snapshot.links.len(),
             overview_elapsed.as_millis(),
-            focus_elapsed.as_millis()
+            focus_elapsed.as_millis(),
+            composition_elapsed.as_millis()
         );
         assert!(overview.nodes.len() <= 40);
         assert!(overview.edges.len() <= 80);
@@ -4046,8 +4098,15 @@ fn projection_scale_matrix_covers_10k_50k_and_100k_items() {
         assert!(focused.edges.iter().all(|edge| {
             focused_ids.contains(edge.from.as_str()) && focused_ids.contains(edge.to.as_str())
         }));
+        assert!(composition.nodes.len() <= 40);
+        assert!(composition.edges.len() <= 80);
+        assert!(composition.edges.iter().all(|edge| {
+            composition_ids.contains(edge.from.as_str())
+                && composition_ids.contains(edge.to.as_str())
+        }));
         assert!(overview_elapsed < Duration::from_secs(30));
         assert!(focus_elapsed < Duration::from_secs(30));
+        assert!(composition_elapsed < Duration::from_secs(30));
     }
 }
 

@@ -88,6 +88,59 @@ describe("stable mode transitions", () => {
     expect(screen.getByText(/왼쪽 API 라우트 목록/)).toBeInTheDocument();
   });
 
+  it("keeps every disconnected composition subject neutral until the user selects a card", () => {
+    const map: VisualMap = {
+      ...visualMap("composition", "code:function-old"),
+      nodes: [
+        { id: "code:function-old", kind: "function", title: "oldFunction", subtitle: "src/old.ts", layer: "code", source: "code" },
+        { id: "db:table:public.users", kind: "table", title: "users", subtitle: "public", layer: "database", source: "db" },
+      ],
+    };
+    const controls = {
+      ...readyControls(map),
+      focusId: null,
+      compositionFocusIds: ["code:function-old", "db:table:public.users"],
+      relationView: "data",
+      toggleCompositionFocus: vi.fn(),
+      clearCompositionFocus: vi.fn(),
+      setRelationView: vi.fn(),
+    } as VisualMapControls;
+    const db = {
+      ...dbProfileControls(),
+      inventory: {
+        tables: [{
+          schema: "public",
+          name: "users",
+          columns: [{ name: "id", dataType: "uuid", isPrimaryKey: true, isForeignKey: false }],
+        }],
+      },
+    } as DbProfileControls;
+    const canvas = render(
+      <AtlasCanvas
+        openSourceManager={vi.fn()}
+        workspaceControls={workspaceControls()}
+        dbProfileControls={db}
+        visualMapControls={controls}
+      />,
+    );
+
+    expect(canvas.container.querySelector(".at-map-surface.has-relation-focus")).not.toBeInTheDocument();
+    expect(canvas.container.querySelector(".at-card.code")).toBeInTheDocument();
+    expect(canvas.container.querySelector(".at-card.table")).toBeInTheDocument();
+    canvas.unmount();
+
+    render(
+      <InspectorPanel
+        workspaceControls={workspaceControls()}
+        dbProfileControls={db}
+        visualMapControls={controls}
+      />,
+    );
+    expect(screen.getByText(/관계는 아직 없고 실제 항목 2개가 있습니다/)).toBeInTheDocument();
+    expect(screen.getByText("관계 분석")).toBeInTheDocument();
+    expect(screen.queryByText("oldFunction")).not.toBeInTheDocument();
+  });
+
   it("uses the requested analysis target when a narrow projection has no focused node", () => {
     render(
       <AtlasCanvas

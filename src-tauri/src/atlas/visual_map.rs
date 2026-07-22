@@ -371,6 +371,18 @@ pub(super) fn confirmed_link_edge(
             "code-handle",
             format!("{from_name} Route를 {to_name} handler가 처리합니다"),
         ),
+        "code_db_read" => (
+            "code-db-read",
+            format!("{from_name} 코드가 {to_name} 테이블을 정적 SQL로 조회합니다"),
+        ),
+        "code_db_write" => (
+            "code-db-write",
+            format!("{from_name} 코드가 {to_name} 테이블을 정적 SQL로 변경합니다"),
+        ),
+        "code_db_uses_column" => (
+            "code-db-column",
+            format!("{from_name} 코드의 정적 SQL이 {to_name} 컬럼을 사용합니다"),
+        ),
         "db_dependency" => (
             "db-dependency",
             format!("{from_name} DB 객체가 {to_name} 구조에 의존합니다"),

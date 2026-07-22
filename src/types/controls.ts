@@ -85,6 +85,8 @@ export type VisualMapControls = {
   currentMap: VisualMap | null;
   mode: string;
   focusId: string | null;
+  compositionFocusIds: string[];
+  relationView: "connections" | "calls" | "data" | "impact";
   loading: boolean;
   enriching: boolean;
   changeIntent: ChangeIntent;
@@ -101,6 +103,9 @@ export type VisualMapControls = {
   selectedEdge: VisualEdge | null;
   setSearchQuery: (value: string) => void;
   showMode: (mode: string, focusId?: string | null) => void;
+  toggleCompositionFocus: (focusId: string) => void;
+  clearCompositionFocus: () => void;
+  setRelationView: (view: "connections" | "calls" | "data" | "impact") => void;
   setChangeIntent: (intent: ChangeIntent) => void;
   runSearch: () => void;
   selectSearchResult: (result: SearchResult) => void;

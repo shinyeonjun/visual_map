@@ -1,19 +1,25 @@
 mod api_flow;
 mod architecture;
+mod composition;
 mod impact;
 mod impact_review;
 mod inventory_query;
 mod linker;
 mod model;
 mod projection_support;
+mod semantic_links;
 mod snapshot;
 mod visual_map;
 
+pub(crate) use composition::{composition_map, validate_composition_request};
 pub(crate) use inventory_query::{
     inventory_bootstrap, search_inventory, InventoryBootstrap, InventorySearchResult,
 };
 pub(crate) use linker::{apply_focused_code_evidence, record_code_search_gap};
 pub(crate) use model::{ChangeIntent, InventorySnapshot, VisualMap};
+pub(crate) use semantic_links::{
+    apply_explicit_query_evidence, apply_explicit_query_evidence_for_code,
+};
 pub(crate) use snapshot::{
     build_inventory_snapshot, invalidate_snapshot_freshness, load_inventory_snapshot_cached,
     load_inventory_snapshot_optional, load_inventory_snapshot_optional_cached,

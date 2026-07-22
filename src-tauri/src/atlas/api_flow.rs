@@ -42,12 +42,37 @@ pub(super) fn api_flow_map(
         .iter()
         .map(String::as_str)
         .collect::<HashSet<_>>();
+    let mut db_relations = snapshot
+        .links
+        .iter()
+        .filter(|link| {
+            link.truth_class == "confirmed"
+                && matches!(link.kind.as_str(), "code_db_read" | "code_db_write")
+                && reachable_code_ids.contains(link.from.as_str())
+                && item_by_id
+                    .get(link.to.as_str())
+                    .is_some_and(|item| item.source == "db" && item.kind == "table")
+        })
+        .collect::<Vec<_>>();
+    db_relations.sort_by(|left, right| {
+        left.from
+            .cmp(&right.from)
+            .then_with(|| left.to.cmp(&right.to))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let confirmed_db_targets = db_relations
+        .iter()
+        .map(|link| link.to.as_str())
+        .collect::<HashSet<_>>();
+    let hidden_db_relations = db_relations.len().saturating_sub(API_DB_RELATION_LIMIT);
+    db_relations.truncate(API_DB_RELATION_LIMIT);
     let all_candidates = has_confirmed_handler.then(|| candidate_links(snapshot));
     let candidate_linker_cap_reached = all_candidates.as_ref().is_some_and(|links| {
         let mut counts = HashMap::<&str, usize>::new();
         links
             .iter()
             .filter(|link| reachable_code_ids.contains(link.from.as_str()))
+            .filter(|link| !confirmed_db_targets.contains(link.to.as_str()))
             .any(|link| {
                 let count = counts.entry(link.from.as_str()).or_default();
                 *count += 1;
@@ -58,6 +83,7 @@ pub(super) fn api_flow_map(
         all_candidates
             .iter()
             .filter(|link| reachable_code_ids.contains(link.from.as_str()))
+            .filter(|link| !confirmed_db_targets.contains(link.to.as_str()))
             .filter(|link| {
                 item_by_id
                     .get(link.to.as_str())
@@ -110,6 +136,7 @@ pub(super) fn api_flow_map(
 
     let mut included_ids = vec![route.id.clone()];
     included_ids.extend(traversal.node_order.iter().cloned());
+    included_ids.extend(db_relations.iter().map(|link| link.to.clone()));
     included_ids.extend(candidates.iter().map(|link| link.to.clone()));
     let mut seen_nodes = HashSet::new();
     let nodes = included_ids
@@ -131,6 +158,11 @@ pub(super) fn api_flow_map(
         })
         .map(|link| confirmed_link_edge(link, &item_by_id))
         .collect::<Vec<_>>();
+    edges.extend(
+        db_relations
+            .iter()
+            .map(|link| confirmed_link_edge(link, &item_by_id)),
+    );
     edges.extend(candidates.iter().filter_map(|link| {
         if visible_ids.contains(link.from.as_str()) && visible_ids.contains(link.to.as_str()) {
             Some(VisualEdge {
@@ -149,9 +181,13 @@ pub(super) fn api_flow_map(
         snapshot,
         route,
         &traversal,
-        &candidates,
-        hidden_candidates,
-        candidate_linker_cap_reached,
+        ApiDatabaseProjection {
+            relations: &db_relations,
+            candidates: &candidates,
+            hidden_relations: hidden_db_relations,
+            hidden_candidates,
+            candidate_cap_reached: candidate_linker_cap_reached,
+        },
         &item_by_id,
     );
 
@@ -186,6 +222,7 @@ pub(super) fn api_flow_map(
 const API_CALL_HOP_LIMIT: usize = 4;
 const API_CODE_NODE_LIMIT: usize = 24;
 const API_EDGE_LIMIT: usize = 32;
+const API_DB_RELATION_LIMIT: usize = 8;
 const API_DB_CANDIDATE_LIMIT: usize = 8;
 
 struct ApiFlowTraversal<'a> {
@@ -195,6 +232,14 @@ struct ApiFlowTraversal<'a> {
     incoming: HashMap<String, &'a SnapshotLink>,
     hidden_branches: usize,
     truncation_reasons: Vec<String>,
+}
+
+struct ApiDatabaseProjection<'a> {
+    relations: &'a [&'a SnapshotLink],
+    candidates: &'a [CandidateLink],
+    hidden_relations: usize,
+    hidden_candidates: usize,
+    candidate_cap_reached: bool,
 }
 
 fn reachable_api_flow_links<'a>(
@@ -392,11 +437,16 @@ fn api_reading_answer(
     snapshot: &InventorySnapshot,
     route: &InventoryItem,
     traversal: &ApiFlowTraversal<'_>,
-    candidates: &[CandidateLink],
-    hidden_candidates: usize,
-    candidate_linker_cap_reached: bool,
+    db_projection: ApiDatabaseProjection<'_>,
     item_by_id: &HashMap<&str, &InventoryItem>,
 ) -> ApiReadingAnswer {
+    let ApiDatabaseProjection {
+        relations: db_relation_links,
+        candidates,
+        hidden_relations: hidden_db_relations,
+        hidden_candidates,
+        candidate_cap_reached: candidate_linker_cap_reached,
+    } = db_projection;
     let mut steps = vec![api_reading_step(route, None, 0, 1, item_by_id)];
     for node_id in &traversal.node_order {
         let Some(item) = item_by_id.get(node_id.as_str()).copied() else {
@@ -413,6 +463,8 @@ fn api_reading_answer(
         ));
     }
 
+    let mut db_relations = db_relation_items(db_relation_links, item_by_id);
+    assign_review_ranks(&mut db_relations);
     let mut db_candidates = candidates
         .iter()
         .filter_map(|link| {
@@ -523,7 +575,7 @@ fn api_reading_answer(
             "unknown",
             route.location.clone(),
         ));
-    } else if db_candidates.is_empty() {
+    } else if db_relations.is_empty() && db_candidates.is_empty() {
         unknowns.push(api_answer_item(
             "api-unknown:db",
             Some(route.id.clone()),
@@ -567,6 +619,7 @@ fn api_reading_answer(
     }
 
     let mut relevant_ids = reachable_sources;
+    relevant_ids.extend(db_relation_links.iter().map(|link| link.to.as_str()));
     relevant_ids.extend(candidates.iter().map(|candidate| candidate.to.as_str()));
     let relevant_gaps = snapshot
         .metadata
@@ -716,7 +769,7 @@ fn api_reading_answer(
             route.location.clone(),
         ));
     }
-    if has_handler && db_candidates.is_empty() {
+    if has_handler && db_relations.is_empty() && db_candidates.is_empty() {
         let (kind, title, detail) = if snapshot.metadata.db.is_some() {
             (
                 "db-source-scope",
@@ -789,14 +842,72 @@ fn api_reading_answer(
     ApiReadingAnswer {
         subject: route.name.clone(),
         steps,
+        db_relations,
         db_candidates,
         unknowns,
         recommended_checks,
         hidden_branches,
         hidden_branches_is_lower_bound,
-        truncated: hidden_branches > 0 || candidate_linker_cap_reached,
-        truncation_reason: (!truncation_reasons.is_empty()).then(|| truncation_reasons.join(" ")),
+        truncated: hidden_branches > 0 || candidate_linker_cap_reached || hidden_db_relations > 0,
+        truncation_reason: {
+            if hidden_db_relations > 0 {
+                truncation_reasons.push(format!(
+                    "확정 DB 연결 중 {hidden_db_relations}개를 표시 한도로 접었습니다."
+                ));
+            }
+            (!truncation_reasons.is_empty()).then(|| truncation_reasons.join(" "))
+        },
     }
+}
+
+fn db_relation_items(
+    links: &[&SnapshotLink],
+    item_by_id: &HashMap<&str, &InventoryItem>,
+) -> Vec<ImpactReviewItem> {
+    let mut items = Vec::<ImpactReviewItem>::new();
+    let mut target_indexes = HashMap::<&str, usize>::new();
+    for link in links {
+        let Some(source) = item_by_id.get(link.from.as_str()).copied() else {
+            continue;
+        };
+        let Some(target) = item_by_id.get(link.to.as_str()).copied() else {
+            continue;
+        };
+        let operation = if link.kind == "code_db_read" {
+            "조회"
+        } else {
+            "변경"
+        };
+        if let Some(index) = target_indexes.get(target.id.as_str()).copied() {
+            items[index].evidence.extend(safe_evidence(&link.evidence));
+            if !items[index].detail.contains(operation) {
+                items[index].detail.push_str(&format!(" · {operation}"));
+            }
+            continue;
+        }
+        target_indexes.insert(target.id.as_str(), items.len());
+        items.push(ImpactReviewItem {
+            id: format!("api-db-relation:{}", target.id),
+            node_id: Some(target.id.clone()),
+            kind: link.kind.clone(),
+            title: target.name.clone(),
+            detail: safe_text(&format!(
+                "{} 코드의 실행 가능한 정적 SQL이 이 테이블을 {operation}합니다.",
+                source.name
+            )),
+            truth_class: "confirmed".to_string(),
+            confidence: None,
+            rank: 0,
+            evidence: safe_evidence(&link.evidence),
+            location: source.location.clone(),
+        });
+    }
+    for item in &mut items {
+        let mut seen = HashSet::new();
+        item.evidence
+            .retain(|entry| seen.insert((entry.kind.clone(), entry.text.clone())));
+    }
+    items
 }
 
 fn api_reading_step(

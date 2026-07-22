@@ -220,6 +220,93 @@ describe("ModePanel navigation context", () => {
     expect(container.querySelectorAll(".product-context-list > button")).toHaveLength(2);
   });
 
+  it("toggles composition subjects in one stable mixed inventory", () => {
+    const toggleCompositionFocus = vi.fn();
+    const controls = {
+      currentMap: null,
+      mode: "composition",
+      focusId: null,
+      loading: false,
+      selectedNode: null,
+      selectedEdge: null,
+      compositionFocusIds: ["code:route-a"],
+      toggleCompositionFocus,
+      showMode: vi.fn(),
+      selectNode: vi.fn(),
+    } as unknown as VisualMapControls;
+    const db = {
+      inventory: {
+        tables: [{
+          schema: "public",
+          name: "orders",
+          columns: [{ name: "id", dataType: "uuid", isPrimaryKey: true, isForeignKey: false }],
+        }],
+      },
+      selectedTableKey: null,
+    } as unknown as DbProfileControls;
+    const workspace = workspaceControls([route("route-a", "/api/a")]);
+    workspace.codeInventory!.functions = Array.from({ length: 140 }, (_, index) => ({
+      id: `function-${index}`,
+      kind: "function",
+      name: `function${index}`,
+      filePath: `src/function-${index}.ts`,
+      line: index + 1,
+      detail: null,
+    }));
+    const { container } = render(
+      <ModePanel
+        workspaceControls={workspace}
+        dbProfileControls={db}
+        visualMapControls={controls}
+      />,
+    );
+
+    const routeInput = container.querySelector<HTMLInputElement>('[data-context-id="code:route-a"] input')!;
+    const tableInput = container.querySelector<HTMLInputElement>('[data-context-id="db:table:public.orders"] input')!;
+    expect(routeInput).toBeChecked();
+    expect(tableInput).not.toBeChecked();
+
+    fireEvent.click(tableInput);
+
+    expect(toggleCompositionFocus).toHaveBeenCalledWith("db:table:public.orders");
+    expect(controls.showMode).not.toHaveBeenCalled();
+  });
+
+  it("allows DB-only composition when a table and column are available", () => {
+    const showMode = vi.fn();
+    const db = {
+      inventory: {
+        tables: [{
+          schema: "public",
+          name: "orders",
+          columns: [{ name: "id", dataType: "uuid", isPrimaryKey: true, isForeignKey: false }],
+        }],
+      },
+      selectedTableKey: null,
+    } as unknown as DbProfileControls;
+    const { container } = render(
+      <ModePanel
+        workspaceControls={workspaceControls([])}
+        dbProfileControls={db}
+        visualMapControls={{
+          currentMap: null,
+          mode: "atlas",
+          focusId: null,
+          loading: false,
+          selectedNode: null,
+          selectedEdge: null,
+          showMode,
+          selectNode: vi.fn(),
+        } as unknown as VisualMapControls}
+      />,
+    );
+    const composition = container.querySelector<HTMLButtonElement>('[data-mode-id="composition"]')!;
+
+    expect(composition).not.toHaveClass("locked");
+    fireEvent.click(composition);
+    expect(showMode).toHaveBeenCalledWith("composition", null);
+  });
+
   it("keeps the atlas context list mounted while a focused atlas view reloads", () => {
     const workspace = workspaceControls([]);
     const db = { inventory: null, selectedTableKey: null } as unknown as DbProfileControls;

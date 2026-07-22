@@ -168,6 +168,36 @@ fn impact_direct_items(
         });
     }
 
+    for link in snapshot.links.iter().filter(|link| {
+        link.truth_class == "confirmed"
+            && matches!(
+                link.kind.as_str(),
+                "code_db_read" | "code_db_write" | "code_db_uses_column"
+            )
+            && semantic_link_touches_focus(link, table, column, item_by_id)
+    }) {
+        let Some(code) = item_by_id.get(link.from.as_str()).copied() else {
+            continue;
+        };
+        let operation = match link.kind.as_str() {
+            "code_db_read" => "정적 SQL 조회",
+            "code_db_write" => "정적 SQL 변경",
+            _ => "정적 SQL 컬럼 사용",
+        };
+        items.push(ImpactReviewItem {
+            id: format!("direct:{}", link.id),
+            node_id: Some(code.id.clone()),
+            kind: link.kind.clone(),
+            title: code.name.clone(),
+            detail: operation.to_string(),
+            truth_class: "confirmed".to_string(),
+            confidence: None,
+            rank: 0,
+            evidence: safe_evidence(&link.evidence),
+            location: code.location.clone(),
+        });
+    }
+
     let focus_columns = match column {
         Some(column) => vec![column],
         None => snapshot
@@ -208,6 +238,21 @@ fn impact_direct_items(
     let mut seen = HashSet::new();
     items.retain(|item| seen.insert(item.id.clone()));
     items
+}
+
+fn semantic_link_touches_focus(
+    link: &SnapshotLink,
+    table: &InventoryItem,
+    column: Option<&InventoryItem>,
+    item_by_id: &HashMap<&str, &InventoryItem>,
+) -> bool {
+    match column {
+        Some(column) => link.to == column.id,
+        None if link.to == table.id => true,
+        None => item_by_id
+            .get(link.to.as_str())
+            .is_some_and(|item| item.parent_id.as_deref() == Some(table.id.as_str())),
+    }
 }
 
 fn direct_object_review_item(

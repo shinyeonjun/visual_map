@@ -488,6 +488,83 @@
   font-size: 9.5px;
 }
 
+.product-context-option {
+  min-width: 0;
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: 14px auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 2px 6px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-left: 2px solid transparent;
+  border-radius: 4px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.product-context-option:hover {
+  border-color: var(--line);
+  background: var(--bg-inset);
+}
+
+.product-context-option.active {
+  border-color: color-mix(in srgb, var(--blue) 24%, var(--line));
+  border-left-color: var(--blue);
+  background: var(--accent-soft);
+}
+
+.product-context-option > input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--blue);
+}
+
+.product-context-option > span {
+  min-width: 34px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: #fff;
+  color: var(--blue-ink);
+  font: 820 9px/1.2 var(--mono);
+  text-align: center;
+}
+
+.product-context-option > strong,
+.product-context-option > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-context-option > strong { font-size: 11.5px; }
+
+.product-context-option > em {
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.product-context-option > small {
+  grid-column: 2 / -1;
+  color: var(--ink-4);
+  font-family: var(--mono);
+  font-size: 9.5px;
+}
+
+.product-context-option:has(input:disabled) {
+  color: var(--ink-4);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .product-context-list > p {
   margin: 0;
   padding: 12px 8px;
@@ -1170,7 +1247,7 @@
   .product-context-close {
     width: 26px;
     height: 26px;
-    display: grid;
+    display: grid !important;
     place-items: center;
     padding: 0;
     border: 1px solid var(--line);

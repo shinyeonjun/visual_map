@@ -13,8 +13,8 @@ describe("buildApiConnectionModel", () => {
       "code:repository",
     ]);
     expect(model.primaryEdges.map((edge) => edge.id)).toEqual(["handles", "calls-service", "calls-repository"]);
-    expect(model.primaryCandidate?.node.id).toBe("db:table:public.sessions");
-    expect(model.primaryCandidate?.edge.from).toBe("code:repository");
+    expect(model.primaryDatabase?.node.id).toBe("db:table:public.sessions");
+    expect(model.primaryDatabase?.edge.from).toBe("code:repository");
     expect(model.additionalEdges.map((edge) => edge.id)).toEqual(["calls-side"]);
   });
 });

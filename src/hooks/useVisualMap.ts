@@ -32,6 +32,7 @@ type SearchContext = {
 };
 
 const DEFAULT_CHANGE_INTENT: ChangeIntent = { kind: "rename", value: null };
+type RelationView = "connections" | "calls" | "data" | "impact";
 
 export function useVisualMap({
   currentWorkspaceId,
@@ -56,6 +57,8 @@ export function useVisualMap({
   const [visualTargetKey, setVisualTargetKey] = useState<string | null>(null);
   const [visualMapKey, setVisualMapKey] = useState<string | null>(null);
   const [mapMode, setMapMode] = useState("atlas");
+  const [compositionFocusIds, setCompositionFocusIds] = useState<string[]>([]);
+  const [relationView, setRelationViewState] = useState<RelationView>("connections");
   const [changeIntent, setChangeIntentState] = useState<ChangeIntent>(DEFAULT_CHANGE_INTENT);
   const [searchQuery, setSearchQueryValue] = useState("");
   const [searchPopoverOpen, setSearchPopoverOpen] = useState(false);
@@ -68,7 +71,15 @@ export function useVisualMap({
   const autoSelectFocusRef = useRef(false);
   const currentWorkspaceIdRef = useRef<string | null>(currentWorkspaceId);
   const changeIntentRef = useRef<ChangeIntent>(DEFAULT_CHANGE_INTENT);
-  const visualTargetRef = useRef<{ workspaceId: string; mode: string; focusId: string | null } | null>(null);
+  const compositionFocusIdsRef = useRef<string[]>([]);
+  const relationViewRef = useRef<RelationView>("connections");
+  const visualTargetRef = useRef<{
+    workspaceId: string;
+    mode: string;
+    focusId: string | null;
+    focusIds?: string[];
+    relationView?: RelationView;
+  } | null>(null);
   const visualMapRequestRef = useRef(0);
   const evidenceGenerationRef = useRef(0);
   const enrichedMapCacheRef = useRef(new Map<string, VisualMap>());
@@ -79,6 +90,10 @@ export function useVisualMap({
   useLayoutEffect(() => {
     currentWorkspaceIdRef.current = currentWorkspaceId;
     invalidateEnrichedMaps();
+    compositionFocusIdsRef.current = [];
+    setCompositionFocusIds([]);
+    relationViewRef.current = "connections";
+    setRelationViewState("connections");
     if (!currentWorkspaceId) {
       clearVisualMapState();
       return;
@@ -95,6 +110,8 @@ export function useVisualMap({
     focusId?: string | null,
     mode = "atlas",
     workspaceId = currentWorkspaceIdRef.current,
+    focusIds = mode === "composition" ? compositionFocusIdsRef.current : [],
+    requestedRelationView = relationViewRef.current,
   ): Promise<VisualMap | null> {
     if (!workspaceId) {
       clearVisualMapState();
@@ -104,8 +121,21 @@ export function useVisualMap({
     const requestId = ++visualMapRequestRef.current;
     const startedAt = performance.now();
     const requestChangeIntent = mode === "column-impact" ? { ...changeIntentRef.current } : null;
-    const targetKey = mapRequestKey(workspaceId, mode, focusId, requestChangeIntent);
-    visualTargetRef.current = { workspaceId, mode, focusId: focusId ?? null };
+    const targetKey = mapRequestKey(
+      workspaceId,
+      mode,
+      focusId,
+      requestChangeIntent,
+      focusIds,
+      requestedRelationView,
+    );
+    visualTargetRef.current = {
+      workspaceId,
+      mode,
+      focusId: focusId ?? null,
+      focusIds: mode === "composition" ? [...focusIds] : undefined,
+      relationView: mode === "composition" ? requestedRelationView : undefined,
+    };
     setVisualStateWorkspaceId(workspaceId);
     setVisualTargetKey(targetKey);
     setVisualMapEnriching(false);
@@ -117,25 +147,14 @@ export function useVisualMap({
       setVisualMapStatus("캔버스 준비 중");
       setVisualMapError(null);
       setVisualMapErrorDetail(null);
-      const map = await invoke<VisualMap>("get_visual_map", {
-        workspaceId,
-        focusId: focusId ?? null,
-        mode,
-        changeIntent: requestChangeIntent,
-        enrichCodeEvidence: false,
-      });
-      if (!isCurrentRequest()) {
-        return null;
-      }
-      setVisualMapError(null);
-      setVisualMapErrorDetail(null);
       const shouldEnrichCodeEvidence = Boolean(
-        (mode === "api-flow" && map.apiReading?.dbCandidates.length) ||
+        (mode === "api-flow" && focusId) ||
+          (mode === "composition" && requestedRelationView !== "calls") ||
           (mode === "table-usage" && focusId?.startsWith("db:table:")) ||
           (mode === "column-impact" && focusId?.startsWith("db:column:")),
       );
       if (shouldEnrichCodeEvidence) {
-        setVisualMapStatus(`확정 근거 ${map.nodes.length}개 확인 · 코드 후보 확인 중`);
+        setVisualMapStatus("정적 SQL과 코드/DB 근거 확인 중");
         const enriched = await enrichVisualMap({
           workspaceId,
           focusId: focusId ?? null,
@@ -143,13 +162,29 @@ export function useVisualMap({
           changeIntent: requestChangeIntent,
           requestId,
           targetKey,
-          fallbackMap: map,
+          focusIds,
+          relationView: requestedRelationView,
         });
         if (isCurrentRequest()) {
           setProjectionElapsedMs(Math.round(performance.now() - startedAt));
         }
         return enriched;
       }
+      const map = await invoke<VisualMap>("get_visual_map", {
+        workspaceId,
+        focusId: focusId ?? null,
+        mode,
+        changeIntent: requestChangeIntent,
+        enrichCodeEvidence: false,
+        composition: mode === "composition"
+          ? { focusIds, relationView: requestedRelationView }
+          : null,
+      });
+      if (!isCurrentRequest()) {
+        return null;
+      }
+      setVisualMapError(null);
+      setVisualMapErrorDetail(null);
       setVisualMap(map);
       setVisualMapKey(targetKey);
       setProjectionElapsedMs(Math.round(performance.now() - startedAt));
@@ -194,7 +229,8 @@ export function useVisualMap({
     changeIntent,
     requestId,
     targetKey,
-    fallbackMap,
+    focusIds,
+    relationView,
   }: {
     workspaceId: string;
     focusId: string | null;
@@ -202,7 +238,8 @@ export function useVisualMap({
     changeIntent: ChangeIntent | null;
     requestId: number;
     targetKey: string;
-    fallbackMap: VisualMap;
+    focusIds: string[];
+    relationView: RelationView;
   }): Promise<VisualMap | null> {
     const generation = evidenceGenerationRef.current;
     const cacheKey = `${generation}:${targetKey}`;
@@ -225,6 +262,7 @@ export function useVisualMap({
             mode,
             changeIntent,
             enrichCodeEvidence: true,
+            composition: mode === "composition" ? { focusIds, relationView } : null,
           });
           enrichedMapRequestsRef.current.set(cacheKey, request);
         }
@@ -243,17 +281,6 @@ export function useVisualMap({
         map.nodes.length > 0 ? `캔버스 항목 ${map.nodes.length}개 · 코드 후보 확인 완료` : "캔버스 항목 없음",
       );
       return map;
-    } catch (error) {
-      if (!isCurrentRequest()) {
-        return null;
-      }
-      const uiError = toUserError(error, "코드 후보를 확인하지 못했습니다");
-      setVisualMap(fallbackMap);
-      setVisualMapKey(targetKey);
-      syncVisualSelection(fallbackMap);
-      setVisualMapStatus("DB 확정 근거 표시 · 코드 후보 확인 실패");
-      setVisualMapErrorDetail(uiError.details);
-      return fallbackMap;
     } finally {
       enrichedMapRequestsRef.current.delete(cacheKey);
       if (isCurrentRequest()) {
@@ -306,10 +333,111 @@ export function useVisualMap({
     } else if (mode !== "search-focus") {
       setSearchPopoverOpen(false);
     }
-    if (currentWorkspaceIdRef.current) {
+    if (currentWorkspaceIdRef.current && mode !== "composition") {
       saveMapContext(currentWorkspaceIdRef.current, mode, focusId);
     }
-    void loadVisualMap(focusId, mode);
+    if (mode === "composition" && compositionFocusIdsRef.current.length < 2) {
+      prepareCompositionSelection();
+      return;
+    }
+    if (mode === "composition") {
+      void loadVisualMap(
+        focusId,
+        mode,
+        currentWorkspaceIdRef.current,
+        compositionFocusIdsRef.current,
+        relationViewRef.current,
+      );
+      return;
+    }
+    void loadVisualMap(focusId, mode, currentWorkspaceIdRef.current);
+  }
+
+  function toggleCompositionFocus(focusId: string) {
+    const current = compositionFocusIdsRef.current;
+    const next = current.includes(focusId)
+      ? current.filter((id) => id !== focusId)
+      : current.length < 8
+        ? [...current, focusId]
+        : current;
+    if (next === current) {
+      setVisualMapStatus("관계 분석 대상은 최대 8개까지 선택할 수 있습니다");
+      return;
+    }
+    compositionFocusIdsRef.current = next;
+    setCompositionFocusIds(next);
+    setMapMode("composition");
+    clearVisualSelection();
+    if (next.length < 2) {
+      prepareCompositionSelection();
+      return;
+    }
+    void loadVisualMap(
+      null,
+      "composition",
+      currentWorkspaceIdRef.current,
+      next,
+      relationViewRef.current,
+    );
+  }
+
+  function clearCompositionFocus() {
+    compositionFocusIdsRef.current = [];
+    setCompositionFocusIds([]);
+    setMapMode("composition");
+    clearVisualSelection();
+    prepareCompositionSelection();
+  }
+
+  function updateRelationView(view: RelationView) {
+    relationViewRef.current = view;
+    setRelationViewState(view);
+    if (compositionFocusIdsRef.current.length >= 2) {
+      void loadVisualMap(
+        null,
+        "composition",
+        currentWorkspaceIdRef.current,
+        compositionFocusIdsRef.current,
+        view,
+      );
+    }
+  }
+
+  function prepareCompositionSelection() {
+    visualMapRequestRef.current += 1;
+    const workspaceId = currentWorkspaceIdRef.current;
+    const targetKey = workspaceId
+      ? mapRequestKey(
+          workspaceId,
+          "composition",
+          null,
+          null,
+          compositionFocusIdsRef.current,
+          relationViewRef.current,
+        )
+      : null;
+    visualTargetRef.current = workspaceId
+      ? {
+          workspaceId,
+          mode: "composition",
+          focusId: null,
+          focusIds: [...compositionFocusIdsRef.current],
+          relationView: relationViewRef.current,
+        }
+      : null;
+    setVisualStateWorkspaceId(workspaceId);
+    setVisualTargetKey(targetKey);
+    setVisualMap(null);
+    setVisualMapKey(null);
+    setVisualMapLoading(false);
+    setVisualMapEnriching(false);
+    setVisualMapError(null);
+    setVisualMapErrorDetail(null);
+    setVisualMapStatus(
+      compositionFocusIdsRef.current.length === 0
+        ? "관계를 볼 대상 2~8개를 선택하세요"
+        : "대상을 1개 더 선택하세요",
+    );
   }
 
   function updateChangeIntent(intent: ChangeIntent) {
@@ -390,14 +518,18 @@ export function useVisualMap({
     if (!query) {
       setSearchSummary(`검색어를 입력하면 ${searchScopeText(codeInventory, dbInventory)}을 함께 찾습니다.`);
       setSearchGroups([]);
-      showMapMode("search-focus", null, true);
+      if (mapMode !== "composition") {
+        showMapMode("search-focus", null, true);
+      }
       focusSearchInput();
       return;
     }
 
     if ((codeInventory?.partial || dbInventory?.partial) && currentWorkspaceIdRef.current && hasTauriRuntime()) {
       refreshSearchResults(query, searchContextRef.current);
-      showMapMode("search-focus", null, true);
+      if (mapMode !== "composition") {
+        showMapMode("search-focus", null, true);
+      }
       return;
     }
 
@@ -406,13 +538,17 @@ export function useVisualMap({
     if (query.length < 2) {
       setSearchSummary("두 글자 이상 입력하면 더 정확합니다.");
       setSearchGroups([]);
-      showMapMode("search-focus", null, true);
+      if (mapMode !== "composition") {
+        showMapMode("search-focus", null, true);
+      }
       return;
     }
     if (collection.truncated) {
       setSearchSummary(`${searchSummaryText(collection)} 그룹별 상위 결과만 보여줍니다.`);
       setSearchGroups(grouped);
-      showMapMode("search-focus", null, true);
+      if (mapMode !== "composition") {
+        showMapMode("search-focus", null, true);
+      }
       return;
     }
     setSearchSummary(searchSummaryText(collection));
@@ -422,7 +558,9 @@ export function useVisualMap({
       selectSearchResult(firstResult);
       return;
     }
-    showMapMode("search-focus", null, true);
+    if (mapMode !== "composition") {
+      showMapMode("search-focus", null, true);
+    }
   }
 
   function focusSearchInput() {
@@ -434,6 +572,19 @@ export function useVisualMap({
   }
 
   function selectSearchResult(result: SearchResult) {
+    if (mapMode === "composition" && compositionSearchResultIsSupported(result)) {
+      setSearchQueryValue("");
+      setSearchPopoverOpen(false);
+      setSearchGroups([]);
+      if (compositionFocusIdsRef.current.includes(result.focusId)) {
+        setSearchSummary(`이미 선택한 관계 대상 · ${result.title}`);
+        setVisualMapStatus("이미 관계 분석 대상으로 선택되어 있습니다");
+        return;
+      }
+      setSearchSummary(`관계 대상에 추가 · ${result.title}`);
+      toggleCompositionFocus(result.focusId);
+      return;
+    }
     const context = searchContextRef.current;
     if (result.codeItem && context) {
       context.selectCodeItem(result.codeItem);
@@ -591,6 +742,8 @@ export function useVisualMap({
     projectionElapsedMs: workspaceStateMatches ? projectionElapsedMs : null,
     mapMode,
     mapFocusId: currentFocusId,
+    compositionFocusIds,
+    relationView,
     changeIntent,
     searchQuery,
     searchPopoverOpen,
@@ -600,6 +753,9 @@ export function useVisualMap({
     searchGroups,
     setSearchQuery: updateSearchQuery,
     showMapMode,
+    toggleCompositionFocus,
+    clearCompositionFocus,
+    setRelationView: updateRelationView,
     setChangeIntent: updateChangeIntent,
     runSearch,
     selectSearchResult,
@@ -613,6 +769,10 @@ export function useVisualMap({
     clearVisualMap: resetVisualMap,
     refreshInventorySnapshot,
   };
+}
+
+function compositionSearchResultIsSupported(result: SearchResult): boolean {
+  return !result.id.startsWith("db-object:");
 }
 
 function sourceSummary(snapshot: InventorySnapshot): string | null {
@@ -654,12 +814,14 @@ function coverageFromSnapshot(snapshot: InventorySnapshot): AnalysisCoverage {
 }
 
 function mapRequestKey(
-  workspaceId: string,
-  mode: string,
-  focusId?: string | null,
-  changeIntent?: ChangeIntent | null,
+    workspaceId: string,
+    mode: string,
+    focusId?: string | null,
+    changeIntent?: ChangeIntent | null,
+    focusIds: string[] = [],
+    relationView: RelationView = "connections",
 ): string {
-  return `${workspaceId}\u0000${mode}\u0000${focusId ?? ""}\u0000${changeIntent?.kind ?? ""}\u0000${changeIntent?.value ?? ""}`;
+  return `${workspaceId}\u0000${mode}\u0000${focusId ?? ""}\u0000${changeIntent?.kind ?? ""}\u0000${changeIntent?.value ?? ""}\u0000${focusIds.join("\u001f")}\u0000${relationView}`;
 }
 
 function mapAnswersMode(map: VisualMap | null, mode: string): boolean {
@@ -671,6 +833,9 @@ function mapAnswersMode(map: VisualMap | null, mode: string): boolean {
   }
   if (mode === "table-usage" || mode === "column-impact") {
     return Boolean(map.reviewBoard);
+  }
+  if (mode === "composition") {
+    return map.mode === "composition" && map.nodes.length >= 2;
   }
   return map.nodes.length > 0;
 }

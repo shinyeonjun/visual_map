@@ -191,6 +191,8 @@ pub(crate) struct ApiReadingAnswer {
     pub subject: String,
     pub steps: Vec<ApiReadingStep>,
     #[serde(default)]
+    pub db_relations: Vec<ImpactReviewItem>,
+    #[serde(default)]
     pub db_candidates: Vec<ImpactReviewItem>,
     #[serde(default)]
     pub unknowns: Vec<ImpactReviewItem>,

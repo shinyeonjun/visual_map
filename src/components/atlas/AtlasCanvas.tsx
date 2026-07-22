@@ -98,6 +98,7 @@ export function AtlasCanvas({
 }) {
   const mode = visualMapControls.currentMap?.mode ?? visualMapControls.mode;
   const architectureMode = mode === "atlas" || mode === "explore";
+  const compositionMode = mode === "composition";
   const architectureMap =
     architectureMode && visualMapControls.currentMap && ["atlas", "explore"].includes(visualMapControls.currentMap.mode)
       ? visualMapControls.currentMap
@@ -165,9 +166,17 @@ export function AtlasCanvas({
     columns: dbColumnCount,
   };
   const hasInventoryData = routes.length > 0 || codeItems.length > 0 || fileItems.length > 0 || allTables.length > 0;
-  const hasData = architectureMode ? Boolean(architectureMap?.nodes.length) : impactBoard || apiReading ? true : hasInventoryData;
+  const hasData = compositionMode
+    ? Boolean(visualMapControls.currentMap?.nodes.length)
+    : architectureMode
+      ? Boolean(architectureMap?.nodes.length)
+      : impactBoard || apiReading
+        ? true
+        : hasInventoryData;
   const activeMode = hasData
-    ? architectureMode
+    ? compositionMode
+      ? "관계 분석"
+      : architectureMode
       ? architectureDetail
         ? "구조 영역 상세"
         : "전체 구조"
@@ -176,20 +185,26 @@ export function AtlasCanvas({
         : apiReading
           ? "API 읽기 경로"
         : atlasModeTitle(mode, inventoryCounts)
-    : workspaceControls.currentWorkspace
+    : compositionMode
+      ? "관계 분석"
+      : workspaceControls.currentWorkspace
       ? "코드/DB 연결"
       : "프로젝트 연결";
   const readOrder = hasData
-    ? architectureMode
+    ? compositionMode
+      ? "선택 대상 → 근거 경로 → 관계 상세"
+      : architectureMode
       ? "구조 영역 → API → 코드 → DB"
       : impactBoard
         ? "직접 영향 → 코드 후보 → 확인 필요 → 권장 확인"
         : apiReading
           ? "Route → Handler → Service/Function → Repository/Query → DB 후보"
         : atlasReadOrder(mode, inventoryCounts)
-    : "프로젝트 → 코드 → DB";
+    : compositionMode ? "대상 2~8개 선택" : "프로젝트 → 코드 → DB";
   const modePurpose = hasData
-    ? architectureMode
+    ? compositionMode
+      ? "선택한 대상 사이의 근거 경로만 표시합니다"
+      : architectureMode
       ? architectureDetail
         ? "선택한 구조 영역의 실제 항목만 펼쳤습니다"
         : "엔진 패키지와 DB 스키마 경계를 먼저 읽습니다"
@@ -198,7 +213,9 @@ export function AtlasCanvas({
         : apiReading
           ? "확정 HANDLES/CALLS만 읽기 경로로 사용합니다"
         : atlasModePurpose(mode, inventoryCounts)
-    : workspaceControls.currentWorkspace
+    : compositionMode
+      ? "왼쪽 항목에서 함께 볼 대상을 선택하세요"
+      : workspaceControls.currentWorkspace
       ? "코드/DB 목록을 불러오면 캔버스가 채워집니다"
       : "프로젝트를 열면 캔버스가 채워집니다";
   const analysisFocusId = visualMapControls.loading && visualMapControls.currentMap
@@ -225,7 +242,8 @@ export function AtlasCanvas({
       ? `code:${focusedCodeItem.id}`
       : null;
   const selectedTableNodeId = dbProfileControls.selectedTableKey ? `db:table:${dbProfileControls.selectedTableKey}` : null;
-  const selectedRelationFocusId = visualMapControls.selectedNode?.id ?? relationFocusIdFromMapFocus(analysisFocusId);
+  const selectedRelationFocusId = visualMapControls.selectedNode?.id
+    ?? (compositionMode ? null : relationFocusIdFromMapFocus(analysisFocusId));
   const pinnedNodeIds = [
     visualMapControls.selectedEdge?.from,
     visualMapControls.selectedEdge?.to,
@@ -291,10 +309,12 @@ export function AtlasCanvas({
         : "프로젝트 폴더를 지정하세요";
   const workspaceRequiredText = workspaceControls.repoSourceMode === "github" ? "GitHub URL 필요" : "로컬 폴더 필요";
   const canvasFacts = hasData
-      ? architectureMode
+      ? compositionMode
+      ? `선택 ${visualMapControls.compositionFocusIds.length}개 · 관계 ${visualMapControls.currentMap?.edges.length ?? 0}개`
+      : architectureMode
       ? architectureCanvasFacts(architectureMap)
       : apiReading
-        ? `읽기 ${apiReading.steps.length}단계 · DB 후보 ${apiReading.dbCandidates.length}개${
+        ? `읽기 ${apiReading.steps.length}단계 · DB 연결 ${apiReading.dbRelations?.length ?? 0}개 · 후보 ${apiReading.dbCandidates.length}개${
             apiReading.hiddenBranches > 0
               ? apiReading.hiddenBranchesIsLowerBound
                 ? ` · 최소 +${apiReading.hiddenBranches} 경계 관계 · 하위 미탐색`
@@ -334,7 +354,7 @@ export function AtlasCanvas({
         ? {
             label: "API",
             title: apiReading.subject,
-            meta: `확정 읽기 ${Math.max(0, apiReading.steps.length - 1)}개 · DB 후보 ${apiReading.dbCandidates.length}개`,
+            meta: `확정 읽기 ${Math.max(0, apiReading.steps.length - 1)}개 · DB 연결 ${apiReading.dbRelations?.length ?? 0}개 · 후보 ${apiReading.dbCandidates.length}개`,
             hint: apiReading.unknowns[0]?.detail ?? "번호 순서대로 파일을 읽습니다.",
             tone: "code" as const,
           }
@@ -385,7 +405,13 @@ export function AtlasCanvas({
     ? Boolean(visualMapControls.selectedNode)
     : Boolean(visualMapControls.selectedNode || focusedCodeItem || focusedColumnLabel || focusedTableKey);
   const guide = hasData
-    ? architectureMode
+    ? compositionMode
+      ? {
+          question: "선택한 대상은 어떤 근거로 이어지나",
+          action: "연결을 선택해 근거 확인",
+          basis: "확정 관계 우선 · 후보 관계 분리",
+        }
+      : architectureMode
       ? {
           question: architectureDetail ? "이 구조 영역은 무엇으로 구성됐나" : "먼저 읽을 구조 영역은?",
           action: architectureDetail ? "API → 코드 → DB 순서로 선택" : "구조 영역 선택",
@@ -401,7 +427,7 @@ export function AtlasCanvas({
           ? {
               question: "이 API 요청은 어디까지 이어지나",
               action: "번호 순서대로 파일 읽기",
-              basis: "확정 HANDLES · 확정 CALLS · 분리된 DB 후보",
+              basis: "확정 HANDLES · CALLS · 정적 SQL READS/WRITES · 후보 분리",
             }
       : atlasCanvasGuide({
         mode,
@@ -524,12 +550,17 @@ export function AtlasCanvas({
           </div>
         )}
       </div>
-      {hasData && !needsTarget && !apiReading && (
+      {compositionMode ? (
+        <CompositionToolbar
+          visualMapControls={visualMapControls}
+          codeInventory={workspaceControls.codeInventory}
+        />
+      ) : hasData && !needsTarget && !apiReading ? (
         <FocusStrip
           focus={focus}
           onClear={visualMapControls.selectedEdge || visualMapControls.selectedNode ? visualMapControls.clearSelection : null}
         />
-      )}
+      ) : null}
 
       <div
         className="at-stage"
@@ -544,7 +575,13 @@ export function AtlasCanvas({
         onWheel={handleWheel}
         onScroll={rememberCanvasView}
       >
-        {needsTarget ? (
+        {compositionMode && visualMapControls.compositionFocusIds.length < 2 ? (
+          <div className="map-empty composition-selection-empty">
+            <MousePointer2 size={22} aria-hidden="true" />
+            <strong>{visualMapControls.compositionFocusIds.length === 0 ? "분석 대상 2개 필요" : "대상 1개 더 필요"}</strong>
+            <span>왼쪽 항목에서 API·코드·테이블·컬럼을 선택하세요.</span>
+          </div>
+        ) : needsTarget ? (
           <div className="map-empty target-selection-empty">
             <MousePointer2 size={22} aria-hidden="true" />
             <strong>{targetSelectionPrompt(mode).title}</strong>
@@ -1160,7 +1197,7 @@ function RelationLedger({
       </div>
       {rows.length > 0 && (
         <div className="at-edge-columns" aria-hidden="true">
-          <span>판정</span>
+          <span>관계</span>
           <span>기준</span>
           <span />
           <span>연결 대상</span>
@@ -1392,6 +1429,88 @@ function transitionFocusState(
   };
 }
 
+
+function CompositionToolbar({
+  visualMapControls,
+  codeInventory,
+}: {
+  visualMapControls: VisualMapControls;
+  codeInventory: CodeInventory | null;
+}) {
+  const views = [
+    ["connections", "전체 연결"],
+    ["calls", "호출"],
+    ["data", "데이터"],
+    ["impact", "영향"],
+  ] as const;
+
+  return (
+    <section className="composition-toolbar" aria-label="관계 분석 범위">
+      <header>
+        <strong>대상</strong>
+        <span>{visualMapControls.compositionFocusIds.length}/8</span>
+      </header>
+      <div className="composition-targets">
+        {visualMapControls.compositionFocusIds.length > 0 ? (
+          visualMapControls.compositionFocusIds.map((id) => (
+            <button
+              type="button"
+              title={`${compositionSelectionLabel(id, codeInventory, visualMapControls.currentMap)} 선택 해제`}
+              aria-label={`${compositionSelectionLabel(id, codeInventory, visualMapControls.currentMap)} 선택 해제`}
+              onClick={() => visualMapControls.toggleCompositionFocus(id)}
+              key={id}
+            >
+              <span>{compositionSelectionLabel(id, codeInventory, visualMapControls.currentMap)}</span>
+              <X size={12} />
+            </button>
+          ))
+        ) : (
+          <span className="composition-target-placeholder">선택 대기</span>
+        )}
+      </div>
+      <div className="composition-view-switch" role="group" aria-label="관계 보기 방식">
+        {views.map(([id, label]) => (
+          <button
+            className={visualMapControls.relationView === id ? "active" : ""}
+            type="button"
+            aria-pressed={visualMapControls.relationView === id}
+            onClick={() => visualMapControls.setRelationView(id)}
+            key={id}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <button
+        className="composition-clear"
+        type="button"
+        title="분석 대상 전체 해제"
+        aria-label="분석 대상 전체 해제"
+        disabled={visualMapControls.compositionFocusIds.length === 0}
+        onClick={visualMapControls.clearCompositionFocus}
+      >
+        <X size={14} />
+      </button>
+    </section>
+  );
+}
+
+function compositionSelectionLabel(
+  nodeId: string,
+  codeInventory: CodeInventory | null,
+  map: VisualMap | null,
+): string {
+  const column = columnRefFromNodeId(nodeId);
+  if (column) return `${dbTableIdentityLabel(column.tableKey)}.${column.columnName}`;
+  const tableKey = tableKeyFromNodeId(nodeId);
+  if (tableKey) return dbTableIdentityLabel(tableKey);
+  const codeItem = codeInventoryItemFromNodeId(codeInventory, nodeId);
+  if (codeItem) return codeItem.name;
+  const mapNode = map?.nodes.find((node) => node.id === nodeId);
+  if (mapNode) return mapNode.title;
+  const parts = nodeId.split(":");
+  return parts[parts.length - 1] || nodeId;
+}
 
 function FocusStrip({ focus, onClear }: { focus: FocusStripState; onClear: (() => void) | null }) {
   return (

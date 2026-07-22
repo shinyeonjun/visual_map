@@ -54,6 +54,7 @@ export function SearchResultsPopover({
               key={result.id}
               result={result}
               isDefault={result.id === defaultResultId}
+              compositionMode={visualMapControls.mode === "composition"}
               onClick={() => visualMapControls.selectSearchResult(result)}
             />
           ))}
@@ -67,14 +68,16 @@ export function SearchResultsPopover({
 function SearchResultButton({
   result,
   isDefault,
+  compositionMode,
   onClick,
 }: {
   result: SearchResult;
   isDefault: boolean;
+  compositionMode: boolean;
   onClick: () => void;
 }) {
   const kind = resultKindLabel(result);
-  const action = resultActionLabel(result);
+  const action = resultActionLabel(result, compositionMode);
   const description = `${kind}: ${result.title}${result.subtitle ? ` · ${result.subtitle}` : ""}`;
   return (
     <button
@@ -141,7 +144,10 @@ function codeKindLabel(kind: string): string {
   return "코드";
 }
 
-function resultActionLabel(result: SearchResult): string {
+function resultActionLabel(result: SearchResult, compositionMode: boolean): string {
+  if (compositionMode && !result.id.startsWith("db-object:")) {
+    return "선택에 추가";
+  }
   if (result.id.startsWith("api:")) {
     return "흐름 보기";
   }

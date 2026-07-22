@@ -53,6 +53,7 @@ export function ApiReadingHeader({
   const method = routeMethod(map.focus);
   const confirmed = map.edges.filter(isConfirmedApiEdge).length;
   const candidates = map.edges.filter(isCandidateEdge).length;
+  const databaseRelations = answer.dbRelations?.length ?? 0;
 
   return (
     <div className="api-map-heading">
@@ -63,6 +64,7 @@ export function ApiReadingHeader({
         <strong>요청이 DB까지 어떻게 이어지나요?</strong>
         <small>
           <em className="confirmed">확정 {confirmed}</em>
+          <em className="confirmed">DB 연결 {databaseRelations}</em>
           <em className="candidate">후보 {candidates}</em>
           <em className={answer.unknowns.length > 0 ? "unknown" : "quiet"}>확인 안 됨 {answer.unknowns.length}</em>
         </small>
@@ -161,17 +163,17 @@ function ApiConnectionView({
   const [branchesOpen, setBranchesOpen] = useState(false);
   useEffect(() => setBranchesOpen(false), [map.focus]);
   const model = buildApiConnectionModel(answer, map);
-  const visibleNodes = model.primaryCandidate
-    ? [...model.primaryPath, model.primaryCandidate]
+  const visibleNodes = model.primaryDatabase
+    ? [...model.primaryPath, model.primaryDatabase]
     : model.primaryPath;
   const gapVisible = Boolean(model.gap && model.primaryPath.length <= 1);
   const slotCount = Math.max(2, visibleNodes.length + (gapVisible ? 1 : 0));
   const width = CANVAS_PAD * 2 + slotCount * NODE_WIDTH + Math.max(0, slotCount - 1) * NODE_GAP;
   const drawerHeight = branchesOpen && model.additionalEdges.length > 0 ? 178 : 0;
   const height = 720 + drawerHeight;
-  const primaryCandidateIndex = model.primaryCandidate ? visibleNodes.length - 1 : -1;
-  const candidateSourceIndex = model.primaryCandidate
-    ? model.primaryPath.findIndex(({ node }) => node.id === model.primaryCandidate?.edge.from)
+  const primaryDatabaseIndex = model.primaryDatabase ? visibleNodes.length - 1 : -1;
+  const databaseSourceIndex = model.primaryDatabase
+    ? model.primaryPath.findIndex(({ node }) => node.id === model.primaryDatabase?.edge.from)
     : -1;
 
   return (
@@ -199,11 +201,11 @@ function ApiConnectionView({
               />
             );
           })}
-          {model.primaryCandidate && candidateSourceIndex >= 0 ? (
+          {model.primaryDatabase && databaseSourceIndex >= 0 ? (
             <path
-              className={`api-edge-line candidate${selectedEdgeId === model.primaryCandidate.edge.id ? " selected" : ""}`}
-              d={candidateCurve(candidateSourceIndex, primaryCandidateIndex)}
-              markerEnd="url(#api-candidate-arrow)"
+              className={`api-edge-line ${isCandidateEdge(model.primaryDatabase.edge) ? "candidate" : "confirmed"}${selectedEdgeId === model.primaryDatabase.edge.id ? " selected" : ""}`}
+              d={candidateCurve(databaseSourceIndex, primaryDatabaseIndex)}
+              markerEnd={isCandidateEdge(model.primaryDatabase.edge) ? "url(#api-candidate-arrow)" : "url(#api-confirmed-arrow)"}
             />
           ) : null}
         </svg>
@@ -234,25 +236,25 @@ function ApiConnectionView({
           </button>
         ))}
 
-        {model.primaryCandidate ? (
+        {model.primaryDatabase ? (
           <>
             <ApiDiagramNode
-              item={model.primaryCandidate.item}
-              node={model.primaryCandidate.node}
-              table={dbTableForNode(model.primaryCandidate.node, dbTables)}
-              selected={selectedNodeId === model.primaryCandidate.node.id}
-              style={{ left: nodeX(primaryCandidateIndex), top: NODE_TOP }}
-              onSelect={() => onSelectNode(model.primaryCandidate!.node)}
+              item={model.primaryDatabase.item}
+              node={model.primaryDatabase.node}
+              table={dbTableForNode(model.primaryDatabase.node, dbTables)}
+              selected={selectedNodeId === model.primaryDatabase.node.id}
+              style={{ left: nodeX(primaryDatabaseIndex), top: NODE_TOP }}
+              onSelect={() => onSelectNode(model.primaryDatabase!.node)}
             />
             <button
-              className={`api-candidate-label${selectedEdgeId === model.primaryCandidate.edge.id ? " selected" : ""}`}
+              className={`api-candidate-label${!isCandidateEdge(model.primaryDatabase.edge) ? " confirmed" : ""}${selectedEdgeId === model.primaryDatabase.edge.id ? " selected" : ""}`}
               type="button"
-              data-edge-id={model.primaryCandidate.edge.id}
-              style={{ left: nodeX(candidateSourceIndex) + NODE_WIDTH / 2, top: NODE_TOP + NODE_HEIGHT + 82 }}
-              title={model.primaryCandidate.edge.evidence[0]?.text ?? "이름 기반 DB 후보"}
-              onClick={() => onSelectEdge(model.primaryCandidate!.edge)}
+              data-edge-id={model.primaryDatabase.edge.id}
+              style={{ left: nodeX(databaseSourceIndex) + NODE_WIDTH / 2, top: NODE_TOP + NODE_HEIGHT + 82 }}
+              title={model.primaryDatabase.edge.evidence[0]?.text ?? relationLabel(model.primaryDatabase.edge)}
+              onClick={() => onSelectEdge(model.primaryDatabase!.edge)}
             >
-              DB 후보
+              {relationLabel(model.primaryDatabase.edge)}
             </button>
           </>
         ) : null}
@@ -292,15 +294,15 @@ function ApiConnectionView({
           <span><i className="unknown" /> 확인 안 됨</span>
         </div>
       </div>
-      {answer.truncated || !model.primaryCandidate ? (
+      {answer.truncated || !model.primaryDatabase ? (
         <div className="api-map-notices">
           {answer.truncated ? (
             <span className="truncated">
               {answer.hiddenBranchesIsLowerBound ? "최소 " : ""}+{answer.hiddenBranches}개 관계가 엔진 표시 범위 밖에 있습니다.
             </span>
           ) : null}
-          {!model.primaryCandidate ? (
-            <span>현재 확정 코드 경로에 직접 붙는 DB 후보가 없습니다. DB 미사용이 확정된 것은 아닙니다.</span>
+          {!model.primaryDatabase ? (
+            <span>현재 확정 코드 경로에 연결된 DB 근거를 찾지 못했습니다. DB 미사용이 확정된 것은 아닙니다.</span>
           ) : null}
         </div>
       ) : null}
@@ -325,7 +327,7 @@ function ApiDiagramNode({
   style: CSSProperties;
   onSelect: () => void;
 }) {
-  const lane = "lane" in item ? item.lane : "db-candidate";
+  const lane = "lane" in item ? item.lane : item.truthClass === "confirmed" ? "db-relation" : "db-candidate";
   const laneMeta = apiLaneMeta(lane);
   const NodeIcon = laneMeta.icon;
   const inferred = "laneBasis" in item && item.laneBasis === "name-inferred";
@@ -407,14 +409,14 @@ function ApiLayerView({
   selectedNodeId: string | null;
   onSelectNode: (node: VisualNode) => void;
 }) {
-  const lanes = ["route", "handler", "service-function", "repository-query", "db-candidate"];
+  const lanes = ["route", "handler", "service-function", "repository-query", "database"];
   return (
     <section className="api-layer-view" aria-label={`${answer.subject} 계층 보기`}>
       {lanes.map((lane) => {
         const meta = apiLaneMeta(lane);
         const LaneIcon = meta.icon;
-        const items: Array<ApiReadingStep | ImpactReviewItem> = lane === "db-candidate"
-          ? answer.dbCandidates
+        const items: Array<ApiReadingStep | ImpactReviewItem> = lane === "database"
+          ? [...(answer.dbRelations ?? []), ...answer.dbCandidates]
           : answer.steps.filter((step) => step.lane === lane);
         return (
           <section key={lane}>
@@ -484,15 +486,16 @@ function ApiListView({
           </div>
         );
       })}
-      {answer.dbCandidates.map((item, index) => {
+      {[...(answer.dbRelations ?? []), ...answer.dbCandidates].map((item, index) => {
         const node = item.nodeId ? map.nodes.find((candidate) => candidate.id === item.nodeId) ?? null : null;
-        const edge = item.nodeId ? map.edges.find((candidate) => isCandidateEdge(candidate) && candidate.to === item.nodeId) ?? null : null;
+        const edge = item.nodeId ? map.edges.find((candidate) => isDatabaseEdge(candidate) && candidate.to === item.nodeId) ?? null : null;
+        const candidate = item.truthClass !== "confirmed";
         return (
-          <div className={`candidate${node && selectedNodeId === node.id ? " selected" : ""}`} key={item.id}>
-            <span>C{index + 1}</span>
+          <div className={`${candidate ? "candidate" : "confirmed"}${node && selectedNodeId === node.id ? " selected" : ""}`} key={item.id}>
+            <span>{candidate ? "C" : "D"}{index + 1}</span>
             {node ? <button type="button" onClick={() => onSelectNode(node)}>{item.title}</button> : <strong>{item.title}</strong>}
-            {edge ? <button type="button" onClick={() => onSelectEdge(edge)}>DB 후보</button> : <span>후보 근거</span>}
-            <code title={item.detail}>{item.confidence ? `후보 강도 ${candidateStrength(item.confidence)}` : "검증 필요"}</code>
+            {edge ? <button type="button" onClick={() => onSelectEdge(edge)}>{relationLabel(edge)}</button> : <span>{candidate ? "후보 근거" : "확정 근거"}</span>}
+            <code title={item.detail}>{item.confidence ? `후보 강도 ${candidateStrength(item.confidence)}` : candidate ? "검증 필요" : "정적 SQL 근거"}</code>
           </div>
         );
       })}
@@ -521,6 +524,8 @@ function apiLaneMeta(lane: string): {
   if (lane === "route") return { label: "API / Route", tone: "route", icon: Braces };
   if (lane === "handler") return { label: "Handler", tone: "handler", icon: Box };
   if (lane === "repository-query") return { label: "Repository / Query", tone: "repository", icon: Database };
+  if (lane === "database") return { label: "DB Table", tone: "database", icon: Table2 };
+  if (lane === "db-relation") return { label: "DB Table · 확정", tone: "database", icon: Table2 };
   if (lane === "db-candidate") return { label: "DB Table · 후보", tone: "database", icon: Table2 };
   return { label: "Service / Function", tone: "service", icon: FileCode2 };
 }
@@ -532,6 +537,8 @@ function routeMethod(focus: string): string | null {
 function relationLabel(edge: VisualEdge): string {
   if (edge.kind === "code_handle") return "HANDLES";
   if (edge.kind === "code_call") return "CALLS";
+  if (edge.kind === "code_db_read") return "READS";
+  if (edge.kind === "code_db_write") return "WRITES";
   if (isCandidateEdge(edge)) return "DB 후보";
   return edge.kind;
 }
@@ -542,6 +549,10 @@ function isConfirmedApiEdge(edge: VisualEdge): boolean {
 
 function isCandidateEdge(edge: VisualEdge): boolean {
   return edge.kind.startsWith("candidate");
+}
+
+function isDatabaseEdge(edge: VisualEdge): boolean {
+  return isCandidateEdge(edge) || edge.kind === "code_db_read" || edge.kind === "code_db_write";
 }
 
 function sourceLocationLabel(location?: { path: string; line?: number | null } | null): string | null {
@@ -560,7 +571,7 @@ function nodeTitle(nodeId: string, map: VisualMap): string {
 
 function laneEmptyMessage(lane: string): string {
   if (lane === "handler") return "확정 HANDLES 대상을 찾지 못했습니다.";
-  if (lane === "db-candidate") return "현재 확정 경로에서 DB 후보를 찾지 못했습니다.";
+  if (lane === "database") return "현재 확정 경로에서 DB 연결 근거를 찾지 못했습니다.";
   return "이 역할로 분류된 항목이 없습니다.";
 }
 

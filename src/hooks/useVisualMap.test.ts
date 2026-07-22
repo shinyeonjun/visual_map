@@ -43,6 +43,9 @@ describe("useVisualMap transitions", () => {
     expect(result.current.mapFocusId).toBe("code:route-1");
 
     await waitFor(() => expect(requests).toHaveLength(2));
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "get_visual_map", expect.objectContaining({
+      enrichCodeEvidence: true,
+    }));
     act(() => requests[1].resolve(visualMap("api-flow", "code:route-1")));
     await waitFor(() => expect(result.current.visualMap?.mode).toBe("api-flow"));
   });
@@ -56,19 +59,20 @@ describe("useVisualMap transitions", () => {
 
     act(() => result.current.showMapMode("column-impact", "db:column:public.users:email"));
     await waitFor(() => expect(requests).toHaveLength(2));
-    act(() => requests[1].resolve(visualMap("column-impact", "db:column:public.users:email")));
-    await waitFor(() => expect(requests).toHaveLength(3));
 
     expect(result.current.visualMap?.mode).toBe("atlas");
     expect(result.current.visualMapLoading).toBe(true);
     expect(result.current.visualMapEnriching).toBe(true);
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "get_visual_map", expect.objectContaining({
+      enrichCodeEvidence: true,
+    }));
 
-    act(() => requests[2].resolve(visualMap("column-impact", "db:column:public.users:email")));
+    act(() => requests[1].resolve(visualMap("column-impact", "db:column:public.users:email")));
     await waitFor(() => expect(result.current.visualMap?.mode).toBe("column-impact"));
     expect(result.current.visualMapLoading).toBe(false);
   });
 
-  it("enriches an API answer when its base path has a DB candidate", async () => {
+  it("enriches a focused API answer even when name matching found no DB candidate", async () => {
     const { result } = renderHook(() => useVisualMap({ currentWorkspaceId: "workspace-1" }));
 
     await waitFor(() => expect(requests).toHaveLength(1));
@@ -81,36 +85,141 @@ describe("useVisualMap transitions", () => {
     base.apiReading = {
       subject: "/sessions",
       steps: [],
-      dbCandidates: [{
-        id: "candidate",
-        nodeId: "db:table:public.sessions",
-        kind: "db-candidate",
-        title: "sessions",
-        detail: "검증 필요",
-        truthClass: "candidate",
-        confidence: "medium",
-        rank: 1,
-        evidence: [],
-      }],
+      dbCandidates: [],
       unknowns: [],
       recommendedChecks: [],
       hiddenBranches: 0,
       hiddenBranchesIsLowerBound: false,
       truncated: false,
     };
-    act(() => requests[1].resolve(base));
-    await waitFor(() => expect(requests).toHaveLength(3));
-
     expect(result.current.visualMap?.mode).toBe("atlas");
     expect(result.current.visualMapEnriching).toBe(true);
-    expect(invokeMock).toHaveBeenNthCalledWith(3, "get_visual_map", expect.objectContaining({
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "get_visual_map", expect.objectContaining({
       mode: "api-flow",
       enrichCodeEvidence: true,
     }));
 
-    act(() => requests[2].resolve(base));
+    act(() => requests[1].resolve(base));
     await waitFor(() => expect(result.current.visualMap?.mode).toBe("api-flow"));
     expect(result.current.visualMapLoading).toBe(false);
+  });
+
+  it("does not duplicate a projection request after a generic backend failure", async () => {
+    const { result } = renderHook(() => useVisualMap({ currentWorkspaceId: "workspace-1" }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    act(() => requests[0].resolve(visualMap("atlas", "overview")));
+    await waitFor(() => expect(result.current.visualMap?.mode).toBe("atlas"));
+
+    act(() => result.current.showMapMode("api-flow", "code:route-1"));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    act(() => requests[1].reject(new Error("engine unavailable")));
+
+    await waitFor(() => expect(result.current.visualMapLoading).toBe(false));
+    expect(requests).toHaveLength(2);
+    expect(result.current.visualMapError).toBe("캔버스를 만들지 못했습니다");
+  });
+
+  it("does not run SQL enrichment for the calls-only composition view", async () => {
+    const { result } = renderHook(() => useVisualMap({ currentWorkspaceId: "workspace-1" }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    act(() => requests[0].resolve(visualMap("atlas", "overview")));
+    await waitFor(() => expect(result.current.visualMap?.mode).toBe("atlas"));
+
+    act(() => result.current.toggleCompositionFocus("code:route-1"));
+    act(() => result.current.setRelationView("calls"));
+    act(() => result.current.toggleCompositionFocus("db:table:public.sessions"));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    const composed = visualMap("composition", "code:route-1");
+    composed.nodes = [
+      { id: "code:route-1", kind: "api", title: "/sessions", layer: "api", source: "code" },
+      { id: "db:table:public.sessions", kind: "table", title: "sessions", layer: "db", source: "db" },
+    ];
+    act(() => requests[1].resolve(composed));
+    await waitFor(() => expect(result.current.visualMap?.mode).toBe("composition"));
+
+    expect(requests).toHaveLength(2);
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "get_visual_map", expect.objectContaining({
+      composition: {
+        focusIds: ["code:route-1", "db:table:public.sessions"],
+        relationView: "calls",
+      },
+      enrichCodeEvidence: false,
+    }));
+  });
+
+  it("waits for two composition targets and sends WHAT plus HOW in one bounded request", async () => {
+    const { result } = renderHook(() => useVisualMap({ currentWorkspaceId: "workspace-1" }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    act(() => requests[0].resolve(visualMap("atlas", "overview")));
+    await waitFor(() => expect(result.current.visualMap?.mode).toBe("atlas"));
+
+    act(() => result.current.toggleCompositionFocus("code:route-1"));
+    expect(requests).toHaveLength(1);
+    expect(result.current.mapMode).toBe("composition");
+    expect(result.current.compositionFocusIds).toEqual(["code:route-1"]);
+
+    act(() => result.current.setRelationView("data"));
+    act(() => result.current.toggleCompositionFocus("db:table:public.sessions"));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "get_visual_map", expect.objectContaining({
+      mode: "composition",
+      composition: {
+        focusIds: ["code:route-1", "db:table:public.sessions"],
+        relationView: "data",
+      },
+      enrichCodeEvidence: true,
+    }));
+
+    const composed = visualMap("composition", "code:route-1");
+    composed.nodes = [
+      { id: "code:route-1", kind: "api", title: "/sessions", layer: "api", source: "code" },
+      { id: "db:table:public.sessions", kind: "table", title: "sessions", layer: "db", source: "db" },
+    ];
+    act(() => requests[1].resolve(composed));
+    await waitFor(() => expect(result.current.visualMap?.mode).toBe("composition"));
+
+    act(() => result.current.showMapMode("api-flow", "code:route-2"));
+    await waitFor(() => expect(requests).toHaveLength(3));
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "get_visual_map", expect.objectContaining({
+      mode: "api-flow",
+      focusId: "code:route-2",
+      composition: null,
+      enrichCodeEvidence: true,
+    }));
+  });
+
+  it("adds a full-search result to the composition instead of leaving relationship mode", async () => {
+    const { result } = renderHook(() => useVisualMap({ currentWorkspaceId: "workspace-1" }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    act(() => requests[0].resolve(visualMap("atlas", "overview")));
+    await waitFor(() => expect(result.current.visualMap?.mode).toBe("atlas"));
+
+    act(() => result.current.toggleCompositionFocus("code:route-1"));
+    act(() => result.current.selectSearchResult({
+      id: "table:public.sessions",
+      title: "public.sessions",
+      subtitle: "테이블",
+      focusId: "db:table:public.sessions",
+      tableKey: "public.sessions",
+    }));
+
+    expect(result.current.mapMode).toBe("composition");
+    expect(result.current.compositionFocusIds).toEqual([
+      "code:route-1",
+      "db:table:public.sessions",
+    ]);
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "get_visual_map", expect.objectContaining({
+      mode: "composition",
+      composition: {
+        focusIds: ["code:route-1", "db:table:public.sessions"],
+        relationView: "connections",
+      },
+    }));
   });
 
   it("keeps the previous answer visible while another target in the same mode loads", async () => {

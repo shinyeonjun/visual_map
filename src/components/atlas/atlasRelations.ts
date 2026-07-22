@@ -88,6 +88,10 @@ export function nodeLabel(id: string, map: VisualMap | null): string {
     const tableKey = tableKeyFromNodeId(id);
     return tableKey ? `${dbTableIdentityLabel(tableKey)}.${node.title}` : node.title;
   }
+  if (node?.kind === "table") {
+    const tableKey = tableKeyFromNodeId(id);
+    return tableKey ? dbTableIdentityLabel(tableKey) : node.title;
+  }
   return node.title;
 }
 
@@ -235,7 +239,7 @@ export function relationLedgerRows(
         fromTitle: from,
         to: compactRelationEndpointLabel(to),
         toTitle: to,
-        label: relationLabel(tone),
+        label: edgeKindLabel(edge),
         tone,
         evidence: relationEvidenceText(edge, tone),
       };

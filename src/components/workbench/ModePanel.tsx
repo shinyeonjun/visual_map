@@ -7,6 +7,7 @@ import {
   GitCompareArrows,
   LayoutGrid,
   ListFilter,
+  Network,
   Search,
   TriangleAlert,
   X,
@@ -43,6 +44,7 @@ type ModeContextItem = {
   meta: string;
   group?: string;
   active: boolean;
+  selectable?: boolean;
   open: () => void;
 };
 
@@ -60,6 +62,7 @@ const workbenchModes: [ModeIcon, string, string, string][] = [
   [FileCode2, "search-focus", "코드", "함수·클래스·파일"],
   [Database, "table-usage", "DB", "테이블·컬럼·제약"],
   [GitCompareArrows, "column-impact", "영향", "직접·후보·미확인"],
+  [Network, "composition", "관계", "선택한 대상만 연결"],
 ];
 
 export function ModePanel({
@@ -272,23 +275,41 @@ export function ModePanel({
                   {item.group && item.group !== context.items[index - 1]?.group ? (
                     <h3>{item.group}</h3>
                   ) : null}
-                  <button
-                    className={item.active ? "active" : ""}
-                    type="button"
-                    data-context-id={item.id}
-                    aria-current={item.active ? "true" : undefined}
-                    onClick={() => {
-                      setBlockedReason(null);
-                      setCompactContextOpen(false);
-                      item.open();
-                      onNavigate?.();
-                    }}
-                  >
-                    <span>{item.badge}</span>
-                    <strong title={item.title}>{item.title}</strong>
-                    {item.active ? <em>현재</em> : null}
-                    <small title={item.meta}>{item.meta}</small>
-                  </button>
+                  {item.selectable ? (
+                    <label className={`product-context-option${item.active ? " active" : ""}`} data-context-id={item.id}>
+                      <input
+                        type="checkbox"
+                        checked={item.active}
+                        disabled={!item.active && visualMapControls.compositionFocusIds.length >= 8}
+                        onChange={() => {
+                          setBlockedReason(null);
+                          item.open();
+                        }}
+                      />
+                      <span>{item.badge}</span>
+                      <strong title={item.title}>{item.title}</strong>
+                      {item.active ? <em>선택</em> : null}
+                      <small title={item.meta}>{item.meta}</small>
+                    </label>
+                  ) : (
+                    <button
+                      className={item.active ? "active" : ""}
+                      type="button"
+                      data-context-id={item.id}
+                      aria-current={item.active ? "true" : undefined}
+                      onClick={() => {
+                        setBlockedReason(null);
+                        setCompactContextOpen(false);
+                        item.open();
+                        onNavigate?.();
+                      }}
+                    >
+                      <span>{item.badge}</span>
+                      <strong title={item.title}>{item.title}</strong>
+                      {item.active ? <em>현재</em> : null}
+                      <small title={item.meta}>{item.meta}</small>
+                    </button>
+                  )}
                 </Fragment>
               ))}
               {context.items.length === 0 ? (
@@ -384,6 +405,86 @@ function modeContext(
     }
     open();
   };
+
+  if (mode === "composition") {
+    const selected = new Set(visualMapControls.compositionFocusIds);
+    const selectable = (
+      nodeId: string,
+      badge: string,
+      title: string,
+      meta: string,
+      group: string,
+    ): ModeContextItem => ({
+      id: nodeId,
+      badge,
+      title,
+      meta,
+      group,
+      active: selected.has(nodeId),
+      selectable: true,
+      open: () => visualMapControls.toggleCompositionFocus(nodeId),
+    });
+    const routeItems = (workspaceControls.codeInventory?.routes ?? []).map((route) =>
+        selectable(
+          `code:${route.id}`,
+          codeRouteMethod(route) ?? "API",
+          route.name,
+          routeLocation(route.filePath, route.line),
+          "API 라우트",
+        ),
+      );
+    const symbolItems = codeInventoryCodeItems(workspaceControls.codeInventory).map((item) =>
+        selectable(
+          `code:${item.id}`,
+          codeKindChip(item.kind),
+          item.name,
+          routeLocation(item.filePath, item.line),
+          "코드",
+        ),
+      );
+    const fileItems = (workspaceControls.codeInventory?.files ?? []).map((item) =>
+        selectable(
+          `code:${item.id}`,
+          "FILE",
+          item.name,
+          routeLocation(item.filePath, item.line),
+          "파일",
+        ),
+      );
+    const tables = dbProfileControls.inventory?.tables ?? [];
+    const tableItems = tables.map((table) => {
+      const tableKey = dbInventoryTableKey(table);
+      return selectable(
+        dbTableNodeId(tableKey),
+        "TABLE",
+        dbTableIdentityLabel(tableKey),
+        `컬럼 ${table.columns.length.toLocaleString("ko-KR")}개`,
+        "DB 테이블",
+      );
+    });
+    const columnItems = tables.flatMap((table) => {
+      const tableKey = dbInventoryTableKey(table);
+      return table.columns.map((column) =>
+          selectable(
+            dbColumnNodeId(tableKey, column.name),
+            column.isPrimaryKey ? "PK" : column.isForeignKey ? "FK" : "COL",
+            column.name,
+            column.dataType ?? "타입 정보 없음",
+            `컬럼 · ${dbTableIdentityLabel(tableKey)}`,
+          ),
+        );
+    });
+    const groups = [routeItems, symbolItems, fileItems, tableItems, columnItems]
+      .map((items) => [...new Map(items.map((item) => [item.id, item])).values()]);
+    const allItems = [...new Map(groups.flat().map((item) => [item.id, item])).values()];
+    const visibleItems = normalizedQuery ? allItems : balancedCompositionItems(groups, 100);
+    return finish(
+      "분석 대상",
+      `${selected.size}/8 선택 · 2개부터 관계 표시`,
+      visibleItems,
+      allItems.length,
+    );
+  }
 
   if (mode === "api-flow") {
     const routes = workspaceControls.codeInventory?.routes ?? [];
@@ -489,7 +590,32 @@ function modeContext(
   );
 }
 
+function balancedCompositionItems(groups: ModeContextItem[][], limit: number): ModeContextItem[] {
+  const selectedCount = groups.reduce(
+    (total, items) => total + items.filter((item) => item.active).length,
+    0,
+  );
+  const allocations = groups.map((items) => items.filter((item) => item.active).length);
+  let remaining = Math.max(0, limit - selectedCount);
+  while (remaining > 0) {
+    let added = false;
+    for (let index = 0; index < groups.length && remaining > 0; index += 1) {
+      if (allocations[index] >= groups[index].length) continue;
+      allocations[index] += 1;
+      remaining -= 1;
+      added = true;
+    }
+    if (!added) break;
+  }
+  return groups.flatMap((items, index) => {
+    const selected = items.filter((item) => item.active);
+    const unselected = items.filter((item) => !item.active);
+    return [...selected, ...unselected.slice(0, allocations[index] - selected.length)];
+  });
+}
+
 function modeTestId(mode: string): string {
+  if (mode === "composition") return "composition";
   if (mode === "api-flow") return "api";
   if (mode === "table-usage") return "dependencies";
   if (mode === "column-impact") return "impact";
@@ -512,6 +638,7 @@ function navigationCounts(
     "search-focus": routes + codeItems + files,
     "table-usage": tableCount,
     "column-impact": tables.reduce((total, table) => total + table.columns.length, 0),
+    composition: compositionItemCount(workspaceControls, dbProfileControls),
   };
 }
 
@@ -529,6 +656,12 @@ function modeBlockReason(
   if (mode === "atlas") {
     return null;
   }
+  if (
+    mode === "composition"
+    && compositionItemCount(workspaceControls, dbProfileControls) < 2
+  ) {
+    return "코드와 DB에서 관계를 볼 대상을 2개 이상 읽어야 합니다.";
+  }
   if (mode === "api-flow") {
     if (!workspaceControls.codeInventory) return "코드를 먼저 읽어야 API 경로를 볼 수 있습니다.";
     if (codeInventoryRouteCount(workspaceControls.codeInventory) === 0) return "읽은 코드에서 API 라우트를 찾지 못했습니다.";
@@ -545,12 +678,26 @@ function modeBlockReason(
   return null;
 }
 
+function compositionItemCount(
+  workspaceControls: WorkspaceControls,
+  dbProfileControls: DbProfileControls,
+): number {
+  const tables = dbProfileControls.inventory?.tables ?? [];
+  return codeInventoryItemCount(workspaceControls.codeInventory)
+    + dbInventoryTableCount(dbProfileControls.inventory)
+    + tables.reduce((total, table) => total + table.columns.length, 0);
+}
+
 function showWorkbenchMode(
   mode: string,
   workspaceControls: WorkspaceControls,
   dbProfileControls: DbProfileControls,
   visualMapControls: VisualMapControls,
 ) {
+  if (mode === "composition") {
+    visualMapControls.showMode(mode, null);
+    return;
+  }
   const workspaceId = workspaceControls.currentWorkspace?.id;
   const savedContext = workspaceId ? savedModeMapContext(workspaceId, mode) : null;
   if (

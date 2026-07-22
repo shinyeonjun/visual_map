@@ -63,9 +63,11 @@ export function InspectorPanel({
   const selectedEdge = visualMapControls.selectedEdge;
   const visibleMode = visualMapControls.currentMap?.mode ?? visualMapControls.mode;
   const apiReading = visibleMode === "api-flow" ? visualMapControls.currentMap?.apiReading ?? null : null;
-  const analysisFocusId = visualMapControls.loading && visualMapControls.currentMap
-    ? visualMapControls.currentMap.focus
-    : visualMapControls.focusId ?? visualMapControls.currentMap?.focus ?? "";
+  const analysisFocusId = visibleMode === "composition"
+    ? visualMapControls.selectedNode?.id ?? ""
+    : visualMapControls.loading && visualMapControls.currentMap
+      ? visualMapControls.currentMap.focus
+      : visualMapControls.focusId ?? visualMapControls.currentMap?.focus ?? "";
   const selectedNode = visualMapControls.selectedNode ?? (
     !selectedEdge && apiReading
       ? visualMapControls.currentMap?.nodes.find((node) => node.id === visualMapControls.currentMap?.focus) ?? null

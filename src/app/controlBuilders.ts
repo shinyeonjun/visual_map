@@ -215,6 +215,8 @@ export function buildVisualMapControls({
     currentMap: visual.visualMap,
     mode: visual.mapMode,
     focusId: visual.mapFocusId,
+    compositionFocusIds: visual.compositionFocusIds,
+    relationView: visual.relationView,
     loading: visual.visualMapLoading,
     enriching: visual.visualMapEnriching,
     changeIntent: visual.changeIntent,
@@ -237,6 +239,9 @@ export function buildVisualMapControls({
         selectDbTable: selectDbOnly,
       }),
     showMode,
+    toggleCompositionFocus: visual.toggleCompositionFocus,
+    clearCompositionFocus: visual.clearCompositionFocus,
+    setRelationView: visual.setRelationView,
     setChangeIntent: visual.setChangeIntent,
     runSearch: () =>
       visual.runSearch({

@@ -22,6 +22,13 @@ use workspace::{
     IndexCodeRequest, IndexDbProfileRequest, SaveDbProfileRequest, Workspace,
 };
 
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompositionMapRequest {
+    focus_ids: Vec<String>,
+    relation_view: Option<String>,
+}
+
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     #[cfg(any(debug_assertions, backend_visual_map_internal_build))]
     {
@@ -286,6 +293,7 @@ fn get_visual_map(
     mode: String,
     change_intent: Option<ChangeIntent>,
     enrich_code_evidence: Option<bool>,
+    composition: Option<CompositionMapRequest>,
 ) -> CommandResult<VisualMap> {
     let app_data_dir = app_data_dir(&app)?;
     let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
@@ -301,6 +309,27 @@ fn get_visual_map(
         .into());
     }
     let change_intent = normalized_change_intent(change_intent)?;
+
+    if mode == "composition" {
+        let composition = composition.unwrap_or_default();
+        let focus_ids = composition.focus_ids;
+        let relation_view = composition
+            .relation_view
+            .unwrap_or_else(|| "connections".to_string());
+        atlas::validate_composition_request(&snapshot, &focus_ids, &relation_view)?;
+        if enrich_code_evidence.unwrap_or(false) && relation_view != "calls" {
+            let mut enriched_snapshot = (*snapshot).clone();
+            enrich_composition_code_evidence(
+                &app_data_dir,
+                &workspace_id,
+                &focus_ids,
+                &mut enriched_snapshot,
+            );
+            return atlas::composition_map(&enriched_snapshot, focus_ids, &relation_view)
+                .map_err(Into::into);
+        }
+        return atlas::composition_map(&snapshot, focus_ids, &relation_view).map_err(Into::into);
+    }
 
     if enrich_code_evidence.unwrap_or(false)
         && matches!(mode.as_str(), "api-flow" | "table-usage" | "column-impact")
@@ -329,6 +358,72 @@ fn get_visual_map(
         mode,
         change_intent,
     ))
+}
+
+fn enrich_composition_code_evidence(
+    app_data_dir: &Path,
+    workspace_id: &str,
+    focus_ids: &[String],
+    snapshot: &mut InventorySnapshot,
+) {
+    let code_ids = composition_code_evidence_source_ids(snapshot, focus_ids);
+    if let Ok(workspace) = workspace::open_workspace(app_data_dir, workspace_id) {
+        atlas::apply_explicit_query_evidence_for_code(
+            snapshot,
+            workspace.repo_path.as_str(),
+            &code_ids,
+        );
+    }
+}
+
+fn composition_code_evidence_source_ids(
+    snapshot: &InventorySnapshot,
+    focus_ids: &[String],
+) -> Vec<String> {
+    const MAX_CODE_ITEMS: usize = 32;
+    const MAX_HOPS: usize = 4;
+
+    let code_items = snapshot
+        .items
+        .iter()
+        .filter(|item| item.source == "code")
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut selected = focus_ids
+        .iter()
+        .filter(|id| code_items.contains(id.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut frontier = selected.iter().cloned().collect::<Vec<_>>();
+    for _ in 0..MAX_HOPS {
+        if frontier.is_empty() || selected.len() >= MAX_CODE_ITEMS {
+            break;
+        }
+        let frontier_ids = frontier.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let mut next = snapshot
+            .links
+            .iter()
+            .filter(|link| {
+                link.truth_class == "confirmed"
+                    && matches!(link.kind.as_str(), "code_handle" | "code_call")
+                    && frontier_ids.contains(link.from.as_str())
+                    && code_items.contains(link.to.as_str())
+            })
+            .map(|link| link.to.clone())
+            .collect::<Vec<_>>();
+        next.sort();
+        next.dedup();
+        frontier.clear();
+        for id in next {
+            if selected.len() == MAX_CODE_ITEMS {
+                break;
+            }
+            if selected.insert(id.clone()) {
+                frontier.push(id);
+            }
+        }
+    }
+    selected.into_iter().collect()
 }
 
 fn normalized_change_intent(intent: Option<ChangeIntent>) -> Result<Option<ChangeIntent>, String> {
@@ -484,6 +579,14 @@ fn enrich_api_code_evidence(
     focus_id: &str,
     snapshot: &mut InventorySnapshot,
 ) {
+    if let Ok(workspace) = workspace::open_workspace(app_data_dir, workspace_id) {
+        let code_ids = api_code_evidence_source_ids(snapshot, focus_id);
+        atlas::apply_explicit_query_evidence_for_code(
+            snapshot,
+            workspace.repo_path.as_str(),
+            &code_ids,
+        );
+    }
     for target_id in api_code_evidence_target_ids(snapshot, focus_id) {
         let _ = enrich_table_code_evidence(
             app_data_dir,
@@ -494,6 +597,24 @@ fn enrich_api_code_evidence(
             snapshot,
         );
     }
+}
+
+fn api_code_evidence_source_ids(snapshot: &InventorySnapshot, focus_id: &str) -> Vec<String> {
+    atlas::visual_map_with_change(
+        snapshot,
+        Some(focus_id.to_string()),
+        "api-flow".to_string(),
+        None,
+    )
+    .api_reading
+    .map(|answer| {
+        answer
+            .steps
+            .into_iter()
+            .filter_map(|step| step.item.node_id)
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 fn api_code_evidence_target_ids(snapshot: &InventorySnapshot, focus_id: &str) -> Vec<String> {
@@ -581,6 +702,15 @@ fn enrich_table_code_evidence(
         &table_search,
         schema_ambiguous,
     );
+    if let Ok(workspace) = workspace::open_workspace(app_data_dir, workspace_id) {
+        atlas::apply_explicit_query_evidence(
+            snapshot,
+            table.id.as_str(),
+            workspace.repo_path.as_str(),
+            &table_evidence.matches,
+            schema_ambiguous,
+        );
+    }
     Some((table_evidence.matched_files, schema_ambiguous))
 }
 
