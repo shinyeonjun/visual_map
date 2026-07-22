@@ -10,7 +10,7 @@ describe("AnswerCanvas", () => {
     const map = apiMap();
     const { container } = renderAnswer(map, "code:route-orders");
 
-    expect(screen.getByRole("heading", { name: "/api/orders" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "DELETE /api/orders" })).toBeInTheDocument();
     expect(screen.getByText("확인된 처리 흐름")).toBeInTheDocument();
     expect(screen.getByText("loadOrders")).toBeInTheDocument();
     expect(container.querySelector(".answer-candidates")).not.toHaveAttribute("open");
@@ -120,6 +120,7 @@ function apiMap(): VisualMap {
     edges: [],
     apiReading: {
       subject: "/api/orders",
+      method: "DELETE",
       steps: [
         {
           id: "route-step",

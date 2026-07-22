@@ -189,6 +189,8 @@ pub(crate) struct VisualMap {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ApiReadingAnswer {
     pub subject: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
     pub steps: Vec<ApiReadingStep>,
     #[serde(default)]
     pub db_relations: Vec<ImpactReviewItem>,

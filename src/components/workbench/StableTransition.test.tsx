@@ -428,6 +428,18 @@ describe("stable mode transitions", () => {
     expect(scrollBody?.contains(footer)).toBe(false);
   });
 
+  it("keeps the API method in the inspector identity", () => {
+    render(
+      <InspectorPanel
+        workspaceControls={workspaceWithApi()}
+        dbProfileControls={dbControlsWithUsers()}
+        visualMapControls={readyControls(apiMap())}
+      />,
+    );
+
+    expect(screen.getByText("DELETE /api/v1/sessions")).toBeInTheDocument();
+  });
+
   it("opens a direct API relationship without replacing the inspector structure", () => {
     const selectEdge = vi.fn();
     const currentMap = apiMap();
@@ -511,6 +523,7 @@ function apiMap(): VisualMap {
     }],
     apiReading: {
       subject: "/api/v1/sessions",
+      method: "DELETE",
       steps: [{
         id: "route-step",
         nodeId: "code:route-session",
