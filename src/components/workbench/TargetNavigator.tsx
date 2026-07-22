@@ -4,7 +4,6 @@ import {
   Database,
   FileCode2,
   GitCompareArrows,
-  Network,
   Search,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -39,14 +38,14 @@ export function TargetNavigator({
   visualMapControls,
   onSelectTarget,
   onOpenDatabase,
-  onOpenAdvanced,
+  onOpenRelations,
 }: {
   workspaceControls: WorkspaceControls;
   dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
   onSelectTarget: () => void;
   onOpenDatabase: () => void;
-  onOpenAdvanced: (mode: "atlas" | "composition") => void;
+  onOpenRelations: () => void;
 }) {
   const catalog = useMemo(
     () => buildTargetCatalog(workspaceControls.codeInventory, dbProfileControls.inventory),
@@ -195,16 +194,10 @@ export function TargetNavigator({
         ) : (
           <small>{matchingItems.length.toLocaleString("ko-KR")}개</small>
         )}
-        <div>
-          <button type="button" title="프로젝트 전체 구조 열기" onClick={() => onOpenAdvanced("atlas")}>
-            <Network size={15} />
-            <span>전체 구조</span>
-          </button>
-          <button type="button" title="선택한 여러 대상의 관계 보기" onClick={() => onOpenAdvanced("composition")}>
-            <GitCompareArrows size={15} />
-            <span>선택 관계</span>
-          </button>
-        </div>
+        <button type="button" title="여러 대상을 선택해 관계 보기" onClick={onOpenRelations}>
+          <GitCompareArrows size={15} />
+          <span>여러 대상 관계</span>
+        </button>
       </footer>
     </section>
   );
