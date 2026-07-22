@@ -153,7 +153,23 @@
 .target-list > button > strong { font-size: 11px; }
 .target-list > button > small { grid-column: 1 / -1; color: var(--ink-4); font: 9.5px/1.35 var(--mono); }
 .target-list > button > em { color: var(--blue-ink); font-size: 9px; font-style: normal; font-weight: 800; }
-.target-list-empty { margin: 8px; color: var(--ink-4); font-size: 10.5px; line-height: 1.5; }
+.target-list-empty { display: grid; gap: 9px; margin: 8px; color: var(--ink-4); font-size: 10.5px; line-height: 1.5; }
+.target-list-empty p { margin: 0; }
+.target-list-empty button {
+  width: fit-content;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--blue) 34%, var(--line));
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--blue-ink);
+  font-size: 10px;
+  font-weight: 760;
+}
+.target-list-empty button:hover { border-color: var(--blue); background: #fff; }
 
 .target-navigator-footer {
   display: grid;
