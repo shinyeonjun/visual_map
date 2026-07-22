@@ -237,8 +237,12 @@ export function InspectorPanel({
       ? apiReading.recommendedChecks.find((item) => item.nodeId === selectedNode.id) ?? apiReading.recommendedChecks[0] ?? null
       : apiReading.recommendedChecks[0] ?? null
     : null;
-  const apiNextNode = apiNextCheck?.nodeId
-    ? visualMapControls.currentMap?.nodes.find((node) => node.id === apiNextCheck.nodeId) ?? null
+  const reviewNextCheck = visualMapControls.currentMap?.reviewBoard?.lanes
+    .find((lane) => lane.id === "checks")
+    ?.items[0] ?? null;
+  const suggestedCheck = apiNextCheck ?? reviewNextCheck;
+  const suggestedNode = suggestedCheck?.nodeId
+    ? visualMapControls.currentMap?.nodes.find((node) => node.id === suggestedCheck.nodeId) ?? null
     : null;
   const nextAction = selectionAction ?? emptyAction;
   const selectedEdgeNodes = selectedEdge
@@ -569,15 +573,15 @@ export function InspectorPanel({
       </div>
 
       <InspectorSection title="다음 확인">
-        {apiNextCheck ? (
+        {suggestedCheck ? (
           <div className="inspector-next-check">
-            {apiNextNode ? (
-              <button type="button" onClick={() => visualMapControls.selectNode(apiNextNode)}>
+            {suggestedNode ? (
+              <button type="button" onClick={() => visualMapControls.selectNode(suggestedNode)}>
                 <GitBranch size={14} />
-                <span><strong>{apiNextCheck.title}</strong><small>{apiNextCheck.detail}</small></span>
+                <span><strong>{suggestedCheck.title}</strong><small>{suggestedCheck.detail}</small></span>
               </button>
             ) : (
-              <div><GitBranch size={14} /><span><strong>{apiNextCheck.title}</strong><small>{apiNextCheck.detail}</small></span></div>
+              <div><GitBranch size={14} /><span><strong>{suggestedCheck.title}</strong><small>{suggestedCheck.detail}</small></span></div>
             )}
           </div>
         ) : nextAction ? (

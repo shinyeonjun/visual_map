@@ -89,8 +89,8 @@ export function TargetNavigator({
     <section className="target-navigator" aria-label="분석 대상 탐색">
       <header className="target-navigator-header">
         <span>
-          <strong>대상 찾기</strong>
-          <small>선택하면 알맞은 답을 바로 엽니다</small>
+          <strong>대상</strong>
+          <small>하나를 선택하면 기본 답을 엽니다</small>
         </span>
       </header>
 

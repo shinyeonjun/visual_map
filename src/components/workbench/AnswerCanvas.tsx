@@ -15,7 +15,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import type {
   ChangeIntent,
@@ -147,8 +147,8 @@ function AnswerHome({
         <section className="answer-home-section" aria-labelledby="answer-suggestions-title">
           <header>
             <span>
-              <strong id="answer-suggestions-title">바로 보기</strong>
-              <small>프로젝트에서 먼저 확인하기 좋은 대상</small>
+              <strong id="answer-suggestions-title">빠른 시작</strong>
+              <small>대상 종류별로 하나씩 바로 열어보기</small>
             </span>
           </header>
           <div className="answer-suggestions">
@@ -221,7 +221,6 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
                 <button
                   type="button"
                   disabled={!step.nodeId}
-                  style={{ "--answer-depth": Math.min(step.depth, 4) } as CSSProperties}
                   onClick={() => selectReviewNode(step.nodeId, map, visualMapControls)}
                 >
                   <span className="answer-flow-index">{String(index + 1).padStart(2, "0")}</span>
@@ -460,11 +459,13 @@ function AnswerHeader({
 }) {
   return (
     <header className="answer-header">
-      <div className="answer-header-icon" aria-hidden="true">{icon}</div>
-      <div>
-        <span>{kicker}</span>
-        <h1>{title}</h1>
-        <p>{conclusion}</p>
+      <div className="answer-header-main">
+        <div className="answer-header-icon" aria-hidden="true">{icon}</div>
+        <div className="answer-header-copy">
+          <span>{kicker}</span>
+          <h1>{title}</h1>
+          <p>{conclusion}</p>
+        </div>
       </div>
       <div className="answer-verdicts" aria-label="근거 요약">
         <span className="confirmed"><CheckCircle2 size={14} />{confirmedLabel} {confirmed}</span>
@@ -490,7 +491,7 @@ function AnswerSection({
   return (
     <section className="answer-section">
       <header>
-        <span><strong>{title}</strong><small>{description}</small></span>
+        <span><h2>{title}</h2><small>{description}</small></span>
         <em>{count}</em>
       </header>
       {children}

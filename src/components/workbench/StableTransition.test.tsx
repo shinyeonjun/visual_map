@@ -263,7 +263,7 @@ describe("stable mode transitions", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "오래됨" }));
+    fireEvent.click(screen.getByRole("button", { name: "다시 읽기 필요" }));
 
     expect(onToggleSourceManager).toHaveBeenCalledOnce();
   });
@@ -426,6 +426,47 @@ describe("stable mode transitions", () => {
     expect(scrollBody?.querySelectorAll(":scope > .inspector-section")).toHaveLength(4);
     expect(footer?.querySelector("header > strong")).toHaveTextContent("다음 확인");
     expect(scrollBody?.contains(footer)).toBe(false);
+  });
+
+  it("keeps the review board next check consistent with the answer canvas", () => {
+    const currentMap = dbMap("column-impact", "db:column:public.users:id");
+    currentMap.reviewBoard = {
+      subject: "public.users.id",
+      scope: "column",
+      lanes: [{
+        id: "checks",
+        order: 4,
+        title: "다음 확인",
+        description: "검토 순서",
+        tone: "action",
+        total: 1,
+        hidden: 0,
+        emptyMessage: "추가 확인 없음",
+        items: [{
+          id: "check-migration",
+          nodeId: null,
+          kind: "action",
+          title: "마이그레이션 확인",
+          detail: "컬럼 변경 전 배포 순서를 확인하세요.",
+          truthClass: "unknown",
+          rank: 1,
+          evidence: [],
+        }],
+      }],
+      markdownSummary: "public.users.id",
+    };
+
+    const { container } = render(
+      <InspectorPanel
+        workspaceControls={workspaceWithApi()}
+        dbProfileControls={dbControlsWithUsers()}
+        visualMapControls={readyControls(currentMap)}
+      />,
+    );
+
+    const footer = container.querySelector(".inspector > .inspector-section:last-child");
+    expect(footer).toHaveTextContent("마이그레이션 확인");
+    expect(footer).toHaveTextContent("컬럼 변경 전 배포 순서를 확인하세요.");
   });
 
   it("keeps the API method in the inspector identity", () => {
