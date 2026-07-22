@@ -44,12 +44,16 @@ import { SourceJumpRow } from "./SourceJumpRow";
 
 export function InspectorPanel({
   onClose,
+  title = "선택한 대상",
+  variant = "full",
   showDbSetup,
   workspaceControls,
   dbProfileControls,
   visualMapControls,
 }: {
   onClose?: () => void;
+  title?: string;
+  variant?: "full" | "answer";
   showDbSetup?: () => void;
   showWorkspaceSetup?: () => void;
   workspaceControls: WorkspaceControls;
@@ -57,7 +61,7 @@ export function InspectorPanel({
   visualMapControls: VisualMapControls;
 }) {
   if (visualMapControls.loading && !visualMapControls.currentMap) {
-    return <InspectorTransitionState mode={visualMapControls.mode} onClose={onClose} />;
+    return <InspectorTransitionState mode={visualMapControls.mode} onClose={onClose} title={title} />;
   }
 
   const selectedEdge = visualMapControls.selectedEdge;
@@ -176,6 +180,15 @@ export function InspectorPanel({
     text: `${item.kind}: ${item.text}`,
     tone: edgeEvidenceTone(edge),
   }))));
+  const reviewBoardEvidence = uniqueInspectorEvidence(
+    (visualMapControls.currentMap?.reviewBoard?.lanes.find((lane) => lane.id === "direct")?.items ?? [])
+      .filter((item) => !selectedNode || !item.nodeId || item.nodeId === selectedNode.id)
+      .map((item) => ({
+        key: item.id,
+        text: `${item.title} · ${item.detail}`,
+        tone: item.truthClass === "confirmed" ? "confirmed" : "neutral",
+      })),
+  );
   const apiStep = selectedNode
     ? apiReading?.steps.find((step) => step.nodeId === selectedNode.id) ?? null
     : null;
@@ -202,7 +215,9 @@ export function InspectorPanel({
       }))
     : nodeEvidenceItems.length
       ? nodeEvidenceItems
-      : directEvidence;
+      : directEvidence.length
+        ? directEvidence
+        : reviewBoardEvidence;
   const edgeCodeNode = selectedEdge
     ? [selectedEdge.from, selectedEdge.to]
         .map((id) => visualMapControls.currentMap?.nodes.find((node) => node.id === id) ?? null)
@@ -238,12 +253,12 @@ export function InspectorPanel({
 
   return (
     <section
-      className={`side-card inspector${visualMapControls.loading ? " is-refreshing" : ""}`}
+      className={`side-card inspector${variant === "answer" ? " answer-inspector" : ""}${visualMapControls.loading ? " is-refreshing" : ""}`}
       aria-busy={visualMapControls.loading}
     >
       <div className="panel-header">
         <Info size={16} />
-        <h2>선택한 대상</h2>
+        <h2>{title}</h2>
         {onClose ? <button className="inspector-close" type="button" onClick={onClose} aria-label="선택 해제" title="선택 해제"><X size={15} /></button> : null}
       </div>
       {visualMapControls.loading ? <InspectorUpdating /> : null}
@@ -438,7 +453,7 @@ export function InspectorPanel({
         </InspectorSection>
 
         {hasSelection ? <>
-        <InspectorSection title="직접 연결" count={selectedEdge ? selectedEdgeNodes.length : directEdges.length}>
+        {variant === "full" ? <InspectorSection title="직접 연결" count={selectedEdge ? selectedEdgeNodes.length : directEdges.length}>
         {selectedEdge ? (
           selectedEdgeNodes.length > 0 ? (
             <div className="inspector-edge-endpoints">
@@ -480,9 +495,9 @@ export function InspectorPanel({
             {hasSelection ? "이 대상에 직접 연결된 관계가 없습니다." : "대상을 선택하면 직접 연결만 표시합니다."}
           </InspectorEmptyRow>
         )}
-        </InspectorSection>
+        </InspectorSection> : null}
 
-        <InspectorSection title="근거" count={evidenceItems.length}>
+        <InspectorSection title="근거" count={evidenceItems.length > 6 ? `6/${evidenceItems.length}` : evidenceItems.length}>
         {evidenceItems.length > 0 ? (
           <div className="inspector-evidence-list">
             {evidenceItems.slice(0, 6).map((item) => (
@@ -580,13 +595,13 @@ export function InspectorPanel({
   );
 }
 
-function InspectorTransitionState({ mode, onClose }: { mode: string; onClose?: () => void }) {
+function InspectorTransitionState({ mode, onClose, title }: { mode: string; onClose?: () => void; title: string }) {
   const subject = inspectorTransitionSubject(mode);
   return (
     <section className="side-card inspector is-transitioning" aria-busy="true">
       <div className="panel-header">
         <Info size={16} />
-        <h2>선택한 대상</h2>
+        <h2>{title}</h2>
         {onClose ? <button className="inspector-close" type="button" onClick={onClose} aria-label="선택 해제" title="선택 해제"><X size={15} /></button> : null}
       </div>
       <div className="evidence-transition-state" role="status" aria-live="polite">
@@ -662,7 +677,7 @@ function InspectorSection({
   children,
 }: {
   title: string;
-  count?: number;
+  count?: ReactNode;
   children: ReactNode;
 }) {
   return (

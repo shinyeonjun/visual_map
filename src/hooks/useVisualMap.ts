@@ -68,7 +68,6 @@ export function useVisualMap({
   const [selectedVisualEdge, setSelectedVisualEdge] = useState<VisualEdge | null>(null);
   const selectedVisualNodeRef = useRef<VisualNode | null>(null);
   const selectedVisualEdgeRef = useRef<VisualEdge | null>(null);
-  const autoSelectFocusRef = useRef(false);
   const currentWorkspaceIdRef = useRef<string | null>(currentWorkspaceId);
   const changeIntentRef = useRef<ChangeIntent>(DEFAULT_CHANGE_INTENT);
   const compositionFocusIdsRef = useRef<string[]>([]);
@@ -102,7 +101,6 @@ export function useVisualMap({
     const context = savedMapContext(currentWorkspaceId);
     clearVisualSelection();
     setMapMode(context.mode);
-    autoSelectFocusRef.current = Boolean(context.focusId);
     void loadVisualMap(context.focusId, context.mode, currentWorkspaceId);
   }, [currentWorkspaceId]);
 
@@ -324,7 +322,6 @@ export function useVisualMap({
   function showMapMode(mode: string, focusId?: string | null, preserveSearch = false) {
     setMapMode(mode);
     clearVisualSelection();
-    autoSelectFocusRef.current = Boolean(focusId);
     if (!preserveSearch) {
       setSearchQueryValue("");
       setSearchPopoverOpen(false);
@@ -669,7 +666,6 @@ export function useVisualMap({
   }
 
   function clearVisualSelection() {
-    autoSelectFocusRef.current = false;
     selectedVisualNodeRef.current = null;
     selectedVisualEdgeRef.current = null;
     setSelectedVisualNode(null);
@@ -684,12 +680,9 @@ export function useVisualMap({
       ? null
       : selectedVisualNodeRef.current
         ? map.nodes.find((item) => item.id === selectedVisualNodeRef.current?.id) ?? null
-        : autoSelectFocusRef.current
-          ? map.nodes.find((item) => item.id === map.focus) ?? null
-          : null;
+        : null;
     selectedVisualNodeRef.current = node;
     selectedVisualEdgeRef.current = edge;
-    autoSelectFocusRef.current = false;
     setSelectedVisualNode(node);
     setSelectedVisualEdge(edge);
   }

@@ -935,18 +935,21 @@ fn direct_kind_label(kind: &str) -> &str {
 
 pub(super) fn direct_review_rank(kind: &str) -> u8 {
     match kind {
-        "primary-key" => 0,
-        "foreign-key" => 1,
-        "foreign-key-reference" => 2,
-        "unique" => 3,
-        "check" => 4,
-        "primary-index" => 5,
-        "unique-index" => 6,
-        "index" => 7,
-        "view" => 8,
-        "trigger" => 9,
-        "routine" => 10,
-        _ => 11,
+        "code_db_write" => 0,
+        "code_db_read" => 1,
+        "code_db_uses_column" => 2,
+        "primary-key" => 3,
+        "foreign-key" => 4,
+        "foreign-key-reference" => 5,
+        "unique" => 6,
+        "check" => 7,
+        "primary-index" => 8,
+        "unique-index" => 9,
+        "index" => 10,
+        "view" => 11,
+        "trigger" => 12,
+        "routine" => 13,
+        _ => 14,
     }
 }
 

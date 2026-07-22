@@ -361,7 +361,7 @@ describe("useVisualMap transitions", () => {
     expect(result.current.searchSummary).toBe("두 글자 이상 입력하면 더 정확합니다.");
   });
 
-  it("uses a navigation focus as the inspector selection after the map commits", async () => {
+  it("keeps navigation focus separate from an explicit inspector selection", async () => {
     const { result } = renderHook(() => useVisualMap({ currentWorkspaceId: "workspace-1" }));
     const focusId = "code:function:target";
     const map = visualMap("search-focus", focusId);
@@ -375,7 +375,7 @@ describe("useVisualMap transitions", () => {
     act(() => requests[1].resolve(map));
     await waitFor(() => expect(result.current.visualMap?.focus).toBe(focusId));
 
-    expect(result.current.selectedVisualNode).toEqual(map.nodes[0]);
+    expect(result.current.selectedVisualNode).toBeNull();
     expect(result.current.selectedVisualEdge).toBeNull();
   });
 
