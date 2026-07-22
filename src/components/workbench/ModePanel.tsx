@@ -1,13 +1,9 @@
 import {
-  Braces,
   CircleCheck,
-  Database,
-  FileCode2,
   FolderCog,
   GitCompareArrows,
   LayoutGrid,
   ListFilter,
-  Network,
   Search,
   TriangleAlert,
   X,
@@ -18,17 +14,13 @@ import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "..
 import type { VisualMap } from "../../types/visual-map";
 import { savedModeMapContext } from "../../visual/mapContext";
 import {
-  columnRefFromNodeId,
   dbColumnNodeId,
   dbTableIdentityLabel,
   dbTableNodeId,
 } from "../../visual/nodeIds";
 import {
   codeInventoryCodeItems,
-  codeInventoryFileCount,
   codeInventoryItemCount,
-  codeInventoryRouteCount,
-  codeInventorySymbolCount,
   codeKindChip,
   codeRouteMethod,
   dbInventoryTableCount,
@@ -58,11 +50,7 @@ type ModeContext = {
 
 const workbenchModes: [ModeIcon, string, string, string][] = [
   [LayoutGrid, "atlas", "개요", "전체 구조"],
-  [Braces, "api-flow", "API", "라우트부터 DB까지"],
-  [FileCode2, "search-focus", "코드", "함수·클래스·파일"],
-  [Database, "table-usage", "DB", "테이블·컬럼·제약"],
-  [GitCompareArrows, "column-impact", "영향", "직접·후보·미확인"],
-  [Network, "composition", "관계", "선택한 대상만 연결"],
+  [GitCompareArrows, "composition", "여러 대상", "선택한 대상만 연결"],
 ];
 
 export function ModePanel({
@@ -185,7 +173,7 @@ export function ModePanel({
                   setBlockedReason(null);
                   setCompactContextOpen(false);
                   if (visualMapControls.mode !== mode) {
-                    showWorkbenchMode(mode, workspaceControls, dbProfileControls, visualMapControls);
+                    showWorkbenchMode(mode, workspaceControls, visualMapControls);
                   }
                   onNavigate?.();
                 }}
@@ -348,7 +336,7 @@ export function ModePanel({
             </span>
             {hasWorkspace && (
               <small>
-                코드 {counts["search-focus"].toLocaleString("ko-KR")} · DB {counts["table-usage"].toLocaleString("ko-KR")}
+                코드 {codeInventoryItemCount(workspaceControls.codeInventory).toLocaleString("ko-KR")} · DB {dbInventoryTableCount(dbProfileControls.inventory).toLocaleString("ko-KR")}
               </small>
             )}
           </footer>
@@ -486,88 +474,6 @@ function modeContext(
     );
   }
 
-  if (mode === "api-flow") {
-    const routes = workspaceControls.codeInventory?.routes ?? [];
-    return finish(
-      "API 라우트",
-      "요청 경로 선택",
-      routes.map((route) => ({
-        id: route.id,
-        badge: codeRouteMethod(route) ?? "API",
-        title: route.name,
-        meta: routeLocation(route.filePath, route.line),
-        active: focus === `code:${route.id}`,
-        open: activate(`code:${route.id}`, () => visualMapControls.showMode("api-flow", `code:${route.id}`)),
-      })),
-      codeInventoryRouteCount(workspaceControls.codeInventory),
-    );
-  }
-
-  if (mode === "search-focus") {
-    const toItem = (group: string) => (item: ReturnType<typeof codeInventoryCodeItems>[number]): ModeContextItem => ({
-      id: item.id,
-      badge: codeKindChip(item.kind),
-      title: item.name,
-      meta: routeLocation(item.filePath, item.line),
-      group,
-      active: focus === `code:${item.id}`,
-      open: activate(`code:${item.id}`, () => visualMapControls.showMode("search-focus", `code:${item.id}`)),
-    });
-    const codeItems = [
-      ...(workspaceControls.codeInventory?.routes ?? []).map(toItem("API 라우트")),
-      ...codeInventoryCodeItems(workspaceControls.codeInventory).map(toItem("함수·클래스")),
-      ...(workspaceControls.codeInventory?.files ?? []).map(toItem("파일")),
-    ];
-    return finish(
-      "코드 항목",
-      "함수·클래스·파일",
-      codeItems,
-      codeInventoryItemCount(workspaceControls.codeInventory),
-    );
-  }
-
-  const tables = dbProfileControls.inventory?.tables ?? [];
-  if (mode === "table-usage") {
-    return finish(
-      "DB 테이블",
-      "사용처와 제약",
-      tables.map((table) => {
-        const tableKey = dbInventoryTableKey(table);
-        return {
-          id: tableKey,
-          badge: "TABLE",
-          title: dbTableIdentityLabel(tableKey),
-          meta: `컬럼 ${table.columns.length.toLocaleString("ko-KR")}개`,
-          active: focus === dbTableNodeId(tableKey),
-          open: activate(dbTableNodeId(tableKey), () => dbProfileControls.openTable(tableKey)),
-        };
-      }),
-      dbInventoryTableCount(dbProfileControls.inventory),
-    );
-  }
-
-  if (mode === "column-impact") {
-    return finish(
-      "DB 컬럼",
-      "영향을 확인할 컬럼",
-      tables.flatMap((table) => {
-        const tableKey = dbInventoryTableKey(table);
-        return table.columns.map((column) => ({
-            id: dbColumnNodeId(tableKey, column.name),
-            badge: column.isPrimaryKey ? "PK" : column.isForeignKey ? "FK" : "COL",
-            title: column.name,
-            meta: column.dataType ?? "타입 정보 없음",
-            group: dbTableIdentityLabel(tableKey),
-            active: focus === dbColumnNodeId(tableKey, column.name),
-            open: activate(
-              dbColumnNodeId(tableKey, column.name),
-              () => dbProfileControls.openColumn(tableKey, column.name),
-            ),
-          }));
-      }),
-    );
-  }
-
   const atlasMap = visualMapControls.currentMap?.mode === "atlas"
     ? visualMapControls.currentMap
     : atlasContextMap?.mode === "atlas"
@@ -615,29 +521,16 @@ function balancedCompositionItems(groups: ModeContextItem[][], limit: number): M
 }
 
 function modeTestId(mode: string): string {
-  if (mode === "composition") return "composition";
-  if (mode === "api-flow") return "api";
-  if (mode === "table-usage") return "dependencies";
-  if (mode === "column-impact") return "impact";
-  if (mode === "search-focus") return "search";
-  return "atlas";
+  return mode === "composition" ? "composition" : "atlas";
 }
 
 function navigationCounts(
   workspaceControls: WorkspaceControls,
   dbProfileControls: DbProfileControls,
 ): Record<string, number> {
-  const codeItems = codeInventorySymbolCount(workspaceControls.codeInventory);
-  const routes = codeInventoryRouteCount(workspaceControls.codeInventory);
-  const files = codeInventoryFileCount(workspaceControls.codeInventory);
-  const tables = dbProfileControls.inventory?.tables ?? [];
   const tableCount = dbInventoryTableCount(dbProfileControls.inventory);
   return {
     atlas: codeInventoryItemCount(workspaceControls.codeInventory) + tableCount,
-    "api-flow": routes,
-    "search-focus": routes + codeItems + files,
-    "table-usage": tableCount,
-    "column-impact": tables.reduce((total, table) => total + table.columns.length, 0),
     composition: compositionItemCount(workspaceControls, dbProfileControls),
   };
 }
@@ -662,19 +555,6 @@ function modeBlockReason(
   ) {
     return "코드와 DB에서 관계를 볼 대상을 2개 이상 읽어야 합니다.";
   }
-  if (mode === "api-flow") {
-    if (!workspaceControls.codeInventory) return "코드를 먼저 읽어야 API 경로를 볼 수 있습니다.";
-    if (codeInventoryRouteCount(workspaceControls.codeInventory) === 0) return "읽은 코드에서 API 라우트를 찾지 못했습니다.";
-  }
-  if (mode === "search-focus" && codeInventoryItemCount(workspaceControls.codeInventory) === 0) {
-    return "코드나 파일을 먼저 읽어야 합니다.";
-  }
-  if (mode === "table-usage" && !dbProfileControls.inventory?.tables.length) {
-    return "DB 또는 DDL을 연결해야 테이블을 볼 수 있습니다.";
-  }
-  if (mode === "column-impact" && !firstColumn(dbProfileControls)) {
-    return "컬럼 구조를 읽어야 변경 영향을 볼 수 있습니다.";
-  }
   return null;
 }
 
@@ -691,7 +571,6 @@ function compositionItemCount(
 function showWorkbenchMode(
   mode: string,
   workspaceControls: WorkspaceControls,
-  dbProfileControls: DbProfileControls,
   visualMapControls: VisualMapControls,
 ) {
   if (mode === "composition") {
@@ -699,65 +578,6 @@ function showWorkbenchMode(
     return;
   }
   const workspaceId = workspaceControls.currentWorkspace?.id;
-  const savedContext = workspaceId ? savedModeMapContext(workspaceId, mode) : null;
-  if (
-    savedContext &&
-    (!savedContext.focusId || modeFocusExists(savedContext.focusId, mode, workspaceControls, dbProfileControls))
-  ) {
-    visualMapControls.showMode(mode, savedContext.focusId);
-    return;
-  }
-  visualMapControls.showMode(mode, null);
-}
-
-function modeFocusExists(
-  focusId: string | null,
-  mode: string,
-  workspaceControls: WorkspaceControls,
-  dbProfileControls: DbProfileControls,
-): boolean {
-  if (mode === "atlas" || mode === "explore") {
-    return true;
-  }
-  if (!focusId) {
-    return false;
-  }
-  if (focusId.startsWith("code:")) {
-    const codeId = focusId.slice("code:".length);
-    const inventory = workspaceControls.codeInventory;
-    return Boolean(
-      inventory?.routes.some((item) => item.id === codeId) ||
-        codeInventoryCodeItems(inventory).some((item) => item.id === codeId) ||
-        inventory?.files.some((item) => item.id === codeId),
-    );
-  }
-  if (focusId.startsWith("db:table:")) {
-    const tableKey = focusId.slice("db:table:".length);
-    return Boolean(dbProfileControls.inventory?.tables.some((table) => dbInventoryTableKey(table) === tableKey));
-  }
-  if (focusId.startsWith("db:column:")) {
-    const ref = columnRefFromNodeId(focusId);
-    return Boolean(
-      ref &&
-        dbProfileControls.inventory?.tables.some(
-          (table) =>
-            dbInventoryTableKey(table) === ref.tableKey &&
-            table.columns.some((column) => column.name === ref.columnName),
-        ),
-    );
-  }
-  return false;
-}
-
-function firstColumn(dbProfileControls: DbProfileControls): { tableKey: string; columnName: string } | null {
-  const tables = dbProfileControls.inventory?.tables ?? [];
-  const selectedTable =
-    (dbProfileControls.selectedTableKey &&
-      tables.find((table) => dbInventoryTableKey(table) === dbProfileControls.selectedTableKey)) ||
-    null;
-  const table = selectedTable?.columns.length
-    ? selectedTable
-    : tables.find((item) => item.columns.length > 0) ?? null;
-  const column = table?.columns[0];
-  return table && column ? { tableKey: dbInventoryTableKey(table), columnName: column.name } : null;
+  const savedContext = workspaceId ? savedModeMapContext(workspaceId, "atlas") : null;
+  visualMapControls.showMode("atlas", savedContext?.focusId ?? null);
 }

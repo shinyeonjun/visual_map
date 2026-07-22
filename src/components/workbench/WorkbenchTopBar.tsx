@@ -152,6 +152,7 @@ export function WorkbenchTopBar({
         <button
           className={(surface ?? "answers") === "answers" ? "active" : ""}
           type="button"
+          aria-label="답 보기"
           aria-pressed={(surface ?? "answers") === "answers"}
           title="대상을 선택해 핵심 답 보기"
           onClick={onShowAnswers}
@@ -162,6 +163,7 @@ export function WorkbenchTopBar({
         <button
           className={surface === "advanced" ? "active" : ""}
           type="button"
+          aria-label="전체 구조"
           aria-pressed={surface === "advanced"}
           title="프로젝트 전체 구조와 고급 분석 열기"
           onClick={onShowAdvanced}

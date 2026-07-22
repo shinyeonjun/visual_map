@@ -15,7 +15,7 @@ describe("TargetNavigator", () => {
         visualMapControls={visualControls(showMode)}
         onSelectTarget={onSelectTarget}
         onOpenDatabase={vi.fn()}
-        onOpenAdvanced={vi.fn()}
+        onOpenRelations={vi.fn()}
       />,
     );
 
@@ -25,8 +25,8 @@ describe("TargetNavigator", () => {
     expect(showMode).toHaveBeenCalledWith("api-flow", "code:route-orders");
   });
 
-  it("keeps the full atlas behind an explicit advanced action", () => {
-    const onOpenAdvanced = vi.fn();
+  it("opens multi-target relationships from one explicit action", () => {
+    const onOpenRelations = vi.fn();
     render(
       <TargetNavigator
         workspaceControls={workspaceControls()}
@@ -34,12 +34,13 @@ describe("TargetNavigator", () => {
         visualMapControls={visualControls(vi.fn())}
         onSelectTarget={vi.fn()}
         onOpenDatabase={vi.fn()}
-        onOpenAdvanced={onOpenAdvanced}
+        onOpenRelations={onOpenRelations}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "전체 구조" }));
-    expect(onOpenAdvanced).toHaveBeenCalledWith("atlas");
+    expect(screen.queryByRole("button", { name: "전체 구조" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "여러 대상 관계" }));
+    expect(onOpenRelations).toHaveBeenCalledOnce();
   });
 
   it("bounds each code role by default but searches the full inventory", () => {
@@ -53,7 +54,7 @@ describe("TargetNavigator", () => {
         visualMapControls={visualControls(vi.fn(), "search-focus")}
         onSelectTarget={vi.fn()}
         onOpenDatabase={vi.fn()}
-        onOpenAdvanced={vi.fn()}
+        onOpenRelations={vi.fn()}
       />,
     );
 
@@ -72,7 +73,7 @@ describe("TargetNavigator", () => {
         visualMapControls={visualControls(vi.fn())}
         onSelectTarget={vi.fn()}
         onOpenDatabase={onOpenDatabase}
-        onOpenAdvanced={vi.fn()}
+        onOpenRelations={vi.fn()}
       />,
     );
 
@@ -92,7 +93,7 @@ describe("TargetNavigator", () => {
       visualMapControls: visualControls(vi.fn(), "atlas"),
       onSelectTarget: vi.fn(),
       onOpenDatabase: vi.fn(),
-      onOpenAdvanced: vi.fn(),
+      onOpenRelations: vi.fn(),
     };
     const { rerender } = render(<TargetNavigator workspaceControls={emptyWorkspace} {...props} />);
 

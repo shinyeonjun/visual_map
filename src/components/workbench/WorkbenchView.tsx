@@ -165,7 +165,7 @@ export function WorkbenchView({
                 setSourceManagerOpen(true);
                 window.requestAnimationFrame(() => focusDbProfileSetup(dbProfileControls));
               }}
-              onOpenAdvanced={showAdvanced}
+              onOpenRelations={() => showAdvanced("composition")}
             />
           )}
         </aside>

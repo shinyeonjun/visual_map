@@ -178,8 +178,7 @@
   border-top: 1px solid var(--line);
 }
 .target-navigator-footer > small { color: var(--ink-4); font-size: 9.5px; }
-.target-navigator-footer > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
-.target-navigator-footer button {
+.target-navigator-footer > button {
   min-width: 0;
   height: 32px;
   display: inline-flex;
@@ -194,7 +193,7 @@
   font-size: 9.5px;
   font-weight: 730;
 }
-.target-navigator-footer button:hover { border-color: var(--line-2); background: var(--bg-panel); color: var(--ink); }
+.target-navigator-footer > button:hover { border-color: var(--line-2); background: var(--bg-panel); color: var(--ink); }
 
 .answer-canvas {
   --answer-content-width: 920px;
@@ -659,7 +658,6 @@
   .product-shell[data-surface="answers"] .evidence-panel {
     width: min(320px, calc(100% - 204px));
   }
-  .product-view-switch { display: none; }
   .target-navigator-header { min-height: 54px; padding: 9px 10px; }
   .target-kind-tabs { padding: 7px; }
   .target-kind-tabs button { grid-template-columns: 18px minmax(0, 1fr); padding-inline: 7px; }

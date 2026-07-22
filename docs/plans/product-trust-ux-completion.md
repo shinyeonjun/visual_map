@@ -14,6 +14,7 @@ The repository implementation is complete for the product boundary described bel
 - Frontend structure: canvas guidance, relation rendering, setup, impact review, API reading, source jumps, and inspector modeling are separated into focused modules. The retired duplicate Atlas/workbench shells and their CSS were removed.
 - Dead-code control: Knip is part of local verification and CI, with explicit entry points for the native smoke and design-generation scripts.
 - UX stability: fixed navigation, non-reloading active mode clicks, bounded search/list rendering, stable async enrichment, and minimum-viewport layout are covered by tests. The left panel now owns one stable analysis criterion; same-mode loading retains the committed target until the left criterion, center focus, and inspector subject can update together. Engine execution, Git operations, snapshot fingerprinting, projection, and workspace scans are dispatched away from the Tauri main thread. The current native build passed the core reading flows, minimum viewport, clean first-run onboarding, and fixed inspector scrolling without source actions being covered by the next-check footer.
+- Answer-first navigation: the fixed top switch owns the only transition between answers and advanced structure. The answer surface owns API, code, table, and column targets; the advanced surface owns only overview and multi-target relationships. The former duplicate API/code/DB/impact navigation and its second target browser were removed.
 
 Live PostgreSQL 16, MySQL 8.4, SQL Server 2022, and Oracle Database Free 23.26.2 adapter tests passed on 2026-07-21 against disposable local Docker databases. The desktop product smoke indexed all four sources and verified non-empty table and column inventory; an empty network database now fails the smoke instead of being reported as a successful metadata check. Oracle was exercised through Oracle Instant Client 19.30, which remains an explicit runtime prerequisite. SQLite DDL and DB evidence run without external infrastructure.
 
@@ -38,7 +39,8 @@ On 2026-07-22 the product adapter moved to `database-memory 0.2.0 / contract 2` 
 
 The workbench is stable; its evidence changes. A user must not have to relearn the screen after choosing another mode or target.
 
-- Left column: choose the answer type and the analysis target. Mode controls keep one fixed order: overview, API, code, DB, impact. The target list keeps its width, filter position, scroll state, and current-item marker.
+- Left column: on the answer surface, choose one stable target kind in this order: API, code, table, column. On the advanced surface, choose only overview or multi-target relationships. Each target list keeps its width, filter position, scroll state, and current-item marker.
+- Top bar: the answer/structure switch stays visible at the 800px product minimum. It is the only control that changes the left-column navigation grammar.
 - Center column: answer the selected question. Its header, focus row, canvas bounds, zoom controls, and relationship evidence area keep stable ownership even when their data changes.
 - Right column: explain the current target. The reading order is always summary, direct relationships, evidence, source, and next check.
 - An inactive mode click changes the answer type. Clicking the active mode does not reload or implicitly open another panel. At compact widths, the target list opens only from the explicit `항목` control.
