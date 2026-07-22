@@ -677,7 +677,7 @@ fn rank_candidate<'a>(
     })
 }
 
-fn table_aliases(name: &str) -> Vec<String> {
+pub(super) fn table_aliases(name: &str) -> Vec<String> {
     let tokens = identifier_tokens(name);
     if tokens.is_empty() {
         return Vec::new();
@@ -695,7 +695,7 @@ fn table_aliases(name: &str) -> Vec<String> {
         .collect()
 }
 
-fn identifier_terms(value: &str) -> HashSet<String> {
+pub(super) fn identifier_terms(value: &str) -> HashSet<String> {
     let tokens = identifier_tokens(value);
     let mut terms = HashSet::new();
     for start in 0..tokens.len() {
@@ -706,7 +706,7 @@ fn identifier_terms(value: &str) -> HashSet<String> {
     terms
 }
 
-fn identifier_tokens(value: &str) -> Vec<String> {
+pub(super) fn identifier_tokens(value: &str) -> Vec<String> {
     let chars = value.chars().collect::<Vec<_>>();
     let mut tokens = Vec::new();
     let mut current = String::new();

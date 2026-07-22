@@ -188,7 +188,8 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
   const method = answer.method ?? routeMethodFromIdentity(map.focus);
   const subject = routeDisplayName(answer.subject, method);
   const confirmedSteps = answer.steps.filter((step) => step.truthClass === "confirmed" || step.truthClass === "structural");
-  const candidateCount = answer.dbCandidates.length + answer.unknowns.length;
+  const candidateCount = answer.dbCandidates.length;
+  const unknownCount = answer.unknowns.length;
   const visibleSteps = confirmedSteps.slice(0, 5);
   const hiddenSteps = confirmedSteps.slice(5);
   const maxDepth = confirmedSteps.reduce((depth, step) => Math.max(depth, step.depth), 0);
@@ -209,6 +210,7 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
         confirmed={confirmedCount}
         structural={structuralCount}
         candidates={candidateCount}
+        unknowns={unknownCount}
       />
 
       <AnswerSection title="확인된 처리 흐름" count={confirmedSteps.length} description="호출 깊이와 역할로 정렬한 코드 근거">
@@ -251,7 +253,7 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
       ) : null}
 
       <CandidateDetails
-        title="확인할 후보"
+        title={reviewDetailsTitle(candidateCount, unknownCount)}
         items={[...answer.dbCandidates, ...answer.unknowns]}
         map={map}
         visualMapControls={visualMapControls}
@@ -277,6 +279,8 @@ function ImpactAnswer({ map, visualMapControls }: { map: VisualMap; visualMapCon
   const checks = board.lanes.find((lane) => lane.id === "checks");
   const candidateItems = [...(candidates?.items ?? []), ...(unknowns?.items ?? [])];
   const hiddenCandidateCount = (candidates?.hidden ?? 0) + (unknowns?.hidden ?? 0);
+  const candidateCount = candidates?.total ?? 0;
+  const unknownCount = unknowns?.total ?? 0;
   const confirmedCount = direct?.total ?? 0;
   const hiddenDirectCount = direct?.hidden ?? 0;
   const subject = impactSubject(map, board.subject);
@@ -299,7 +303,8 @@ function ImpactAnswer({ map, visualMapControls }: { map: VisualMap; visualMapCon
         conclusion={conclusion}
         confirmed={confirmedCount}
         confirmedLabel="직접 근거"
-        candidates={(candidates?.total ?? 0) + (unknowns?.total ?? 0)}
+        candidates={candidateCount}
+        unknowns={unknownCount}
       />
       {!tableUsage ? (
         <ChangeIntentBar intent={board.changeIntent ?? visualMapControls.changeIntent} onChange={visualMapControls.setChangeIntent} />
@@ -351,7 +356,7 @@ function ImpactAnswer({ map, visualMapControls }: { map: VisualMap; visualMapCon
         </AnswerSection>
       )}
       <CandidateDetails
-        title="확인할 후보와 빈 구간"
+        title={reviewDetailsTitle(candidateCount, unknownCount)}
         items={candidateItems}
         hidden={hiddenCandidateCount}
         map={map}
@@ -441,6 +446,7 @@ function AnswerHeader({
   confirmedLabel = "확정",
   structural = 0,
   candidates,
+  unknowns = 0,
 }: {
   icon: ReactNode;
   kicker: string;
@@ -450,6 +456,7 @@ function AnswerHeader({
   confirmedLabel?: string;
   structural?: number;
   candidates: number;
+  unknowns?: number;
 }) {
   return (
     <header className="answer-header">
@@ -463,6 +470,7 @@ function AnswerHeader({
         <span className="confirmed"><CheckCircle2 size={14} />{confirmedLabel} {confirmed}</span>
         {structural > 0 ? <span className="structural"><CircleDashed size={14} />구조 {structural}</span> : null}
         {candidates > 0 ? <span className="candidate"><TriangleAlert size={14} />후보 {candidates}</span> : null}
+        {unknowns > 0 ? <span className="unknown"><ShieldAlert size={14} />확인 필요 {unknowns}</span> : null}
       </div>
     </header>
   );
@@ -575,9 +583,15 @@ function CandidateDetails({
         <em>{items.length + hidden}</em>
       </summary>
       <ReviewItems items={items} map={map} visualMapControls={visualMapControls} />
-      {hidden > 0 ? <CoverageNote>후보 {hidden}개는 엔진 표시 상한 때문에 접혔습니다.</CoverageNote> : null}
+      {hidden > 0 ? <CoverageNote>확인 항목 {hidden}개는 엔진 표시 상한 때문에 접혔습니다.</CoverageNote> : null}
     </details>
   );
+}
+
+function reviewDetailsTitle(candidateCount: number, unknownCount: number): string {
+  if (candidateCount > 0 && unknownCount > 0) return "확인할 후보와 빈 구간";
+  if (candidateCount > 0) return "확인할 후보";
+  return "확인되지 않은 구간";
 }
 
 function NextChecks({
