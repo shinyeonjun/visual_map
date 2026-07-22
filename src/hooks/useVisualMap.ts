@@ -89,6 +89,12 @@ export function useVisualMap({
   useLayoutEffect(() => {
     currentWorkspaceIdRef.current = currentWorkspaceId;
     invalidateEnrichedMaps();
+    searchRequestRef.current += 1;
+    searchContextRef.current = null;
+    setSearchQueryValue("");
+    setSearchPopoverOpen(false);
+    setSearchSummary(null);
+    setSearchGroups([]);
     compositionFocusIdsRef.current = [];
     setCompositionFocusIds([]);
     relationViewRef.current = "connections";

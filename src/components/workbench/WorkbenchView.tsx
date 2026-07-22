@@ -134,6 +134,7 @@ export function WorkbenchView({
   return (
     <div className="app-shell product-shell" data-view="workbench" data-surface={surface}>
       <WorkbenchTopBar
+        key={workspaceId ?? "no-workspace"}
         sourceManagerOpen={drawerOpen}
         onToggleSourceManager={() => setSourceManagerOpen(!drawerOpen)}
         surface={pendingSurface ?? surface}

@@ -268,6 +268,48 @@ describe("stable mode transitions", () => {
     expect(onToggleSourceManager).toHaveBeenCalledOnce();
   });
 
+  it("lists each project once in the project switcher", () => {
+    const openWorkspace = vi.fn();
+    render(
+      <WorkbenchTopBar
+        sourceManagerOpen={false}
+        onToggleSourceManager={vi.fn()}
+        workspaceControls={{
+          initialized: true,
+          busy: false,
+          currentWorkspace: { id: "workspace-1", name: "Shop API" },
+          workspaces: [
+            { id: "workspace-1", name: "Shop API" },
+            { id: "workspace-2", name: "Billing API" },
+          ],
+          codeInventory: null,
+          operationStatus: { phase: "idle", label: "작업 없음", message: "실행 중인 작업 없음" },
+          openWorkspace,
+        } as unknown as WorkspaceControls}
+        dbProfileControls={{ inventory: null } as unknown as DbProfileControls}
+        visualMapControls={{
+          searchQuery: "",
+          searchGroups: [],
+          snapshotStaleReasons: [],
+          setSearchQuery: vi.fn(),
+          openSearchPopover: vi.fn(),
+          closeSearchPopover: vi.fn(),
+          runSearch: vi.fn(),
+          selectSearchResult: vi.fn(),
+        } as unknown as VisualMapControls}
+      />,
+    );
+
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Shop API",
+      "Billing API",
+    ]);
+    fireEvent.change(screen.getByRole("combobox", { name: "프로젝트" }), {
+      target: { value: "workspace-2" },
+    });
+    expect(openWorkspace).toHaveBeenCalledWith("workspace-2");
+  });
+
   it("keeps code re-reading visible without expanding project details", () => {
     const indexCodeRepository = vi.fn();
     const { container } = render(
