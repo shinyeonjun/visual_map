@@ -47,17 +47,19 @@ pub(crate) fn open_source_location(
     let workspace = workspace::open_workspace(app_data_dir, &request.workspace_id)?;
     let path = resolve_repo_source(&workspace.repo_path, &request.path)?;
     let action_path = source_action_path(&path);
-    let line = positive_position(request.line, "라인")?;
-    let column = positive_position(request.column, "컬럼")?;
+    let target = editor_target(&action_path, request.line, request.column)?;
     let executable = find_editor(request.editor).ok_or(match request.editor {
         SourceEditor::Vscode => "VS Code를 찾지 못했습니다. 설치 경로 또는 PATH를 확인하세요.",
         SourceEditor::Cursor => "Cursor를 찾지 못했습니다. 설치 경로 또는 PATH를 확인하세요.",
     })?;
-    let target = format!("{}:{line}:{column}", action_path.display());
 
-    Command::new(&executable)
-        .arg("--goto")
-        .arg(target)
+    let mut command = Command::new(&executable);
+    if let Some(target) = target {
+        command.arg("--goto").arg(target);
+    } else {
+        command.arg(&action_path);
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -66,8 +68,8 @@ pub(crate) fn open_source_location(
 
     Ok(SourceActionResult {
         path: action_path.display().to_string(),
-        line: Some(line),
-        column: Some(column),
+        line: request.line,
+        column: request.column,
         action: match request.editor {
             SourceEditor::Vscode => "vscode".to_string(),
             SourceEditor::Cursor => "cursor".to_string(),
@@ -103,12 +105,22 @@ pub(crate) fn reveal_source_location(
     })
 }
 
-fn positive_position(value: Option<u64>, label: &str) -> Result<u64, String> {
-    let value = value.unwrap_or(1);
-    if value == 0 || value > u32::MAX as u64 {
-        return Err(format!("{label}은 1 이상 {} 이하여야 합니다", u32::MAX));
+fn editor_target(
+    path: &Path,
+    line: Option<u64>,
+    column: Option<u64>,
+) -> Result<Option<String>, String> {
+    for (value, label) in [(line, "라인"), (column, "컬럼")] {
+        if value.is_some_and(|position| position == 0 || position > u32::MAX as u64) {
+            return Err(format!("{label}은 1 이상 {} 이하여야 합니다", u32::MAX));
+        }
     }
-    Ok(value)
+    match (line, column) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err("컬럼은 라인 없이 지정할 수 없습니다".to_string()),
+        (Some(line), None) => Ok(Some(format!("{}:{line}", path.display()))),
+        (Some(line), Some(column)) => Ok(Some(format!("{}:{line}:{column}", path.display()))),
+    }
 }
 
 pub(crate) fn resolve_repo_source(repo_path: &str, source_path: &str) -> Result<PathBuf, String> {
@@ -266,11 +278,20 @@ mod tests {
     }
 
     #[test]
-    fn positions_are_positive_and_bounded() {
-        assert_eq!(positive_position(None, "라인").unwrap(), 1);
-        assert_eq!(positive_position(Some(42), "라인").unwrap(), 42);
-        assert!(positive_position(Some(0), "라인").is_err());
-        assert!(positive_position(Some(u32::MAX as u64 + 1), "라인").is_err());
+    fn editor_target_preserves_unknown_positions_and_validates_known_ones() {
+        let path = Path::new("src/main.rs");
+        assert_eq!(editor_target(path, None, None).unwrap(), None);
+        assert_eq!(
+            editor_target(path, Some(42), None).unwrap().as_deref(),
+            Some("src/main.rs:42")
+        );
+        assert_eq!(
+            editor_target(path, Some(42), Some(7)).unwrap().as_deref(),
+            Some("src/main.rs:42:7")
+        );
+        assert!(editor_target(path, None, Some(7)).is_err());
+        assert!(editor_target(path, Some(0), None).is_err());
+        assert!(editor_target(path, Some(u32::MAX as u64 + 1), None).is_err());
     }
 
     #[cfg(target_os = "windows")]
