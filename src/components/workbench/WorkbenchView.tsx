@@ -1,12 +1,14 @@
-import { LoaderCircle, ShieldCheck, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { FileSearch, LoaderCircle, ShieldCheck, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import type { EngineRegistry } from "../../types/engine";
 import { codeInventoryItemCount } from "../../types/workspace";
 import { AtlasCanvas } from "../atlas/AtlasCanvas";
+import { AnswerCanvas } from "./AnswerCanvas";
 import { InspectorPanel } from "./InspectorPanel";
 import { ModePanel } from "./ModePanel";
+import { TargetNavigator } from "./TargetNavigator";
 import { WorkbenchLeftPanel } from "./WorkbenchLeftPanel";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
 import { WorkbenchTopBar } from "./WorkbenchTopBar";
@@ -30,6 +32,7 @@ export function WorkbenchView({
   engineError: string | null;
   devSlot?: ReactNode;
 }) {
+  const [surface, setSurface] = useState<"answers" | "advanced">("answers");
   const hasAnswerSource =
     codeInventoryItemCount(workspaceControls.codeInventory) > 0 || Boolean(dbProfileControls.inventory?.tables.length);
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
@@ -43,6 +46,48 @@ export function WorkbenchView({
   const inspectorVisible = Boolean(visualMapControls.selectedNode || visualMapControls.selectedEdge);
   const drawerOpen = sourceManagerOpen && hasWorkspace;
   const sourceManagerRef = useRef<HTMLElement | null>(null);
+  const lastAnswerRef = useRef<{ workspaceId: string; mode: string; focusId: string } | null>(null);
+  const workspaceId = workspaceControls.currentWorkspace?.id ?? null;
+  const visibleMode = visualMapControls.loading && visualMapControls.currentMap
+    ? visualMapControls.currentMap.mode
+    : visualMapControls.mode;
+  const answerHasTarget = ["api-flow", "search-focus", "table-usage", "column-impact"].includes(visibleMode)
+    && Boolean(answerFocusId(visualMapControls));
+
+  useEffect(() => {
+    lastAnswerRef.current = null;
+    setSurface("answers");
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (["api-flow", "search-focus", "table-usage", "column-impact"].includes(visualMapControls.mode)) {
+      const focusId = answerFocusId(visualMapControls);
+      if (workspaceId && focusId) {
+        lastAnswerRef.current = { workspaceId, mode: visualMapControls.mode, focusId };
+      }
+      setSurface("answers");
+    }
+  }, [visualMapControls.mode, visualMapControls.focusId, visualMapControls.currentMap?.focus, workspaceId]);
+
+  function showAnswers() {
+    setSurface("answers");
+    const previous = lastAnswerRef.current;
+    if (
+      previous?.workspaceId === workspaceId &&
+      !["api-flow", "search-focus", "table-usage", "column-impact"].includes(visualMapControls.mode)
+    ) {
+      visualMapControls.showMode(previous.mode, previous.focusId);
+    }
+  }
+
+  function showAdvanced(mode: "atlas" | "composition") {
+    const focusId = answerFocusId(visualMapControls);
+    if (workspaceId && focusId && ["api-flow", "search-focus", "table-usage", "column-impact"].includes(visibleMode)) {
+      lastAnswerRef.current = { workspaceId, mode: visibleMode, focusId };
+    }
+    setSurface("advanced");
+    visualMapControls.showMode(mode, null);
+  }
 
   useEffect(() => {
     if (!hasWorkspace && sourceManagerOpen) {
@@ -60,23 +105,36 @@ export function WorkbenchView({
   }, [drawerOpen]);
 
   return (
-    <div className="app-shell product-shell" data-view="workbench">
+    <div className="app-shell product-shell" data-view="workbench" data-surface={surface}>
       <WorkbenchTopBar
         sourceManagerOpen={drawerOpen}
         onToggleSourceManager={() => setSourceManagerOpen(!drawerOpen)}
+        surface={surface}
+        onShowAnswers={showAnswers}
+        onShowAdvanced={() => showAdvanced("atlas")}
         workspaceControls={workspaceControls}
         dbProfileControls={dbProfileControls}
         visualMapControls={visualMapControls}
       />
       <div className={`workspace product-workspace ${showInspector ? "has-inspector" : ""} ${inspectorVisible ? "inspector-visible" : ""}`}>
         <aside className="product-navigation" aria-label="주요 탐색">
-          <ModePanel
-            workspaceControls={workspaceControls}
-            dbProfileControls={dbProfileControls}
-            visualMapControls={visualMapControls}
-            onNavigate={() => setSourceManagerOpen(false)}
-            onOpenSources={() => setSourceManagerOpen(true)}
-          />
+          {surface === "advanced" ? (
+            <ModePanel
+              workspaceControls={workspaceControls}
+              dbProfileControls={dbProfileControls}
+              visualMapControls={visualMapControls}
+              onNavigate={() => setSourceManagerOpen(false)}
+              onOpenSources={() => setSourceManagerOpen(true)}
+            />
+          ) : (
+            <TargetNavigator
+              workspaceControls={workspaceControls}
+              dbProfileControls={dbProfileControls}
+              visualMapControls={visualMapControls}
+              onSelectTarget={() => setSurface("answers")}
+              onOpenAdvanced={showAdvanced}
+            />
+          )}
         </aside>
         {!workspaceControls.initialized ? (
           <main className="workspace-initializing" aria-busy="true" aria-live="polite">
@@ -84,12 +142,19 @@ export function WorkbenchView({
             <strong>프로젝트를 확인하고 있습니다</strong>
             <span>마지막으로 열었던 작업 공간을 준비합니다.</span>
           </main>
-        ) : hasWorkspace ? (
+        ) : hasWorkspace && surface === "advanced" ? (
           <AtlasCanvas
             openSourceManager={() => setSourceManagerOpen(true)}
             workspaceControls={workspaceControls}
             dbProfileControls={dbProfileControls}
             visualMapControls={visualMapControls}
+          />
+        ) : hasWorkspace ? (
+          <AnswerCanvas
+            workspaceControls={workspaceControls}
+            dbProfileControls={dbProfileControls}
+            visualMapControls={visualMapControls}
+            onOpenSources={() => setSourceManagerOpen(true)}
           />
         ) : (
           <main className="source-onboarding-main">
@@ -113,16 +178,32 @@ export function WorkbenchView({
         )}
         {showInspector && (
           <aside className="side side-right evidence-panel">
-            <InspectorPanel
-              onClose={visualMapControls.clearSelection}
-              workspaceControls={workspaceControls}
-              dbProfileControls={dbProfileControls}
-              visualMapControls={visualMapControls}
-            />
+            {surface === "advanced" || answerHasTarget ? (
+              <InspectorPanel
+                onClose={visualMapControls.clearSelection}
+                title={surface === "answers" ? "근거" : "선택한 대상"}
+                variant={surface === "answers" ? "answer" : "full"}
+                workspaceControls={workspaceControls}
+                dbProfileControls={dbProfileControls}
+                visualMapControls={visualMapControls}
+              />
+            ) : (
+              <section className="side-card inspector answer-evidence-placeholder">
+                <div className="panel-header">
+                  <FileSearch size={16} />
+                  <h2>근거</h2>
+                </div>
+                <div>
+                  <FileSearch size={21} />
+                  <strong>대상을 선택하세요</strong>
+                  <span>확정 근거, 확인할 후보, 파일 위치가 여기에 표시됩니다.</span>
+                </div>
+              </section>
+            )}
           </aside>
         )}
       </div>
-      {hasSnapshotState && (
+      {hasSnapshotState && surface === "advanced" && (
         <WorkbenchStatusBar
           workspaceControls={workspaceControls}
           dbProfileControls={dbProfileControls}
@@ -189,4 +270,11 @@ export function WorkbenchView({
       first.focus();
     }
   }
+}
+
+function answerFocusId(visualMapControls: VisualMapControls): string | null {
+  const value = visualMapControls.loading && visualMapControls.currentMap
+    ? visualMapControls.currentMap.focus
+    : visualMapControls.focusId ?? visualMapControls.currentMap?.focus ?? null;
+  return value && value !== "narrow-focus" && value !== "overview" && !value.startsWith("group:") ? value : null;
 }

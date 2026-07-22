@@ -2750,6 +2750,36 @@ fn change_impact_checks_follow_the_selected_change_scenario() {
 }
 
 #[test]
+fn table_usage_keeps_confirmed_code_access_ahead_of_structural_overflow() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    for index in 0..20 {
+        append_structural_review_constraint(
+            &mut snapshot,
+            &format!("orders_extra_check_{index}"),
+            "check",
+        );
+    }
+    snapshot.links.push(confirmed_api_link(
+        "reads:order-service->orders",
+        "code:class:OrderService",
+        "db:table:orders",
+        "code_db_read",
+        "READS",
+    ));
+
+    let map = visual_map(
+        &snapshot,
+        Some("db:table:orders".to_string()),
+        "table-usage".to_string(),
+    );
+    let direct = review_lane(map.review_board.as_ref().unwrap(), "direct");
+
+    assert_eq!(direct.items[0].kind, "code_db_read");
+    assert_eq!(direct.items[0].node_id.as_deref(), Some("code:class:OrderService"));
+    assert!(direct.hidden > 0);
+}
+
+#[test]
 fn change_impact_review_lanes_are_independently_bounded() {
     let mut snapshot = fixture_inventory("workspace-1".to_string());
     for index in 0..24 {

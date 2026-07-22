@@ -4,6 +4,7 @@ import {
   Clock3,
   Folder,
   FolderCog,
+  ListTree,
   Network,
   RefreshCw,
   Search,
@@ -18,12 +19,18 @@ import { SearchResultsPopover, focusFirstSearchResult } from "../common/SearchRe
 export function WorkbenchTopBar({
   sourceManagerOpen,
   onToggleSourceManager,
+  surface,
+  onShowAnswers,
+  onShowAdvanced,
   workspaceControls,
   dbProfileControls,
   visualMapControls,
 }: {
   sourceManagerOpen: boolean;
   onToggleSourceManager: () => void;
+  surface?: "answers" | "advanced";
+  onShowAnswers?: () => void;
+  onShowAdvanced?: () => void;
   workspaceControls: WorkspaceControls;
   dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
@@ -141,6 +148,29 @@ export function WorkbenchTopBar({
         {hasInventory && (
           <SearchResultsPopover visualMapControls={visualMapControls} searchScope={searchScope} />
         )}
+      </div>
+
+      <div className="product-view-switch" role="group" aria-label="읽기 화면">
+        <button
+          className={(surface ?? "answers") === "answers" ? "active" : ""}
+          type="button"
+          aria-pressed={(surface ?? "answers") === "answers"}
+          title="대상을 선택해 핵심 답 보기"
+          onClick={onShowAnswers}
+        >
+          <ListTree size={15} />
+          <span>답 보기</span>
+        </button>
+        <button
+          className={surface === "advanced" ? "active" : ""}
+          type="button"
+          aria-pressed={surface === "advanced"}
+          title="프로젝트 전체 구조와 고급 분석 열기"
+          onClick={onShowAdvanced}
+        >
+          <Network size={15} />
+          <span>전체 구조</span>
+        </button>
       </div>
 
       <button
