@@ -66,13 +66,11 @@ export function WorkbenchTopBar({
           disabled={workspaceControls.busy || workspaceControls.workspaces.length === 0}
           onChange={(event) => workspaceControls.openWorkspace(event.currentTarget.value)}
         >
-          <option value="">
-            {hasWorkspace
-              ? workspaceControls.currentWorkspace?.name
-              : workspaceControls.initialized
-                ? "프로젝트 없음"
-                : "프로젝트 확인 중"}
-          </option>
+          {!hasWorkspace && (
+            <option value="">
+              {workspaceControls.initialized ? "프로젝트 없음" : "프로젝트 확인 중"}
+            </option>
+          )}
           {workspaceControls.workspaces.map((workspace) => (
             <option value={workspace.id} key={workspace.id}>
               {workspace.name}
