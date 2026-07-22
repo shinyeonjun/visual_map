@@ -219,7 +219,7 @@ function sourceFreshness(
   }
   if (visualMapControls.snapshotStaleReasons.length > 0) {
     return {
-      label: "오래됨",
+      label: "다시 읽기 필요",
       detail: visualMapControls.snapshotStaleReasons.join(" · "),
       tone: "stale",
       icon: TriangleAlert,
@@ -227,7 +227,7 @@ function sourceFreshness(
   }
   if (visualMapControls.snapshotSavedAt || hasInventory) {
     return {
-      label: "마지막 읽기",
+      label: "읽기 완료",
       detail: visualMapControls.snapshotSourceSummary ?? "마지막으로 읽은 코드와 DB 구조를 표시합니다.",
       tone: "fresh",
       icon: CircleCheck,

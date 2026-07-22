@@ -11,7 +11,7 @@ describe("AnswerCanvas", () => {
     const { container } = renderAnswer(map, "code:route-orders");
 
     expect(screen.getByRole("heading", { name: "DELETE /api/orders" })).toBeInTheDocument();
-    expect(screen.getByText("확인된 처리 흐름")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "확인된 처리 흐름" })).toBeInTheDocument();
     expect(screen.getByText("loadOrders")).toBeInTheDocument();
     expect(container.querySelector(".answer-candidates")).not.toHaveAttribute("open");
     expect(screen.getByText("orders 테이블 후보")).toBeInTheDocument();
