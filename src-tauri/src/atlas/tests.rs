@@ -2775,7 +2775,10 @@ fn table_usage_keeps_confirmed_code_access_ahead_of_structural_overflow() {
     let direct = review_lane(map.review_board.as_ref().unwrap(), "direct");
 
     assert_eq!(direct.items[0].kind, "code_db_read");
-    assert_eq!(direct.items[0].node_id.as_deref(), Some("code:class:OrderService"));
+    assert_eq!(
+        direct.items[0].node_id.as_deref(),
+        Some("code:class:OrderService")
+    );
     assert!(direct.hidden > 0);
 }
 
