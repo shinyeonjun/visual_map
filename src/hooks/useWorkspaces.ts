@@ -13,6 +13,9 @@ import {
 } from "../types/workspace";
 
 type WithBusy = (action: string, task: () => Promise<void>) => Promise<void>;
+const lastWorkspaceKey = "backend-visual-map:last-workspace";
+const mapContextKeyPrefix = "backend-visual-map:map-context:v1:";
+const investigationKeyPrefix = "backend-visual-map:investigation:v1:";
 
 export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
   const [initialized, setInitialized] = useState(!hasTauriRuntime());
@@ -49,6 +52,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       const selected =
         (preferredWorkspaceId ? items.find((workspace) => workspace.id === preferredWorkspaceId) : null) ??
         (currentWorkspace && items.find((workspace) => workspace.id === currentWorkspace.id)) ??
+        items.find((workspace) => workspace.id === rememberedWorkspaceId()) ??
         items[0] ??
         null;
 
@@ -67,6 +71,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       return;
     }
 
+    rememberWorkspace(workspace.id);
     setWorkspaceName(workspace.name);
     setRepoPath(workspaceRepoInputValue(workspace));
     setRepoSourceMode(workspace.repoSource);
@@ -78,13 +83,19 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       return;
     }
 
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "저장소 폴더 선택",
-    });
+    let selected: string | string[] | null;
+    try {
+      selected = await open({
+        directory: true,
+        multiple: false,
+        title: "저장소 폴더 선택",
+      });
+    } catch (error) {
+      setWorkspaceError(toUserError(error, "프로젝트 폴더 선택기를 열지 못했습니다").message);
+      return;
+    }
 
-    if (!selected) {
+    if (!selected || Array.isArray(selected)) {
       return;
     }
 
@@ -248,6 +259,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
     await withBusy("workspace-delete", async () => {
       try {
         await invoke("delete_workspace", { workspaceId });
+        clearLocalWorkspaceState(workspaceId);
         setWorkspaces((items) => items.filter((workspace) => workspace.id !== workspaceId));
         if (currentWorkspace?.id === workspaceId) {
           setCurrentWorkspace(null);
@@ -306,4 +318,32 @@ function repoModeForValue(value: string): RepoSourceMode | null {
 
 function workspaceNameForPath(value: string, mode: RepoSourceMode): string | null {
   return mode === "github" ? githubRepoName(value) : lastPathPart(value);
+}
+
+function rememberedWorkspaceId(): string | null {
+  try {
+    return window.localStorage.getItem(lastWorkspaceKey);
+  } catch {
+    return null;
+  }
+}
+
+function rememberWorkspace(workspaceId: string) {
+  try {
+    window.localStorage.setItem(lastWorkspaceKey, workspaceId);
+  } catch {
+    // The workspace list still falls back to its most recently updated entry.
+  }
+}
+
+function clearLocalWorkspaceState(workspaceId: string) {
+  try {
+    if (window.localStorage.getItem(lastWorkspaceKey) === workspaceId) {
+      window.localStorage.removeItem(lastWorkspaceKey);
+    }
+    window.localStorage.removeItem(`${mapContextKeyPrefix}${workspaceId}`);
+    window.localStorage.removeItem(`${investigationKeyPrefix}${workspaceId}`);
+  } catch {
+    // Filesystem deletion remains authoritative when local storage is unavailable.
+  }
 }

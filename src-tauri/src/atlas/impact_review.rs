@@ -103,15 +103,10 @@ fn impact_direct_items(
     links_by_from: &ImpactLinkIndex<'_>,
     links_by_to: &ImpactLinkIndex<'_>,
 ) -> Vec<ImpactReviewItem> {
-    let relevant_objects = snapshot
-        .items
-        .iter()
-        .filter(|item| {
-            item.parent_id.as_deref() == Some(table.id.as_str())
-                && matches!(item.kind.as_str(), "constraint" | "index")
-        })
-        .filter(|item| {
-            column.is_none()
+    let relevant_objects = snapshot.items.iter().filter(|item| {
+        let structural_object = item.parent_id.as_deref() == Some(table.id.as_str())
+            && matches!(item.kind.as_str(), "constraint" | "index")
+            && (column.is_none()
                 || links_by_from
                     .get(item.id.as_str())
                     .into_iter()
@@ -119,12 +114,29 @@ fn impact_direct_items(
                     .any(|link| {
                         matches!(link.kind.as_str(), "db_constraint" | "db_index")
                             && column.is_some_and(|column| link.to == column.id)
-                    })
-        });
+                    }));
+        let dependent_object = matches!(item.kind.as_str(), "view" | "trigger" | "routine")
+            && db_dependent_touches_focus(
+                item,
+                table,
+                column,
+                item_by_id,
+                links_by_from,
+                links_by_to,
+            );
+        structural_object || dependent_object
+    });
 
     let mut items = relevant_objects
         .map(|object| {
-            direct_object_review_item(object, column, item_by_id, links_by_from, links_by_to)
+            direct_object_review_item(
+                object,
+                table,
+                column,
+                item_by_id,
+                links_by_from,
+                links_by_to,
+            )
         })
         .collect::<Vec<_>>();
 
@@ -200,6 +212,7 @@ fn impact_direct_items(
 
 fn direct_object_review_item(
     object: &InventoryItem,
+    table: &InventoryItem,
     column: Option<&InventoryItem>,
     item_by_id: &HashMap<&str, &InventoryItem>,
     links_by_from: &ImpactLinkIndex<'_>,
@@ -210,15 +223,25 @@ fn direct_object_review_item(
         .into_iter()
         .flatten()
         .filter(|link| {
-            matches!(link.kind.as_str(), "db_constraint" | "db_index")
-                && column.is_none_or(|column| link.to == column.id)
+            if matches!(link.kind.as_str(), "db_constraint" | "db_index") {
+                return column.is_none_or(|column| link.to == column.id);
+            }
+            link.kind == "db_dependency"
+                && column.map_or_else(
+                    || link_endpoint_belongs_to_table(link.to.as_str(), table, item_by_id),
+                    |column| link.to == column.id,
+                )
         })
         .chain(
             links_by_to
                 .get(object.id.as_str())
                 .into_iter()
                 .flatten()
-                .filter(|link| column.is_none() && link.kind == "contains"),
+                .filter(|link| {
+                    column.is_none()
+                        && matches!(link.kind.as_str(), "contains" | "db_trigger")
+                        && link.from == table.id
+                }),
         )
         .collect::<Vec<_>>();
     let confirmed = links.iter().any(|link| link.truth_class == "confirmed");
@@ -342,24 +365,47 @@ fn impact_unknown_items(
         .iter()
         .filter_map(|candidate| candidate.node_id.as_deref())
         .collect::<HashSet<_>>();
-    for gap in snapshot.metadata.gaps.iter().filter(|gap| {
-        gap.kind == "db-capability"
-            || gap.related_ids.is_empty()
-            || gap.related_ids.iter().any(|id| {
-                id == &table.id
-                    || column.is_some_and(|column| id == &column.id)
-                    || candidate_ids.contains(id.as_str())
-                    || item_by_id
-                        .get(id.as_str())
-                        .is_some_and(|item| item.parent_id.as_deref() == Some(table.id.as_str()))
+    let capability_gaps = snapshot
+        .metadata
+        .gaps
+        .iter()
+        .filter(|gap| gap.kind == "db-capability")
+        .collect::<Vec<_>>();
+    if !capability_gaps.is_empty() {
+        let mut item = unknown_review_item(
+            "unknown:db-capability".to_string(),
+            "db-capability",
+            "DB에서 확인하지 못하는 구조",
+            &format!(
+                "현재 DB 어댑터가 수집하지 않는 구조 정보가 {}종 있습니다. 실제 스키마에 해당 객체가 있을 때 영향 분석이 불완전할 수 있습니다.",
+                capability_gaps.len()
+            ),
+        );
+        item.evidence = capability_gaps
+            .iter()
+            .map(|gap| Evidence {
+                kind: "db-capability".to_string(),
+                text: safe_text(&gap.message),
             })
+            .collect();
+        items.push(item);
+    }
+    for gap in snapshot.metadata.gaps.iter().filter(|gap| {
+        gap.kind != "db-capability"
+            && (gap.related_ids.is_empty()
+                || gap.related_ids.iter().any(|id| {
+                    id == &table.id
+                        || column.is_some_and(|column| id == &column.id)
+                        || candidate_ids.contains(id.as_str())
+                        || item_by_id.get(id.as_str()).is_some_and(|item| {
+                            item.parent_id.as_deref() == Some(table.id.as_str())
+                        })
+                }))
     }) {
         items.push(unknown_review_item(
             format!("unknown:{}", gap.id),
             &gap.kind,
-            if gap.kind == "db-capability" {
-                "DB 지원 범위 제한"
-            } else if gap.kind.starts_with("code-search") {
+            if gap.kind.starts_with("code-search") {
                 "코드 텍스트 근거 확인 필요"
             } else {
                 "DB 메타데이터 누락"
@@ -786,6 +832,9 @@ fn review_location(location: &SourceLocation) -> String {
 }
 
 pub(super) fn direct_object_kind(object: &InventoryItem, evidence: &[Evidence]) -> String {
+    if matches!(object.kind.as_str(), "view" | "trigger" | "routine") {
+        return object.kind.clone();
+    }
     if object.kind == "index" {
         if evidence
             .iter()
@@ -832,6 +881,9 @@ fn direct_kind_label(kind: &str) -> &str {
         "primary-index" => "PRIMARY INDEX",
         "unique-index" => "UNIQUE INDEX",
         "index" => "INDEX",
+        "view" => "VIEW",
+        "trigger" => "TRIGGER",
+        "routine" => "ROUTINE",
         _ => "CONSTRAINT",
     }
 }
@@ -846,8 +898,50 @@ pub(super) fn direct_review_rank(kind: &str) -> u8 {
         "primary-index" => 5,
         "unique-index" => 6,
         "index" => 7,
-        _ => 8,
+        "view" => 8,
+        "trigger" => 9,
+        "routine" => 10,
+        _ => 11,
     }
+}
+
+fn db_dependent_touches_focus(
+    object: &InventoryItem,
+    table: &InventoryItem,
+    column: Option<&InventoryItem>,
+    item_by_id: &HashMap<&str, &InventoryItem>,
+    links_by_from: &ImpactLinkIndex<'_>,
+    links_by_to: &ImpactLinkIndex<'_>,
+) -> bool {
+    let outgoing = links_by_from
+        .get(object.id.as_str())
+        .into_iter()
+        .flatten()
+        .any(|link| {
+            link.kind == "db_dependency"
+                && column.map_or_else(
+                    || link_endpoint_belongs_to_table(link.to.as_str(), table, item_by_id),
+                    |column| link.to == column.id,
+                )
+        });
+    let incoming = column.is_none()
+        && links_by_to
+            .get(object.id.as_str())
+            .into_iter()
+            .flatten()
+            .any(|link| link.kind == "db_trigger" && link.from == table.id);
+    outgoing || incoming
+}
+
+fn link_endpoint_belongs_to_table(
+    endpoint: &str,
+    table: &InventoryItem,
+    item_by_id: &HashMap<&str, &InventoryItem>,
+) -> bool {
+    endpoint == table.id
+        || item_by_id
+            .get(endpoint)
+            .is_some_and(|item| item.parent_id.as_deref() == Some(table.id.as_str()))
 }
 
 fn candidate_review_rank(kind: &str) -> u8 {

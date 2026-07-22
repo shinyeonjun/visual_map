@@ -4,18 +4,20 @@
 
 Make Backend Visual Map safe and fast enough for a developer to use as an evidence-backed codebase reading tool. The UI must distinguish verified facts, incomplete answers, stale sources, and heuristic grouping without requiring the user to understand the engines.
 
-## Completion Record (2026-07-19)
+## Completion Record (2026-07-20)
 
-The repository implementation is complete for the product boundary described below. Current frontend, native debug, and local installer-lifecycle checks pass. A fresh release-profile executable and installer still require verification on a Windows runner that permits Cargo build scripts; the current workstation blocks newly generated unsigned release build-script executables through enterprise Code Integrity policy (`os error 4551`).
+The repository implementation is complete for the product boundary described below. Current frontend, native debug, release-profile build, and local installer bundle checks pass on this workstation.
 
 - Trust and lifecycle: real path validation, workspace and DB-profile deletion, structured command errors, explicit source freshness, managed GitHub refresh, command-line secret removal, serialized snapshot persistence, and guarded snapshot restoration are implemented.
 - Reading workflows: architecture, API reading path, and change-impact views render only engine-backed data. Change intent, coverage, candidate strength, source evidence, and unknown regions remain explicit.
 - Projection structure: `visual_map.rs` is now a small dispatcher and shared-neighborhood coordinator. Architecture, API flow, DB impact, review policy, and projection helpers live in focused modules.
 - Frontend structure: canvas guidance, relation rendering, setup, impact review, API reading, source jumps, and inspector modeling are separated into focused modules. The retired duplicate Atlas/workbench shells and their CSS were removed.
 - Dead-code control: Knip is part of local verification and CI, with explicit entry points for the native smoke and design-generation scripts.
-- UX stability: fixed navigation, non-reloading active mode clicks, bounded search/list rendering, stable async enrichment, and minimum-viewport layout are covered by tests. Engine execution, Git operations, snapshot fingerprinting, projection, and workspace scans are dispatched away from the Tauri main thread. The current debug native build passed the core reading flows, minimum viewport, and clean first-run onboarding; the release installer must still be repeated on an allowed runner.
+- UX stability: fixed navigation, non-reloading active mode clicks, bounded search/list rendering, stable async enrichment, and minimum-viewport layout are covered by tests. The left panel now owns one stable analysis criterion; same-mode loading retains the committed target until the left criterion, center focus, and inspector subject can update together. Engine execution, Git operations, snapshot fingerprinting, projection, and workspace scans are dispatched away from the Tauri main thread. The current native build passed the core reading flows, minimum viewport, clean first-run onboarding, and fixed inspector scrolling without source actions being covered by the next-check footer.
 
-Live PostgreSQL, MySQL, SQL Server, and Oracle smoke tests still require their respective external connection environment variables. Their adapter contracts are covered locally; SQLite DDL and DB evidence run without external infrastructure.
+Live PostgreSQL 16, MySQL 8.4, SQL Server 2022, and Oracle Database Free 23.26.2 adapter tests passed on 2026-07-21 against disposable local Docker databases. The desktop product smoke indexed all four sources and verified non-empty table and column inventory; an empty network database now fails the smoke instead of being reported as a successful metadata check. Oracle was exercised through Oracle Instant Client 19.30, which remains an explicit runtime prerequisite. SQLite DDL and DB evidence run without external infrastructure.
+
+On 2026-07-22 the product adapter moved to `database-memory 0.2.0 / contract 2` at source commit `35ed83de33e51eef74a5276c625cb03b24e020c4`. It now accepts only metadata-only, authoritative `complete` snapshots and fails closed on pagination, count, identity, or source mismatches. The candidate binary is pinned for local/internal validation but remains `releaseReady=false` until a public `v0.2.0` artifact is explicitly published.
 
 ## Success Criteria
 
@@ -31,6 +33,30 @@ Live PostgreSQL, MySQL, SQL Server, and Oracle smoke tests still require their r
 - High-value canvas text and controls meet the product readability floor without breaking 1180x760.
 - Existing truth classes, evidence, limits, and empty-state honesty remain intact.
 - Typecheck, production build, Clippy, Rust tests, and focused Tauri UI smoke pass.
+
+## Static Shell Interaction Contract
+
+The workbench is stable; its evidence changes. A user must not have to relearn the screen after choosing another mode or target.
+
+- Left column: choose the answer type and the analysis target. Mode controls keep one fixed order: overview, API, code, DB, impact. The target list keeps its width, filter position, scroll state, and current-item marker.
+- Center column: answer the selected question. Its header, focus row, canvas bounds, zoom controls, and relationship evidence area keep stable ownership even when their data changes.
+- Right column: explain the current target. The reading order is always summary, direct relationships, evidence, source, and next check.
+- An inactive mode click changes the answer type. Clicking the active mode does not reload or implicitly open another panel. At compact widths, the target list opens only from the explicit `항목` control.
+- A target click is one operation: left criterion, center subject, and right evidence commit together. There is no hidden first-click focus and second-click selection state.
+- While a request is running, the last committed answer remains visible and non-interactive with a preparation indicator. The requested mode is marked pending; the old and new subjects are never mixed. The new result replaces all three regions atomically.
+- Node and relationship selection are mutually exclusive. Selecting one cannot leave the inspector showing the other.
+- Data may change height or density inside a mode-specific canvas, but top-level navigation, column geometry, control locations, and inspector section order do not move.
+- A relationship-free target renders as one target with explicit inbound/outbound zero states. Nearby inventory items without relationship evidence are not dimmed into a misleading pseudo-graph.
+
+Mode-specific center answers:
+
+| Mode | Left target | Center answer | Right evidence |
+| --- | --- | --- | --- |
+| Overview | Structure domain | Grouped architecture boundary and domain detail | Domain summary, direct links, grouping evidence |
+| API | Route | Confirmed route-to-handler/call path with separated DB candidates | Selected stage or relation evidence and source |
+| Code | Symbol, class, or file | Focus neighborhood using only represented relations | Symbol source, direct relations, evidence, next check |
+| DB | Table | Confirmed schema facts plus code-use candidates | Table structure, relation class, source profile |
+| Impact | Column | Direct impact, candidates, unknowns, and recommended checks | Column facts, candidate warning, evidence, action |
 
 ## In Scope
 
@@ -93,18 +119,25 @@ powershell -File scripts/smoke-ui.ps1 -Scenario change-impact -Width 1180 -Heigh
 ## Final Verification
 
 - `npm run deadcode`: passed with no findings.
-- `npm test -- --run`: 10 files and 19 tests passed, including stale-view and stale-workspace response suppression, snapshot-persistence ordering, restoration status, and immediate removal of deleted workspaces from the visible list.
+- `npm test`: 20 files and 98 tests passed, including stale snapshots becoming an actionable re-read state instead of a canvas failure, direct source-management entry from the stale status, visible code and DB re-read actions, stale-view and stale-workspace response suppression, snapshot-persistence ordering, restoration status, atomic analysis-target transitions, pending-request replacement, mutually exclusive node/edge selection, compact context accessibility, honest no-relation rendering, confirmed-only call restoration, fixed inspector scroll/footer ownership, and the actionable Oracle Client prerequisite error.
 - `npm run typecheck`: passed.
 - `npm run build`: passed.
 - `npm audit --audit-level=high`: 0 vulnerabilities.
 - `npm run security:audit`: passed.
 - `npm run verify:inventory`: 707 dependencies verified.
+- `npm run smoke:code-matrix`: passed against pinned Java/Spring, C#/.NET, and Python/FastAPI + TypeScript repositories. Scored CALLS split into confirmed/candidate/unknown as 35/96/137, 261/13/432, and 329/136/148 respectively.
 - `cargo clippy --locked --all-targets -- -D warnings`: passed.
-- Latest executable `cargo test --locked` run: 152 passed, 1 ignored manual benchmark, 0 failed. The current tree still compiles through `cargo test --locked --lib --no-run`; this workstation's enterprise Code Integrity policy blocks the newly generated test executable from starting.
-- Current native smoke run: Atlas drilldown, API flow, change impact, source jump, large repository, and the 1180x760 minimum viewport passed sequentially against a real 10,308-item workspace in the current debug build.
-- Clean first-run native smoke: an empty app-data directory created a local workspace, indexed 2,445 code items from this repository, indexed the two-table/five-column/one-FK DDL fixture, and restored code, DB, and impact counts after an app restart without stale warnings. Native deletion then removed the DB cache and app workspace immediately while preserving the original repository.
-- Local installer lifecycle: the current internal debug build produced a 27.7 MB NSIS installer, silently installed it to an isolated temporary directory, verified the app and both bundled engines, kept the app running through the smoke window, silently uninstalled it, and left no process or install directory behind.
-- Fresh release build: blocked locally when Windows Code Integrity rejects Cargo build-script executables with `os error 4551`. CI now builds a release-mode desktop binary, and the release workflow builds, silently installs, launches, checks bundled engines, and removes an unuploaded local installer on an allowed runner.
+- Latest `cargo test --locked` run: 175 passed, 1 ignored manual benchmark, 0 failed. CALLS now preserves engine confidence, strategy, and callee expression; only scores of at least 85% enter confirmed paths, and unscored legacy calls force a code re-read.
+- Current native smoke run: the final release-profile app passed Atlas drilldown, API flow, change impact, source jump, large repository, and stable navigation at 1180x820. Stable navigation also passed at 820x820 with the explicit compact `항목` panel, focus restoration, selection restoration, and no document overflow.
+- Clean first-run native smoke: an isolated empty app-data directory showed no fabricated data, opened this repository, indexed 2,268 code symbols and 260 files, and indexed the two-table/five-column/one-FK DDL fixture. A source edit correctly blocked the stale snapshot; after reindexing without another source change, restart restored code 2,528, DB 2, the four-lane impact board, and `main.orders.id` without a stale warning. Persisted profile data kept `passwordStored: false`, and URL-shaped credentials found in the analyzed test fixtures were stored only as `[REDACTED]`.
+- Stale-source recovery smoke: an isolated native app indexed a two-file FastAPI fixture into one route, nine code items, and two files. Editing the source and dispatching the real window-focus path changed the fixed status to `오래됨` with the exact source-drift reason, showed zero operation errors, opened source management from the status itself, exposed `다시 읽기` without expanding project details, and returned to `마지막 읽기` after reindexing.
+- DB stale-source recovery smoke: an isolated native app indexed a two-table SQLite DDL fixture with one FK. Two successive schema edits produced the exact DB stale state; the visible DB `다시 읽기` action updated the inventory from five to seven columns, and `db:column:main.orders:updated_at` was returned by the persisted inventory search with zero operation errors.
+- DB scope honesty smoke: the same adapter reported six source-level capability limits. The overview no longer presents them as six project-specific missing facts; coverage now reports `기록된 누락 0 · 지원 제한 6`, while column impact exposes one scope card with six evidence entries.
+- Native transition trace: a same-mode target change sampled every 20 ms kept the old target in the left criterion, center focus, and inspector while loading, then committed the new target to all three together. Real DB and impact selections synchronized `main.orders` and `main.orders.user_id` across the same regions.
+- Recovery and deletion lifecycle: a deliberately corrupt isolated `workspace.json` surfaced a backup warning and was repaired from the preserved backup. DB deletion removed only the selected profile cache and retained the code cache. Project deletion removed only the app-owned workspace while preserving the source repository and Git metadata.
+- Local installer lifecycle: the current internal installer was silently installed to an isolated temporary directory with both application data and WebView2 browser data redirected under that directory. The app and both bundled engines were verified, the installer was silently removed, and no process, install directory, app data, or WebView cache was left behind.
+- Historical release build: the `v0.1.2` installer evidence passed at the time, but it is superseded by the contract-v2 adapter and does not qualify the current `0.2.0` candidate for public release. A new installer checksum and install lifecycle smoke are required after the explicit `v0.2.0` publication decision.
+- Final native captures: `design/ui-concepts/qa-static-shell-1180.png`, `design/ui-concepts/qa-static-shell-820.png`, and `design/ui-concepts/qa-static-shell-context-820.png`.
 - Manual bounded projection matrix: 10k, 50k, and 100k inventory inputs completed without dangling edges.
 
 ## Codex Implementer Prompt

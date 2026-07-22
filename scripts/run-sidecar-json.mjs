@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 const [executable, tool, argsFile] = process.argv.slice(2);
@@ -7,7 +6,7 @@ if (!executable || !tool || !argsFile) {
   process.exit(2);
 }
 
-const run = spawnSync(executable, ["cli", tool, readFileSync(argsFile, "utf8")], {
+const run = spawnSync(executable, ["cli", tool, "--args-file", argsFile], {
   encoding: "utf8",
   env: process.env,
   maxBuffer: 32 * 1024 * 1024,

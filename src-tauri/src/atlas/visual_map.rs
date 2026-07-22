@@ -61,7 +61,7 @@ pub(crate) fn visual_map_with_change(
 
     if let Some(focus_id) = &focus {
         included.insert(focus_id.clone());
-        for link in &candidates {
+        for link in candidates.iter() {
             if link.from == *focus_id || link.to == *focus_id {
                 included.insert(link.from.clone());
                 included.insert(link.to.clone());
@@ -95,6 +95,11 @@ pub(crate) fn visual_map_with_change(
     include_snapshot_link_neighbors(snapshot, &item_by_id, &mut included);
     let mut included_ids: Vec<&String> = included.iter().collect();
     included_ids.sort();
+    if let Some(focus_id) = focus.as_ref() {
+        if let Some(index) = included_ids.iter().position(|id| *id == focus_id) {
+            included_ids.swap(0, index);
+        }
+    }
     let cap = mode_node_cap(&mode);
     let included_count = included_ids.len();
     let mut nodes: Vec<VisualNode> = included_ids
@@ -108,6 +113,7 @@ pub(crate) fn visual_map_with_change(
             subtitle: item.path.clone(),
             layer: item.layer.clone(),
             source: item.source.clone(),
+            location: item.location.clone(),
         })
         .collect();
     nodes.sort_by(|a, b| a.id.cmp(&b.id));
@@ -184,7 +190,7 @@ pub(super) fn focus_neighborhood_map(
 
     if let Some(focus_id) = &focus {
         included.insert(focus_id.clone());
-        for link in &candidates {
+        for link in candidates.iter() {
             if link.from == *focus_id || link.to == *focus_id {
                 included.insert(link.from.clone());
                 included.insert(link.to.clone());
@@ -243,15 +249,15 @@ pub(super) fn focus_neighborhood_map(
             }
         })
         .collect();
-    edges.extend(candidates.into_iter().filter_map(|link| {
+    edges.extend(candidates.iter().filter_map(|link| {
         if visible_ids.contains(link.from.as_str()) && visible_ids.contains(link.to.as_str()) {
             Some(VisualEdge {
-                id: link.id,
-                from: link.from,
-                to: link.to,
+                id: link.id.clone(),
+                from: link.from.clone(),
+                to: link.to.clone(),
                 kind: "candidate_uses".to_string(),
-                confidence: Some(link.confidence),
-                evidence: link.evidence,
+                confidence: Some(link.confidence.clone()),
+                evidence: link.evidence.clone(),
             })
         } else {
             None
@@ -290,6 +296,7 @@ pub(super) fn visual_node(item: &InventoryItem) -> VisualNode {
         subtitle: node_subtitle(item),
         layer: item.layer.clone(),
         source: item.source.clone(),
+        location: item.location.clone(),
     }
 }
 
@@ -364,6 +371,14 @@ pub(super) fn confirmed_link_edge(
             "code-handle",
             format!("{from_name} Route를 {to_name} handler가 처리합니다"),
         ),
+        "db_dependency" => (
+            "db-dependency",
+            format!("{from_name} DB 객체가 {to_name} 구조에 의존합니다"),
+        ),
+        "db_trigger" => (
+            "db-trigger",
+            format!("{from_name} 테이블에 {to_name} 트리거가 등록되어 있습니다"),
+        ),
         _ => (
             "snapshot-link",
             format!("{from_name} 항목과 {to_name} 항목의 확정 연결입니다"),
@@ -392,7 +407,11 @@ fn include_snapshot_link_neighbors(
     item_by_id: &HashMap<&str, &InventoryItem>,
     included: &mut HashSet<String>,
 ) {
-    for link in &snapshot.links {
+    for link in snapshot
+        .links
+        .iter()
+        .filter(|link| link.truth_class == "confirmed")
+    {
         if !(included.contains(&link.from) || included.contains(&link.to)) {
             continue;
         }

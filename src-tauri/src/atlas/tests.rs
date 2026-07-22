@@ -2,12 +2,13 @@ use super::*;
 use crate::{
     engine::{EngineAvailability, EngineRegistry, EngineRuntimeMode},
     workspace::{
-        CodeHandle, CodeInventory, CodeInventoryItem, CodeInventorySummary, DbConstraint,
-        DbForeignKey, DbIndex, DbInventory, DbInventoryColumn, DbInventoryTable, DbProfile,
-        DbSource, Workspace, WorkspaceEngineCache,
+        CodeCall, CodeHandle, CodeInventory, CodeInventoryItem, CodeInventorySummary, DbConstraint,
+        DbDependentObject, DbForeignKey, DbIndex, DbInventory, DbInventoryColumn, DbInventoryTable,
+        DbProfile, DbSource, Workspace, WorkspaceEngineCache,
     },
 };
 use std::{
+    collections::{BTreeSet, HashSet},
     fs,
     time::{Duration, Instant},
 };
@@ -30,6 +31,74 @@ fn review_lane<'a>(
     id: &str,
 ) -> &'a super::model::ImpactReviewLane {
     board.lanes.iter().find(|lane| lane.id == id).unwrap()
+}
+
+fn dependent_object_snapshot() -> InventorySnapshot {
+    let table_key = "sqlite:shop:main:public:table:orders";
+    let status_key = "sqlite:shop:main:public:column:orders:status";
+    let db = DbInventory {
+        profile_id: "profile-1".to_string(),
+        snapshot_key: Some("sqlite:shop".to_string()),
+        contract_version: Some("2".to_string()),
+        capability_warnings: Vec::new(),
+        limit_requested: Some(1_000),
+        limit_applied: Some(1_000),
+        limit_clamped: Some(false),
+        result_count: Some(1),
+        total_tables: Some(1),
+        truncated: Some(false),
+        gaps: Vec::new(),
+        tables: vec![DbInventoryTable {
+            key: Some(table_key.to_string()),
+            database: Some("main".to_string()),
+            schema: Some("public".to_string()),
+            name: "orders".to_string(),
+            columns: vec![DbInventoryColumn {
+                key: Some(status_key.to_string()),
+                table_key: Some(table_key.to_string()),
+                name: "status".to_string(),
+                data_type: Some("text".to_string()),
+                nullable: Some(false),
+                is_primary_key: false,
+                is_foreign_key: false,
+            }],
+            foreign_keys: Vec::new(),
+            inbound_foreign_keys: Vec::new(),
+            constraints: Vec::new(),
+            indexes: Vec::new(),
+            dependents: vec![
+                DbDependentObject {
+                    key: "sqlite:shop:main:public:view:active_orders".to_string(),
+                    kind: "view".to_string(),
+                    name: "active_orders".to_string(),
+                    relation: "view_depends_on".to_string(),
+                    column_keys: vec![status_key.to_string()],
+                },
+                DbDependentObject {
+                    key: "sqlite:shop:main:public:trigger:orders:trg_orders_status".to_string(),
+                    kind: "trigger".to_string(),
+                    name: "trg_orders_status".to_string(),
+                    relation: "table_has_trigger".to_string(),
+                    column_keys: Vec::new(),
+                },
+                DbDependentObject {
+                    key: "sqlite:shop:main:public:routine:refresh_orders".to_string(),
+                    kind: "routine".to_string(),
+                    name: "refresh_orders".to_string(),
+                    relation: "routine_depends_on".to_string(),
+                    column_keys: Vec::new(),
+                },
+                DbDependentObject {
+                    key: "sqlite:shop:main:public:view:missing_column_view".to_string(),
+                    kind: "view".to_string(),
+                    name: "missing_column_view".to_string(),
+                    relation: "view_depends_on".to_string(),
+                    column_keys: vec!["sqlite:shop:main:public:column:orders:missing".to_string()],
+                },
+            ],
+        }],
+    };
+    normalize_inventory("workspace-1".to_string(), None, Some(&db))
 }
 
 fn append_review_db_object(
@@ -233,11 +302,27 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
             unknown: 1,
         },
         architecture: Some(serde_json::json!({ "modules": ["orders"] })),
-        calls: Vec::new(),
+        calls: vec![
+            CodeCall {
+                from: "shop.routes.create_order".to_string(),
+                to: "shop.handlers.create_order".to_string(),
+                confidence: Some(95),
+                strategy: Some("lsp_direct".to_string()),
+                expression: Some("create_order".to_string()),
+            },
+            CodeCall {
+                from: "shop.handlers.create_order".to_string(),
+                to: "shop.routes.create_order".to_string(),
+                confidence: Some(38),
+                strategy: Some("unique_name".to_string()),
+                expression: Some("create_order".to_string()),
+            },
+        ],
         handles: vec![CodeHandle {
             handler: "shop.handlers.create_order".to_string(),
             route: "shop.routes.create_order".to_string(),
         }],
+        partial: false,
     };
     let code_json = serde_json::to_value(code).unwrap();
     assert_eq!(code_json["handlers"][0]["column"], 3);
@@ -254,6 +339,16 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
         .links
         .iter()
         .find(|link| link.kind == "code_handle")
+        .unwrap();
+    let trusted_call = snapshot
+        .links
+        .iter()
+        .find(|link| link.kind == "code_call" && link.from == "code:shop.routes.create_order")
+        .unwrap();
+    let weak_call = snapshot
+        .links
+        .iter()
+        .find(|link| link.kind == "code_call" && link.from == "code:shop.handlers.create_order")
         .unwrap();
     let unverified_route = snapshot
         .items
@@ -284,6 +379,12 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
         .evidence
         .iter()
         .any(|evidence| evidence.text.contains("handler→route")));
+    assert_eq!(trusted_call.truth_class, "confirmed");
+    assert_eq!(weak_call.truth_class, "unknown");
+    assert!(weak_call
+        .evidence
+        .iter()
+        .any(|evidence| evidence.kind == "engine-confidence-score" && evidence.text == "38%"));
     assert_eq!(
         snapshot.metadata.architecture,
         Some(serde_json::json!({ "modules": ["orders"] }))
@@ -326,7 +427,7 @@ fn snapshot_with_metadata_records_code_source() {
     let code = snapshot.metadata.code.unwrap();
     assert_eq!(code.source_path.as_deref(), Some(r"D:\repo\shop-api"));
     assert_eq!(code.source_type, "local-folder");
-    assert_eq!(code.engine_version.as_deref(), Some("0.8.1"));
+    assert_eq!(code.engine_version.as_deref(), Some("0.9.0"));
     assert!(snapshot.stale_reasons.is_empty());
 }
 
@@ -357,6 +458,7 @@ fn empty_inventories_keep_source_provenance() {
         architecture: None,
         calls: Vec::new(),
         handles: Vec::new(),
+        partial: false,
     };
     let db = DbInventory {
         profile_id: "profile-1".to_string(),
@@ -512,6 +614,403 @@ fn snapshot_marks_code_stale_when_source_contents_change() {
         .stale_reasons
         .iter()
         .any(|reason| reason.contains("확인할 수 없습니다")));
+}
+
+#[test]
+fn snapshot_freshness_cache_avoids_repeat_scan_until_invalidated() {
+    let root = temp_root("freshness-cache");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let mut workspace = test_workspace(root.to_str().unwrap());
+    workspace.id = "freshness-cache-workspace".to_string();
+    let registry = test_registry();
+    let snapshot = snapshot_with_metadata(
+        InventorySnapshot {
+            schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+            workspace_id: workspace.id.clone(),
+            saved_at: "1".to_string(),
+            metadata: Default::default(),
+            stale_reasons: Vec::new(),
+            links: Vec::new(),
+            items: vec![item(
+                "code:file:main",
+                "file",
+                "main.rs",
+                "code",
+                "code",
+                None,
+                Some("src/main.rs"),
+            )],
+        },
+        &workspace,
+        &registry,
+    );
+
+    assert!(snapshot_staleness_reasons_cached(&snapshot, &workspace, &registry).is_empty());
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() { println!(\"changed after indexing\"); }\n",
+    )
+    .unwrap();
+    assert!(snapshot_staleness_reasons_cached(&snapshot, &workspace, &registry).is_empty());
+
+    invalidate_snapshot_freshness(&workspace.id);
+    assert!(
+        snapshot_staleness_reasons_cached(&snapshot, &workspace, &registry)
+            .iter()
+            .any(|reason| reason.contains("코드 파일"))
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn inventory_bootstrap_caps_code_but_keeps_exact_counts_and_full_search() {
+    let mut items = (0..150)
+        .map(|index| {
+            item(
+                &format!("code:function:item-{index:03}"),
+                "function",
+                &format!("function_{index:03}"),
+                "code",
+                "code",
+                None,
+                Some(&format!("src/function_{index:03}.rs")),
+            )
+        })
+        .collect::<Vec<_>>();
+    items.push(item(
+        "code:route:health",
+        "api",
+        "/health",
+        "api",
+        "code",
+        None,
+        Some("src/routes.rs"),
+    ));
+    items.push(item(
+        "db:table:public.users",
+        "table",
+        "users",
+        "database",
+        "db",
+        None,
+        Some("public"),
+    ));
+    let snapshot = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: "bounded-bootstrap".to_string(),
+        saved_at: "1".to_string(),
+        metadata: Default::default(),
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items,
+    };
+
+    let bootstrap = inventory_bootstrap(&snapshot);
+    assert_eq!(bootstrap.summary.sources["code"].groups["functions"], 150);
+    assert_eq!(
+        bootstrap
+            .snapshot
+            .items
+            .iter()
+            .filter(|item| item.source == "code" && item.kind == "function")
+            .count(),
+        100
+    );
+    assert!(bootstrap
+        .snapshot
+        .items
+        .iter()
+        .any(|item| item.id == "db:table:public.users"));
+
+    let result = search_inventory(&snapshot, "function_149");
+    assert_eq!(result.total, 1);
+    assert_eq!(result.hits[0].item.id, "code:function:item-149");
+}
+
+#[test]
+fn inventory_bootstrap_caps_db_tables_with_their_children_and_keeps_full_search() {
+    let mut items = Vec::new();
+    for index in 0..150 {
+        let table_id = format!("db:table:public.table_{index:03}");
+        items.push(item(
+            &table_id,
+            "table",
+            &format!("table_{index:03}"),
+            "database",
+            "db",
+            None,
+            Some("public"),
+        ));
+        items.push(item(
+            &format!("db:column:public.table_{index:03}:id"),
+            "column",
+            "id",
+            "database",
+            "db",
+            Some(&table_id),
+            Some("INTEGER"),
+        ));
+    }
+    let snapshot = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: "bounded-db-bootstrap".to_string(),
+        saved_at: "1".to_string(),
+        metadata: Default::default(),
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items,
+    };
+
+    let bootstrap = inventory_bootstrap(&snapshot);
+    assert_eq!(bootstrap.summary.sources["db"].groups["table"], 150);
+    assert_eq!(bootstrap.summary.sources["db"].groups["column"], 150);
+    assert_eq!(
+        bootstrap
+            .snapshot
+            .items
+            .iter()
+            .filter(|item| item.source == "db" && item.kind == "table")
+            .count(),
+        100
+    );
+    assert_eq!(
+        bootstrap
+            .snapshot
+            .items
+            .iter()
+            .filter(|item| item.source == "db" && item.kind == "column")
+            .count(),
+        100
+    );
+    assert!(bootstrap.snapshot.items.iter().all(|item| {
+        item.parent_id.as_ref().is_none_or(|parent| {
+            bootstrap
+                .snapshot
+                .items
+                .iter()
+                .any(|candidate| candidate.id == *parent)
+        })
+    }));
+
+    let result = search_inventory(&snapshot, "table_149");
+    assert_eq!(result.counts["table"], 1);
+    assert!(result
+        .hits
+        .iter()
+        .any(|hit| hit.item.id == "db:table:public.table_149"));
+}
+
+#[test]
+fn inventory_bootstrap_keeps_db_objects_linked_to_retained_tables() {
+    let table_id = "db:table:public.orders";
+    let column_id = "db:column:public.orders:status";
+    let view_id = "db:view:active-orders";
+    let routine_id = "db:routine:refresh-orders";
+    let trigger_id = "db:trigger:audit-orders";
+    let snapshot = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: "db-dependents-bootstrap".to_string(),
+        saved_at: "1".to_string(),
+        metadata: Default::default(),
+        stale_reasons: Vec::new(),
+        items: vec![
+            item(
+                table_id,
+                "table",
+                "orders",
+                "database",
+                "db",
+                None,
+                Some("public"),
+            ),
+            item(
+                column_id,
+                "column",
+                "status",
+                "database",
+                "db",
+                Some(table_id),
+                Some("TEXT"),
+            ),
+            item(view_id, "view", "active_orders", "data", "db", None, None),
+            item(
+                routine_id,
+                "routine",
+                "refresh_orders",
+                "data",
+                "db",
+                None,
+                None,
+            ),
+            item(
+                trigger_id,
+                "trigger",
+                "audit_orders",
+                "data",
+                "db",
+                Some(table_id),
+                None,
+            ),
+        ],
+        links: vec![
+            confirmed_api_link(
+                "view-status",
+                view_id,
+                column_id,
+                "db_dependency",
+                "VIEW_DEPENDS_ON_COLUMN",
+            ),
+            confirmed_api_link(
+                "routine-orders",
+                routine_id,
+                table_id,
+                "db_dependency",
+                "ROUTINE_DEPENDS_ON_TABLE",
+            ),
+            confirmed_api_link(
+                "orders-trigger",
+                table_id,
+                trigger_id,
+                "db_trigger",
+                "TABLE_HAS_TRIGGER",
+            ),
+        ],
+    };
+
+    let bootstrap = inventory_bootstrap(&snapshot);
+    let retained_ids = bootstrap
+        .snapshot
+        .items
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<HashSet<_>>();
+
+    assert_eq!(retained_ids.len(), 5);
+    assert!(retained_ids.contains(view_id));
+    assert!(retained_ids.contains(routine_id));
+    assert!(retained_ids.contains(trigger_id));
+    assert_eq!(bootstrap.snapshot.links.len(), 3);
+
+    let result = search_inventory(&snapshot, "active_orders");
+    assert_eq!(result.counts["db-object"], 1);
+    assert_eq!(result.hits[0].item.id, view_id);
+}
+
+#[test]
+fn inventory_bootstrap_caps_db_dependents_and_keeps_full_search() {
+    let table_id = "db:table:public.orders";
+    let mut items = vec![item(
+        table_id,
+        "table",
+        "orders",
+        "database",
+        "db",
+        None,
+        Some("public"),
+    )];
+    let mut links = Vec::new();
+    for index in 0..250 {
+        let view_id = format!("db:view:orders-{index:03}");
+        items.push(item(
+            &view_id,
+            "view",
+            &format!("orders_view_{index:03}"),
+            "data",
+            "db",
+            None,
+            None,
+        ));
+        links.push(confirmed_api_link(
+            &format!("view-orders-{index:03}"),
+            &view_id,
+            table_id,
+            "db_dependency",
+            "VIEW_DEPENDS_ON_TABLE",
+        ));
+    }
+    let snapshot = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: "bounded-db-dependents".to_string(),
+        saved_at: "1".to_string(),
+        metadata: Default::default(),
+        stale_reasons: Vec::new(),
+        links,
+        items,
+    };
+
+    let bootstrap = inventory_bootstrap(&snapshot);
+    assert_eq!(
+        bootstrap
+            .snapshot
+            .items
+            .iter()
+            .filter(|item| item.kind == "view")
+            .count(),
+        200
+    );
+    assert_eq!(bootstrap.snapshot.links.len(), 200);
+    assert_eq!(bootstrap.summary.sources["db"].groups["view"], 250);
+
+    let result = search_inventory(&snapshot, "orders_view_249");
+    assert_eq!(result.total, 1);
+    assert_eq!(result.hits[0].item.id, "db:view:orders-249");
+}
+
+#[test]
+fn replacing_code_inventory_preserves_the_existing_db_source() {
+    let existing = fixture_inventory("workspace-1".to_string());
+    let db_metadata = existing.metadata.db.clone();
+    let db_ids = existing
+        .items
+        .iter()
+        .filter(|item| item.source == "db")
+        .map(|item| item.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut metadata = super::model::SnapshotMetadata {
+        code: existing.metadata.code.clone(),
+        architecture: Some(serde_json::json!({ "packages": ["replacement"] })),
+        ..Default::default()
+    };
+    if let Some(code) = metadata.code.as_mut() {
+        code.saved_at = "2".to_string();
+    }
+    let incoming = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: existing.workspace_id.clone(),
+        saved_at: "2".to_string(),
+        metadata,
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items: vec![item(
+            "code:function:replacement",
+            "function",
+            "replacement",
+            "code",
+            "code",
+            None,
+            Some("src/replacement.rs"),
+        )],
+    };
+
+    let merged = replace_inventory_source(Some(existing), incoming, "code").unwrap();
+    assert_eq!(merged.metadata.db, db_metadata);
+    assert!(db_ids
+        .iter()
+        .all(|id| merged.items.iter().any(|item| &item.id == id)));
+    assert!(merged
+        .items
+        .iter()
+        .any(|item| item.id == "code:function:replacement"));
+    assert!(merged
+        .items
+        .iter()
+        .filter(|item| item.source == "code")
+        .all(|item| item.id == "code:function:replacement"));
+    assert!(merged.links.iter().all(|link| {
+        merged.items.iter().any(|item| item.id == link.from)
+            && merged.items.iter().any(|item| item.id == link.to)
+    }));
 }
 
 #[test]
@@ -697,13 +1196,18 @@ fn load_migrates_v1_and_drops_dangling_relationships() {
     assert!(snapshot.metadata.migration.reindex_required);
     assert_eq!(snapshot.items.len(), 2);
     assert_eq!(snapshot.links.len(), 1);
-    assert_eq!(snapshot.links[0].truth_class, "confirmed");
+    assert_eq!(snapshot.links[0].truth_class, "unknown");
     assert_eq!(snapshot.links[0].engine_edge_type.as_deref(), Some("CALLS"));
     assert!(snapshot
         .metadata
         .gaps
         .iter()
         .any(|gap| gap.kind == "dangling-relationship"));
+    assert!(snapshot
+        .metadata
+        .gaps
+        .iter()
+        .any(|gap| gap.kind == "unscored-code-call"));
     assert!(snapshot.items.iter().all(|entry| entry.location.is_some()));
     assert!(snapshot
         .stale_reasons
@@ -962,6 +1466,7 @@ fn normalize_inventory_distinguishes_same_table_names_by_schema() {
                 inbound_foreign_keys: Vec::new(),
                 constraints: Vec::new(),
                 indexes: Vec::new(),
+                dependents: Vec::new(),
             },
             crate::workspace::DbInventoryTable {
                 key: None,
@@ -973,6 +1478,7 @@ fn normalize_inventory_distinguishes_same_table_names_by_schema() {
                 inbound_foreign_keys: Vec::new(),
                 constraints: Vec::new(),
                 indexes: Vec::new(),
+                dependents: Vec::new(),
             },
         ],
     };
@@ -989,6 +1495,89 @@ fn normalize_inventory_distinguishes_same_table_names_by_schema() {
     assert!(table_ids.contains(&"db:table:audit.users"));
     assert!(snapshot.items.iter().any(|item| {
         item.id == "db:column:public.users:id" && item.is_primary_key && !item.is_foreign_key
+    }));
+}
+
+#[test]
+fn normalize_inventory_escapes_delimiters_without_changing_ordinary_ids() {
+    let table = |schema: Option<&str>, name: &str, column: &str| DbInventoryTable {
+        key: None,
+        database: None,
+        schema: schema.map(str::to_string),
+        name: name.to_string(),
+        columns: vec![DbInventoryColumn {
+            key: None,
+            table_key: None,
+            name: column.to_string(),
+            data_type: None,
+            nullable: None,
+            is_primary_key: false,
+            is_foreign_key: false,
+        }],
+        foreign_keys: Vec::new(),
+        inbound_foreign_keys: Vec::new(),
+        constraints: Vec::new(),
+        indexes: Vec::new(),
+        dependents: Vec::new(),
+    };
+    let mut tables = vec![
+        table(Some("audit.2026"), "order:events", "value:raw%text"),
+        table(Some("audit"), "2026.order:events", "value"),
+        table(Some("public"), "orders", "id"),
+    ];
+    tables[0].foreign_keys.push(DbForeignKey {
+        key: None,
+        name: Some("event:value-fkey".to_string()),
+        table_key: None,
+        table_schema: Some("audit.2026".to_string()),
+        table: Some("order:events".to_string()),
+        columns: vec!["value:raw%text".to_string()],
+        column_keys: Vec::new(),
+        referenced_table_key: None,
+        referenced_schema: Some("audit".to_string()),
+        referenced_table: "2026.order:events".to_string(),
+        referenced_columns: vec!["value".to_string()],
+        referenced_column_keys: Vec::new(),
+    });
+    let db = DbInventory {
+        profile_id: "profile-1".to_string(),
+        snapshot_key: None,
+        contract_version: None,
+        capability_warnings: Vec::new(),
+        limit_requested: None,
+        limit_applied: None,
+        limit_clamped: None,
+        result_count: None,
+        total_tables: None,
+        truncated: None,
+        gaps: Vec::new(),
+        tables,
+    };
+
+    let snapshot = normalize_inventory("workspace-1".to_string(), None, Some(&db));
+    let ids = snapshot
+        .items
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert!(ids.contains("db:table:audit%2E2026.order%3Aevents"));
+    assert!(ids.contains("db:table:audit.2026%2Eorder%3Aevents"));
+    assert!(ids.contains("db:column:audit%2E2026.order%3Aevents:value%3Araw%25text"));
+    assert!(ids.contains("db:table:public.orders"));
+    assert!(ids.contains("db:column:public.orders:id"));
+    assert_eq!(
+        snapshot
+            .items
+            .iter()
+            .find(|item| item.id == "db:table:audit%2E2026.order%3Aevents")
+            .and_then(|item| item.qualified_name.as_deref()),
+        Some("audit.2026.order:events")
+    );
+    assert!(snapshot.links.iter().any(|link| {
+        link.kind == "db_fk"
+            && link.from == "db:column:audit%2E2026.order%3Aevents:value%3Araw%25text"
+            && link.to == "db:column:audit.2026%2Eorder%3Aevents:value"
     }));
 }
 
@@ -1038,6 +1627,7 @@ fn normalize_inventory_preserves_confirmed_db_foreign_key_links() {
                 inbound_foreign_keys: Vec::new(),
                 constraints: Vec::new(),
                 indexes: Vec::new(),
+                dependents: Vec::new(),
             },
             crate::workspace::DbInventoryTable {
                 key: None,
@@ -1057,6 +1647,7 @@ fn normalize_inventory_preserves_confirmed_db_foreign_key_links() {
                 inbound_foreign_keys: Vec::new(),
                 constraints: Vec::new(),
                 indexes: Vec::new(),
+                dependents: Vec::new(),
             },
         ],
     };
@@ -1088,6 +1679,161 @@ fn normalize_inventory_preserves_confirmed_db_foreign_key_links() {
 }
 
 #[test]
+fn db_dependents_round_trip_with_confirmed_endpoints_and_explicit_gaps() {
+    let snapshot = dependent_object_snapshot();
+    let by_name = |name: &str| {
+        snapshot
+            .items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap()
+    };
+    let view = by_name("active_orders");
+    let trigger = by_name("trg_orders_status");
+    let routine = by_name("refresh_orders");
+    let missing_view = by_name("missing_column_view");
+
+    assert_eq!(view.kind, "view");
+    assert_eq!(view.parent_id, None);
+    assert_eq!(trigger.parent_id.as_deref(), Some("db:table:public.orders"));
+    assert_eq!(routine.kind, "routine");
+    assert!(snapshot.links.iter().any(|link| {
+        link.kind == "db_dependency"
+            && link.from == view.id
+            && link.to == "db:column:public.orders:status"
+            && link.truth_class == "confirmed"
+            && link.engine_edge_type.as_deref() == Some("VIEW_DEPENDS_ON_COLUMN")
+            && link.evidence.iter().any(|evidence| {
+                evidence.kind == "db-object-key"
+                    && evidence.text == "sqlite:shop:main:public:view:active_orders"
+            })
+    }));
+    assert!(snapshot.links.iter().any(|link| {
+        link.kind == "db_trigger"
+            && link.from == "db:table:public.orders"
+            && link.to == trigger.id
+            && link.truth_class == "confirmed"
+    }));
+    assert!(snapshot.links.iter().any(|link| {
+        link.kind == "db_dependency"
+            && link.from == routine.id
+            && link.to == "db:table:public.orders"
+            && link.engine_edge_type.as_deref() == Some("ROUTINE_DEPENDS_ON_TABLE")
+    }));
+    assert!(snapshot.metadata.gaps.iter().any(|gap| {
+        gap.kind == "db-dependent-missing-column"
+            && gap.related_ids.iter().any(|id| id == &missing_view.id)
+    }));
+    assert!(snapshot.links.iter().any(|link| {
+        link.kind == "db_dependency"
+            && link.from == missing_view.id
+            && link.to == "db:table:public.orders"
+            && link.truth_class == "structural"
+            && link.engine_edge_type.as_deref() == Some("DEPENDENCY_SCOPE")
+    }));
+}
+
+#[test]
+fn db_dependents_are_scoped_into_table_and_column_impact_views() {
+    let snapshot = dependent_object_snapshot();
+    let table_map = visual_map(
+        &snapshot,
+        Some("db:table:public.orders".to_string()),
+        "table-usage".to_string(),
+    );
+    let column_map = visual_map(
+        &snapshot,
+        Some("db:column:public.orders:status".to_string()),
+        "column-impact".to_string(),
+    );
+
+    for kind in ["view", "trigger", "routine"] {
+        assert!(
+            table_map.nodes.iter().any(|node| node.kind == kind),
+            "table map omitted {kind}"
+        );
+        assert!(
+            review_lane(table_map.review_board.as_ref().unwrap(), "direct")
+                .items
+                .iter()
+                .any(|item| item.kind == kind),
+            "table review omitted {kind}"
+        );
+    }
+    assert!(column_map
+        .nodes
+        .iter()
+        .any(|node| node.kind == "view" && node.title == "active_orders"));
+    assert!(!column_map
+        .nodes
+        .iter()
+        .any(|node| matches!(node.kind.as_str(), "trigger" | "routine")));
+    assert!(column_map
+        .edges
+        .iter()
+        .any(|edge| edge.kind == "db_dependency"));
+    let column_direct = review_lane(column_map.review_board.as_ref().unwrap(), "direct");
+    assert!(column_direct.items.iter().any(|item| item.kind == "view"));
+    assert!(!column_direct
+        .items
+        .iter()
+        .any(|item| matches!(item.kind.as_str(), "trigger" | "routine")));
+}
+
+#[test]
+fn db_capability_warnings_are_localized_preserved_and_visible_after_restore() {
+    let db = DbInventory {
+        profile_id: "profile-1".to_string(),
+        snapshot_key: Some("postgres:shop".to_string()),
+        contract_version: Some("1".to_string()),
+        capability_warnings: vec![
+            "cross-object dependency metadata is partially tracked by the postgres adapter."
+                .to_string(),
+            "view dependency metadata is not tracked by the mysql adapter.".to_string(),
+            "routine dependency metadata support is unknown for the oracle adapter.".to_string(),
+            "SQLite generated columns are identified, but generation expressions are not extracted."
+                .to_string(),
+            "adapter-specific warning".to_string(),
+        ],
+        limit_requested: None,
+        limit_applied: None,
+        limit_clamped: None,
+        result_count: Some(0),
+        total_tables: Some(0),
+        truncated: Some(false),
+        gaps: Vec::new(),
+        tables: Vec::new(),
+    };
+    let snapshot = normalize_inventory("workspace-capabilities".to_string(), None, Some(&db));
+    let messages = snapshot
+        .metadata
+        .gaps
+        .iter()
+        .map(|gap| gap.message.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert!(messages.contains("PostgreSQL 어댑터는 객체 간 의존성 메타데이터를 일부만 추적합니다."));
+    assert!(messages.contains("MySQL/MariaDB 어댑터는 뷰 의존성 메타데이터를 추적하지 않습니다."));
+    assert!(messages.contains(
+        "Oracle 어댑터의 프로시저·함수 의존성 메타데이터 지원 여부를 확인할 수 없습니다."
+    ));
+    assert!(messages.contains("SQLite 생성 열 여부는 식별하지만 생성식은 수집하지 않습니다."));
+    assert!(messages.contains("adapter-specific warning"));
+
+    let overview = visual_map(&snapshot, None, "atlas".to_string());
+    assert!(!overview
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("DB 지원 범위")));
+
+    let root = temp_root("capability-warning-restore");
+    save_inventory_snapshot(&root, &snapshot).unwrap();
+    let restored = load_inventory_snapshot(&root, "workspace-capabilities").unwrap();
+    assert_eq!(restored.metadata.gaps, snapshot.metadata.gaps);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn db_contract_facts_round_trip_as_nodes_relationships_evidence_and_gaps() {
     let table_key = |table: &str| format!("postgres:shop:shop:public:table:{table}");
     let column_key =
@@ -1096,7 +1842,7 @@ fn db_contract_facts_round_trip_as_nodes_relationships_evidence_and_gaps() {
     let db = DbInventory {
         profile_id: "profile-1".to_string(),
         snapshot_key: Some("postgres:shop".to_string()),
-        contract_version: Some("1".to_string()),
+        contract_version: Some("2".to_string()),
         capability_warnings: vec!["trigger metadata unsupported".to_string()],
         limit_requested: Some(1_000),
         limit_applied: Some(1_000),
@@ -1217,6 +1963,7 @@ fn db_contract_facts_round_trip_as_nodes_relationships_evidence_and_gaps() {
                     predicate: Some("external_id IS NOT NULL".to_string()),
                     expression: Some("lower(external_id)".to_string()),
                 }],
+                dependents: Vec::new(),
             },
             DbInventoryTable {
                 key: Some(table_key("customers")),
@@ -1236,6 +1983,7 @@ fn db_contract_facts_round_trip_as_nodes_relationships_evidence_and_gaps() {
                 inbound_foreign_keys: Vec::new(),
                 constraints: Vec::new(),
                 indexes: Vec::new(),
+                dependents: Vec::new(),
             },
         ],
     };
@@ -1807,9 +2555,9 @@ fn change_impact_review_lanes_are_independently_bounded() {
         });
         snapshot.items.push(code);
         snapshot.metadata.gaps.push(super::model::SnapshotGap {
-            id: format!("gap:db-capability:{index}"),
-            kind: "db-capability".to_string(),
-            message: format!("capability {index} unavailable"),
+            id: format!("gap:db-inventory:{index}"),
+            kind: "db-inventory-gap".to_string(),
+            message: format!("inventory item {index} unavailable"),
             related_ids: Vec::new(),
         });
     }
@@ -2026,6 +2774,115 @@ fn api_flow_surfaces_snapshot_coverage_risks_and_reindex_action() {
         .recommended_checks
         .iter()
         .any(|item| item.kind == "reindex"));
+}
+
+#[test]
+fn api_flow_treats_db_capability_as_fixed_scope_not_a_reindex_failure() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    for item in snapshot
+        .items
+        .iter_mut()
+        .filter(|item| item.kind == "table")
+    {
+        item.name = format!("unrelated_{}", item.name);
+    }
+    snapshot.metadata.db = Some(super::model::SnapshotSourceMetadata {
+        saved_at: "1".to_string(),
+        engine_id: Some("database-memory".to_string()),
+        engine_version: Some("1".to_string()),
+        engine_checksum: None,
+        contract_version: Some("1".to_string()),
+        snapshot_key: Some("ddl:test".to_string()),
+        limit_requested: Some(1000),
+        limit_applied: Some(1000),
+        limit_clamped: Some(false),
+        result_count: Some(2),
+        total_tables: Some(2),
+        truncated: Some(false),
+        source_revision: None,
+        source_revision_label: None,
+        source_path: None,
+        source_type: "ddl-sqlite".to_string(),
+        profile_id: Some("test".to_string()),
+    });
+    snapshot.metadata.gaps.extend([
+        super::model::SnapshotGap {
+            id: "gap:db-capability:views".to_string(),
+            kind: "db-capability".to_string(),
+            message: "뷰 의존성을 추적하지 않습니다.".to_string(),
+            related_ids: Vec::new(),
+        },
+        super::model::SnapshotGap {
+            id: "gap:db-capability:triggers".to_string(),
+            kind: "db-capability".to_string(),
+            message: "트리거 의존성을 추적하지 않습니다.".to_string(),
+            related_ids: Vec::new(),
+        },
+    ]);
+
+    let answer = visual_map(
+        &snapshot,
+        Some("code:route:orders:create".to_string()),
+        "api-flow".to_string(),
+    )
+    .api_reading
+    .unwrap();
+    let capabilities = answer
+        .unknowns
+        .iter()
+        .filter(|item| item.kind == "db-capability")
+        .collect::<Vec<_>>();
+
+    assert_eq!(capabilities.len(), 1);
+    assert_eq!(capabilities[0].evidence.len(), 2);
+    assert!(capabilities[0].detail.contains("2종"));
+    assert!(!capabilities[0].detail.contains("지원하지 않습니다"));
+    assert!(capabilities[0].detail.contains("다시 읽어도"));
+    assert!(!answer
+        .recommended_checks
+        .iter()
+        .any(|item| item.kind == "reindex"));
+    assert_eq!(answer.recommended_checks[0].kind, "db-source-scope");
+}
+
+#[test]
+fn impact_groups_db_capability_limits_without_polluting_the_overview() {
+    let mut snapshot = dependent_object_snapshot();
+    snapshot.metadata.gaps.extend([
+        super::model::SnapshotGap {
+            id: "gap:db-capability:views".to_string(),
+            kind: "db-capability".to_string(),
+            message: "뷰 의존성을 추적하지 않습니다.".to_string(),
+            related_ids: Vec::new(),
+        },
+        super::model::SnapshotGap {
+            id: "gap:db-capability:triggers".to_string(),
+            kind: "db-capability".to_string(),
+            message: "트리거 의존성을 추적하지 않습니다.".to_string(),
+            related_ids: Vec::new(),
+        },
+    ]);
+
+    let map = visual_map(
+        &snapshot,
+        Some("db:column:public.orders:status".to_string()),
+        "column-impact".to_string(),
+    );
+    let capabilities = review_lane(map.review_board.as_ref().unwrap(), "unknowns")
+        .items
+        .iter()
+        .filter(|item| item.kind == "db-capability")
+        .collect::<Vec<_>>();
+
+    assert_eq!(capabilities.len(), 1);
+    assert_eq!(capabilities[0].evidence.len(), 2);
+    assert!(capabilities[0].detail.contains("2종"));
+
+    let overview = visual_map(&snapshot, None, "atlas".to_string());
+    assert!(!overview
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("DB 지원 범위")));
 }
 
 #[test]
@@ -2510,6 +3367,29 @@ fn api_flow_is_cycle_safe_preserves_evidence_and_limits_db_candidates_to_reachab
 }
 
 #[test]
+fn focus_map_does_not_show_untrusted_call_neighbors_without_an_edge() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot
+        .links
+        .iter_mut()
+        .find(|link| link.kind == "code_call")
+        .unwrap()
+        .truth_class = "unknown".to_string();
+
+    let map = visual_map(
+        &snapshot,
+        Some("code:function:CreateOrderHandler".to_string()),
+        "search-focus".to_string(),
+    );
+
+    assert!(!map
+        .nodes
+        .iter()
+        .any(|node| node.id == "code:class:OrderService"));
+    assert!(!map.edges.iter().any(|edge| edge.kind == "code_call"));
+}
+
+#[test]
 fn visual_map_without_focus_returns_overview() {
     let snapshot = fixture_inventory("workspace-1".to_string());
     let map = visual_map(&snapshot, None, "atlas".to_string());
@@ -2804,6 +3684,26 @@ fn large_snapshot_projection_stays_bounded_and_has_no_dangling_edges() {
     let restore_elapsed = restore_started.elapsed();
     assert_eq!(restored.items.len(), snapshot.items.len());
     assert_eq!(restored.links.len(), snapshot.links.len());
+    let full_payload_bytes = serde_json::to_vec(&restored).unwrap().len();
+    let bootstrap_started = Instant::now();
+    let bootstrap = inventory_bootstrap(&restored);
+    let bootstrap_elapsed = bootstrap_started.elapsed();
+    let bootstrap_payload_bytes = serde_json::to_vec(&bootstrap).unwrap().len();
+    assert_eq!(bootstrap.summary.total_items, 10_200);
+    assert_eq!(bootstrap.summary.total_links, 40_000);
+    assert_eq!(
+        bootstrap
+            .snapshot
+            .items
+            .iter()
+            .filter(|item| item.source == "code")
+            .count(),
+        100
+    );
+    assert!(
+        bootstrap_payload_bytes * 5 < full_payload_bytes,
+        "bounded bootstrap payload must stay below 20% of the full snapshot"
+    );
 
     let overview_started = Instant::now();
     let map = visual_map(&restored, None, "atlas".to_string());
@@ -2859,10 +3759,13 @@ fn large_snapshot_projection_stays_bounded_and_has_no_dangling_edges() {
         Duration::from_secs(2)
     };
     eprintln!(
-        "large_snapshot metrics: items={}, edges={}, restore_ms={}, overview_ms={}, focus_ms={}",
+        "large_snapshot metrics: items={}, edges={}, restore_ms={}, bootstrap_ms={}, payload_bytes={}->{}, overview_ms={}, focus_ms={}",
         snapshot.items.len(),
         snapshot.links.len(),
         restore_elapsed.as_millis(),
+        bootstrap_elapsed.as_millis(),
+        full_payload_bytes,
+        bootstrap_payload_bytes,
         overview_elapsed.as_millis(),
         focus_elapsed.as_millis()
     );
@@ -3337,6 +4240,67 @@ fn capped_focus_map_does_not_return_edges_to_hidden_nodes() {
 }
 
 #[test]
+fn capped_search_focus_map_always_keeps_the_requested_target() {
+    let focus_id = "code:function:zz_target";
+    let mut focus_item = item(
+        focus_id,
+        "function",
+        "zz_target",
+        "code",
+        "code",
+        None,
+        Some("src/target.ts"),
+    );
+    focus_item.location = Some(super::model::SourceLocation {
+        path: "src/target.ts".to_string(),
+        line: Some(42),
+        column: Some(3),
+        end_line: Some(48),
+        end_column: None,
+    });
+    let mut items = vec![focus_item];
+    for index in 0..50 {
+        items.push(item(
+            &format!("code:function:aa_neighbor_{index:02}"),
+            "function",
+            &format!("aa_neighbor_{index:02}"),
+            "code",
+            "code",
+            Some(focus_id),
+            Some("src/neighbors.ts"),
+        ));
+    }
+    let snapshot = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: "workspace-1".to_string(),
+        saved_at: "1".to_string(),
+        metadata: Default::default(),
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items,
+    };
+
+    let map = visual_map(
+        &snapshot,
+        Some(focus_id.to_string()),
+        "search-focus".to_string(),
+    );
+
+    assert_eq!(map.nodes.len(), 32);
+    assert!(map.nodes.iter().any(|node| node.id == focus_id));
+    assert!(map
+        .nodes
+        .iter()
+        .find(|node| node.id == focus_id)
+        .and_then(|node| node.location.as_ref())
+        .is_some_and(|location| location.line == Some(42) && location.column == Some(3)));
+    assert!(map.edges.iter().all(|edge| {
+        map.nodes.iter().any(|node| node.id == edge.from)
+            && map.nodes.iter().any(|node| node.id == edge.to)
+    }));
+}
+
+#[test]
 fn save_inventory_snapshot_redacts_secret_shapes_before_persisting() {
     let root = temp_root("snapshot-redaction");
     let snapshot = InventorySnapshot {
@@ -3497,7 +4461,7 @@ fn test_registry() -> EngineRegistry {
                 label: "codebase-memory".to_string(),
                 role: "code".to_string(),
                 executable: "codebase-memory-mcp.exe".to_string(),
-                expected_version: "0.8.1".to_string(),
+                expected_version: "0.9.0".to_string(),
                 contract_version: "1".to_string(),
                 path: r"D:\engines\codebase-memory-mcp.exe".to_string(),
                 available: false,

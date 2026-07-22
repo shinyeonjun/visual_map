@@ -13,7 +13,7 @@ import {
   visualMapModeLabel as modeLabel,
   visualNodeKindLabel as nodeKindLabel,
 } from "../../visual/labels";
-import { columnLabelFromNodeId, tableKeyFromDbNodeId } from "../../visual/nodeIds";
+import { columnLabelFromNodeId, dbTableIdentityLabel, tableKeyFromDbNodeId } from "../../visual/nodeIds";
 
 export type InspectorAnswer = {
   kicker: string;
@@ -136,7 +136,7 @@ export function inspectorAnswer({
     const isTypedOnly = counts.typed > 0 && counts.confirmed === 0 && counts.candidate === 0;
     const candidateNote = counts.candidate > 0 ? "후보 근거는 바뀔 수 있는 범위를 넓게 잡는 힌트입니다." : null;
     return {
-      kicker: `${nodeKindLabel(node.kind)} 근거`,
+      kicker: `${nodeKindLabel(node.kind, node.source)} 근거`,
       title: nodeDisplayTitle(node),
       sentence: nodeAnswerSentence(node, counts, map),
       tone: isCandidateHeavy ? "candidate" : isTypedOnly || node.source === "projection" ? "neutral" : "confirmed",
@@ -448,6 +448,18 @@ function nodeAnswerSentence(node: VisualNode, counts: EdgeCounts, map: VisualMap
   if (node.kind === "file") {
     return "이 파일 주변의 심볼과 호출 관계입니다.";
   }
+  if (node.source === "db") {
+    if (node.kind === "view") {
+      return "이 뷰가 참조하는 테이블과 컬럼의 DB 근거입니다.";
+    }
+    if (node.kind === "trigger") {
+      return "이 트리거가 등록된 테이블의 DB 근거입니다.";
+    }
+    if (node.kind === "routine") {
+      return "이 DB 함수/프로시저가 참조하는 테이블과 컬럼의 DB 근거입니다.";
+    }
+    return "이 DB 객체와 연결된 구조 근거입니다.";
+  }
   return "이 코드 항목 주변의 호출과 DB 후보 근거입니다.";
 }
 
@@ -468,6 +480,15 @@ function nodeAnswerSteps(node: VisualNode, map: VisualMap | null): string[] {
   }
   if (node.kind === "api") {
     return ["연결된 코드 확인"];
+  }
+  if (node.source === "db") {
+    if (node.kind === "trigger") {
+      return ["등록된 테이블 확인"];
+    }
+    if (node.kind === "view" || node.kind === "routine") {
+      return ["참조하는 테이블/컬럼 확인"];
+    }
+    return ["연결된 DB 구조 확인"];
   }
   return ["직접 호출 관계 확인"];
 }
@@ -553,16 +574,11 @@ export function edgeEvidenceTone(edge: VisualEdge): "candidate" | "confirmed" | 
   return edge.kind === "code_flow" || isStructuralEdge(edge) || edge.evidence.length === 0 ? "neutral" : "confirmed";
 }
 
-export function emptyEvidenceLabel(edge: VisualEdge): string {
-  return edge.kind.startsWith("candidate")
-    ? "근거 문장 없음 · 후보 근거만 표시"
-    : "근거 문장 없음 · 구조 근거만 표시";
-}
-
 export function endpointLabel(id: string, map: VisualMap | null): string {
   const node = map?.nodes.find((item) => item.id === id);
   if (!node) {
-    return columnLabelFromNodeId(id) ?? (id.startsWith("db:table:") ? id.slice("db:table:".length) : id);
+    return columnLabelFromNodeId(id) ??
+      (id.startsWith("db:table:") ? dbTableIdentityLabel(id.slice("db:table:".length)) : id);
   }
   const title = nodeDisplayTitle(node);
   return node.kind === "column" ? title : node.subtitle ? `${title} (${node.subtitle})` : title;
@@ -570,7 +586,10 @@ export function endpointLabel(id: string, map: VisualMap | null): string {
 
 function endpointTitleLabel(id: string, map: VisualMap | null): string {
   const node = map?.nodes.find((item) => item.id === id);
-  return node ? nodeDisplayTitle(node) : columnLabelFromNodeId(id) ?? (id.startsWith("db:table:") ? id.slice("db:table:".length) : id);
+  return node
+    ? nodeDisplayTitle(node)
+    : columnLabelFromNodeId(id) ??
+        (id.startsWith("db:table:") ? dbTableIdentityLabel(id.slice("db:table:".length)) : id);
 }
 
 export function nodeDisplayTitle(node: VisualNode): string {
@@ -578,7 +597,7 @@ export function nodeDisplayTitle(node: VisualNode): string {
     return node.title;
   }
   const tableKey = tableKeyFromDbNodeId(node.id);
-  return tableKey ? `${tableKey}.${node.title}` : node.title;
+  return tableKey ? `${dbTableIdentityLabel(tableKey)}.${node.title}` : node.title;
 }
 
 export function firstTableColumnAction(
@@ -632,6 +651,15 @@ export function relationshipReason(edge: VisualEdge): string {
   if (edge.kind === "db_constraint" || edge.kind === "db_fk") {
     return edge.evidence[0]?.text ?? "DB 제약 구조입니다";
   }
+  if (edge.kind === "db_index") {
+    return edge.evidence[0]?.text ?? "DB 인덱스가 포함하는 컬럼 구조입니다";
+  }
+  if (edge.kind === "db_dependency") {
+    return edge.evidence[0]?.text ?? "DB 뷰 또는 함수/프로시저가 참조하는 테이블이나 컬럼입니다";
+  }
+  if (edge.kind === "db_trigger") {
+    return edge.evidence[0]?.text ?? "테이블에 등록된 DB 트리거입니다";
+  }
   if (edge.kind === "code_call") {
     return edge.evidence[0]?.text ?? "읽은 호출 구조입니다. 상세 근거 문장은 없습니다";
   }
@@ -659,6 +687,9 @@ export function copyValuesForNode(node: VisualNode): Array<[string, string]> {
   }
   if (node.kind === "file") {
     return [["경로", node.subtitle ?? node.title], ["ID", node.id]];
+  }
+  if (node.source === "db") {
+    return [[nodeKindLabel(node.kind, node.source), node.title], ["ID", node.id]];
   }
   return [["심볼", node.title], ["경로", node.subtitle ?? ""], ["ID", node.id]];
 }
@@ -759,7 +790,10 @@ export function nodeHasCodeRelation(node: VisualNode, map: VisualMap | null): bo
 }
 
 function edgeHasCodeEndpoint(edge: VisualEdge): boolean {
-  return edge.from.startsWith("code:") || edge.to.startsWith("code:");
+  return edge.from.startsWith("code:")
+    || edge.to.startsWith("code:")
+    || edge.kind.endsWith("code_call")
+    || edge.kind.endsWith("code_handle");
 }
 
 function strongestCandidateConfidence(edges: VisualEdge[]): "high" | "medium" | "low" | null {
@@ -778,7 +812,9 @@ export function columnImpactSummary(node: VisualNode, map: VisualMap | null): {
   constraints: string;
 } {
   const connectedEdges = map?.edges.filter((edge) => edge.from === node.id || edge.to === node.id) ?? [];
-  const directCount = connectedEdges.filter((edge) => !edge.kind.startsWith("candidate")).length;
+  const directCount = connectedEdges.filter(
+    (edge) => !edge.kind.startsWith("candidate") && edge.kind !== "contains" && edge.kind !== "group_contains",
+  ).length;
   const candidateCount = connectedEdges.filter((edge) => edge.kind.startsWith("candidate")).length;
   const fkCount = connectedEdges.filter((edge) => edge.kind === "db_fk" || edge.kind === "db_constraint").length;
   const constraints = fkCount > 0 ? `FK 관계 ${fkCount}개` : "-";

@@ -14,16 +14,13 @@ describe("inventory snapshot persistence", () => {
     invokeMock.mockReset();
   });
 
-  it("keeps code indexing busy until its snapshot is saved", async () => {
+  it("keeps code indexing busy until the persisted snapshot is refreshed", async () => {
     const saved = deferred();
-    const saveInventorySnapshot = vi.fn(() => saved.promise);
+    const refreshInventorySnapshot = vi.fn(() => saved.promise);
     const refreshWorkspaces = vi.fn(async () => undefined);
     invokeMock.mockImplementation((command) => {
       if (command === "index_code_repository") {
-        return Promise.resolve({ workspace, run: { ok: true, stderr: "" } });
-      }
-      if (command === "get_code_inventory") {
-        return Promise.resolve(codeInventory);
+        return Promise.resolve({ workspace, run: { ok: true, stderr: "" }, inventory: codeInventory });
       }
       throw new Error(`Unexpected command: ${command}`);
     });
@@ -33,8 +30,7 @@ describe("inventory snapshot persistence", () => {
         withBusy,
         setCurrentWorkspace: vi.fn(),
         refreshWorkspaces,
-        saveInventorySnapshot,
-        getDbInventory: () => null,
+        refreshInventorySnapshot,
       }),
     );
 
@@ -42,7 +38,7 @@ describe("inventory snapshot persistence", () => {
     act(() => {
       operation = result.current.indexCodeRepository();
     });
-    await waitFor(() => expect(saveInventorySnapshot).toHaveBeenCalledOnce());
+    await waitFor(() => expect(refreshInventorySnapshot).toHaveBeenCalledOnce());
     expect(refreshWorkspaces).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -52,16 +48,18 @@ describe("inventory snapshot persistence", () => {
     expect(refreshWorkspaces).toHaveBeenCalledWith(workspace.id);
   });
 
-  it("keeps DB indexing busy until its snapshot is saved", async () => {
+  it("keeps DB indexing busy until the persisted snapshot is refreshed", async () => {
     const saved = deferred();
-    const saveInventorySnapshot = vi.fn(() => saved.promise);
+    const refreshInventorySnapshot = vi.fn(() => saved.promise);
     const refreshWorkspaces = vi.fn(async () => undefined);
     invokeMock.mockImplementation((command) => {
       if (command === "index_db_profile") {
-        return Promise.resolve({ workspace: dbWorkspace, run: { ok: true, stderr: "" }, indexJson: null });
-      }
-      if (command === "get_db_inventory") {
-        return Promise.resolve(dbInventory);
+        return Promise.resolve({
+          workspace: dbWorkspace,
+          run: { ok: true, stderr: "" },
+          indexJson: null,
+          inventory: dbInventory,
+        });
       }
       throw new Error(`Unexpected command: ${command}`);
     });
@@ -72,8 +70,7 @@ describe("inventory snapshot persistence", () => {
         setCurrentWorkspace: vi.fn(),
         refreshWorkspaces,
         clearVisualMap: vi.fn(),
-        saveInventorySnapshot,
-        getCodeInventory: () => null,
+        refreshInventorySnapshot,
       }),
     );
     await waitFor(() => expect(result.current.dbProfileName).toBe(dbProfile.name));
@@ -82,7 +79,7 @@ describe("inventory snapshot persistence", () => {
     act(() => {
       operation = result.current.indexDbProfile();
     });
-    await waitFor(() => expect(saveInventorySnapshot).toHaveBeenCalledOnce());
+    await waitFor(() => expect(refreshInventorySnapshot).toHaveBeenCalledOnce());
     expect(refreshWorkspaces).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -90,6 +87,57 @@ describe("inventory snapshot persistence", () => {
       await operation;
     });
     expect(refreshWorkspaces).toHaveBeenCalledWith(dbWorkspace.id);
+  });
+
+  it("does not snapshot a successful code index without extracted inventory", async () => {
+    const refreshInventorySnapshot = vi.fn(async () => undefined);
+    invokeMock.mockResolvedValue({
+      workspace,
+      run: { ok: true, stderr: "" },
+      inventory: null,
+      inventoryError: "inventory extraction failed",
+    });
+    const { result } = renderHook(() =>
+      useCodeInventory({
+        currentWorkspace: workspace,
+        withBusy,
+        setCurrentWorkspace: vi.fn(),
+        refreshWorkspaces: vi.fn(async () => undefined),
+        refreshInventorySnapshot,
+      }),
+    );
+
+    await act(() => result.current.indexCodeRepository());
+
+    expect(refreshInventorySnapshot).not.toHaveBeenCalled();
+    expect(result.current.codeError).toContain("코드 목록을 불러오지 못했습니다");
+  });
+
+  it("does not snapshot a successful DB index without extracted inventory", async () => {
+    const refreshInventorySnapshot = vi.fn(async () => undefined);
+    invokeMock.mockResolvedValue({
+      workspace: dbWorkspace,
+      run: { ok: true, stderr: "" },
+      indexJson: null,
+      inventory: null,
+      inventoryError: "inventory extraction failed",
+    });
+    const { result } = renderHook(() =>
+      useDbProfiles({
+        currentWorkspace: dbWorkspace,
+        withBusy,
+        setCurrentWorkspace: vi.fn(),
+        refreshWorkspaces: vi.fn(async () => undefined),
+        clearVisualMap: vi.fn(),
+        refreshInventorySnapshot,
+      }),
+    );
+    await waitFor(() => expect(result.current.dbProfileName).toBe(dbProfile.name));
+
+    await act(() => result.current.indexDbProfile());
+
+    expect(refreshInventorySnapshot).not.toHaveBeenCalled();
+    expect(result.current.dbError).toContain("테이블 목록을 불러오지 못했습니다");
   });
 });
 

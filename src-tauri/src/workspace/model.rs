@@ -57,7 +57,9 @@ pub(crate) enum DbSource {
     Sqlite,
     DdlSqlite,
     Postgres,
+    Yugabytedb,
     Mysql,
+    Mariadb,
     Sqlserver,
     Oracle,
 }
@@ -98,6 +100,8 @@ pub(crate) struct DbIndexResult {
     pub workspace: Workspace,
     pub run: engine::EngineRunResult,
     pub index_json: Option<serde_json::Value>,
+    pub inventory: Option<DbInventory>,
+    pub inventory_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +109,8 @@ pub(crate) struct DbIndexResult {
 pub(crate) struct CodeIndexResult {
     pub workspace: Workspace,
     pub run: engine::EngineRunResult,
+    pub inventory: Option<CodeInventory>,
+    pub inventory_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -125,6 +131,8 @@ pub(crate) struct CodeInventory {
     pub calls: Vec<CodeCall>,
     #[serde(default)]
     pub handles: Vec<CodeHandle>,
+    #[serde(default)]
+    pub partial: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -169,6 +177,12 @@ pub(crate) struct CodeInventoryItem {
 pub(crate) struct CodeCall {
     pub from: String,
     pub to: String,
+    #[serde(default)]
+    pub confidence: Option<u8>,
+    #[serde(default)]
+    pub strategy: Option<String>,
+    #[serde(default)]
+    pub expression: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -252,6 +266,19 @@ pub(crate) struct DbInventoryTable {
     pub constraints: Vec<DbConstraint>,
     #[serde(default)]
     pub indexes: Vec<DbIndex>,
+    #[serde(default)]
+    pub dependents: Vec<DbDependentObject>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DbDependentObject {
+    pub key: String,
+    pub kind: String,
+    pub name: String,
+    pub relation: String,
+    #[serde(default)]
+    pub column_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -262,19 +262,6 @@
   .side-right .answer-summary p {
     -webkit-line-clamp: 2;
   }
-  .side-right .answer-metrics {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-  .side-right .answer-metrics span {
-    min-height: 28px;
-  }
-  .side-right .answer-action {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .side-right .answer-action svg {
-    display: none;
-  }
-  .side-right .answer-step-block,
   .side-right .answer-summary > small {
     display: none;
   }
@@ -303,8 +290,5 @@
   .side-right .answer-verdict {
     padding-inline: 4px;
     font-size: 9px;
-  }
-  .side-right .answer-metrics em {
-    font-size: 8.8px;
   }
 }

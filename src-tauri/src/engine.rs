@@ -39,10 +39,10 @@ pub(crate) struct EngineSpec {
     pub expected_contract_version: &'static str,
 }
 
-pub(crate) const CODEBASE_MEMORY_VERSION: &str = "0.8.1";
+pub(crate) const CODEBASE_MEMORY_VERSION: &str = "0.9.0";
 pub(crate) const CODEBASE_MEMORY_CONTRACT_VERSION: &str = "1";
-pub(crate) const DATABASE_MEMORY_VERSION: &str = "0.1.1";
-pub(crate) const DATABASE_MEMORY_CONTRACT_VERSION: &str = "1";
+pub(crate) const DATABASE_MEMORY_VERSION: &str = "0.2.0";
+pub(crate) const DATABASE_MEMORY_CONTRACT_VERSION: &str = "2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -582,11 +582,20 @@ pub(crate) fn run_command_with_env(
             let _ = child.kill();
             let _ = child.wait();
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
+            let stderr = String::from_utf8_lossy(&stderr);
+            let stderr = if stderr.trim().is_empty() {
+                "읽기 도구 실행 시간이 초과되었습니다".to_string()
+            } else {
+                format!(
+                    "{}\n읽기 도구 실행 시간이 초과되었습니다",
+                    stderr.trim_end()
+                )
+            };
 
             return Ok(EngineRunResult {
                 ok: false,
                 stdout: redact_secrets(&String::from_utf8_lossy(&stdout)),
-                stderr: redact_secrets(&String::from_utf8_lossy(&stderr)),
+                stderr: redact_secrets(&stderr),
                 exit_code: None,
                 started_at,
                 finished_at: timestamp(),

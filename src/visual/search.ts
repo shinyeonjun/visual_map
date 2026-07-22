@@ -1,18 +1,29 @@
 import type { SearchResult, SearchResultGroup } from "../types/controls";
+import {
+  dbTableIdentityLabel,
+  dbTableNameFromIdentityKey,
+  encodeDbIdentityComponent,
+  parseDbStableObjectKey,
+} from "../inventory/dbIdentity";
+import { codeInventoryItemFromSnapshot } from "../inventory/snapshotRestore";
 import { codeInventoryCodeItems, codeRouteMethod, dbInventoryTableKey } from "../types/workspace";
+import type { InventorySearchResult } from "../types/visual-map";
 import type {
   CodeInventory,
   CodeInventoryItem,
+  DbDependentObject,
   DbInventory,
   DbInventoryColumn,
   DbInventoryTable,
 } from "../types/workspace";
+import { dbColumnNodeId, dbTableNodeId } from "./nodeIds";
 
 const SEARCH_GROUPS = [
   ["api:", "API"],
   ["code:", "코드"],
   ["file:", "파일"],
   ["table:", "테이블"],
+  ["db-object:", "DB 객체"],
   ["column:", "컬럼"],
 ] as const;
 
@@ -43,6 +54,18 @@ type IndexedDbTable = {
   columns: IndexedDbColumn[];
 };
 
+type IndexedDbObject = {
+  object: DbDependentObject;
+  name: string;
+  qualifiedName: string;
+  kind: string;
+};
+
+type DbSearchIndex = {
+  tables: IndexedDbTable[];
+  objects: IndexedDbObject[];
+};
+
 type CodeSearchIndex = {
   routes: IndexedCodeItem[];
   code: IndexedCodeItem[];
@@ -50,8 +73,9 @@ type CodeSearchIndex = {
 };
 
 const codeSearchIndexes = new WeakMap<CodeInventory, CodeSearchIndex>();
-const dbSearchIndexes = new WeakMap<DbInventory, IndexedDbTable[]>();
+const dbSearchIndexes = new WeakMap<DbInventory, DbSearchIndex>();
 const EMPTY_CODE_INDEX: CodeSearchIndex = { routes: [], code: [], files: [] };
+const EMPTY_DB_INDEX: DbSearchIndex = { tables: [], objects: [] };
 
 export type SearchCollection = {
   results: SearchResult[];
@@ -59,6 +83,64 @@ export type SearchCollection = {
   counts: number[];
   truncated: boolean;
 };
+
+export function searchCollectionFromInventoryResult(result: InventorySearchResult): SearchCollection {
+  const results = result.hits.map(({ group, item }): SearchResult => {
+    if (group === "api" || group === "code" || group === "file") {
+      const codeItem = codeInventoryItemFromSnapshot(item, item.projectId ?? "snapshot");
+      if (group === "api") {
+        const method = codeRouteMethod(codeItem) ?? "ANY?";
+        return {
+          id: `api:${codeItem.id}`,
+          title: `${method} ${codeItem.name}`,
+          subtitle: routeSearchIdentity(codeItem),
+          focusId: item.id,
+          codeItem,
+        };
+      }
+      return {
+        id: `${group}:${codeItem.id}`,
+        title: codeItem.name,
+        subtitle: codeItem.filePath ?? (group === "file" ? "파일" : codeItem.kind),
+        focusId: item.id,
+        codeItem,
+      };
+    }
+
+    if (group === "db-object") {
+      return {
+        id: `db-object:${item.id}`,
+        title: item.name,
+        subtitle: dbObjectSearchSubtitle(item.kind, item.qualifiedName),
+        focusId: item.id,
+      };
+    }
+
+    const tableKey = (item.parentId ?? item.id).replace(/^db:table:/, "");
+    if (group === "column") {
+      return {
+        id: `column:${tableKey}:${encodeDbIdentityComponent(item.name)}`,
+        title: `${dbTableNameFromIdentityKey(tableKey)}.${item.name}`,
+        subtitle: `${dbTableIdentityLabel(tableKey)}${item.path ? ` · ${item.path}` : ""}`,
+        focusId: item.id,
+        tableKey,
+      };
+    }
+    return {
+      id: `table:${tableKey}`,
+      title: item.name,
+      subtitle: item.path ?? "테이블",
+      focusId: item.id,
+      tableKey,
+    };
+  });
+  return {
+    results,
+    total: result.total,
+    counts: SEARCH_GROUPS.map(([prefix]) => result.counts[prefix.slice(0, -1)] ?? 0),
+    truncated: result.truncated,
+  };
+}
 
 export function prepareSearchIndex(codeInventory: CodeInventory | null, dbInventory: DbInventory | null) {
   codeSearchIndex(codeInventory);
@@ -117,7 +199,8 @@ export function collectSearchResults(
       });
     }
   }
-  for (const indexed of dbSearchIndex(dbInventory)) {
+  const indexedDb = dbSearchIndex(dbInventory);
+  for (const indexed of indexedDb.tables) {
     const { table, tableKey } = indexed;
     const tableScore = searchScore(
       indexed.normalizedName,
@@ -130,7 +213,7 @@ export function collectSearchResults(
         id: `table:${tableKey}`,
         title: table.name,
         subtitle: table.schema ?? "테이블",
-        focusId: `db:table:${tableKey}`,
+        focusId: dbTableNodeId(tableKey),
         tableKey,
       });
     }
@@ -143,14 +226,26 @@ export function collectSearchResults(
         normalizedQuery,
       );
       if (columnScore > 0) {
-        addSearchResult(rankedGroups, counts, 4, columnScore, {
-          id: `column:${tableKey}:${column.name}`,
+        addSearchResult(rankedGroups, counts, 5, columnScore, {
+          id: `column:${tableKey}:${encodeDbIdentityComponent(column.name)}`,
           title: `${table.name}.${column.name}`,
-          subtitle: `${tableKey}${column.dataType ? ` · ${column.dataType}` : ""}`,
-          focusId: `db:column:${tableKey}:${column.name}`,
+          subtitle: `${dbTableIdentityLabel(tableKey)}${column.dataType ? ` · ${column.dataType}` : ""}`,
+          focusId: dbColumnNodeId(tableKey, column.name),
           tableKey,
         });
       }
+    }
+  }
+  for (const indexed of indexedDb.objects) {
+    const { object } = indexed;
+    const score = searchScore(indexed.name, indexed.qualifiedName, indexed.kind, normalizedQuery);
+    if (score > 0) {
+      addSearchResult(rankedGroups, counts, 4, score, {
+        id: `db-object:${object.key}`,
+        title: object.name,
+        subtitle: dbObjectSearchSubtitle(object.kind, object.key),
+        focusId: `db:${object.kind}:${encodeDbIdentityComponent(object.key)}`,
+      });
     }
   }
   const results = rankedGroups.flatMap((group) => group.map(({ result }) => result));
@@ -189,6 +284,7 @@ export function searchScopeText(codeInventory: CodeInventory | null, dbInventory
     codeInventoryCodeItems(codeInventory).length ? "코드" : null,
     codeInventory?.files.length ? "파일" : null,
     dbInventory?.tables.length ? "테이블" : null,
+    dbInventory?.tables.some((table) => (table.dependents?.length ?? 0) > 0) ? "DB 객체" : null,
     dbInventory?.tables.some((table) => table.columns.length > 0) ? "컬럼" : null,
   ].filter(Boolean);
   return scopes.length > 0 ? scopes.join(" · ") : "항목";
@@ -224,15 +320,15 @@ function indexCodeItem(item: CodeInventoryItem): IndexedCodeItem {
   };
 }
 
-function dbSearchIndex(inventory: DbInventory | null): IndexedDbTable[] {
+function dbSearchIndex(inventory: DbInventory | null): DbSearchIndex {
   if (!inventory) {
-    return [];
+    return EMPTY_DB_INDEX;
   }
   const cached = dbSearchIndexes.get(inventory);
   if (cached) {
     return cached;
   }
-  const index = inventory.tables.map((table) => {
+  const tables = inventory.tables.map((table) => {
     const tableKey = dbInventoryTableKey(table);
     const qualifiedName = table.schema ? `${table.schema}.${table.name}` : table.name;
     return {
@@ -249,8 +345,38 @@ function dbSearchIndex(inventory: DbInventory | null): IndexedDbTable[] {
       })),
     };
   });
+  const objectsByKey = new Map<string, IndexedDbObject>();
+  for (const table of inventory.tables) {
+    for (const object of table.dependents ?? []) {
+      if (!objectsByKey.has(object.key)) {
+        objectsByKey.set(object.key, {
+          object,
+          name: object.name.toLowerCase(),
+          qualifiedName: object.key.toLowerCase(),
+          kind: object.kind.toLowerCase(),
+        });
+      }
+    }
+  }
+  const index = { tables, objects: [...objectsByKey.values()] };
   dbSearchIndexes.set(inventory, index);
   return index;
+}
+
+function dbObjectSearchSubtitle(kind: string, key?: string | null): string {
+  const label = visualDbObjectKindLabel(kind);
+  const identity = parseDbStableObjectKey(key);
+  if (!identity) {
+    return label;
+  }
+  return `${label} · ${identity.schema}.${identity.subObject ?? identity.objectName}`;
+}
+
+function visualDbObjectKindLabel(kind: string): string {
+  if (kind === "view") return "뷰";
+  if (kind === "trigger") return "트리거";
+  if (kind === "routine") return "DB 함수/프로시저";
+  return "DB 객체";
 }
 
 function addSearchResult(

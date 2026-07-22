@@ -1,5 +1,14 @@
+import {
+  dbColumnNodeId,
+  dbTableIdentityLabel,
+  dbTableNodeId,
+  decodeDbIdentityComponent,
+} from "../inventory/dbIdentity";
+
 const DB_TABLE_PREFIX = "db:table:";
 const DB_COLUMN_PREFIX = "db:column:";
+
+export { dbColumnNodeId, dbTableIdentityLabel, dbTableNodeId };
 
 export type DbColumnNodeRef = {
   tableKey: string;
@@ -12,9 +21,11 @@ export function columnRefFromNodeId(nodeId: string): DbColumnNodeRef | null {
   }
   const body = nodeId.slice(DB_COLUMN_PREFIX.length);
   const splitIndex = body.lastIndexOf(":");
-  return splitIndex > 0 && splitIndex < body.length - 1
-    ? { tableKey: body.slice(0, splitIndex), columnName: body.slice(splitIndex + 1) }
-    : null;
+  if (splitIndex <= 0 || splitIndex >= body.length - 1) {
+    return null;
+  }
+  const columnName = decodeDbIdentityComponent(body.slice(splitIndex + 1));
+  return columnName === null ? null : { tableKey: body.slice(0, splitIndex), columnName };
 }
 
 export function tableKeyFromDbNodeId(nodeId: string): string | null {
@@ -26,5 +37,5 @@ export function tableKeyFromDbNodeId(nodeId: string): string | null {
 
 export function columnLabelFromNodeId(nodeId: string): string | null {
   const column = columnRefFromNodeId(nodeId);
-  return column ? `${column.tableKey}.${column.columnName}` : null;
+  return column ? `${dbTableIdentityLabel(column.tableKey)}.${column.columnName}` : null;
 }

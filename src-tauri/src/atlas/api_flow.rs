@@ -56,13 +56,14 @@ pub(super) fn api_flow_map(
     });
     let mut candidates = if let Some(all_candidates) = all_candidates {
         all_candidates
-            .into_iter()
+            .iter()
             .filter(|link| reachable_code_ids.contains(link.from.as_str()))
             .filter(|link| {
                 item_by_id
                     .get(link.to.as_str())
                     .is_some_and(|item| item.source == "db" && item.kind == "table")
             })
+            .cloned()
             .collect::<Vec<_>>()
     } else {
         Vec::new()
@@ -497,7 +498,12 @@ fn api_reading_answer(
                 "{title}: {relationship} 관계가 확정 조건을 충족하지 않아 읽기 순서와 지도에서 제외했습니다."
             )),
             truth_class: link.truth_class.clone(),
-            confidence: None,
+            confidence: link
+                .evidence
+                .iter()
+                .find(|entry| entry.kind == "engine-confidence")
+                .map(|entry| entry.text.clone())
+                .filter(|confidence| confidence != "unknown"),
             rank: 0,
             evidence,
             location: item_by_id
@@ -562,13 +568,49 @@ fn api_reading_answer(
 
     let mut relevant_ids = reachable_sources;
     relevant_ids.extend(candidates.iter().map(|candidate| candidate.to.as_str()));
-    for gap in snapshot.metadata.gaps.iter().filter(|gap| {
-        gap.related_ids.is_empty()
-            || gap
-                .related_ids
+    let relevant_gaps = snapshot
+        .metadata
+        .gaps
+        .iter()
+        .filter(|gap| {
+            gap.related_ids.is_empty()
+                || gap
+                    .related_ids
+                    .iter()
+                    .any(|id| relevant_ids.contains(id.as_str()))
+        })
+        .collect::<Vec<_>>();
+    let capability_gaps = relevant_gaps
+        .iter()
+        .filter(|gap| gap.kind == "db-capability")
+        .collect::<Vec<_>>();
+    if !capability_gaps.is_empty() {
+        unknowns.push(ImpactReviewItem {
+            id: "api-unknown:db-capability".to_string(),
+            node_id: Some(route.id.clone()),
+            kind: "db-capability".to_string(),
+            title: "DB에서 확인하지 못하는 구조".to_string(),
+            detail: format!(
+                "현재 DB 어댑터가 수집하지 않는 구조 정보가 {}종 있습니다. 실제 스키마에 해당 객체가 있을 때 경로가 불완전할 수 있으며, 다시 읽어도 지원 범위는 바뀌지 않습니다.",
+                capability_gaps.len()
+            ),
+            truth_class: "unknown".to_string(),
+            confidence: None,
+            rank: 0,
+            evidence: capability_gaps
                 .iter()
-                .any(|id| relevant_ids.contains(id.as_str()))
-    }) {
+                .map(|gap| Evidence {
+                    kind: "db-capability".to_string(),
+                    text: safe_text(&gap.message),
+                })
+                .collect(),
+            location: None,
+        });
+    }
+    for gap in relevant_gaps
+        .iter()
+        .filter(|gap| gap.kind != "db-capability")
+    {
         unknowns.push(api_answer_item(
             &format!("api-unknown:gap:{}", gap.id),
             Some(route.id.clone()),
@@ -657,13 +699,7 @@ fn api_reading_answer(
     let mut recommended_checks = Vec::new();
     let snapshot_coverage_risk = !snapshot.stale_reasons.is_empty()
         || snapshot.metadata.migration.reindex_required
-        || snapshot.metadata.gaps.iter().any(|gap| {
-            gap.related_ids.is_empty()
-                || gap
-                    .related_ids
-                    .iter()
-                    .any(|id| relevant_ids.contains(id.as_str()))
-        })
+        || relevant_gaps.iter().any(|gap| gap.kind != "db-capability")
         || snapshot
             .metadata
             .db
@@ -676,6 +712,30 @@ fn api_reading_answer(
             "reindex",
             "Snapshot 범위 확인 후 다시 인덱싱",
             "stale·migration·metadata gap 또는 DB 인벤토리 한도를 해소한 뒤 API 경로를 다시 확인하세요.",
+            "action",
+            route.location.clone(),
+        ));
+    }
+    if has_handler && db_candidates.is_empty() {
+        let (kind, title, detail) = if snapshot.metadata.db.is_some() {
+            (
+                "db-source-scope",
+                "연결한 DB 범위 확인",
+                "확정 코드 경로에 연결되는 DB 후보가 없습니다. 연결한 DB/DDL이 이 프로젝트와 같은 환경의 구조인지 확인하세요.",
+            )
+        } else {
+            (
+                "db-source",
+                "DB 구조 연결",
+                "DB 구조를 연결한 뒤 같은 API 경로를 다시 확인하세요.",
+            )
+        };
+        recommended_checks.push(api_answer_item(
+            "api-check:db-source",
+            Some(route.id.clone()),
+            kind,
+            title,
+            detail,
             "action",
             route.location.clone(),
         ));

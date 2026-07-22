@@ -25,6 +25,7 @@ describe("SourceJumpRow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "조사함 추가" }));
 
+    expect(screen.getByText("조사함").closest("details")).not.toHaveAttribute("open");
     expect(screen.getByText("src/example.ts")).toBeInTheDocument();
     expect(screen.queryByText("src/example.ts:1")).not.toBeInTheDocument();
     expect(window.localStorage.getItem("backend-visual-map:investigation:v1:workspace-1")).toContain(

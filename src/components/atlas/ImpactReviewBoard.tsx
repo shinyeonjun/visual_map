@@ -181,7 +181,7 @@ function ChangeIntentControls({
   );
 }
 
-export function ImpactReviewEntry({
+function ImpactReviewEntry({
   item,
   onSelect,
   contextBadge = null,

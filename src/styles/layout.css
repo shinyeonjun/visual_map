@@ -387,19 +387,6 @@
 .code-source { flex: 1.12 1 0; overflow: auto; scrollbar-gutter: stable; }
 .database-source { flex: 0.98 1 0; overflow: auto; scrollbar-gutter: stable; }
 .inspector { flex: 1 1 0; overflow: auto; scrollbar-gutter: stable; }
-.code-source .list,
-.database-source .list {
-  flex: 1 1 auto;
-  min-height: 72px;
-  overflow: auto;
-  padding-right: 2px;
-  scrollbar-gutter: stable;
-}
-.database-source.ready > .tabs {
-  display: none;
-}
-.database-source.ready > .filter-input { order: 5; }
-.database-source.ready > .list { order: 6; }
 .database-source.ready > .source-advanced {
   order: 7;
   margin-top: 6px;
@@ -407,16 +394,6 @@
 .code-source:has(.source-next.source-ready) > .source-advanced {
   order: 7;
   margin-top: 6px;
-}
-.code-source:has(.source-next.source-ready) > .tabs {
-  margin-top: 6px;
-}
-.code-source:has(.source-next.source-ready) > .field-label {
-  display: none;
-}
-.code-source:has(.source-next.source-ready) > .filter-input {
-  height: 26px;
-  margin-top: 5px;
 }
 .code-source.locked,
 .database-source.locked { flex: 0 0 auto; overflow: hidden; }

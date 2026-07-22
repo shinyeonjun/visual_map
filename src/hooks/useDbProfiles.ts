@@ -5,8 +5,8 @@ import { toUserError } from "../app/operationStatus";
 import { hasTauriRuntime, tauriUnavailableMessage } from "../app/tauriRuntime";
 import {
   dbInventoryTableKey,
+  dbInventoryTableCount,
   dbProfileSourceUsesPath,
-  type CodeInventory,
   type DbInventory,
   type DbProfile,
   type DbProfileSource,
@@ -23,16 +23,14 @@ export function useDbProfiles({
   setCurrentWorkspace,
   refreshWorkspaces,
   clearVisualMap,
-  saveInventorySnapshot,
-  getCodeInventory,
+  refreshInventorySnapshot,
 }: {
   currentWorkspace: Workspace | null;
   withBusy: WithBusy;
   setCurrentWorkspace: (workspace: Workspace | null) => void;
   refreshWorkspaces: (preferredWorkspaceId?: string) => Promise<void>;
   clearVisualMap: () => void;
-  saveInventorySnapshot: (workspaceId: string, code: CodeInventory | null, db: DbInventory | null) => Promise<void>;
-  getCodeInventory: () => CodeInventory | null;
+  refreshInventorySnapshot: (workspaceId: string) => Promise<void>;
 }) {
   const activeProfile = getActiveDbProfile(currentWorkspace);
   const [dbProfileName, setDbProfileName] = useState("");
@@ -56,7 +54,7 @@ export function useDbProfiles({
     setDbErrorDetail(null);
   }, [currentWorkspace?.id]);
 
-  async function pickDbPath() {
+  async function pickDbPath(directory = false) {
     if (!dbProfileSourceUsesPath(dbProfileSource)) {
       return;
     }
@@ -65,16 +63,31 @@ export function useDbProfiles({
       return;
     }
 
-    const selected = await open({
-      multiple: false,
-      title: dbProfileSource === "ddl-sqlite" ? "DDL 파일 선택" : "SQLite 데이터베이스 선택",
-      filters:
-        dbProfileSource === "ddl-sqlite"
-          ? [{ name: "SQL", extensions: ["sql"] }]
-          : [{ name: "SQLite", extensions: ["sqlite", "sqlite3", "db"] }],
-    });
+    let selected: string | string[] | null;
+    try {
+      selected = await open({
+        directory,
+        multiple: false,
+        title: directory
+          ? "DDL 폴더 선택"
+          : dbProfileSource === "ddl-sqlite"
+            ? "DDL 파일 선택"
+            : "SQLite 데이터베이스 선택",
+        filters:
+          directory
+            ? undefined
+            : dbProfileSource === "ddl-sqlite"
+            ? [{ name: "SQL", extensions: ["sql"] }]
+            : [{ name: "SQLite", extensions: ["sqlite", "sqlite3", "db"] }],
+      });
+    } catch (error) {
+      const uiError = toUserError(error, "DB 파일 선택기를 열지 못했습니다");
+      setDbError(uiError.message);
+      setDbErrorDetail(uiError.details);
+      return;
+    }
 
-    if (selected) {
+    if (selected && !Array.isArray(selected)) {
       updateDbProfilePath(selected);
     }
   }
@@ -127,55 +140,50 @@ export function useDbProfiles({
   }
 
   async function indexDbProfile() {
-    await runDbProfileIndex("db-index", "DB 구조 읽기 완료", "DB 읽기 실패");
-  }
-
-  async function testDbConnection() {
-    await runDbProfileIndex("db-test", "DB 구조 테스트 완료", "DB 구조 테스트 실패");
-  }
-
-  async function runDbProfileIndex(action: "db-index" | "db-test", success: string, failure: string) {
     const request = dbIndexRequest();
     if (!request) {
       return;
     }
 
-    await withBusy(action, async () => {
+    await withBusy("db-index", async () => {
       try {
         const result = await invoke<{
           workspace: Workspace;
           run: { ok: boolean; stderr: string; stdout?: string };
           indexJson?: unknown | null;
+          inventory?: DbInventory | null;
+          inventoryError?: string | null;
         }>("index_db_profile", { request });
-        const dbMessage = redactUiSecret(result.run.stderr || result.run.stdout || failure, dbConnectionString);
+        const dbMessage = redactUiSecret(result.run.stderr || result.run.stdout || "DB 읽기 실패", dbConnectionString);
         setCurrentWorkspace(result.workspace);
         if (result.run.ok) {
           clearDbInventory();
-          const successMessage = [success, dbIndexSummary(result.indexJson)].filter(Boolean).join(": ");
-          if (action === "db-index") {
-            setDbStatus("테이블 목록 불러오는 중...");
+          const successMessage = ["DB 구조 읽기 완료", dbIndexSummary(result.indexJson)].filter(Boolean).join(": ");
+          if (!result.inventory) {
+            const uiError = toUserError(result.inventoryError ?? "DB inventory가 없습니다", "테이블 목록을 불러오지 못했습니다");
+            setDbStatus(successMessage);
+            setDbError(uiError.message);
+            setDbErrorDetail(uiError.details);
+          } else {
+            setDbStatus("DB 읽기 결과 저장 중...");
             try {
-              await loadDbInventoryForProfile(request.workspaceId, request.profileId, "읽음");
+              await storeDbInventory(request.workspaceId, result.inventory);
             } catch (error) {
-              const uiError = toUserError(error, "테이블 목록을 불러오지 못했습니다");
+              const uiError = toUserError(error, "DB 읽기 결과를 저장하지 못했습니다");
               setDbStatus(successMessage);
               setDbError(uiError.message);
               setDbErrorDetail(uiError.details);
             }
-          } else {
-            setDbStatus(successMessage);
-            setDbError(null);
-            setDbErrorDetail(null);
           }
         } else {
-          const uiError = toDbUserError(dbMessage, failure);
+          const uiError = toDbUserError(dbMessage, "DB 읽기 실패");
           setDbStatus(null);
           setDbError(uiError.message);
           setDbErrorDetail(uiError.details);
         }
         await refreshWorkspaces(result.workspace.id);
       } catch (error) {
-        const uiError = toDbUserError(redactUiSecret(String(error), dbConnectionString), failure);
+        const uiError = toDbUserError(redactUiSecret(String(error), dbConnectionString), "DB 읽기 실패");
         setDbStatus(null);
         setDbError(uiError.message);
         setDbErrorDetail(uiError.details);
@@ -207,28 +215,6 @@ export function useDbProfiles({
     }
 
     return request;
-  }
-
-  async function loadDbInventory() {
-    if (!currentWorkspace || !activeProfile) {
-      setDbError("DB 연결을 저장한 뒤 테이블 목록을 불러오세요");
-      return;
-    }
-
-    const workspaceId = currentWorkspace.id;
-    const profileId = activeProfile.id;
-
-    await withBusy("db-load", async () => {
-      try {
-        await loadDbInventoryForProfile(workspaceId, profileId, "불러옴");
-      } catch (error) {
-        const uiError = toUserError(error, "테이블 목록을 불러오지 못했습니다");
-        clearDbInventory();
-        setDbStatus(null);
-        setDbError(uiError.message);
-        setDbErrorDetail(uiError.details);
-      }
-    });
   }
 
   async function deleteDbProfile() {
@@ -310,18 +296,18 @@ export function useDbProfiles({
     setDbErrorDetail(null);
   }
 
-  async function loadDbInventoryForProfile(workspaceId: string, profileId: string, action: string) {
-    const inventory = await invoke<DbInventory>("get_db_inventory", {
-      workspaceId,
-      profileId,
-    });
-    setDbInventory(inventory);
+  async function storeDbInventory(workspaceId: string, inventory: DbInventory) {
+    const presentedInventory = {
+      ...inventory,
+      partial: Boolean(inventory.partial || dbInventoryTableCount(inventory) > inventory.tables.length),
+    };
+    setDbInventory(presentedInventory);
     setInventoryWorkspaceId(workspaceId);
-    setSelectedDbTableKey(inventory.tables[0] ? dbInventoryTableKey(inventory.tables[0]) : null);
-    setDbStatus(dbInventoryStatus(inventory, action));
+    setSelectedDbTableKey(presentedInventory.tables[0] ? dbInventoryTableKey(presentedInventory.tables[0]) : null);
+    setDbStatus(dbInventoryStatus(presentedInventory, "읽음"));
     setDbError(null);
     setDbErrorDetail(null);
-    await saveInventorySnapshot(workspaceId, getCodeInventory(), inventory);
+    await refreshInventorySnapshot(workspaceId);
   }
 
   return {
@@ -343,24 +329,23 @@ export function useDbProfiles({
     restoreDbInventory,
     pickDbPath,
     saveDbProfile,
-    testDbConnection,
     indexDbProfile,
-    loadDbInventory,
     deleteDbProfile,
     clearDbInventory,
   };
 }
 
 function dbInventoryStatus(inventory: DbInventory, action: string): string {
-  if (inventory.tables.length === 0) {
+  const tableCount = dbInventoryTableCount(inventory);
+  if (tableCount === 0) {
     return "테이블 목록이 비어 있음";
   }
   const columnCount = inventory.tables.reduce((sum, table) => sum + table.columns.length, 0);
   const missingColumnTables = inventory.tables.filter((table) => table.columns.length === 0).length;
   if (missingColumnTables > 0 && columnCount > 0) {
-    return `테이블 ${inventory.tables.length}개, 컬럼 ${columnCount}개, ${missingColumnTables}개 테이블 컬럼 필요 ${action}`;
+    return `테이블 ${tableCount}개, 컬럼 ${columnCount}개, ${missingColumnTables}개 테이블 컬럼 필요 ${action}`;
   }
-  return `테이블 ${inventory.tables.length}개, 컬럼 ${columnCount}개 ${action}`;
+  return `테이블 ${tableCount}개, 컬럼 ${columnCount}개 ${action}`;
 }
 
 function getActiveDbProfile(workspace: Workspace | null): DbProfile | null {
@@ -400,8 +385,8 @@ function activeProfileMatchesForm(
 }
 
 function dbIndexSummary(indexJson: unknown): string | null {
-  const tables = countFromJson(indexJson, ["tableCount", "tablesCount", "tables"]);
-  const columns = countFromJson(indexJson, ["columnCount", "columnsCount", "columns"]);
+  const tables = countFromJson(indexJson, ["tables_indexed", "tableCount", "tablesCount", "tables"]);
+  const columns = countFromJson(indexJson, ["columns_indexed", "columnCount", "columnsCount", "columns"]);
   const facts = [
     tables == null ? null : `테이블 ${tables}개`,
     columns == null ? null : `컬럼 ${columns}개`,
@@ -427,10 +412,25 @@ function countFromJson(value: unknown, keys: string[]): number | null {
   return null;
 }
 
-function toDbUserError(value: string, fallback: string): { message: string; details: string } {
+export function toDbUserError(value: string, fallback: string): { message: string; details: string } {
   const details = value;
   const lower = value.toLowerCase();
 
+  if (lower.includes("dpi-1047") || lower.includes("oracle client") || lower.includes("oci.dll")) {
+    return { message: `${fallback}: Oracle Client를 설치한 뒤 앱을 다시 시작하세요`, details };
+  }
+  if (
+    lower.includes("contract v2") ||
+    lower.includes("contract_version") ||
+    lower.includes("authority") ||
+    lower.includes("inventory가 완전하지") ||
+    lower.includes("completeness")
+  ) {
+    return { message: `${fallback}: 완전한 DB 구조를 확인하지 못했습니다. DB를 다시 읽으세요`, details };
+  }
+  if (lower.includes("제품 안전 한도") || lower.includes("20,000")) {
+    return { message: `${fallback}: 현재 제품의 DB 테이블 처리 한도를 초과했습니다`, details };
+  }
   if (lower.includes("password") || lower.includes("access denied") || lower.includes("login failed") || lower.includes("ora-01017") || lower.includes("auth")) {
     return { message: `${fallback}: 인증 정보를 확인하세요`, details };
   }

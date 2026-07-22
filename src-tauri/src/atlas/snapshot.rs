@@ -2,15 +2,15 @@ use crate::{
     engine::{self, EngineRegistry},
     paths::base_paths,
     workspace::{
-        validate_workspace_id, CodeInventory, CodeInventoryItem, DbConstraint, DbForeignKey,
-        DbIndex, DbInventory, DbProfile, DbSource, Workspace,
+        validate_workspace_id, CodeCall, CodeInventory, CodeInventoryItem, DbConstraint,
+        DbDependentObject, DbForeignKey, DbIndex, DbInventory, DbProfile, DbSource, Workspace,
     },
 };
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{btree_map::Entry, BTreeMap, BTreeSet, HashMap},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -19,7 +19,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use super::model::{
@@ -28,11 +28,15 @@ use super::model::{
 };
 
 const REINDEX_REASON: &str = "스냅샷 형식이 호환되지 않아 다시 읽어야 합니다";
+const CONFIRMED_CODE_CALL_CONFIDENCE: u8 = 85;
+const CANDIDATE_CODE_CALL_CONFIDENCE: u8 = 70;
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 static SNAPSHOT_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedSnapshot>>> = OnceLock::new();
+static FRESHNESS_CACHE: OnceLock<Mutex<HashMap<String, CachedFreshness>>> = OnceLock::new();
 // Keep at most two idle inventories. Entries held by active commands may temporarily exceed
 // the limit so concurrent workspace reads do not evict data still in use.
 const SNAPSHOT_CACHE_LIMIT: usize = 2;
+const FRESHNESS_CACHE_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SnapshotFileState {
@@ -45,6 +49,17 @@ struct CachedSnapshot {
     primary: SnapshotFileState,
     backup: SnapshotFileState,
     snapshot: Arc<InventorySnapshot>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedFreshness {
+    snapshot_saved_at: String,
+    snapshot_schema_version: u32,
+    snapshot_stale_reasons: Vec<String>,
+    workspace: Workspace,
+    registry: EngineRegistry,
+    checked_at: Instant,
+    reasons: Vec<String>,
 }
 
 pub(crate) fn build_inventory_snapshot(
@@ -134,16 +149,7 @@ pub(crate) fn build_inventory_snapshot(
                 .iter()
                 .map(|entry| code_item(entry, "file", "code", &code.project)),
         );
-        snapshot.links.extend(code.calls.iter().map(|call| {
-            confirmed_link(
-                format!("code-call:{}->{}", call.from, call.to),
-                format!("code:{}", call.from),
-                format!("code:{}", call.to),
-                "code_call",
-                "CALLS",
-                "codebase-memory CALLS",
-            )
-        }));
+        snapshot.links.extend(code.calls.iter().map(code_call_link));
         snapshot.links.extend(code.handles.iter().map(|handle| {
             let mut link = confirmed_link(
                 format!("code-handle:{}->{}", handle.route, handle.handler),
@@ -179,10 +185,11 @@ pub(crate) fn build_inventory_snapshot(
             profile_id: Some(db.profile_id.clone()),
         });
         for (index, warning) in db.capability_warnings.iter().enumerate() {
+            let message = localized_db_capability_warning(warning);
             snapshot.metadata.gaps.push(gap(
                 format!("gap:db-capability:{index}"),
                 "db-capability",
-                localized_db_capability_warning(warning),
+                &message,
                 Vec::new(),
             ));
         }
@@ -230,7 +237,7 @@ pub(crate) fn build_inventory_snapshot(
                 table
                     .columns
                     .iter()
-                    .map(move |column| format!("db:column:{table_key}:{}", column.name))
+                    .map(move |column| db_column_id(&table_key, &column.name))
             })
             .collect::<BTreeSet<_>>();
         let stable_column_ids = db
@@ -239,12 +246,10 @@ pub(crate) fn build_inventory_snapshot(
             .flat_map(|table| {
                 let table_key = db_table_key(table.schema.as_deref(), &table.name);
                 table.columns.iter().filter_map(move |column| {
-                    column.key.as_ref().map(|key| {
-                        (
-                            key.clone(),
-                            format!("db:column:{table_key}:{}", column.name),
-                        )
-                    })
+                    column
+                        .key
+                        .as_ref()
+                        .map(|key| (key.clone(), db_column_id(&table_key, &column.name)))
                 })
             })
             .collect::<BTreeMap<_, _>>();
@@ -261,7 +266,11 @@ pub(crate) fn build_inventory_snapshot(
                 None,
                 table.schema.as_deref(),
             );
-            table_item.qualified_name = table.key.clone().or_else(|| Some(table_key.clone()));
+            let display_table_name = db_qualified_table_name(table.schema.as_deref(), &table.name);
+            table_item.qualified_name = table
+                .key
+                .clone()
+                .or_else(|| Some(display_table_name.clone()));
             table_item.engine_label = Some("Table".to_string());
             table_item.project_id = Some(db.profile_id.clone());
             table_item.group_id = table.schema.clone();
@@ -269,7 +278,7 @@ pub(crate) fn build_inventory_snapshot(
 
             snapshot.items.extend(table.columns.iter().map(|column| {
                 let mut column_item = InventoryItem {
-                    id: format!("db:column:{table_key}:{}", column.name),
+                    id: db_column_id(&table_key, &column.name),
                     kind: "column".to_string(),
                     name: column.name.clone(),
                     layer: "data".to_string(),
@@ -279,7 +288,7 @@ pub(crate) fn build_inventory_snapshot(
                     qualified_name: column
                         .key
                         .clone()
-                        .or_else(|| Some(format!("{table_key}.{}", column.name))),
+                        .or_else(|| Some(format!("{display_table_name}.{}", column.name))),
                     engine_label: Some("Column".to_string()),
                     project_id: Some(db.profile_id.clone()),
                     group_id: table.schema.clone(),
@@ -311,6 +320,16 @@ pub(crate) fn build_inventory_snapshot(
                     &db.profile_id,
                     index,
                     &column_ids,
+                    &stable_column_ids,
+                );
+            }
+            for dependent in &table.dependents {
+                append_db_dependent(
+                    &mut snapshot,
+                    &table_key,
+                    table.schema.as_deref(),
+                    &db.profile_id,
+                    dependent,
                     &stable_column_ids,
                 );
             }
@@ -568,6 +587,7 @@ pub(crate) fn snapshot_with_metadata(
     canonicalize_snapshot(snapshot)
 }
 
+#[cfg(test)]
 pub(crate) fn mark_snapshot_staleness(
     mut snapshot: InventorySnapshot,
     workspace: &Workspace,
@@ -575,6 +595,52 @@ pub(crate) fn mark_snapshot_staleness(
 ) -> InventorySnapshot {
     snapshot.stale_reasons = snapshot_staleness_reasons(&snapshot, workspace, registry);
     snapshot
+}
+
+pub(crate) fn snapshot_staleness_reasons_cached(
+    snapshot: &InventorySnapshot,
+    workspace: &Workspace,
+    registry: &EngineRegistry,
+) -> Vec<String> {
+    let cache = FRESHNESS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(cache) = cache.lock() {
+        if let Some(entry) = cache.get(&workspace.id) {
+            if entry.checked_at.elapsed() < FRESHNESS_CACHE_TTL
+                && entry.snapshot_saved_at == snapshot.saved_at
+                && entry.snapshot_schema_version == snapshot.schema_version
+                && entry.snapshot_stale_reasons == snapshot.stale_reasons
+                && entry.workspace == *workspace
+                && entry.registry == *registry
+            {
+                return entry.reasons.clone();
+            }
+        }
+    }
+
+    let reasons = snapshot_staleness_reasons(snapshot, workspace, registry);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(
+            workspace.id.clone(),
+            CachedFreshness {
+                snapshot_saved_at: snapshot.saved_at.clone(),
+                snapshot_schema_version: snapshot.schema_version,
+                snapshot_stale_reasons: snapshot.stale_reasons.clone(),
+                workspace: workspace.clone(),
+                registry: registry.clone(),
+                checked_at: Instant::now(),
+                reasons: reasons.clone(),
+            },
+        );
+    }
+    reasons
+}
+
+pub(crate) fn invalidate_snapshot_freshness(workspace_id: &str) {
+    if let Some(cache) = FRESHNESS_CACHE.get() {
+        if let Ok(mut cache) = cache.lock() {
+            cache.remove(workspace_id);
+        }
+    }
 }
 
 pub(crate) fn snapshot_staleness_reasons(
@@ -680,9 +746,58 @@ pub(crate) fn save_inventory_snapshot(
         &snapshot.workspace_id,
     )?;
     invalidate_cached_snapshot(&path);
+    invalidate_snapshot_freshness(&snapshot.workspace_id);
+    super::linker::invalidate_candidate_links(&snapshot.workspace_id);
     Ok(())
 }
 
+pub(crate) fn replace_inventory_source(
+    existing: Option<InventorySnapshot>,
+    incoming: InventorySnapshot,
+    source: &str,
+) -> Result<InventorySnapshot, String> {
+    if !matches!(source, "code" | "db") {
+        return Err(format!("지원하지 않는 inventory 소스입니다: {source}"));
+    }
+    let Some(mut merged) = existing else {
+        return Ok(canonicalize_snapshot(incoming));
+    };
+    if merged.workspace_id != incoming.workspace_id {
+        return Err("합칠 inventory의 프로젝트 ID가 일치하지 않습니다".to_string());
+    }
+
+    let prefix = format!("{source}:");
+    let removed_ids = merged
+        .items
+        .iter()
+        .filter(|item| item.source == source)
+        .map(|item| item.id.clone())
+        .collect::<HashSet<_>>();
+    merged.items.retain(|item| item.source != source);
+    merged
+        .links
+        .retain(|link| !removed_ids.contains(&link.from) && !removed_ids.contains(&link.to));
+    merged.metadata.gaps.retain(|gap| {
+        !gap.id.starts_with(&format!("gap:{source}"))
+            && !gap.kind.starts_with(source)
+            && !gap.related_ids.iter().any(|id| id.starts_with(&prefix))
+    });
+
+    merged.items.extend(incoming.items);
+    merged.links.extend(incoming.links);
+    merged.metadata.gaps.extend(incoming.metadata.gaps);
+    merged.saved_at = incoming.saved_at;
+    merged.stale_reasons.clear();
+    if source == "code" {
+        merged.metadata.code = incoming.metadata.code;
+        merged.metadata.architecture = incoming.metadata.architecture;
+    } else {
+        merged.metadata.db = incoming.metadata.db;
+    }
+    Ok(canonicalize_snapshot(merged))
+}
+
+#[cfg(test)]
 pub(crate) fn load_inventory_snapshot(
     app_data_dir: impl AsRef<Path>,
     workspace_id: &str,
@@ -694,12 +809,22 @@ pub(crate) fn load_inventory_snapshot_optional(
     app_data_dir: impl AsRef<Path>,
     workspace_id: &str,
 ) -> Result<Option<InventorySnapshot>, String> {
+    Ok(
+        load_inventory_snapshot_optional_cached(app_data_dir, workspace_id)?
+            .map(|snapshot| (*snapshot).clone()),
+    )
+}
+
+pub(crate) fn load_inventory_snapshot_optional_cached(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+) -> Result<Option<Arc<InventorySnapshot>>, String> {
     validate_workspace_id(workspace_id)?;
     let path = snapshot_path(app_data_dir.as_ref(), workspace_id);
     if !path.is_file() && !snapshot_backup_path(&path).is_file() {
         return Ok(None);
     }
-    load_inventory_snapshot(app_data_dir, workspace_id).map(Some)
+    load_inventory_snapshot_cached(app_data_dir, workspace_id).map(Some)
 }
 
 pub(crate) fn remove_db_inventory_snapshot(
@@ -736,6 +861,7 @@ pub(crate) fn remove_db_inventory_snapshot(
         remove_file_if_exists(&path)?;
         remove_file_if_exists(&snapshot_backup_path(&path))?;
         invalidate_cached_snapshot(&path);
+        invalidate_snapshot_freshness(workspace_id);
         return Ok(());
     }
 
@@ -982,7 +1108,25 @@ fn canonicalize_snapshot(mut snapshot: InventorySnapshot) -> InventorySnapshot {
     });
     let mut links = BTreeMap::<String, SnapshotLink>::new();
     let mut relationships = BTreeSet::new();
+    let mut unscored_code_calls = 0usize;
     for mut link in std::mem::take(&mut snapshot.links) {
+        if link.kind == "code_call"
+            && !link
+                .evidence
+                .iter()
+                .any(|evidence| evidence.kind == "engine-confidence")
+        {
+            link.truth_class = "unknown".to_string();
+            link.evidence.push(Evidence {
+                kind: "engine-confidence".to_string(),
+                text: "unknown".to_string(),
+            });
+            link.evidence.push(Evidence {
+                kind: "engine-confidence-score".to_string(),
+                text: "점수 없음".to_string(),
+            });
+            unscored_code_calls += 1;
+        }
         normalize_link(&mut link);
         if !node_ids.contains(&link.from) || !node_ids.contains(&link.to) {
             gaps.push(gap(
@@ -1020,6 +1164,21 @@ fn canonicalize_snapshot(mut snapshot: InventorySnapshot) -> InventorySnapshot {
                 snapshot.metadata.migration.reindex_required = true;
             }
         }
+    }
+
+    if unscored_code_calls > 0 {
+        gaps.push(gap(
+            "gap:code-call-confidence".to_string(),
+            "unscored-code-call",
+            &format!(
+                "엔진 신뢰도 정보가 없는 CALLS {unscored_code_calls}개를 확정 관계에서 제외했습니다."
+            ),
+            Vec::new(),
+        ));
+        mark_reindex_required(
+            &mut snapshot,
+            "기존 CALLS에 엔진 신뢰도 정보가 없어 코드를 다시 읽어야 합니다.",
+        );
     }
 
     snapshot.items = items.into_values().collect();
@@ -1312,6 +1471,152 @@ fn append_db_index(
     }
 }
 
+fn append_db_dependent(
+    snapshot: &mut InventorySnapshot,
+    table_key: &str,
+    table_schema: Option<&str>,
+    profile_id: &str,
+    dependent: &DbDependentObject,
+    stable_column_ids: &BTreeMap<String, String>,
+) {
+    let table_id = format!("db:table:{table_key}");
+    let dependent_id = format!(
+        "db:{}:{}",
+        dependent.kind,
+        encode_db_identity_component(&dependent.key)
+    );
+    let parent_id = (dependent.kind == "trigger").then_some(table_id.as_str());
+    let mut dependent_item = item(
+        &dependent_id,
+        &dependent.kind,
+        &dependent.name,
+        "data",
+        "db",
+        parent_id,
+        None,
+    );
+    dependent_item.qualified_name = Some(dependent.key.clone());
+    dependent_item.engine_label = Some(
+        match dependent.kind.as_str() {
+            "view" => "View",
+            "trigger" => "Trigger",
+            "routine" => "Routine",
+            _ => "DB Object",
+        }
+        .to_string(),
+    );
+    dependent_item.project_id = Some(profile_id.to_string());
+    dependent_item.group_id = if dependent.kind == "trigger" {
+        table_schema.map(str::to_string)
+    } else {
+        None
+    };
+    snapshot.items.push(dependent_item);
+
+    let evidence = dependent_evidence(dependent);
+    if dependent.kind == "trigger" {
+        snapshot.links.push(db_evidence_link(
+            table_id,
+            dependent_id,
+            "db_trigger",
+            Some(dependent.name.clone()),
+            "TABLE_HAS_TRIGGER",
+            "confirmed",
+            evidence,
+        ));
+        return;
+    }
+
+    let column_edge_type = match dependent.kind.as_str() {
+        "view" => "VIEW_DEPENDS_ON_COLUMN",
+        "routine" => "ROUTINE_DEPENDS_ON_COLUMN",
+        _ => "DB_OBJECT_DEPENDS_ON_COLUMN",
+    };
+    let table_edge_type = match dependent.kind.as_str() {
+        "view" => "VIEW_DEPENDS_ON_TABLE",
+        "routine" => "ROUTINE_DEPENDS_ON_TABLE",
+        _ => "DB_OBJECT_DEPENDS_ON_TABLE",
+    };
+    let mut resolved_columns = 0usize;
+    for column_key in &dependent.column_keys {
+        let Some(column_id) = stable_column_ids.get(column_key).cloned() else {
+            snapshot.metadata.gaps.push(gap(
+                format!("gap:db-dependent-column:{dependent_id}:{column_key}"),
+                "db-dependent-missing-column",
+                "DB 의존 객체의 컬럼 endpoint가 inventory에 없어 해당 컬럼 관계를 만들지 않았습니다.",
+                vec![dependent_id.clone(), table_id.clone()],
+            ));
+            continue;
+        };
+        let mut link = db_evidence_link(
+            dependent_id.clone(),
+            column_id,
+            "db_dependency",
+            Some(dependent.name.clone()),
+            column_edge_type,
+            "confirmed",
+            evidence.clone(),
+        );
+        push_evidence(&mut link.evidence, "db-column-key", Some(column_key));
+        snapshot.links.push(link);
+        resolved_columns += 1;
+    }
+
+    if dependent.column_keys.is_empty() {
+        snapshot.links.push(db_evidence_link(
+            dependent_id,
+            table_id,
+            "db_dependency",
+            Some(dependent.name.clone()),
+            table_edge_type,
+            "confirmed",
+            evidence,
+        ));
+    } else if resolved_columns == 0 {
+        let mut link = db_evidence_link(
+            dependent_id,
+            table_id,
+            "db_dependency",
+            Some(dependent.name.clone()),
+            "DEPENDENCY_SCOPE",
+            "structural",
+            evidence,
+        );
+        link.evidence.push(Evidence {
+            kind: "db-normalization".to_string(),
+            text: "확정된 컬럼 endpoint를 복원하지 못해 의존 객체가 이 테이블 범위에 속한다는 사실만 보존했습니다."
+                .to_string(),
+        });
+        snapshot.links.push(link);
+    }
+}
+
+fn dependent_evidence(dependent: &DbDependentObject) -> Vec<Evidence> {
+    vec![
+        Evidence {
+            kind: "db-object-key".to_string(),
+            text: dependent.key.clone(),
+        },
+        Evidence {
+            kind: "db-dependent-kind".to_string(),
+            text: dependent.kind.clone(),
+        },
+        Evidence {
+            kind: "db-relation".to_string(),
+            text: dependent.relation.clone(),
+        },
+        Evidence {
+            kind: "db-column-keys".to_string(),
+            text: serde_json::to_string(&dependent.column_keys)
+                .unwrap_or_else(|_| "[]".to_string()),
+        },
+        Evidence {
+            kind: "db-contract-field".to_string(),
+            text: "dependents".to_string(),
+        },
+    ]
+}
+
 fn resolve_db_column_id(
     table_key: &str,
     column: Option<&str>,
@@ -1323,7 +1628,7 @@ fn resolve_db_column_id(
         .and_then(|key| stable_column_ids.get(key).cloned())
         .or_else(|| {
             column
-                .map(|column| format!("db:column:{table_key}:{column}"))
+                .map(|column| db_column_id(table_key, column))
                 .filter(|column_id| column_ids.contains(column_id))
         })
 }
@@ -1452,6 +1757,56 @@ fn stable_hash(value: &str) -> u64 {
     value.bytes().fold(0xcbf29ce484222325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
     })
+}
+
+fn code_call_link(call: &CodeCall) -> SnapshotLink {
+    let (truth_class, confidence) = match call.confidence {
+        Some(score) if score >= CONFIRMED_CODE_CALL_CONFIDENCE => ("confirmed", "high"),
+        Some(score) if score >= CANDIDATE_CODE_CALL_CONFIDENCE => ("candidate", "medium"),
+        Some(_) => ("unknown", "low"),
+        None => ("unknown", "unknown"),
+    };
+    let mut evidence = vec![
+        Evidence {
+            kind: "engine-edge".to_string(),
+            text: "codebase-memory CALLS".to_string(),
+        },
+        Evidence {
+            kind: "engine-confidence".to_string(),
+            text: confidence.to_string(),
+        },
+        Evidence {
+            kind: "engine-confidence-score".to_string(),
+            text: call
+                .confidence
+                .map(|score| format!("{score}%"))
+                .unwrap_or_else(|| "점수 없음".to_string()),
+        },
+    ];
+    if let Some(strategy) = call.strategy.as_deref() {
+        evidence.push(Evidence {
+            kind: "engine-strategy".to_string(),
+            text: strategy.to_string(),
+        });
+    }
+    if let Some(expression) = call.expression.as_deref() {
+        evidence.push(Evidence {
+            kind: "engine-callee".to_string(),
+            text: expression.to_string(),
+        });
+    }
+
+    SnapshotLink {
+        id: format!("code-call:{}->{}", call.from, call.to),
+        from: format!("code:{}", call.from),
+        to: format!("code:{}", call.to),
+        kind: "code_call".to_string(),
+        label: Some("CALLS".to_string()),
+        truth_class: truth_class.to_string(),
+        direction: "outbound".to_string(),
+        engine_edge_type: Some("CALLS".to_string()),
+        evidence,
+    }
 }
 
 fn confirmed_link(
@@ -1992,22 +2347,56 @@ fn db_source_key(source: &impl Serialize) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn localized_db_capability_warning(value: &str) -> &str {
-    match value {
-        "cross-object dependency metadata is not tracked by the ddl-sqlite adapter." => {
-            "이 DDL 어댑터는 객체 간 일반 의존성을 추적하지 않습니다."
-        }
-        "routine dependency metadata is not tracked by the ddl-sqlite adapter." => {
-            "이 DDL 어댑터는 프로시저와 함수 의존성을 추적하지 않습니다."
-        }
-        "trigger dependency metadata is not tracked by the ddl-sqlite adapter." => {
-            "이 DDL 어댑터는 트리거 의존성을 추적하지 않습니다."
-        }
-        "view dependency metadata is not tracked by the ddl-sqlite adapter." => {
-            "이 DDL 어댑터는 뷰 의존성을 추적하지 않습니다."
-        }
-        _ => value,
+fn localized_db_capability_warning(value: &str) -> String {
+    if let Some((capability, source)) = db_capability_parts(value, " is partially tracked by the ")
+    {
+        return format!("{source} 어댑터는 {capability}를 일부만 추적합니다.");
     }
+    if let Some((capability, source)) = db_capability_parts(value, " is not tracked by the ") {
+        return format!("{source} 어댑터는 {capability}를 추적하지 않습니다.");
+    }
+    if let Some((capability, source)) = db_capability_parts(value, " support is unknown for the ") {
+        return format!("{source} 어댑터의 {capability} 지원 여부를 확인할 수 없습니다.");
+    }
+
+    match value {
+        "SQLite CHECK and UNIQUE constraints are not emitted as constraint nodes." => {
+            "SQLite CHECK·UNIQUE 제약은 제약 노드로 수집하지 않습니다.".to_string()
+        }
+        "SQLite partial-index predicates and expression-index expressions are not extracted." => {
+            "SQLite 부분 인덱스 조건식과 표현식 인덱스 식은 수집하지 않습니다.".to_string()
+        }
+        "SQLite generated columns are identified, but generation expressions are not extracted." => {
+            "SQLite 생성 열 여부는 식별하지만 생성식은 수집하지 않습니다.".to_string()
+        }
+        "SQLite view dependencies are resolved from prepare-time read authorization; trigger-body dependencies are not emitted." => {
+            "SQLite 뷰 의존성은 준비 단계 읽기 권한으로 확인하며, 트리거 본문의 의존성은 수집하지 않습니다.".to_string()
+        }
+        _ => value.to_string(),
+    }
+}
+
+fn db_capability_parts<'a>(value: &'a str, separator: &str) -> Option<(&'static str, &'a str)> {
+    let (capability, source) = value.split_once(separator)?;
+    let source = source.strip_suffix(" adapter.")?;
+    Some((
+        match capability {
+            "view dependency metadata" => "뷰 의존성 메타데이터",
+            "trigger dependency metadata" => "트리거 의존성 메타데이터",
+            "routine dependency metadata" => "프로시저·함수 의존성 메타데이터",
+            "cross-object dependency metadata" => "객체 간 의존성 메타데이터",
+            _ => return None,
+        },
+        match source {
+            "ddl-sqlite" => "SQLite DDL",
+            "sqlite" => "SQLite",
+            "postgres" => "PostgreSQL",
+            "mysql" => "MySQL/MariaDB",
+            "sqlserver" => "SQL Server",
+            "oracle" => "Oracle",
+            _ => source,
+        },
+    ))
 }
 
 pub(crate) fn item(
@@ -2039,10 +2428,38 @@ pub(crate) fn item(
 }
 
 fn db_table_key(schema: Option<&str>, name: &str) -> String {
+    let name = encode_db_identity_component(name);
+    match schema.filter(|value| !value.is_empty()) {
+        Some(schema) => format!("{}.{name}", encode_db_identity_component(schema)),
+        None => name,
+    }
+}
+
+fn db_qualified_table_name(schema: Option<&str>, name: &str) -> String {
     match schema.filter(|value| !value.is_empty()) {
         Some(schema) => format!("{schema}.{name}"),
         None => name.to_string(),
     }
+}
+
+fn db_column_id(table_key: &str, column_name: &str) -> String {
+    format!(
+        "db:column:{table_key}:{}",
+        encode_db_identity_component(column_name)
+    )
+}
+
+fn encode_db_identity_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '%' => encoded.push_str("%25"),
+            '.' => encoded.push_str("%2E"),
+            ':' => encoded.push_str("%3A"),
+            character => encoded.push(character),
+        }
+    }
+    encoded
 }
 
 fn detail_string(value: &Value, keys: &[&str]) -> Option<String> {

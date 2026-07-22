@@ -8,12 +8,10 @@ import type { EngineRegistry } from "../types/engine";
 import {
   codeInventoryCodeItems,
   dbProfileSourceUsesPath,
-  isApiCodeItem,
   workspaceRepoInputValue,
   type CodeInventoryItem,
 } from "../types/workspace";
-import type { VisualEdge, VisualNode } from "../types/visual-map";
-import { tableKeyFromDbNodeId } from "../visual/nodeIds";
+import { dbColumnNodeId, dbTableNodeId, tableKeyFromDbNodeId } from "../visual/nodeIds";
 
 type WorkspacesState = ReturnType<typeof useWorkspaces>;
 type CodeState = ReturnType<typeof useCodeInventory>;
@@ -27,8 +25,6 @@ export function buildWorkspaceControls({
   code,
   engineRegistry,
   engineError,
-  db,
-  visual,
   busy,
   busyAction,
   refreshGithubWorkspace,
@@ -39,8 +35,6 @@ export function buildWorkspaceControls({
   code: CodeState;
   engineRegistry: EngineRegistry | null;
   engineError: string | null;
-  db: DbState;
-  visual: VisualState;
   busy: boolean;
   busyAction: string | null;
   refreshGithubWorkspace: () => void;
@@ -80,7 +74,6 @@ export function buildWorkspaceControls({
     refreshing: busyAction === "workspace-refresh",
     deleting: busyAction === "workspace-delete",
     codeIndexing: busyAction === "code-index",
-    codeLoading: busyAction === "code-load",
     canIndexCode: !codeIndexBlockedReason,
     codeIndexBlockedReason,
     canCreateWorkspace: Boolean(
@@ -97,12 +90,6 @@ export function buildWorkspaceControls({
     openWorkspace: workspaces.openWorkspace,
     refreshGithubWorkspace,
     indexCodeRepository: () => void code.indexCodeRepository(),
-    loadCodeInventory: () => void code.loadCodeInventory(),
-    openCodeItem: (item) => {
-      code.setSelectedCodeItem(item);
-      db.setSelectedDbTableKey(null);
-      visual.showMapMode(isApiCodeItem(item) ? "api-flow" : "search-focus", `code:${item.id}`);
-    },
     refreshWorkspaces: () => void workspaces.refreshWorkspaces(),
     repairWorkspaceFromBackup: (workspaceId) => void workspaces.repairWorkspaceFromBackup(workspaceId),
     deleteWorkspace: (workspaceId) => void workspaces.deleteWorkspace(workspaceId),
@@ -156,9 +143,7 @@ export function buildDbProfileControls({
     errorDetail: db.dbErrorDetail,
     busy,
     saving: busyAction === "db-save",
-    testing: busyAction === "db-test",
     indexing: busyAction === "db-index",
-    loading: busyAction === "db-load",
     deleting: busyAction === "db-delete",
     canSaveProfile: Boolean(
       !activeProfileMatchesForm &&
@@ -171,33 +156,24 @@ export function buildDbProfileControls({
         db.activeProfile &&
         (dbProfileSourceUsesPath(db.activeProfile.source) || db.dbConnectionString.trim()),
     ),
-    canTestConnection: Boolean(
-      canRunDbEngine &&
-      activeProfileMatchesForm &&
-        db.activeProfile &&
-        (dbProfileSourceUsesPath(db.activeProfile.source) || db.dbConnectionString.trim()),
-    ),
     dbIndexBlockedReason,
-    canLoadInventory: Boolean(db.activeProfile),
     setProfileName: db.setDbProfileName,
     setProfileSource: db.setDbProfileSource,
     setProfilePath: db.setDbProfilePath,
     setConnectionString: db.setDbConnectionString,
-    pickPath: () => void db.pickDbPath(),
+    pickPath: (directory) => void db.pickDbPath(directory),
     saveProfile: () => void db.saveDbProfile(),
-    testConnection: () => void db.testDbConnection(),
     indexProfile: () => void db.indexDbProfile(),
-    loadInventory: () => void db.loadDbInventory(),
     deleteProfile: () => void db.deleteDbProfile(),
     openTable: (tableKey) => {
       db.setSelectedDbTableKey(tableKey);
       code.setSelectedCodeItem(null);
-      visual.showMapMode("table-usage", `db:table:${tableKey}`);
+      visual.showMapMode("table-usage", dbTableNodeId(tableKey));
     },
     openColumn: (tableKey, columnName) => {
       db.setSelectedDbTableKey(tableKey);
       code.setSelectedCodeItem(null);
-      visual.showMapMode("column-impact", `db:column:${tableKey}:${columnName}`);
+      visual.showMapMode("column-impact", dbColumnNodeId(tableKey, columnName));
     },
   };
 }
@@ -219,10 +195,26 @@ export function buildVisualMapControls({
     db.setSelectedDbTableKey(tableKey);
     code.setSelectedCodeItem(null);
   };
+  const showMode = (mode: string, focusId?: string | null) => {
+    if (focusId?.startsWith("code:")) {
+      code.setSelectedCodeItem(codeItemFromNodeId(focusId, code.codeInventory));
+      db.setSelectedDbTableKey(null);
+    } else {
+      const tableKey = focusId ? tableKeyFromDbNodeId(focusId) : null;
+      if (tableKey) {
+        selectDbOnly(tableKey);
+      } else {
+        code.setSelectedCodeItem(null);
+        db.setSelectedDbTableKey(null);
+      }
+    }
+    visual.showMapMode(mode, focusId);
+  };
 
   return {
     currentMap: visual.visualMap,
     mode: visual.mapMode,
+    focusId: visual.mapFocusId,
     loading: visual.visualMapLoading,
     enriching: visual.visualMapEnriching,
     changeIntent: visual.changeIntent,
@@ -244,7 +236,7 @@ export function buildVisualMapControls({
         selectCodeItem: selectCodeOnly,
         selectDbTable: selectDbOnly,
       }),
-    showMode: visual.showMapMode,
+    showMode,
     setChangeIntent: visual.setChangeIntent,
     runSearch: () =>
       visual.runSearch({
@@ -256,35 +248,8 @@ export function buildVisualMapControls({
     selectSearchResult: visual.selectSearchResult,
     openSearchPopover: visual.openSearchPopover,
     closeSearchPopover: visual.closeSearchPopover,
-    selectNode: (node: VisualNode) => {
-      visual.setSelectedVisualNode(node);
-      visual.setSelectedVisualEdge(null);
-      if (node.id.startsWith("db:table:")) {
-        selectDbOnly(node.id.slice("db:table:".length));
-      } else if (node.id.startsWith("db:column:")) {
-        const tableKey = tableKeyFromDbNodeId(node.id);
-        if (tableKey) {
-          selectDbOnly(tableKey);
-        }
-      } else if (node.id.startsWith("code:")) {
-        const item = codeItemFromNodeId(node.id, code.codeInventory);
-        if (item) {
-          selectCodeOnly(item);
-        } else {
-          db.setSelectedDbTableKey(null);
-        }
-      }
-    },
-    selectEdge: (edge: VisualEdge) => {
-      visual.setSelectedVisualEdge(edge);
-      visual.setSelectedVisualNode(null);
-      const tableKey = tableKeyFromDbNodeId(edge.from) ?? tableKeyFromDbNodeId(edge.to);
-      if (tableKey) {
-        selectDbOnly(tableKey);
-      } else {
-        db.setSelectedDbTableKey(null);
-      }
-    },
+    selectNode: visual.setSelectedVisualNode,
+    selectEdge: visual.setSelectedVisualEdge,
     clearSelection: visual.clearVisualSelection,
   };
 }

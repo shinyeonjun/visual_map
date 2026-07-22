@@ -12,7 +12,7 @@
     "bench:projection": "cargo test --locked --manifest-path src-tauri/Cargo.toml projection_scale_matrix_covers_10k_50k_and_100k_items -- --ignored --nocapture",
     "typecheck": "tsc --noEmit",
     "build": "tsc && vite build",
-    "verify:engines": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-engines.ps1 -VerifyOnly",
+    "verify:engines": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-engines.ps1 -VerifyOnly -AllowDevelopmentArtifact",
     "verify:release-engines": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-engines.ps1 -VerifyOnly -Release",
     "verify:notices": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-third-party-notices.ps1",
     "verify:inventory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-dependency-inventory.ps1 -VerifyOnly",

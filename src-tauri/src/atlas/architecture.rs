@@ -51,7 +51,6 @@ pub(super) fn atlas_overview(snapshot: &InventorySnapshot, mode: String) -> Visu
             "구조 영역 간 관계 +{hidden_edges}개는 우선순위 밖이라 접었습니다"
         ));
     }
-
     VisualMap {
         id: format!("map:{}:atlas", snapshot.workspace_id),
         workspace_id: snapshot.workspace_id.clone(),
@@ -131,7 +130,6 @@ pub(super) fn atlas_group_detail(
             "구조 영역 관계 +{hidden_edges}개는 우선순위 밖이라 접었습니다"
         ));
     }
-
     VisualMap {
         id: format!("map:{}:atlas:{group_id}", snapshot.workspace_id),
         workspace_id: snapshot.workspace_id.clone(),
@@ -457,6 +455,7 @@ fn atlas_group_node(group: &AtlasGroup) -> VisualNode {
         )),
         layer: "mixed".to_string(),
         source: "projection".to_string(),
+        location: None,
     }
 }
 

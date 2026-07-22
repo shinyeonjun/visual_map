@@ -3,7 +3,11 @@ import { tauriUnavailableMessage } from "../../app/tauriRuntime";
 import {
   codeInventoryCodeItems,
   codeInventoryDefaultRoute,
+  codeInventoryFileCount,
   codeInventoryItemCount,
+  codeInventoryRouteCount,
+  codeInventorySymbolCount,
+  dbInventoryTableCount,
   dbInventoryTableKey,
 } from "../../types/workspace";
 import {
@@ -12,6 +16,7 @@ import {
   type VisualMapControls,
   type WorkspaceControls,
 } from "../../types/controls";
+import { dbColumnNodeId } from "../../visual/nodeIds";
 import {
   focusDbProfileSetup,
   focusSourceSetup,
@@ -33,18 +38,16 @@ export function SetupChecklist({
 }) {
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
   const codeCount = codeInventoryItemCount(workspaceControls.codeInventory);
-  const routeCount = workspaceControls.codeInventory?.routes.length ?? 0;
-  const codeSymbolCount = codeInventoryCodeItems(workspaceControls.codeInventory).length;
-  const fileCount = workspaceControls.codeInventory?.files.length ?? 0;
+  const routeCount = codeInventoryRouteCount(workspaceControls.codeInventory);
+  const codeSymbolCount = codeInventorySymbolCount(workspaceControls.codeInventory);
+  const fileCount = codeInventoryFileCount(workspaceControls.codeInventory);
   const dbTables = dbProfileControls.inventory?.tables ?? [];
-  const dbCount = dbTables.length;
+  const dbCount = dbInventoryTableCount(dbProfileControls.inventory);
   const dbColumnCount = dbTables.reduce((sum, table) => sum + table.columns.length, 0);
   const dbMissingColumnTables = dbTables.filter((table) => table.columns.length === 0).length;
   const dbReady = dbCount > 0 && dbColumnCount > 0 && dbMissingColumnTables === 0;
   const hasCodeContext = routeCount > 0 || codeSymbolCount > 0;
-  const codeIndexed = workspaceControls.codeStatus?.includes("완료") ?? false;
   const dbStarted = dbProfileWorkStarted(dbProfileControls);
-  const canUseCodeStep = codeIndexed || workspaceControls.canIndexCode;
   const projectSourceLabel = workspaceControls.repoSourceMode === "github" ? "GitHub 저장소" : "프로젝트 폴더";
   const projectStepLabel = workspaceControls.repoSourceMode === "github" ? "저장소 연결" : "프로젝트 열기";
   const projectStepAction = workspaceControls.canCreateWorkspace
@@ -54,12 +57,8 @@ export function SetupChecklist({
     : workspaceControls.repoSourceMode === "github"
       ? "URL 입력"
       : "폴더 선택";
-  const codeStepAction = codeIndexed ? "목록 열기" : workspaceControls.canIndexCode ? "코드 읽기" : "코드 섹션";
-  const dbStepAction = dbProfileControls.canIndexProfile
-    ? "DB 읽기"
-    : dbProfileControls.canLoadInventory
-      ? "목록 열기"
-      : "DB 섹션";
+  const codeStepAction = workspaceControls.canIndexCode ? "코드 읽기" : "코드 섹션";
+  const dbStepAction = dbProfileControls.canIndexProfile ? "DB 읽기" : "DB 섹션";
   const codeReadyText = codeInventoryReadyText({
     routes: routeCount,
     code: codeSymbolCount,
@@ -96,9 +95,7 @@ export function SetupChecklist({
       feedback: workspaceControls.codeError ?? null,
       done: codeCount > 0,
       place: codeStepAction,
-      run: codeIndexed
-        ? workspaceControls.loadCodeInventory
-        : workspaceControls.canIndexCode
+      run: workspaceControls.canIndexCode
         ? workspaceControls.indexCodeRepository
         : () => focusSourceSetup(openSourceManager, workspaceControls, dbProfileControls),
       disabled: workspaceControls.busy || !hasWorkspace,
@@ -120,9 +117,7 @@ export function SetupChecklist({
       place: dbStepAction,
       run: dbProfileControls.canIndexProfile
         ? dbProfileControls.indexProfile
-        : dbProfileControls.canLoadInventory
-          ? dbProfileControls.loadInventory
-          : () => showWorkbenchDbSetup(openSourceManager, dbProfileControls),
+        : () => showWorkbenchDbSetup(openSourceManager, dbProfileControls),
       disabled: dbProfileControls.busy || !hasWorkspace,
     },
   ];
@@ -140,7 +135,7 @@ export function SetupChecklist({
     dbTables
       .map((table) => {
         const column = table.columns.find((item) => item.isForeignKey) ?? table.columns[0] ?? null;
-        return column ? `db:column:${dbInventoryTableKey(table)}:${column.name}` : null;
+        return column ? dbColumnNodeId(dbInventoryTableKey(table), column.name) : null;
       })
       .find(Boolean) ?? null;
   const runCodeAnswer = () => {
@@ -182,7 +177,7 @@ export function SetupChecklist({
   };
   const activeStep = !hasWorkspace
     ? 0
-    : codeCount === 0 && !dbStarted && canUseCodeStep
+    : codeCount === 0 && !dbStarted && workspaceControls.canIndexCode
       ? 1
       : !dbReady
         ? 2

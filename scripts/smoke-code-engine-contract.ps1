@@ -38,6 +38,9 @@ function Invoke-CodeTool([string]$Tool, [hashtable]$Payload) {
     if ($exitCode -ne 0) {
         throw "$Tool failed: $($output -join [Environment]::NewLine)"
     }
+    if (($output -join [Environment]::NewLine) -match "raw JSON.+deprecated") {
+        throw "$Tool used the deprecated raw JSON transport."
+    }
     foreach ($line in @($output)) {
         $text = [string]$line
         if ($text.TrimStart().StartsWith("{") -or $text.TrimStart().StartsWith("[")) {
@@ -54,23 +57,20 @@ function Invoke-CodeTool([string]$Tool, [hashtable]$Payload) {
 
 try {
     $fixtureSource = @'
-const express = require("express");
-const app = express();
+from fastapi import FastAPI
 
-function saveOrder(order) {
-  const sql = "SELECT id, customer_id FROM orders WHERE customer_id = ?";
-  return { order, sql };
-}
+app = FastAPI()
 
-function createOrder(request, response) {
-  const saved = saveOrder(request.body);
-  response.json(saved);
-}
+def save_order(order):
+    sql = "SELECT id, customer_id FROM orders WHERE customer_id = ?"
+    return {"order": order, "sql": sql}
 
-app.post("/orders", createOrder);
+@app.post("/orders")
+def create_order(request):
+    return save_order(request)
 '@
     [IO.File]::WriteAllText(
-        (Join-Path $sourceRoot "server.js"),
+        (Join-Path $sourceRoot "server.py"),
         $fixtureSource,
         [Text.UTF8Encoding]::new($false)
     )
@@ -83,48 +83,39 @@ app.post("/orders", createOrder);
     )
 
     $env:CBM_CACHE_DIR = $cacheRoot
+    $env:CBM_ALLOWED_ROOT = $sourceRoot
     $index = Invoke-CodeTool "index_repository" @{
         repo_path = $sourceRoot
-        path = $sourceRoot
-        project = "backend-visual-map-contract"
-        project_name = "backend-visual-map-contract"
-        cache_path = $cacheRoot
-        cache_dir = $cacheRoot
+        mode = "full"
+        name = "backend-visual-map-contract"
+        persistence = $false
     }
     $project = [string]$index.project
     if ([string]::IsNullOrWhiteSpace($project)) {
         throw "index_repository did not return project."
     }
 
-    $base = @{ project = $project; cache_path = $cacheRoot; cache_dir = $cacheRoot }
-    foreach ($label in @("Route", "Function", "File")) {
-        $payload = $base.Clone()
-        $payload.label = $label
-        $payload.limit = 500
-        $payload.offset = 0
-        $result = Invoke-CodeTool "search_graph" $payload
-        foreach ($item in @($result.results)) {
-            if ($item.label -ne $label) {
-                throw "search_graph label drift: expected $label, got $($item.label)"
-            }
-        }
+    $base = @{ project = $project }
+    $architecture = Invoke-CodeTool "get_architecture" $base
+    if ($null -eq $architecture) {
+        throw "get_architecture returned no result."
     }
 
     $queries = @(
         @{
+            Name = "NODES"
+            Query = "MATCH (node:Route|Function|Method|Class|Struct|Interface|Trait|Protocol|Record|Enum|Type|Constructor|Subroutine|Procedure|Decorator|Field|Variable|Module|Namespace|Package|Resource|File) RETURN labels(node) AS labels, node.name AS name, node.qualified_name AS qualified_name, node.file_path AS file_path, node.start_line AS start_line, node.start_column AS start_column, node.end_line AS end_line, node.end_column AS end_column, node.method AS method, node.source AS source, node.parent_qualified_name AS parent_qualified_name, node.parent_class AS parent_class, node.module AS module, node.namespace AS namespace, node.package AS package, node.route_path AS route_path, node.route_method AS route_method, node.signature AS signature, node.return_type AS return_type, node.is_test AS is_test LIMIT 100000"
+            Columns = @("labels", "name", "qualified_name", "file_path", "start_line", "start_column", "end_line", "end_column", "method", "source", "parent_qualified_name", "parent_class", "module", "namespace", "package", "route_path", "route_method", "signature", "return_type", "is_test")
+        },
+        @{
             Name = "CALLS"
-            Query = "MATCH (caller)-[:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target LIMIT 100000"
-            Columns = @("source", "target")
+            Query = "MATCH (caller)-[rel:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target, rel.confidence AS confidence, rel.strategy AS strategy, rel.callee AS call_expression LIMIT 100000"
+            Columns = @("source", "target", "confidence", "strategy", "call_expression")
         },
         @{
             Name = "HANDLES"
             Query = "MATCH (handler)-[:HANDLES]->(route) RETURN handler.qualified_name AS source, route.qualified_name AS target LIMIT 100000"
             Columns = @("source", "target")
-        },
-        @{
-            Name = "SOURCE_LOCATIONS"
-            Query = "MATCH (node) RETURN node.qualified_name AS source, node.file_path AS path, node.start_line AS start_line, node.start_column AS start_column, node.end_line AS end_line, node.end_column AS end_column LIMIT 100000"
-            Columns = @("source", "path", "start_line", "start_column", "end_line", "end_column")
         }
     )
     foreach ($contract in $queries) {
@@ -134,13 +125,35 @@ app.post("/orders", createOrder);
         if ((@($result.columns) -join ",") -ne ($contract.Columns -join ",")) {
             throw "$($contract.Name) columns drifted: $(@($result.columns) -join ',')"
         }
-        if ($contract.Name -eq "SOURCE_LOCATIONS") {
+        if ($contract.Name -eq "NODES") {
+            foreach ($label in @("Route", "Function", "File")) {
+                if (@($result.rows | Where-Object { [string]$_[0] -match $label }).Count -eq 0) {
+                    throw "NODES returned no $label node."
+                }
+            }
             $located = @($result.rows) | Where-Object {
-                $_.Count -eq 6 -and [string]$_[1] -eq "server.js" -and [int]$_[2] -gt 0
+                $_.Count -eq 20 -and [string]$_[3] -eq "server.py" -and [int]$_[4] -gt 0
             }
             if ($located.Count -eq 0) {
-                throw "SOURCE_LOCATIONS returned no positive line for server.js."
+                throw "NODES returned no positive line for server.py."
             }
+        }
+        if ($contract.Name -eq "CALLS") {
+            $scored = @($result.rows) | Where-Object {
+                $score = 0.0
+                $validScore = [double]::TryParse([string]$_[2], [ref]$score)
+                $_.Count -eq 5 -and
+                $validScore -and
+                $score -ge 0 -and $score -le 1 -and
+                -not [string]::IsNullOrWhiteSpace([string]$_[3]) -and
+                -not [string]::IsNullOrWhiteSpace([string]$_[4])
+            }
+            if ($scored.Count -eq 0) {
+                throw "CALLS returned no scored relationship evidence."
+            }
+        }
+        if ($contract.Name -eq "HANDLES" -and @($result.rows).Count -eq 0) {
+            throw "HANDLES returned no route-to-handler evidence."
         }
     }
 
@@ -148,12 +161,12 @@ app.post("/orders", createOrder);
         @{
             Name = "TABLE_TEXT"
             Pattern = "(^|[^A-Za-z0-9_])orders([^A-Za-z0-9_]|$)"
-            PathFilter = "^(server\.js|migrations/001_orders\.sql)$"
+            PathFilter = "^(server\.py|migrations/001_orders\.sql)$"
         },
         @{
             Name = "COLUMN_TEXT"
             Pattern = "(^|[^A-Za-z0-9_])customer_id([^A-Za-z0-9_]|$)"
-            PathFilter = "^server\.js$"
+            PathFilter = "^server\.py$"
         }
     )) {
         $payload = $base.Clone()
@@ -190,6 +203,7 @@ app.post("/orders", createOrder);
 }
 finally {
     Remove-Item Env:CBM_CACHE_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:CBM_ALLOWED_ROOT -ErrorAction SilentlyContinue
     if (-not $KeepFixture) {
         $resolvedFixture = [IO.Path]::GetFullPath($fixtureRoot)
         if ($resolvedFixture.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {

@@ -3,7 +3,7 @@ import { ClipboardList } from "lucide-react";
 import { useState } from "react";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import type { EngineRegistry } from "../../types/engine";
-import { codeInventoryItemCount } from "../../types/workspace";
+import { codeInventoryItemCount, dbInventoryTableCount } from "../../types/workspace";
 import { copyValue } from "./copyValue";
 
 export function DiagnosticsExport({
@@ -43,7 +43,7 @@ export function DiagnosticsExport({
         present: Boolean(workspaceControls.codeInventory || dbProfileControls.inventory),
         savedAt: visualMapControls.snapshotSavedAt,
         codeItems: codeInventoryItemCount(workspaceControls.codeInventory),
-        dbTables: tables.length,
+        dbTables: dbInventoryTableCount(dbProfileControls.inventory),
         dbColumns: tables.reduce((sum, table) => sum + table.columns.length, 0),
       },
       projection: {

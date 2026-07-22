@@ -3,6 +3,18 @@
 Status: Complete for MIT source distribution and local installer validation  
 Date: 2026-07-11
 
+## Latest Local Candidate (2026-07-20)
+
+- path: `src-tauri/target/release/bundle/nsis/Backend Visual Map_0.1.0_x64-setup.exe`
+- SHA-256: `E079547AD1EBDAD343868D99C040E5329DA70203FDDBE9616A411D5B0607E5BA`
+- size: 27,087,680 bytes
+- release-profile build: passed on the current workstation
+- bundle smoke: product version, PE structure, bundled engines, checksums, notices, and license inputs passed
+- native UX smoke: the matching release executable passed stable navigation at 1180x820 and 820x820, plus Atlas drilldown, API flow, change impact, source jump, and large-repository scenarios at 1180x820; left criterion, center focus, and inspector subject commit atomically during target changes, and inspector source actions remain reachable without being covered by the fixed next-check footer
+- recovery/deletion smoke: backup repair restored a deliberately corrupt isolated workspace; DB-profile deletion preserved code data; project deletion preserved the original repository and Git metadata
+- install/start/uninstall exercise: not repeated for this candidate because it changes the host system; the isolated lifecycle result below remains the latest installation exercise
+- distribution: local validation only
+
 ## Completed Locally
 
 - Added a manually triggered GitHub Actions workflow for pinned engines, multi-language code validation and required network DB validation.
@@ -16,7 +28,7 @@ Date: 2026-07-11
 
 ## Evidence
 
-Current release-candidate installer:
+2026-07-11 lifecycle-tested installer:
 
 - path: `src-tauri/target/release/bundle/nsis/Backend Visual Map_0.1.0_x64-setup.exe`
 - SHA-256: `80E0402330EA1B140D4075E6EEE46C07B24EAA66F2A4448B3E9E4A9844E7F2A7`

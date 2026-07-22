@@ -21,6 +21,29 @@ function Get-Sha256([string]$Path) {
   }
 }
 
+function Get-ProductUninstallEntries {
+  $roots = @(
+    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+    "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+  )
+  foreach ($registryRoot in $roots) {
+    if (-not (Test-Path -LiteralPath $registryRoot)) { continue }
+    foreach ($key in Get-ChildItem -LiteralPath $registryRoot -ErrorAction SilentlyContinue) {
+      $entry = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
+      $displayName = $entry.PSObject.Properties["DisplayName"]
+      if ($null -eq $displayName -or [string]$displayName.Value -ne "Backend Visual Map") { continue }
+      $installLocation = $entry.PSObject.Properties["InstallLocation"]
+      $uninstallString = $entry.PSObject.Properties["UninstallString"]
+      [pscustomobject]@{
+        Key = $key.PSPath
+        InstallLocation = if ($installLocation) { [string]$installLocation.Value } else { "" }
+        UninstallString = if ($uninstallString) { [string]$uninstallString.Value } else { "" }
+      }
+    }
+  }
+}
+
 if ($ExerciseInstall -and -not $AcknowledgeSystemChanges) {
   throw "-ExerciseInstall requires -AcknowledgeSystemChanges because it writes installer state and then removes it."
 }
@@ -71,18 +94,33 @@ if ($installer.Length -lt 1MB) {
 $hash = Get-Sha256 $InstallerPath
 
 if ($ExerciseInstall) {
+  $existingEntries = @(Get-ProductUninstallEntries)
+  if ($existingEntries.Count -gt 0) {
+    throw "Refusing installer smoke because Backend Visual Map is already installed."
+  }
   $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
   $installRoot = Join-Path $tempBase ("bvm-release-smoke-" + [guid]::NewGuid().ToString("N"))
   $resolvedInstallRoot = [IO.Path]::GetFullPath($installRoot)
   if (-not $resolvedInstallRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to use install path outside the temp directory: $resolvedInstallRoot"
   }
+  $smokeAppData = Join-Path $resolvedInstallRoot "smoke-app-data"
+  $smokeWebViewData = Join-Path $resolvedInstallRoot "smoke-webview-data"
 
   $installed = $false
+  $process = $null
   try {
     $install = Start-Process -FilePath $InstallerPath -ArgumentList @("/S", "/D=$resolvedInstallRoot") -Wait -PassThru -WindowStyle Hidden
     if ($install.ExitCode -ne 0) { throw "Silent install failed with exit code $($install.ExitCode)." }
     $installed = $true
+    $installedEntries = @(Get-ProductUninstallEntries)
+    if ($installedEntries.Count -eq 0) { throw "Installer did not register an uninstall entry." }
+    foreach ($entry in $installedEntries) {
+      $entryPaths = "$($entry.InstallLocation) $($entry.UninstallString)"
+      if ($entryPaths.IndexOf($resolvedInstallRoot, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        throw "Installer registered an uninstall entry outside the isolated install root: $($entry.Key)"
+      }
+    }
     $app = Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter "backend-visual-map.exe" -File -Recurse | Select-Object -First 1
     if (-not $app) { throw "Installed application executable was not found." }
     foreach ($engine in "codebase-memory-mcp.exe", "database-memory.exe") {
@@ -90,12 +128,28 @@ if ($ExerciseInstall) {
         throw "Installed resource is missing: $engine"
       }
     }
-    $process = Start-Process -FilePath $app.FullName -PassThru -WindowStyle Hidden
+    $previousAppData = $env:BACKEND_VISUAL_MAP_APP_DATA_DIR
+    $previousWebViewData = $env:WEBVIEW2_USER_DATA_FOLDER
+    try {
+      $env:BACKEND_VISUAL_MAP_APP_DATA_DIR = $smokeAppData
+      $env:WEBVIEW2_USER_DATA_FOLDER = $smokeWebViewData
+      $process = Start-Process -FilePath $app.FullName -PassThru -WindowStyle Hidden
+    } finally {
+      $env:BACKEND_VISUAL_MAP_APP_DATA_DIR = $previousAppData
+      $env:WEBVIEW2_USER_DATA_FOLDER = $previousWebViewData
+    }
     Start-Sleep -Seconds 5
     if ($process.HasExited) {
       throw "Installed application exited before the smoke window completed with code $($process.ExitCode)."
     }
+    if ($Internal -and -not (Test-Path -LiteralPath $smokeAppData -PathType Container)) {
+      throw "Installed internal application did not use the isolated app-data directory."
+    }
+    if (-not (Test-Path -LiteralPath $smokeWebViewData -PathType Container)) {
+      throw "Installed application did not use the isolated WebView2 data directory."
+    }
     Stop-Process -Id $process.Id -Force
+    Wait-Process -Id $process.Id -Timeout 10 -ErrorAction SilentlyContinue
 
     $uninstaller = Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter "*uninstall*.exe" -File -Recurse | Select-Object -First 1
     if (-not $uninstaller) { throw "Uninstaller was not found." }
@@ -103,6 +157,10 @@ if ($ExerciseInstall) {
     if ($uninstall.ExitCode -ne 0) { throw "Silent uninstall failed with exit code $($uninstall.ExitCode)." }
     $installed = $false
   } finally {
+    if ($process -and -not $process.HasExited) {
+      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+      Wait-Process -Id $process.Id -Timeout 10 -ErrorAction SilentlyContinue
+    }
     if ($installed -and (Test-Path -LiteralPath $resolvedInstallRoot)) {
       $cleanupUninstaller = Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter "*uninstall*.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
       if ($cleanupUninstaller) {
@@ -112,6 +170,13 @@ if ($ExerciseInstall) {
     Start-Sleep -Milliseconds 500
     if (Test-Path -LiteralPath $resolvedInstallRoot) {
       Remove-Item -LiteralPath $resolvedInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $resolvedInstallRoot) {
+      throw "Installer smoke cleanup left files behind: $resolvedInstallRoot"
+    }
+    $remainingEntries = @(Get-ProductUninstallEntries)
+    if ($remainingEntries.Count -gt 0) {
+      throw "Installer smoke cleanup left uninstall registry entries behind."
     }
   }
 }

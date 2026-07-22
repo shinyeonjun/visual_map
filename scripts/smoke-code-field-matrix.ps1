@@ -71,6 +71,9 @@ function Invoke-CodeTool([string]$Tool, [hashtable]$Payload, [string]$RunRoot) {
     if ($diagnostic.Length -gt 2000) { $diagnostic = $diagnostic.Substring($diagnostic.Length - 2000) }
     throw "$Tool failed for <run-root>.`n$diagnostic"
   }
+  if (($output -join [Environment]::NewLine) -match "raw JSON.+deprecated") {
+    throw "$Tool used the deprecated raw JSON transport."
+  }
   foreach ($line in @($output)) {
     $text = [string]$line
     if ($text.TrimStart().StartsWith("{") -or $text.TrimStart().StartsWith("[")) {
@@ -101,55 +104,92 @@ try {
     $cacheRoot = Join-Path $matrixRoot ("cache-" + $entry.Name)
     New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
     $env:CBM_CACHE_DIR = $cacheRoot
+    $env:CBM_ALLOWED_ROOT = $sourceRoot
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $index = Invoke-CodeTool "index_repository" @{
       repo_path = $sourceRoot
-      path = $sourceRoot
-      project = "bvm-field-$($entry.Name)"
-      project_name = "bvm-field-$($entry.Name)"
-      cache_path = $cacheRoot
-      cache_dir = $cacheRoot
+      mode = "full"
+      name = "bvm-field-$($entry.Name)"
+      persistence = $false
     } $cacheRoot
     $watch.Stop()
     $project = [string]$index.project
     if ([string]::IsNullOrWhiteSpace($project)) {
       throw "$($entry.Name) returned no project id."
     }
-    $base = @{ project = $project; cache_path = $cacheRoot; cache_dir = $cacheRoot }
-    $counts = @{}
-    foreach ($label in "File", "Function", "Class", "Route") {
-      $payload = $base.Clone()
-      $payload.label = $label
-      $payload.limit = 10000
-      $payload.offset = 0
-      $response = Invoke-CodeTool "search_graph" $payload $cacheRoot
-      $items = @($response.results)
-      if (@($items | Where-Object { $_.label -ne $label }).Count -gt 0) {
-        throw "$($entry.Name) returned a non-$label item for the $label query."
-      }
-      $counts[$label] = $items.Count
+    $base = @{ project = $project }
+    $architecture = Invoke-CodeTool "get_architecture" $base $cacheRoot
+    if ($null -eq $architecture) {
+      throw "$($entry.Name) returned no architecture."
     }
-    if ($counts.File -eq 0 -or ($counts.Function + $counts.Class) -eq 0) {
+
+    $nodePayload = $base.Clone()
+    $nodePayload.query = "MATCH (node:Route|Function|Method|Class|Struct|Interface|Trait|Protocol|Record|Enum|Type|Constructor|Subroutine|Procedure|Decorator|Field|Variable|Module|Namespace|Package|Resource|File) RETURN labels(node) AS labels, node.name AS name, node.qualified_name AS qualified_name, node.file_path AS file_path, node.start_line AS start_line, node.start_column AS start_column, node.end_line AS end_line, node.end_column AS end_column, node.method AS method, node.source AS source, node.parent_qualified_name AS parent_qualified_name, node.parent_class AS parent_class, node.module AS module, node.namespace AS namespace, node.package AS package, node.route_path AS route_path, node.route_method AS route_method, node.signature AS signature, node.return_type AS return_type, node.is_test AS is_test LIMIT 100000"
+    $nodes = Invoke-CodeTool "query_graph" $nodePayload $cacheRoot
+    $nodeColumns = "labels,name,qualified_name,file_path,start_line,start_column,end_line,end_column,method,source,parent_qualified_name,parent_class,module,namespace,package,route_path,route_method,signature,return_type,is_test"
+    if ((@($nodes.columns) -join ",") -ne $nodeColumns) {
+      throw "$($entry.Name) node columns drifted: $(@($nodes.columns) -join ',')"
+    }
+    if ([int]$nodes.total -ge 100000) {
+      throw "$($entry.Name) node inventory reached the adapter safety limit."
+    }
+    $nodeRows = @($nodes.rows)
+    $counts = @{}
+    foreach ($label in "File", "Function", "Method", "Class", "Route") {
+      $counts[$label] = @($nodeRows | Where-Object {
+        [string]$_[0] -match ('"' + $label + '"')
+      }).Count
+    }
+    $codeNodes = @($nodeRows | Where-Object {
+      [string]$_[0] -notmatch '"(File|Route)"'
+    }).Count
+    if ($counts.File -eq 0 -or $codeNodes -eq 0) {
       throw "$($entry.Name) produced no usable file/code inventory."
+    }
+    $located = @($nodeRows | Where-Object {
+      $_.Count -eq 20 -and $_[3] -and [int]$_[4] -gt 0
+    }).Count
+    if ($located -eq 0) {
+      throw "$($entry.Name) returned no positive source location."
     }
 
     $callPayload = $base.Clone()
-    $callPayload.query = "MATCH (caller)-[:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target LIMIT 100000"
+    $callPayload.query = "MATCH (caller)-[rel:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target, rel.confidence AS confidence, rel.strategy AS strategy, rel.callee AS call_expression LIMIT 100000"
     $calls = Invoke-CodeTool "query_graph" $callPayload $cacheRoot
-    if ((@($calls.columns) -join ",") -ne "source,target") {
+    if ((@($calls.columns) -join ",") -ne "source,target,confidence,strategy,call_expression") {
       throw "$($entry.Name) CALLS columns drifted: $(@($calls.columns) -join ',')"
     }
-    $validCalls = @($calls.rows | Where-Object { $_.Count -eq 2 -and $_[0] -and $_[1] }).Count
-
-    $locationPayload = $base.Clone()
-    $locationPayload.query = "MATCH (node) RETURN node.qualified_name AS source, node.file_path AS path, node.start_line AS start_line, node.start_column AS start_column, node.end_line AS end_line, node.end_column AS end_column LIMIT 100000"
-    $locations = Invoke-CodeTool "query_graph" $locationPayload $cacheRoot
-    if ((@($locations.columns) -join ",") -ne "source,path,start_line,start_column,end_line,end_column") {
-      throw "$($entry.Name) source-location columns drifted."
+    if ([int]$calls.total -ge 100000) {
+      throw "$($entry.Name) CALLS reached the adapter safety limit."
     }
-    $located = @($locations.rows | Where-Object { $_.Count -eq 6 -and $_[1] -and [int]$_[2] -gt 0 }).Count
-    if ($located -eq 0) {
-      throw "$($entry.Name) returned no positive source location."
+    $validCallRows = @($calls.rows | Where-Object { $_.Count -eq 5 -and $_[0] -and $_[1] })
+    $confirmedCalls = 0
+    $candidateCalls = 0
+    $unknownCalls = 0
+    foreach ($row in $validCallRows) {
+      $score = 0.0
+      if (-not [double]::TryParse([string]$row[2], [ref]$score)) {
+        $unknownCalls += 1
+      } elseif ($score -ge 0.85) {
+        $confirmedCalls += 1
+      } elseif ($score -ge 0.70) {
+        $candidateCalls += 1
+      } else {
+        $unknownCalls += 1
+      }
+    }
+    if ($validCallRows.Count -gt 0 -and $confirmedCalls -eq 0) {
+      throw "$($entry.Name) returned no high-confidence CALLS relationship."
+    }
+
+    $handlePayload = $base.Clone()
+    $handlePayload.query = "MATCH (handler)-[:HANDLES]->(route) RETURN handler.qualified_name AS source, route.qualified_name AS target LIMIT 100000"
+    $handles = Invoke-CodeTool "query_graph" $handlePayload $cacheRoot
+    if ((@($handles.columns) -join ",") -ne "source,target") {
+      throw "$($entry.Name) HANDLES columns drifted: $(@($handles.columns) -join ',')"
+    }
+    if ([int]$handles.total -ge 100000) {
+      throw "$($entry.Name) HANDLES reached the adapter safety limit."
     }
 
     $results.Add([pscustomobject][ordered]@{
@@ -159,9 +199,14 @@ try {
       indexMs = $watch.ElapsedMilliseconds
       files = $counts.File
       functions = $counts.Function
+      methods = $counts.Method
       classes = $counts.Class
       routes = $counts.Route
-      calls = $validCalls
+      handles = @($handles.rows).Count
+      calls = $validCallRows.Count
+      confirmedCalls = $confirmedCalls
+      candidateCalls = $candidateCalls
+      unknownCalls = $unknownCalls
       located = $located
     })
   }
@@ -170,6 +215,7 @@ try {
   Write-Output "PASS: pinned multi-language code field matrix completed."
 } finally {
   Remove-Item Env:CBM_CACHE_DIR -ErrorAction SilentlyContinue
+  Remove-Item Env:CBM_ALLOWED_ROOT -ErrorAction SilentlyContinue
   if ($ownsRoot -and -not $Keep) {
     $resolvedRoot = [IO.Path]::GetFullPath($matrixRoot)
     if ($resolvedRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {

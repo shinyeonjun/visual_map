@@ -15,7 +15,15 @@ type InvestigationItem = {
 const INVESTIGATION_STORAGE_PREFIX = "backend-visual-map:investigation:v1:";
 const INVESTIGATION_LIMIT = 50;
 
-export function SourceJumpRow({ workspaceId, code }: { workspaceId: string | null; code: CodeInventoryItem }) {
+export function SourceJumpRow({
+  workspaceId,
+  code,
+  showInvestigationTray = true,
+}: {
+  workspaceId: string | null;
+  code: CodeInventoryItem;
+  showInvestigationTray?: boolean;
+}) {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<"success" | "error" | null>(null);
@@ -138,58 +146,61 @@ export function SourceJumpRow({ workspaceId, code }: { workspaceId: string | nul
         </button>
         {status && <small role="status" data-source-status={statusTone}>{status}</small>}
       </div>
-      {investigationItems.length > 0 && (
-        <section className="investigation-tray" aria-label="로컬 조사함">
-          <div className="investigation-tray-head">
-            <span><CheckSquare size={13} />조사함 <b>{investigationItems.length}</b></span>
-            <button
-              type="button"
-              data-investigation-action="copy"
-              data-copy-state={copyState}
-              onClick={() => void copyInvestigation()}
-            >
-              <Copy size={12} />
-              {copyState === "copied" ? "복사됨" : copyState === "failed" ? "복사 실패" : "Markdown"}
-            </button>
-          </div>
-          <div className="investigation-list">
-            {investigationItems.map((item) => {
-              const key = investigationKey(item);
-              const location = investigationLocation(item);
-              return (
-                <div className={item.checked ? "investigation-item checked" : "investigation-item"} key={key}>
-                  <button
-                    type="button"
-                    className="investigation-check"
-                    data-investigation-action="toggle"
-                    aria-label={`${sourceFileLabel(item.path)} 확인 ${item.checked ? "해제" : "완료"}`}
-                    aria-pressed={item.checked}
-                    onClick={() => toggleInvestigationItem(key)}
-                  >
-                    <span aria-hidden="true">{item.checked ? "✓" : ""}</span>
-                  </button>
-                  <span className="investigation-location" title={location}>
-                    <b>{sourceFileLabel(item.path)}</b>
-                    <small>{location}</small>
-                    <code>{item.evidenceId}</code>
-                  </span>
-                  <button
-                    type="button"
-                    className="investigation-remove"
-                    data-investigation-action="remove"
-                    aria-label={`${sourceFileLabel(item.path)} 조사함에서 삭제`}
-                    onClick={() => removeInvestigationItem(key)}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          <small className="investigation-privacy" data-investigation-storage="source-location-evidence-check-state-only">
-            소스 위치, 근거 ID와 확인 상태만 이 PC에 저장됩니다.
-          </small>
-        </section>
+      {showInvestigationTray && investigationItems.length > 0 && (
+        <details className="investigation-tray-shell">
+          <summary><span><CheckSquare size={13} />조사함 <b>{investigationItems.length}</b></span></summary>
+          <section className="investigation-tray" aria-label="로컬 조사함">
+            <div className="investigation-tray-head">
+              <span>확인 목록</span>
+              <button
+                type="button"
+                data-investigation-action="copy"
+                data-copy-state={copyState}
+                onClick={() => void copyInvestigation()}
+              >
+                <Copy size={12} />
+                {copyState === "copied" ? "복사됨" : copyState === "failed" ? "복사 실패" : "Markdown"}
+              </button>
+            </div>
+            <div className="investigation-list">
+              {investigationItems.map((item) => {
+                const key = investigationKey(item);
+                const location = investigationLocation(item);
+                return (
+                  <div className={item.checked ? "investigation-item checked" : "investigation-item"} key={key}>
+                    <button
+                      type="button"
+                      className="investigation-check"
+                      data-investigation-action="toggle"
+                      aria-label={`${sourceFileLabel(item.path)} 확인 ${item.checked ? "해제" : "완료"}`}
+                      aria-pressed={item.checked}
+                      onClick={() => toggleInvestigationItem(key)}
+                    >
+                      <span aria-hidden="true">{item.checked ? "✓" : ""}</span>
+                    </button>
+                    <span className="investigation-location" title={location}>
+                      <b>{sourceFileLabel(item.path)}</b>
+                      <small>{location}</small>
+                      <code>{item.evidenceId}</code>
+                    </span>
+                    <button
+                      type="button"
+                      className="investigation-remove"
+                      data-investigation-action="remove"
+                      aria-label={`${sourceFileLabel(item.path)} 조사함에서 삭제`}
+                      onClick={() => removeInvestigationItem(key)}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <small className="investigation-privacy" data-investigation-storage="source-location-evidence-check-state-only">
+              소스 위치, 근거 ID와 확인 상태만 이 PC에 저장됩니다.
+            </small>
+          </section>
+        </details>
       )}
     </>
   );

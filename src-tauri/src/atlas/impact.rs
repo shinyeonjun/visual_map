@@ -44,8 +44,9 @@ pub(super) fn table_detail_map(
 
     let mut usage_candidates = if include_candidates {
         candidate_links(snapshot)
-            .into_iter()
+            .iter()
             .filter(|link| link.to == table.id)
+            .cloned()
             .collect::<Vec<_>>()
     } else {
         Vec::new()
@@ -75,6 +76,31 @@ pub(super) fn table_detail_map(
         .collect::<Vec<_>>();
     let fk_links = db_fk_links_for_table(snapshot, &item_by_id, table.id.as_str());
     let fk_nodes = linked_items(&fk_links, &item_by_id);
+    let table_column_ids = columns
+        .iter()
+        .map(|column| column.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut db_dependents = snapshot
+        .items
+        .iter()
+        .filter(|item| matches!(item.kind.as_str(), "view" | "trigger" | "routine"))
+        .filter(|item| {
+            snapshot.links.iter().any(|link| {
+                matches!(link.kind.as_str(), "db_dependency" | "db_trigger")
+                    && (link.from == item.id || link.to == item.id)
+                    && (link.from == table.id
+                        || link.to == table.id
+                        || table_column_ids.contains(link.from.as_str())
+                        || table_column_ids.contains(link.to.as_str()))
+            })
+        })
+        .collect::<Vec<_>>();
+    db_dependents.sort_by_key(|item| {
+        (
+            direct_review_rank(&direct_object_kind(item, &[])),
+            item.name.clone(),
+        )
+    });
     let mut db_objects = snapshot
         .items
         .iter()
@@ -94,6 +120,7 @@ pub(super) fn table_detail_map(
     let included_count = 1
         + columns.len()
         + db_objects.len()
+        + db_dependents.len()
         + fk_nodes.len()
         + candidate_count.min(candidate_limit);
     let mut nodes = Vec::with_capacity(cap.min(included_count));
@@ -104,6 +131,7 @@ pub(super) fn table_detail_map(
         .collect::<HashSet<_>>();
     for item in db_objects
         .into_iter()
+        .chain(db_dependents)
         .chain(candidate_nodes)
         .chain(fk_nodes)
         .chain(columns)
@@ -125,6 +153,7 @@ pub(super) fn table_detail_map(
         .iter()
         .filter_map(|item| {
             if item.parent_id.as_deref() == Some(table.id.as_str())
+                && matches!(item.kind.as_str(), "column" | "constraint" | "index")
                 && visible_ids.contains(item.id.as_str())
             {
                 Some(VisualEdge {
@@ -227,7 +256,10 @@ pub(super) fn column_impact_map(
         .links
         .iter()
         .filter(|link| {
-            matches!(link.kind.as_str(), "db_constraint" | "db_index") && link.to == column.id
+            matches!(
+                link.kind.as_str(),
+                "db_constraint" | "db_index" | "db_dependency"
+            ) && link.to == column.id
         })
         .filter_map(|link| item_by_id.get(link.from.as_str()).copied())
         .collect::<Vec<_>>();
@@ -431,6 +463,7 @@ fn constraint_node(column: &InventoryItem, suffix: &str, title: &str) -> VisualN
         subtitle: Some("확정 DB 구조".to_string()),
         layer: "data".to_string(),
         source: "db".to_string(),
+        location: None,
     }
 }
 

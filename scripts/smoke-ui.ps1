@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("atlas-drilldown", "api-flow", "change-impact", "source-jump", "large-repo")]
+  [ValidateSet("atlas-drilldown", "api-flow", "change-impact", "source-jump", "large-repo", "stable-navigation")]
   [string]$Scenario,
   [int]$Port = 9222,
   [ValidateRange(800, 3840)]
@@ -83,7 +83,19 @@ $impactExpression = @'
   const mode = document.querySelector('button[data-mode-id="impact"]');
   if (!mode || mode.disabled) throw new Error('Column impact mode is not available for the loaded workspace');
   mode.click();
-  let board = null;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitFor('button[data-mode-id="impact"].active');
+  const transitionStarted = Date.now();
+  while (document.querySelector('.canvas[aria-busy="true"]') && Date.now() - transitionStarted < 8000) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  if (document.querySelector('.canvas[aria-busy="true"]')) throw new Error('Column impact mode did not settle');
+  let board = document.querySelector('.at-impact-board:not(.at-api-reading)');
+  if (!board) {
+    const columnTarget = document.querySelector('.product-context-list button[data-context-id]');
+    if (!columnTarget) throw new Error('Column impact mode has no selectable column in the left context list');
+    columnTarget.click();
+  }
   const started = Date.now();
   while (Date.now() - started < 8000) {
     const candidate = document.querySelector('.at-impact-board:not(.at-api-reading)');
@@ -147,38 +159,60 @@ $apiExpression = @'
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   await waitFor('.at-domain-card');
+  const workspace = await waitFor('.product-workspace');
+  const columnsBefore = getComputedStyle(workspace).gridTemplateColumns;
+  if (!document.querySelector('.evidence-panel')) throw new Error('Desktop evidence panel is not reserved');
   const mode = document.querySelector('button[data-mode-id="api"]');
   if (!mode || mode.disabled) throw new Error('API flow mode is not available for the loaded workspace');
   mode.click();
-  await waitFor('.at-api-reading');
-  const labels = [...document.querySelectorAll('.at-api-reading > .at-impact-lanes > .at-impact-lane')]
-    .map((node) => node.getAttribute('aria-labelledby') ?? '');
-  const expected = [
-    'api-lane-route',
-    'api-lane-handler',
-    'api-lane-service-function',
-    'api-lane-repository-query',
-    'api-lane-db-candidate',
-  ];
-  if (labels.join('|') !== expected.join('|')) throw new Error(`Unexpected API lanes: ${labels.join('|')}`);
-  const routeItems = document.querySelectorAll('[aria-labelledby="api-lane-route"] .at-impact-item').length;
-  if (routeItems !== 1) throw new Error(`Expected one selected route, got ${routeItems}`);
-  if (document.querySelectorAll('.at-api-followups > .at-impact-lane').length !== 2) {
-    throw new Error('Expected unknown and recommended-check follow-up lanes');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (document.querySelector('.canvas[aria-busy="true"]')) {
+    if (!document.querySelector('.at-canvas.is-refreshing')) throw new Error('API loading did not retain the committed canvas');
+    if (!document.querySelector('.at-map-surface')) throw new Error('API loading removed the committed canvas');
+    if (!document.querySelector('button[data-mode-id="api"][aria-busy="true"]')) throw new Error('API mode did not expose its pending state');
+    if (document.querySelector('button[data-mode-id="api"].active')) throw new Error('API mode became active before its projection committed');
   }
-  const surface = document.querySelector('.at-map-surface');
-  const surfaceRect = surface?.getBoundingClientRect();
-  const clipped = surfaceRect && [...document.querySelectorAll('.at-api-reading > .at-impact-lanes > .at-impact-lane')]
-    .some((lane) => {
-      const rect = lane.getBoundingClientRect();
-      return rect.left < surfaceRect.left - 2 || rect.right > surfaceRect.right + 2;
-    });
-  if (clipped) throw new Error('API lane is horizontally clipped');
+  await waitFor('.api-connection-view');
+  const nodes = [...document.querySelectorAll('.api-diagram-node[data-node-id]')];
+  if (nodes.length === 0) throw new Error('API connection map has no real nodes');
+  const nodeIds = nodes.map((node) => node.getAttribute('data-node-id') || '');
+  if (new Set(nodeIds).size !== nodeIds.length) throw new Error('API connection map rendered duplicate primary nodes');
+  if (!document.querySelector('.product-context-list button.active')) throw new Error('Selected API route is not reflected in the left navigation');
+  const columnsAfter = getComputedStyle(workspace).gridTemplateColumns;
+  if (columnsAfter !== columnsBefore) throw new Error(`Workspace columns shifted: ${columnsBefore} -> ${columnsAfter}`);
+  nodes[0].click();
+  const inspector = await waitFor('.inspector');
+  const inspectorSections = [...inspector.querySelectorAll('.inspector-section > header > strong')]
+    .map((node) => node.textContent?.trim() ?? '');
+  if (inspectorSections.length !== 5) {
+    throw new Error(`Unexpected inspector order: ${inspectorSections.join('|')}`);
+  }
+  const layers = document.querySelector('button[data-api-view="layers"]');
+  layers.click();
+  await waitFor('.api-layer-view');
+  if (document.querySelectorAll('.api-layer-view > section').length !== 5) throw new Error('API hierarchy view is incomplete');
+  const list = document.querySelector('button[data-api-view="list"]');
+  list.click();
+  await waitFor('.api-list-view');
+  if (document.querySelectorAll('.api-list-view > div').length === 0) throw new Error('API list view is empty');
+  document.querySelector('button[data-api-view="connections"]').click();
+  await waitFor('.api-connection-view');
+  const branchToggle = document.querySelector('.api-branch-toggle');
+  if (branchToggle) {
+    branchToggle.click();
+    await waitFor('.api-branch-drawer');
+    branchToggle.click();
+    const branchClosedStarted = Date.now();
+    while (document.querySelector('.api-branch-drawer') && Date.now() - branchClosedStarted < 2000) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (document.querySelector('.api-branch-drawer')) throw new Error('Additional API connections did not collapse');
+  }
   mode.click();
   await new Promise((resolve) => setTimeout(resolve, 80));
   if (document.querySelector('.is-transitioning')) throw new Error('Clicking the active API mode restarted loading');
   if (document.documentElement.scrollWidth > window.innerWidth + 2) throw new Error('Root document overflows horizontally');
-  return { ok: true, labels };
+  return { ok: true, labels: [`nodes:${nodes.length}`, 'views:3', branchToggle ? 'branches:expanded' : 'branches:none'] };
 })()
 '@
 
@@ -330,6 +364,189 @@ $largeRepoExpression = @'
 })()
 '@
 
+$stableNavigationExpression = @'
+(async () => {
+  const waitFor = async (selector, timeout = 8000) => {
+    const started = Date.now();
+    while (Date.now() - started < timeout) {
+      const node = document.querySelector(selector);
+      if (node) return node;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Timed out waiting for ${selector}`);
+  };
+  const waitForSettled = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const started = Date.now();
+    while (document.querySelector('.canvas[aria-busy="true"]') && Date.now() - started < 8000) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (document.querySelector('.canvas[aria-busy="true"]')) throw new Error('Mode transition did not settle');
+  };
+
+  const workspace = await waitFor('.product-workspace');
+  const initialOverview = await waitFor('button[data-mode-id="atlas"]');
+  initialOverview.click();
+  await waitForSettled();
+  await waitFor('.at-map-surface');
+  const modes = [
+    ['atlas', '개요'],
+    ['api', 'API'],
+    ['search', '코드'],
+    ['dependencies', '데이터베이스'],
+    ['impact', '변경 영향'],
+  ];
+  const columns = getComputedStyle(workspace).gridTemplateColumns;
+  let headerHeight = null;
+
+  for (const [id, label] of modes) {
+    const button = await waitFor(`button[data-mode-id="${id}"]`);
+    if (button.disabled) throw new Error(`${label} mode is unavailable`);
+    button.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (document.querySelector('.canvas[aria-busy="true"]')) {
+      if (!document.querySelector('.at-canvas.is-refreshing')) throw new Error(`${label} loading did not retain the committed canvas`);
+      if (!document.querySelector('.at-map-surface') && !document.querySelector('.at-stage > .map-empty')) {
+        throw new Error(`${label} removed the committed answer while loading`);
+      }
+      if (!document.querySelector(`button[data-mode-id="${id}"][aria-busy="true"]`)) throw new Error(`${label} did not expose its pending state`);
+      if (document.querySelector(`button[data-mode-id="${id}"].active`)) throw new Error(`${label} became active before its projection committed`);
+    }
+    await waitForSettled();
+    const active = document.querySelector(`button[data-mode-id="${id}"].active`);
+    if (!active) throw new Error(`${label} did not become active`);
+    if (id !== 'atlas' && !document.querySelector('.product-context-list button.active') && !document.querySelector('.target-selection-empty')) {
+      throw new Error(`${label} exposed neither a current target nor the neutral target prompt`);
+    }
+    const nextColumns = getComputedStyle(workspace).gridTemplateColumns;
+    if (nextColumns !== columns) throw new Error(`${label} shifted workspace columns: ${columns} -> ${nextColumns}`);
+    const nextHeaderHeight = Math.round(document.querySelector('.at-canvas-head').getBoundingClientRect().height);
+    if (headerHeight === null) headerHeight = nextHeaderHeight;
+    if (nextHeaderHeight !== headerHeight) throw new Error(`${label} shifted header height: ${headerHeight} -> ${nextHeaderHeight}`);
+  }
+
+  if (window.innerWidth <= 1020) {
+    const contextToggle = document.querySelector('.product-context-toggle');
+    if (!contextToggle) throw new Error('Compact navigation has no target-list control');
+    contextToggle.click();
+    const compactContext = await waitFor('.product-context-browser.compact-open');
+    if (!compactContext.querySelector('.product-context-list') || !compactContext.querySelector('.product-context-filter')) {
+      throw new Error('Compact context panel is missing its fixed filter or target list');
+    }
+    compactContext.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (document.querySelector('.product-context-browser.compact-open')) {
+      throw new Error('Compact context panel did not close with Escape');
+    }
+    if (document.activeElement !== contextToggle) throw new Error('Compact target-list control did not regain focus after Escape');
+    contextToggle.click();
+    const reopenedContext = await waitFor('.product-context-browser.compact-open');
+    const closeContext = reopenedContext.querySelector('.product-context-close');
+    if (!closeContext) throw new Error('Compact context panel has no close control');
+    closeContext.click();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (document.querySelector('.product-context-browser.compact-open')) {
+      throw new Error('Compact context panel did not close');
+    }
+  }
+
+  document.querySelector('button[data-mode-id="api"]').click();
+  await waitForSettled();
+  const apiItems = [...document.querySelectorAll('.product-context-list button[data-context-id]')];
+  if (apiItems.length < 2) throw new Error('API context list does not expose enough routes to test restoration');
+  apiItems[1].click();
+  await waitForSettled();
+  const restoredRoute = document.querySelector('.product-context-list button.active')?.getAttribute('data-context-id');
+  if (!restoredRoute) throw new Error('API target did not become active');
+  const zoomInIcon = await waitFor('.api-map-floating-controls .lucide-plus');
+  const zoomIn = zoomInIcon.closest('button');
+  if (!zoomIn) throw new Error('API zoom control is missing');
+  const zoomBefore = document.querySelector('.api-map-floating-controls .wide')?.textContent?.trim();
+  zoomIn.click();
+  const zoomStarted = Date.now();
+  while (document.querySelector('.api-map-floating-controls .wide')?.textContent?.trim() === zoomBefore && Date.now() - zoomStarted < 1000) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  const restoredZoom = document.querySelector('.api-map-floating-controls .wide')?.textContent?.trim();
+  document.querySelector('button[data-mode-id="search"]').click();
+  await waitForSettled();
+  document.querySelector('button[data-mode-id="api"]').click();
+  await waitForSettled();
+  if (document.querySelector('.product-context-list button.active')?.getAttribute('data-context-id') !== restoredRoute) {
+    throw new Error('API mode did not restore its last target');
+  }
+  if (document.querySelector('.api-map-floating-controls .wide')?.textContent?.trim() !== restoredZoom) {
+    throw new Error('API mode did not restore its zoom');
+  }
+
+  document.querySelector('button[data-mode-id="search"]').click();
+  await waitForSettled();
+  let codeCard = document.querySelector('.at-card.code, .at-card.route');
+  let disconnectedTarget = document.querySelector('.at-disconnected-target');
+  if (!codeCard && !disconnectedTarget) {
+    const codeTarget = document.querySelector('.product-context-list button[data-context-id]');
+    if (!codeTarget) throw new Error('Code mode has no target in the left context list');
+    codeTarget.click();
+    await waitForSettled();
+    codeCard = document.querySelector('.at-card.code, .at-card.route');
+    disconnectedTarget = document.querySelector('.at-disconnected-target');
+  }
+  if (!codeCard && !disconnectedTarget) throw new Error('Code mode has no focused target');
+  if (codeCard) codeCard.click();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const selectionStarted = Date.now();
+  while (!workspace.classList.contains('inspector-visible') && Date.now() - selectionStarted < 1000) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (document.querySelector('.at-update-indicator')) throw new Error('Selecting a code card restarted projection');
+  if (!document.querySelector('button[data-mode-id="search"].active')) throw new Error('Selecting a code card changed mode');
+  if (!workspace.classList.contains('inspector-visible')) throw new Error('Selecting a code card did not update evidence');
+  const inspectorBody = document.querySelector('.inspector-scroll-body');
+  const sourceAction = document.querySelector('button[data-source-action="reveal"]');
+  const nextCheck = document.querySelector('.inspector > .inspector-section:last-child');
+  if (!inspectorBody || !sourceAction || !nextCheck) throw new Error('Inspector scroll/footer structure is incomplete');
+  sourceAction.scrollIntoView({ block: 'end' });
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const sourceRect = sourceAction.getBoundingClientRect();
+  const bodyRect = inspectorBody.getBoundingClientRect();
+  const nextRect = nextCheck.getBoundingClientRect();
+  if (sourceRect.top < bodyRect.top - 1 || sourceRect.bottom > bodyRect.bottom + 1 || sourceRect.bottom > nextRect.top) {
+    throw new Error('Fixed next-check footer covers source actions');
+  }
+  document.querySelector('button[data-mode-id="api"]').click();
+  await waitForSettled();
+
+  const clearSelection = document.querySelector('.inspector-close');
+  if (!clearSelection) throw new Error('Selection clear control is missing');
+  clearSelection.click();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const evidencePanel = document.querySelector('.evidence-panel');
+  if (!evidencePanel) throw new Error('Evidence panel was removed after clearing selection');
+  if (window.innerWidth > 820 && getComputedStyle(evidencePanel).display === 'none') {
+    throw new Error('Desktop evidence panel collapsed after clearing selection');
+  }
+  if (window.innerWidth <= 820 && getComputedStyle(evidencePanel).display !== 'none') {
+    throw new Error('Compact evidence overlay stayed open after clearing selection');
+  }
+
+  const sourceTrigger = await waitFor('.source-manager-trigger');
+  if (!document.querySelector('.source-manager')) sourceTrigger.click();
+  const sourceManager = await waitFor('.source-manager');
+  const dbDetails = sourceManager.querySelector('.database-source details.source-advanced');
+  if (dbDetails) dbDetails.open = true;
+  const sourceActions = [...sourceManager.querySelectorAll('.database-source [data-source-action]')]
+    .map((button) => button.getAttribute('data-source-action'));
+  const expectedSourceActions = ['db-index'];
+  if (sourceActions.join('|') !== expectedSourceActions.join('|')) {
+    throw new Error(`Unexpected DB source actions: ${sourceActions.join('|')}`);
+  }
+  sourceManager.querySelector('.source-manager-header .tool')?.click();
+
+  if (document.documentElement.scrollWidth > window.innerWidth + 2) throw new Error('Root document overflows horizontally');
+  return { ok: true, labels: [`modes:${modes.length}`, `header:${headerHeight}px`, `target:restored`, `zoom:${restoredZoom}`, `source-actions:${sourceActions.length}`] };
+})()
+'@
+
 $expression = if ($Scenario -eq "change-impact") {
   $impactExpression
 }
@@ -341,6 +558,9 @@ elseif ($Scenario -eq "source-jump") {
 }
 elseif ($Scenario -eq "large-repo") {
   $largeRepoExpression
+}
+elseif ($Scenario -eq "stable-navigation") {
+  $stableNavigationExpression
 }
 else {
   $atlasExpression

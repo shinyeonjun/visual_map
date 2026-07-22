@@ -1,9 +1,10 @@
-import { idleOperation, runningOperation } from "./operationStatus";
+import { idleOperation, operationSourceForAction, runningOperation, type OperationSource } from "./operationStatus";
 import type { OperationStatus } from "../types/operation";
 import type { RepoSourceMode } from "../types/workspace";
 
 export function currentOperationStatus({
   busyAction,
+  latestAction,
   workspaceStatus,
   workspaceError,
   codeStatus,
@@ -18,6 +19,7 @@ export function currentOperationStatus({
   mapErrorDetail,
 }: {
   busyAction: string | null;
+  latestAction: string | null;
   workspaceStatus: string | null;
   workspaceError: string | null;
   codeStatus: string | null;
@@ -37,6 +39,26 @@ export function currentOperationStatus({
   }
   if (mapLoading) {
     return { phase: "running", label: "캔버스", message: "캔버스 준비 중" };
+  }
+
+  const latestSource = operationSourceForAction(latestAction);
+  if (latestSource) {
+    const latest = statusForSource(latestSource, {
+      workspaceStatus,
+      workspaceError,
+      codeStatus,
+      codeError,
+      codeErrorDetail,
+      dbStatus,
+      dbError,
+      dbErrorDetail,
+      mapStatus,
+      mapError,
+      mapErrorDetail,
+    });
+    if (latest) {
+      return latest;
+    }
   }
   if (workspaceError) {
     return { phase: "error", label: "프로젝트", message: workspaceError };
@@ -63,6 +85,50 @@ export function currentOperationStatus({
     return { phase: "success", label: "프로젝트", message: workspaceStatus };
   }
   return idleOperation();
+}
+
+function statusForSource(
+  source: OperationSource,
+  values: {
+    workspaceStatus: string | null;
+    workspaceError: string | null;
+    codeStatus: string | null;
+    codeError: string | null;
+    codeErrorDetail: string | null;
+    dbStatus: string | null;
+    dbError: string | null;
+    dbErrorDetail: string | null;
+    mapStatus: string | null;
+    mapError: string | null;
+    mapErrorDetail: string | null;
+  },
+): OperationStatus | null {
+  if (source === "workspace") {
+    if (values.workspaceError) {
+      return { phase: "error", label: "프로젝트", message: values.workspaceError };
+    }
+    return successStatus("프로젝트", values.workspaceStatus);
+  }
+  if (source === "code") {
+    if (values.codeError) {
+      return { phase: "error", label: "코드", message: values.codeError, details: values.codeErrorDetail };
+    }
+    return successStatus("코드", values.codeStatus);
+  }
+  if (source === "db") {
+    if (values.dbError) {
+      return { phase: "error", label: "DB", message: values.dbError, details: values.dbErrorDetail };
+    }
+    return successStatus("DB", values.dbStatus);
+  }
+  if (values.mapError) {
+    return { phase: "error", label: "캔버스", message: values.mapError, details: values.mapErrorDetail };
+  }
+  return successStatus("캔버스", values.mapStatus);
+}
+
+function successStatus(label: string, message: string | null): OperationStatus | null {
+  return message && !isNonSuccessStatus(message) ? { phase: "success", label, message } : null;
 }
 
 function isNonSuccessStatus(value: string): boolean {

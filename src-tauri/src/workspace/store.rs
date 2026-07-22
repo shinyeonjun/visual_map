@@ -605,13 +605,17 @@ fn clone_github_repo(url: &str, target: &Path) -> Result<(), String> {
 
     let target_string = target.display().to_string();
     let args = ["clone", "--depth", "1", url, target_string.as_str()];
-    let run = run_git(&args, Duration::from_secs(180))?;
-
-    if run.ok {
-        Ok(())
-    } else {
-        Err(git_failure("GitHub 프로젝트 복제 실패", &run))
+    let result = run_git(&args, Duration::from_secs(180)).and_then(|run| {
+        if run.ok {
+            Ok(())
+        } else {
+            Err(git_failure("GitHub 프로젝트 복제 실패", &run))
+        }
+    });
+    if result.is_err() {
+        let _ = fs::remove_dir_all(target);
     }
+    result
 }
 
 fn run_git(args: &[&str], timeout: Duration) -> Result<engine::EngineRunResult, String> {
@@ -658,4 +662,26 @@ pub(crate) fn timestamp() -> String {
         .unwrap_or_default()
         .as_millis()
         .to_string()
+}
+
+#[cfg(test)]
+mod clone_cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn failed_clone_does_not_leave_a_managed_project_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "backend-visual-map-clone-failure-{}-{}",
+            std::process::id(),
+            timestamp()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("partial-clone");
+        let missing_source = root.join("missing.git");
+
+        assert!(clone_github_repo(missing_source.to_str().unwrap(), &target).is_err());
+        assert!(!target.exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

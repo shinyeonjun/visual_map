@@ -75,10 +75,22 @@ export function WorkbenchTopBar({
         <ChevronDown size={13} />
       </label>
 
-      <span className={`source-freshness ${freshness.tone}`} title={freshness.detail}>
+      <button
+        className={`source-freshness ${freshness.tone}`}
+        type="button"
+        title={`${freshness.detail} · 소스 관리 열기`}
+        disabled={!workspaceControls.initialized}
+        onClick={() => {
+          if (hasWorkspace) {
+            onToggleSourceManager();
+          } else {
+            document.querySelector<HTMLInputElement>("#workspace-repo-input")?.focus();
+          }
+        }}
+      >
         <FreshnessIcon size={14} className={freshness.spin ? "spin" : undefined} />
         <span>{freshness.label}</span>
-      </span>
+      </button>
 
       <div
         className={`search-shell product-search ${hasInventory ? "" : "disabled"}`}
@@ -95,7 +107,7 @@ export function WorkbenchTopBar({
           <input
             id="global-inventory-search"
             ref={searchInputRef}
-            aria-label="API, 함수, 파일, 테이블, 컬럼 검색"
+            aria-label="API, 함수, 파일, 테이블, 컬럼, DB 객체 검색"
             defaultValue={visualMapControls.searchQuery}
             disabled={!hasInventory}
             onFocus={() => hasInventory && visualMapControls.openSearchPopover()}

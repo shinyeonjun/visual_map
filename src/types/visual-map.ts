@@ -76,6 +76,7 @@ export type VisualNode = {
   subtitle?: string | null;
   layer: string;
   source: string;
+  location?: SourceLocation | null;
 };
 
 export type VisualEdge = {
@@ -135,6 +136,36 @@ export type InventorySnapshot = {
   items: InventoryItem[];
 };
 
+export type InventoryBootstrap = {
+  snapshot: InventorySnapshot;
+  summary: InventorySummary;
+};
+
+export type InventorySummary = {
+  workspaceId: string;
+  savedAt: string;
+  totalItems: number;
+  totalLinks: number;
+  sources: Record<string, InventorySourceSummary>;
+};
+
+type InventorySourceSummary = {
+  total: number;
+  groups: Record<string, number>;
+};
+
+export type InventorySearchResult = {
+  hits: InventorySearchHit[];
+  total: number;
+  counts: Record<string, number>;
+  truncated: boolean;
+};
+
+type InventorySearchHit = {
+  group: "api" | "code" | "file" | "table" | "column" | string;
+  item: InventoryItem;
+};
+
 type SnapshotMetadata = {
   code?: SnapshotSourceMetadata | null;
   db?: SnapshotSourceMetadata | null;
@@ -147,6 +178,7 @@ export type AnalysisCoverage = {
   code: AnalysisCoverageSource;
   db: AnalysisCoverageSource;
   gaps: number;
+  capabilities: number;
   reindexRequired: boolean;
 };
 

@@ -102,6 +102,13 @@ if ($VerifyOnly) {
         $target = Join-Path $DestinationPath $engine.executable.fileName
         $state = Get-ArtifactState $engine $target
         if ($state.Kind -eq "release") {
+            if ($engine.releaseReady -ne $true -and -not $AllowDevelopmentArtifact) {
+                throw "Engine '$($engine.id)' is an unpublished pinned artifact. Use -AllowDevelopmentArtifact for local/internal validation."
+            }
+            if ($engine.releaseReady -ne $true) {
+                Write-Warning "Verified unpublished pinned artifact for $($engine.id): $target. It is not releasable."
+                continue
+            }
             Write-Host "Verified release engine $($engine.id) $($engine.version): $target"
             continue
         }
@@ -126,6 +133,13 @@ try {
         $target = Join-Path $DestinationPath $engine.executable.fileName
         $state = Get-ArtifactState $engine $target
         if ($state.Kind -eq "release") {
+            if ($engine.releaseReady -ne $true -and -not $AllowDevelopmentArtifact) {
+                throw "Engine '$($engine.id)' is not published. Supply its pinned artifact and use -AllowDevelopmentArtifact."
+            }
+            if ($engine.releaseReady -ne $true) {
+                Write-Warning "Keeping unpublished pinned artifact for $($engine.id). It cannot be used for a public release."
+                continue
+            }
             Write-Host "Release engine already prepared: $($engine.id) $($engine.version)"
             continue
         }
@@ -135,6 +149,9 @@ try {
         }
         if ($state.Kind -ne "missing" -and -not $Force) {
             throw "Refusing to replace '$target' without -Force. Current SHA-256: $($state.Hash)"
+        }
+        if ($engine.releaseReady -ne $true) {
+            throw "Engine '$($engine.id)' has no published archive yet. Build source commit $($engine.sourceCommit), place '$($engine.executable.fileName)' in the engine directory, and use -AllowDevelopmentArtifact."
         }
 
         $engineTemp = Join-Path $tempRoot $engine.id

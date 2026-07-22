@@ -385,6 +385,21 @@ fn command_runner_drains_output_larger_than_pipe_buffers() {
     assert_eq!(result.stdout.len(), 1024 * 1024);
 }
 
+#[cfg(windows)]
+#[test]
+fn command_runner_reports_timeout() {
+    let result = run_command(
+        Path::new("node.exe"),
+        &["-e", "setTimeout(() => {}, 5000)"],
+        Duration::from_millis(50),
+    )
+    .unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(result.exit_code, None);
+    assert!(result.stderr.contains("시간이 초과되었습니다"));
+}
+
 #[test]
 fn process_stream_reader_drains_but_does_not_store_past_its_limit() {
     let input = std::io::Cursor::new(vec![b'x'; 1024]);
@@ -421,7 +436,7 @@ fn run_engine_command_rejects_missing_engine_before_spawn() {
         label: "codebase-memory".to_string(),
         role: "code".to_string(),
         executable: "codebase-memory-mcp.exe".to_string(),
-        expected_version: "0.8.1".to_string(),
+        expected_version: "0.9.0".to_string(),
         contract_version: "1".to_string(),
         path: r"D:\missing\codebase-memory-mcp.exe".to_string(),
         available: false,
@@ -452,7 +467,7 @@ fn write_test_manifest(
         "engines": [
             {
                 "id": "codebase-memory",
-                "version": "0.8.1",
+                "version": "0.9.0",
                 "contractVersion": "1",
                 "releaseReady": true,
                 "executable": {
@@ -464,7 +479,7 @@ fn write_test_manifest(
             {
                 "id": "database-memory",
                 "version": DATABASE_MEMORY_VERSION,
-                "contractVersion": "1",
+                "contractVersion": DATABASE_MEMORY_CONTRACT_VERSION,
                 "releaseReady": false,
                 "executable": {
                     "fileName": "database-memory.exe",

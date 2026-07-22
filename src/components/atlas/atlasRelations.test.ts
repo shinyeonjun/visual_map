@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { VisualEdge, VisualMap, VisualNode } from "../../types/visual-map";
-import { buildRelationCounts, relationLedgerRows, takeWithPinned } from "./atlasRelations";
+import {
+  buildRelationCounts,
+  filterCodeItemsByMap,
+  relationFocusIdFromMapFocus,
+  relationLedgerRows,
+  takeWithPinned,
+} from "./atlasRelations";
 
 const nodes: VisualNode[] = [
   { id: "code:route", kind: "api", title: "GET /orders", layer: "api", source: "code" },
@@ -53,5 +59,16 @@ describe("atlas relation policy", () => {
   it("keeps a pinned item visible without exceeding the display cap", () => {
     const items = ["a", "b", "c", "d"];
     expect(takeWithPinned(items, new Set(["d"]), (item) => item, 2)).toEqual(["d", "a"]);
+  });
+
+  it("does not present inventory items that are absent from the current map", () => {
+    const items = [{ id: "route" }, { id: "missing" }];
+    expect(filterCodeItemsByMap(items, new Set(["code:route"]))).toEqual([{ id: "route" }]);
+    expect(filterCodeItemsByMap(items, new Set(["code:other"]))).toEqual([]);
+  });
+
+  it("keeps database object focus available to the relation ledger", () => {
+    expect(relationFocusIdFromMapFocus("db:view:active-orders")).toBe("db:view:active-orders");
+    expect(relationFocusIdFromMapFocus("group:package:app")).toBeNull();
   });
 });

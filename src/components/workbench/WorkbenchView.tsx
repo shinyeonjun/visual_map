@@ -37,12 +37,10 @@ export function WorkbenchView({
     hasAnswerSource ||
     visualMapControls.snapshotStaleReasons.length > 0 ||
     Boolean(visualMapControls.snapshotSavedAt);
-  const showInspector = Boolean(
-    hasAnswerSource &&
-      (visualMapControls.selectedNode ||
-        visualMapControls.selectedEdge ||
-        (visualMapControls.mode !== "atlas" && (visualMapControls.currentMap || visualMapControls.loading))),
-  );
+  // Keep the evidence column mounted once a project exists so mode changes do not
+  // resize the canvas. Its contents can change; the workspace geometry cannot.
+  const showInspector = hasWorkspace;
+  const inspectorVisible = Boolean(visualMapControls.selectedNode || visualMapControls.selectedEdge);
   const drawerOpen = sourceManagerOpen && hasWorkspace;
   const sourceManagerRef = useRef<HTMLElement | null>(null);
 
@@ -70,7 +68,7 @@ export function WorkbenchView({
         dbProfileControls={dbProfileControls}
         visualMapControls={visualMapControls}
       />
-      <div className={`workspace product-workspace ${showInspector ? "has-inspector" : ""}`}>
+      <div className={`workspace product-workspace ${showInspector ? "has-inspector" : ""} ${inspectorVisible ? "inspector-visible" : ""}`}>
         <aside className="product-navigation" aria-label="주요 탐색">
           <ModePanel
             workspaceControls={workspaceControls}
@@ -116,6 +114,7 @@ export function WorkbenchView({
         {showInspector && (
           <aside className="side side-right evidence-panel">
             <InspectorPanel
+              onClose={visualMapControls.clearSelection}
               workspaceControls={workspaceControls}
               dbProfileControls={dbProfileControls}
               visualMapControls={visualMapControls}

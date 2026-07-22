@@ -274,6 +274,8 @@ pub(crate) struct VisualNode {
     pub subtitle: Option<String>,
     pub layer: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<SourceLocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

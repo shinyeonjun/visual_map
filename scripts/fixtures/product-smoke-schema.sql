@@ -8,3 +8,14 @@ CREATE TABLE orders (
   user_id INTEGER NOT NULL REFERENCES users(id),
   status TEXT NOT NULL
 );
+
+CREATE VIEW active_orders AS
+  SELECT id, user_id, status
+  FROM orders
+  WHERE status = 'active';
+
+CREATE TRIGGER trg_orders_status
+  AFTER UPDATE OF status ON orders
+  BEGIN
+    SELECT NEW.status;
+  END;

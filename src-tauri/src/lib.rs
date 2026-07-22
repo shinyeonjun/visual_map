@@ -23,7 +23,7 @@ use workspace::{
 };
 
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, backend_visual_map_internal_build))]
     {
         if let Some(path) = std::env::var_os("BACKEND_VISUAL_MAP_APP_DATA_DIR") {
             return Ok(PathBuf::from(path));
@@ -97,29 +97,23 @@ fn index_db_profile(
 ) -> CommandResult<DbIndexResult> {
     let app_data_dir = app_data_dir(&app)?;
     let registry = get_engine_availability(app)?;
+    let workspace_id = request.workspace_id.clone();
+    let profile_id = request.profile_id.clone();
 
-    Ok(workspace::index_db_profile(
-        app_data_dir,
-        &registry,
-        request,
-    )?)
-}
-
-#[tauri::command(async)]
-fn get_db_inventory(
-    app: tauri::AppHandle,
-    workspace_id: String,
-    profile_id: Option<String>,
-) -> CommandResult<DbInventory> {
-    let app_data_dir = app_data_dir(&app)?;
-    let registry = get_engine_availability(app)?;
-
-    Ok(workspace::db_inventory(
-        app_data_dir,
-        &registry,
-        &workspace_id,
-        profile_id.as_deref(),
-    )?)
+    let mut result = workspace::index_db_profile(&app_data_dir, &registry, request)?;
+    if result.run.ok {
+        match workspace::db_inventory(&app_data_dir, &registry, &workspace_id, Some(&profile_id)) {
+            Ok(inventory) => {
+                match persist_db_inventory(&app_data_dir, &result.workspace, &registry, &inventory)
+                {
+                    Ok(()) => result.inventory = Some(bounded_db_inventory(inventory)),
+                    Err(error) => result.inventory_error = Some(error),
+                }
+            }
+            Err(error) => result.inventory_error = Some(error),
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command(async)]
@@ -129,62 +123,159 @@ fn index_code_repository(
 ) -> CommandResult<CodeIndexResult> {
     let app_data_dir = app_data_dir(&app)?;
     let registry = get_engine_availability(app)?;
+    let workspace_id = request.workspace_id.clone();
 
-    Ok(workspace::index_code_repository(
-        app_data_dir,
-        &registry,
-        request,
-    )?)
-}
-
-#[tauri::command(async)]
-fn get_code_inventory(app: tauri::AppHandle, workspace_id: String) -> CommandResult<CodeInventory> {
-    let app_data_dir = app_data_dir(&app)?;
-    let registry = get_engine_availability(app)?;
-
-    Ok(workspace::code_inventory(
-        app_data_dir,
-        &registry,
-        &workspace_id,
-    )?)
-}
-
-#[tauri::command(async)]
-fn save_inventory_snapshot(
-    app: tauri::AppHandle,
-    workspace_id: String,
-    code: Option<CodeInventory>,
-    db: Option<DbInventory>,
-) -> CommandResult<InventorySnapshot> {
-    let app_data_dir = app_data_dir(&app)?;
-    let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
-    if code.is_none() && db.is_none() {
-        return Err("저장할 코드 또는 DB 읽기 결과가 없습니다".into());
+    let mut result = workspace::index_code_repository(&app_data_dir, &registry, request)?;
+    if result.run.ok {
+        match workspace::code_inventory(&app_data_dir, &registry, &workspace_id) {
+            Ok(inventory) => match persist_code_inventory(
+                &app_data_dir,
+                &result.workspace,
+                &registry,
+                &inventory,
+            ) {
+                Ok(()) => result.inventory = Some(bounded_code_inventory(inventory)),
+                Err(error) => result.inventory_error = Some(error),
+            },
+            Err(error) => result.inventory_error = Some(error),
+        }
     }
-    let registry = get_engine_availability(app)?;
-    let snapshot = atlas::build_inventory_snapshot(workspace_id, code.as_ref(), db.as_ref());
-    let snapshot = atlas::snapshot_with_metadata(snapshot, &workspace, &registry);
-
-    atlas::save_inventory_snapshot(app_data_dir, &snapshot)?;
-    Ok(snapshot)
+    Ok(result)
 }
 
 #[tauri::command(async)]
-fn load_inventory_snapshot(
+fn load_inventory_bootstrap(
     app: tauri::AppHandle,
     workspace_id: String,
-) -> CommandResult<Option<InventorySnapshot>> {
+) -> CommandResult<Option<atlas::InventoryBootstrap>> {
     let app_data_dir = app_data_dir(&app)?;
     let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
     let registry = get_engine_availability(app)?;
-    let Some(snapshot) = atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace_id)?
+    let Some(snapshot) =
+        atlas::load_inventory_snapshot_optional_cached(&app_data_dir, &workspace_id)?
     else {
         return Ok(None);
     };
+    let stale_reasons = atlas::snapshot_staleness_reasons_cached(&snapshot, &workspace, &registry);
+    let mut bootstrap = atlas::inventory_bootstrap(&snapshot);
+    bootstrap.snapshot.stale_reasons = stale_reasons;
+    Ok(Some(bootstrap))
+}
 
-    Ok(Some(atlas::mark_snapshot_staleness(
-        snapshot, &workspace, &registry,
-    )))
+fn persist_code_inventory(
+    app_data_dir: &Path,
+    workspace: &Workspace,
+    registry: &EngineRegistry,
+    inventory: &CodeInventory,
+) -> Result<(), String> {
+    let snapshot = atlas::build_inventory_snapshot(workspace.id.clone(), Some(inventory), None);
+    persist_inventory_source(app_data_dir, workspace, registry, snapshot, "code")
+}
+
+fn persist_db_inventory(
+    app_data_dir: &Path,
+    workspace: &Workspace,
+    registry: &EngineRegistry,
+    inventory: &DbInventory,
+) -> Result<(), String> {
+    let snapshot = atlas::build_inventory_snapshot(workspace.id.clone(), None, Some(inventory));
+    persist_inventory_source(app_data_dir, workspace, registry, snapshot, "db")
+}
+
+fn persist_inventory_source(
+    app_data_dir: &Path,
+    workspace: &Workspace,
+    registry: &EngineRegistry,
+    snapshot: InventorySnapshot,
+    source: &str,
+) -> Result<(), String> {
+    let incoming = atlas::snapshot_with_metadata(snapshot, workspace, registry);
+    let existing = atlas::load_inventory_snapshot_optional(app_data_dir, &workspace.id)?;
+    let merged = atlas::replace_inventory_source(existing, incoming, source)?;
+    atlas::save_inventory_snapshot(app_data_dir, &merged)
+}
+
+fn bounded_code_inventory(mut inventory: CodeInventory) -> CodeInventory {
+    const LIMIT: usize = 100;
+    let mut partial = truncate_to(&mut inventory.routes, LIMIT);
+    partial |= truncate_to(&mut inventory.services, LIMIT);
+    partial |= truncate_to(&mut inventory.files, LIMIT);
+    partial |= truncate_to(&mut inventory.handlers, LIMIT);
+    partial |= truncate_to(&mut inventory.repositories, LIMIT);
+    partial |= truncate_to(&mut inventory.functions, LIMIT);
+    partial |= truncate_to(&mut inventory.classes, LIMIT);
+    partial |= truncate_to(&mut inventory.modules, LIMIT);
+    partial |= truncate_to(&mut inventory.unknown, LIMIT);
+    let retained = inventory
+        .routes
+        .iter()
+        .chain(inventory.services.iter())
+        .chain(inventory.files.iter())
+        .chain(inventory.handlers.iter())
+        .chain(inventory.repositories.iter())
+        .chain(inventory.functions.iter())
+        .chain(inventory.classes.iter())
+        .chain(inventory.modules.iter())
+        .chain(inventory.unknown.iter())
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+    inventory.calls.retain(|call| {
+        retained.contains(call.from.as_str()) && retained.contains(call.to.as_str())
+    });
+    inventory.handles.retain(|handle| {
+        retained.contains(handle.route.as_str()) && retained.contains(handle.handler.as_str())
+    });
+    inventory.partial = partial;
+    inventory
+}
+
+fn bounded_db_inventory(mut inventory: DbInventory) -> DbInventory {
+    inventory.tables.truncate(100);
+    inventory
+}
+
+fn truncate_to<T>(items: &mut Vec<T>, limit: usize) -> bool {
+    let truncated = items.len() > limit;
+    items.truncate(limit);
+    truncated
+}
+
+#[tauri::command(async)]
+fn search_inventory(
+    app: tauri::AppHandle,
+    workspace_id: String,
+    query: String,
+) -> CommandResult<atlas::InventorySearchResult> {
+    let app_data_dir = app_data_dir(&app)?;
+    let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
+    let registry = get_engine_availability(app)?;
+    let snapshot = atlas::load_inventory_snapshot_cached(&app_data_dir, &workspace_id)
+        .map_err(|error| format!("검색하려면 먼저 코드/DB 읽기 결과가 필요합니다: {error}"))?;
+    let stale_reasons = atlas::snapshot_staleness_reasons_cached(&snapshot, &workspace, &registry);
+    if !stale_reasons.is_empty() {
+        return Err(format!(
+            "코드/DB 읽기 결과가 최신이 아닙니다: {}",
+            stale_reasons.join(", ")
+        )
+        .into());
+    }
+    Ok(atlas::search_inventory(&snapshot, &query))
+}
+
+#[tauri::command(async)]
+fn refresh_snapshot_freshness(
+    app: tauri::AppHandle,
+    workspace_id: String,
+) -> CommandResult<Vec<String>> {
+    let app_data_dir = app_data_dir(&app)?;
+    let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
+    let registry = get_engine_availability(app)?;
+    let snapshot = atlas::load_inventory_snapshot_cached(&app_data_dir, &workspace_id)
+        .map_err(|error| format!("읽은 결과의 최신 상태를 확인할 수 없습니다: {error}"))?;
+    atlas::invalidate_snapshot_freshness(&workspace_id);
+    Ok(atlas::snapshot_staleness_reasons_cached(
+        &snapshot, &workspace, &registry,
+    ))
 }
 
 #[tauri::command(async)]
@@ -201,7 +292,7 @@ fn get_visual_map(
     let registry = get_engine_availability(app)?;
     let snapshot = atlas::load_inventory_snapshot_cached(&app_data_dir, &workspace_id)
         .map_err(|error| format!("캔버스를 보려면 먼저 코드/DB 읽기 결과가 필요합니다: {error}"))?;
-    let stale_reasons = atlas::snapshot_staleness_reasons(&snapshot, &workspace, &registry);
+    let stale_reasons = atlas::snapshot_staleness_reasons_cached(&snapshot, &workspace, &registry);
     if !stale_reasons.is_empty() {
         return Err(format!(
             "코드/DB 읽기 결과가 최신이 아닙니다: {}",
@@ -212,7 +303,7 @@ fn get_visual_map(
     let change_intent = normalized_change_intent(change_intent)?;
 
     if enrich_code_evidence.unwrap_or(false)
-        && matches!(mode.as_str(), "table-usage" | "column-impact")
+        && matches!(mode.as_str(), "api-flow" | "table-usage" | "column-impact")
         && focus_id.is_some()
     {
         let mut enriched_snapshot = (*snapshot).clone();
@@ -286,6 +377,10 @@ fn enrich_snapshot_code_evidence(
     let Some(focus_id) = focus_id else {
         return;
     };
+    if mode == "api-flow" {
+        enrich_api_code_evidence(app_data_dir, registry, workspace_id, focus_id, snapshot);
+        return;
+    }
     let Some(focus) = snapshot
         .items
         .iter()
@@ -316,58 +411,25 @@ fn enrich_snapshot_code_evidence(
         }
         _ => return,
     };
-    let ambiguous_table_ids = snapshot
-        .items
-        .iter()
-        .filter(|item| {
-            item.kind == "table"
-                && item.source == "db"
-                && item.name.eq_ignore_ascii_case(&table.name)
-        })
-        .map(|item| item.id.clone())
-        .collect::<Vec<_>>();
-    let schema_ambiguous = ambiguous_table_ids.len() > 1;
-    if schema_ambiguous {
-        atlas::record_code_search_gap(
-            snapshot,
-            column.as_ref().map_or(table.id.as_str(), |column| column.id.as_str()),
-            "code-search-schema-ambiguous",
-            "동일한 테이블명이 여러 스키마에 있어 텍스트 검색 후보의 신뢰도를 high로 표시하지 않습니다.",
-            ambiguous_table_ids,
-        );
-    }
-
-    let table_search = match workspace::focused_code_search(
+    let evidence_target_id = column
+        .as_ref()
+        .map_or(table.id.as_str(), |column| column.id.as_str())
+        .to_string();
+    let Some((matched_files, schema_ambiguous)) = enrich_table_code_evidence(
         app_data_dir,
         registry,
         workspace_id,
-        table.name.as_str(),
-        None,
-        32,
-    ) {
-        Ok(search) => search,
-        Err(_) => {
-            atlas::record_code_search_gap(
-                snapshot,
-                table.id.as_str(),
-                "code-search-failure",
-                "테이블 식별자 코드 검색에 실패했습니다. 기본 snapshot 후보는 그대로 유지합니다.",
-                Vec::new(),
-            );
-            return;
-        }
-    };
-    let table_evidence = atlas::apply_focused_code_evidence(
-        snapshot,
         table.id.as_str(),
-        &table_search,
-        schema_ambiguous,
-    );
+        evidence_target_id.as_str(),
+        snapshot,
+    ) else {
+        return;
+    };
     let Some(column) = column else {
         return;
     };
 
-    let (path_filter, omitted_files) = focused_code_path_filter(&table_evidence.matched_files);
+    let (path_filter, omitted_files) = focused_code_path_filter(&matched_files);
     if omitted_files > 0 {
         atlas::record_code_search_gap(
             snapshot,
@@ -413,6 +475,113 @@ fn enrich_snapshot_code_evidence(
             vec![table.id.clone()],
         ),
     }
+}
+
+fn enrich_api_code_evidence(
+    app_data_dir: &Path,
+    registry: &EngineRegistry,
+    workspace_id: &str,
+    focus_id: &str,
+    snapshot: &mut InventorySnapshot,
+) {
+    for target_id in api_code_evidence_target_ids(snapshot, focus_id) {
+        let _ = enrich_table_code_evidence(
+            app_data_dir,
+            registry,
+            workspace_id,
+            target_id.as_str(),
+            target_id.as_str(),
+            snapshot,
+        );
+    }
+}
+
+fn api_code_evidence_target_ids(snapshot: &InventorySnapshot, focus_id: &str) -> Vec<String> {
+    let map = atlas::visual_map_with_change(
+        snapshot,
+        Some(focus_id.to_string()),
+        "api-flow".to_string(),
+        None,
+    );
+    let Some(answer) = map.api_reading else {
+        return Vec::new();
+    };
+    answer
+        .db_candidates
+        .into_iter()
+        .filter_map(|candidate| candidate.node_id)
+        .filter(|target_id| {
+            snapshot
+                .items
+                .iter()
+                .any(|item| item.id == *target_id && item.source == "db" && item.kind == "table")
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn enrich_table_code_evidence(
+    app_data_dir: &Path,
+    registry: &EngineRegistry,
+    workspace_id: &str,
+    table_id: &str,
+    evidence_target_id: &str,
+    snapshot: &mut InventorySnapshot,
+) -> Option<(Vec<String>, bool)> {
+    let table = snapshot
+        .items
+        .iter()
+        .find(|item| item.id == table_id && item.source == "db" && item.kind == "table")
+        .cloned()?;
+    let ambiguous_table_ids = snapshot
+        .items
+        .iter()
+        .filter(|item| {
+            item.kind == "table"
+                && item.source == "db"
+                && item.name.eq_ignore_ascii_case(&table.name)
+        })
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
+    let schema_ambiguous = ambiguous_table_ids.len() > 1;
+    if schema_ambiguous {
+        atlas::record_code_search_gap(
+            snapshot,
+            evidence_target_id,
+            "code-search-schema-ambiguous",
+            "동일한 테이블명이 여러 스키마에 있어 텍스트 검색 후보의 신뢰도를 high로 표시하지 않습니다.",
+            ambiguous_table_ids,
+        );
+    }
+
+    let table_search = match workspace::focused_code_search(
+        app_data_dir,
+        registry,
+        workspace_id,
+        table.name.as_str(),
+        None,
+        32,
+    ) {
+        Ok(search) => search,
+        Err(_) => {
+            atlas::record_code_search_gap(
+                snapshot,
+                table.id.as_str(),
+                "code-search-failure",
+                "테이블 식별자 코드 검색에 실패했습니다. 기본 snapshot 후보는 그대로 유지합니다.",
+                Vec::new(),
+            );
+            return None;
+        }
+    };
+    let table_evidence = atlas::apply_focused_code_evidence(
+        snapshot,
+        table.id.as_str(),
+        &table_search,
+        schema_ambiguous,
+    );
+    Some((table_evidence.matched_files, schema_ambiguous))
 }
 
 fn focused_code_path_filter(paths: &[String]) -> (Option<String>, usize) {
@@ -461,8 +630,35 @@ fn escape_regex(value: &str) -> String {
 
 #[cfg(test)]
 mod code_evidence_tests {
-    use super::{focused_code_path_filter, normalized_change_intent};
-    use crate::atlas::ChangeIntent;
+    use super::{api_code_evidence_target_ids, focused_code_path_filter, normalized_change_intent};
+    use crate::atlas::{ChangeIntent, InventorySnapshot};
+
+    #[test]
+    fn api_evidence_search_targets_only_reachable_db_candidates() {
+        let snapshot: InventorySnapshot = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 2,
+            "workspaceId": "shop",
+            "savedAt": "1",
+            "items": [
+                { "id": "code:route", "kind": "api", "name": "/sessions", "layer": "api", "source": "code", "parentId": null, "path": "routes.py" },
+                { "id": "code:handler", "kind": "function", "name": "listSessions", "layer": "code", "source": "code", "parentId": null, "path": "routes.py" },
+                { "id": "code:repository", "kind": "function", "name": "sessionsRepository", "layer": "code", "source": "code", "parentId": null, "path": "repository.py" },
+                { "id": "code:unreachable", "kind": "function", "name": "auditRepository", "layer": "code", "source": "code", "parentId": null, "path": "audit.py" },
+                { "id": "db:table:public.sessions", "kind": "table", "name": "sessions", "layer": "db", "source": "db", "parentId": null, "path": null },
+                { "id": "db:table:public.audit", "kind": "table", "name": "audit", "layer": "db", "source": "db", "parentId": null, "path": null }
+            ],
+            "links": [
+                { "id": "handles", "from": "code:route", "to": "code:handler", "kind": "code_handle", "truthClass": "confirmed", "direction": "outbound", "engineEdgeType": "HANDLES", "label": null, "evidence": [] },
+                { "id": "calls", "from": "code:handler", "to": "code:repository", "kind": "code_call", "truthClass": "confirmed", "direction": "outbound", "engineEdgeType": "CALLS", "label": null, "evidence": [] }
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            api_code_evidence_target_ids(&snapshot, "code:route"),
+            vec!["db:table:public.sessions"]
+        );
+    }
 
     #[test]
     fn column_search_path_filter_is_exact_deduplicated_and_bounded() {
@@ -607,6 +803,86 @@ fn list_workspaces(app: tauri::AppHandle) -> CommandResult<Vec<Workspace>> {
     Ok(workspace::list_workspaces(app_data_dir)?)
 }
 
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    #[test]
+    fn bounded_code_inventory_keeps_totals_and_drops_dangling_relationships() {
+        let functions = (0..101)
+            .map(|index| {
+                serde_json::json!({
+                    "id": format!("function-{index}"),
+                    "kind": "function",
+                    "name": format!("function_{index}"),
+                    "detail": {}
+                })
+            })
+            .collect::<Vec<_>>();
+        let inventory: CodeInventory = serde_json::from_value(serde_json::json!({
+            "project": "test",
+            "routes": [],
+            "services": [],
+            "files": [],
+            "handlers": [],
+            "repositories": [],
+            "functions": functions,
+            "classes": [],
+            "modules": [],
+            "unknown": [],
+            "summary": {
+                "routes": 0,
+                "handlers": 0,
+                "services": 0,
+                "repositories": 0,
+                "functions": 101,
+                "classes": 0,
+                "modules": 0,
+                "files": 0,
+                "unknown": 0
+            },
+            "architecture": null,
+            "calls": [{ "from": "function-0", "to": "function-100" }],
+            "handles": []
+        }))
+        .unwrap();
+
+        let bounded = bounded_code_inventory(inventory);
+        assert_eq!(bounded.functions.len(), 100);
+        assert_eq!(bounded.summary.functions, 101);
+        assert!(bounded.partial);
+        assert!(bounded.calls.is_empty());
+    }
+
+    #[test]
+    fn bounded_db_inventory_keeps_exact_engine_totals() {
+        let tables = (0..101)
+            .map(|index| {
+                serde_json::json!({
+                    "key": format!("sqlite:test:main:main:table:table_{index}"),
+                    "schema": "main",
+                    "name": format!("table_{index}"),
+                    "columns": []
+                })
+            })
+            .collect::<Vec<_>>();
+        let inventory: DbInventory = serde_json::from_value(serde_json::json!({
+            "profileId": "test",
+            "tables": tables,
+            "resultCount": 101,
+            "totalTables": 101,
+            "truncated": false
+        }))
+        .unwrap();
+
+        let bounded = bounded_db_inventory(inventory);
+        assert_eq!(bounded.tables.len(), 100);
+        assert_eq!(bounded.result_count, Some(101));
+        assert_eq!(bounded.total_tables, Some(101));
+        assert_eq!(bounded.truncated, Some(false));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -616,11 +892,10 @@ pub fn run() {
             get_engine_availability,
             save_db_profile,
             index_db_profile,
-            get_db_inventory,
             index_code_repository,
-            get_code_inventory,
-            save_inventory_snapshot,
-            load_inventory_snapshot,
+            load_inventory_bootstrap,
+            search_inventory,
+            refresh_snapshot_freshness,
             get_visual_map,
             open_source_location,
             reveal_source_location,

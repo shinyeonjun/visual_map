@@ -81,16 +81,3 @@
   background: color-mix(in srgb, var(--accent) 9%, var(--bg-raised));
   color: var(--accent-ink);
 }
-.table-button {
-  width: 100%;
-  border: 0;
-  text-align: left;
-}
-.table-button.active { background: var(--green-soft); }
-.column-button {
-  width: 100%;
-  border: 0;
-  background: transparent;
-  text-align: left;
-}
-.column-button:hover { background: var(--bg-inset); }

@@ -1,19 +1,20 @@
 import type { CommandErrorPayload, OperationStatus, UserError } from "../types/operation";
 
-const actionLabels: Record<string, string> = {
-  "workspace-create": "프로젝트 열기",
-  "workspace-clone": "GitHub 저장소 복제",
-  "workspace-open": "프로젝트 열기",
-  "workspace-refresh": "GitHub 업데이트",
-  "workspace-delete": "프로젝트 제거",
-  "snapshot-restore": "저장 결과 확인",
-  "code-index": "코드 읽기",
-  "code-load": "코드 불러오기",
-  "db-save": "DB 연결 저장",
-  "db-test": "DB 구조 테스트",
-  "db-index": "DB 구조 읽기",
-  "db-load": "테이블 불러오기",
-  "db-delete": "DB 연결 삭제",
+export type OperationSource = "workspace" | "code" | "db" | "map";
+
+const actions: Record<string, { label: string; source: OperationSource }> = {
+  "workspace-create": { label: "프로젝트 열기", source: "workspace" },
+  "workspace-clone": { label: "GitHub 저장소 복제", source: "workspace" },
+  "workspace-open": { label: "프로젝트 열기", source: "workspace" },
+  "workspace-refresh": { label: "GitHub 업데이트", source: "workspace" },
+  "workspace-repair": { label: "프로젝트 복구", source: "workspace" },
+  "workspace-delete": { label: "프로젝트 제거", source: "workspace" },
+  "snapshot-restore": { label: "저장 결과 확인", source: "map" },
+  "code-index": { label: "코드 읽기", source: "code" },
+  "db-save": { label: "DB 연결 저장", source: "db" },
+  "db-index": { label: "DB 구조 읽기", source: "db" },
+  "db-delete": { label: "DB 연결 삭제", source: "db" },
+  "map-load": { label: "캔버스", source: "map" },
 };
 
 export function runningOperation(action: string | null): OperationStatus | null {
@@ -21,12 +22,16 @@ export function runningOperation(action: string | null): OperationStatus | null 
     return null;
   }
 
-  const label = actionLabels[action] ?? "작업";
+  const label = actions[action]?.label ?? "작업";
   return {
     phase: "running",
     label,
     message: `${label} 진행 중`,
   };
+}
+
+export function operationSourceForAction(action: string | null): OperationSource | null {
+  return action ? (actions[action]?.source ?? null) : null;
 }
 
 export function idleOperation(): OperationStatus {

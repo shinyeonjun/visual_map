@@ -52,10 +52,7 @@ export function WorkbenchLeftPanel({
       {hasWorkspace && (
         <CodeSourceSection workspaceControls={workspaceControls} />
       )}
-      <DatabaseSourceSection
-        dbProfileControls={dbProfileControls}
-        visualMapControls={visualMapControls}
-      />
+      <DatabaseSourceSection dbProfileControls={dbProfileControls} />
     </aside>
   );
 }
@@ -125,7 +122,7 @@ function workbenchSetupSteps(
     },
     {
       label: "답",
-      detail: hasAnswers ? "중앙 답과 오른쪽 선택 근거에서 직접/후보를 확인합니다." : "검색하거나 카드를 선택해 답 기준을 좁힙니다.",
+      detail: hasAnswers ? "중앙 답과 오른쪽 대상 근거에서 직접/후보를 확인합니다." : "검색하거나 카드를 선택해 답 기준을 좁힙니다.",
       state: hasAnswers && canFindAnswers ? "done" : activeStep === "answers" ? "active" : "",
     },
   ];

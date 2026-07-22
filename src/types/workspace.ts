@@ -1,10 +1,22 @@
-export type DbProfileSource = "sqlite" | "ddl-sqlite" | "postgres" | "mysql" | "sqlserver" | "oracle";
+import { dbTableIdentityKey } from "../inventory/dbIdentity";
+
+export type DbProfileSource =
+  | "sqlite"
+  | "ddl-sqlite"
+  | "postgres"
+  | "yugabytedb"
+  | "mysql"
+  | "mariadb"
+  | "sqlserver"
+  | "oracle";
 
 export const DB_PROFILE_SOURCE_OPTIONS: { value: DbProfileSource; label: string }[] = [
   { value: "ddl-sqlite", label: "SQLite DDL" },
   { value: "sqlite", label: "SQLite" },
   { value: "postgres", label: "PostgreSQL" },
-  { value: "mysql", label: "MySQL/MariaDB" },
+  { value: "yugabytedb", label: "YugabyteDB (YSQL)" },
+  { value: "mysql", label: "MySQL" },
+  { value: "mariadb", label: "MariaDB" },
   { value: "sqlserver", label: "SQL Server" },
   { value: "oracle", label: "Oracle" },
 ];
@@ -35,11 +47,6 @@ const CODE_KIND_CHIPS: Record<string, string> = {
 export function codeKindChip(kind: string): string {
   const key = kind.trim().toLowerCase();
   return CODE_KIND_CHIPS[key] ?? kind.slice(0, 5).toUpperCase();
-}
-
-export function isApiCodeItem(item: { kind: string }): boolean {
-  const kind = item.kind.trim().toLowerCase();
-  return kind === "route" || kind === "api";
 }
 
 export type Workspace = {
@@ -120,6 +127,14 @@ export type DbInventoryColumn = {
   isForeignKey: boolean;
 };
 
+export type DbDependentObject = {
+  key: string;
+  kind: "view" | "trigger" | "routine" | string;
+  name: string;
+  relation: string;
+  columnKeys?: string[];
+};
+
 export type DbInventoryTable = {
   key?: string | null;
   database?: string | null;
@@ -130,6 +145,7 @@ export type DbInventoryTable = {
   inboundForeignKeys?: DbForeignKey[];
   constraints?: DbConstraint[];
   indexes?: DbIndex[];
+  dependents?: DbDependentObject[];
 };
 
 export type DbForeignKey = {
@@ -181,12 +197,13 @@ type DbInventoryGap = {
 };
 
 export function dbInventoryTableKey(table: DbInventoryTable): string {
-  return table.schema ? `${table.schema}.${table.name}` : table.name;
+  return dbTableIdentityKey(table.schema, table.name);
 }
 
 export type DbInventory = {
   profileId: string;
   tables: DbInventoryTable[];
+  partial?: boolean;
   snapshotKey?: string | null;
   contractVersion?: string | null;
   capabilityWarnings?: string[];
@@ -229,6 +246,7 @@ export type CodeInventory = {
   architecture?: unknown;
   calls: CodeCall[];
   handles?: CodeHandle[];
+  partial?: boolean;
 };
 
 export function codeInventoryItemCount(inventory: CodeInventory | null | undefined): number {
@@ -236,6 +254,26 @@ export function codeInventoryItemCount(inventory: CodeInventory | null | undefin
     return 0;
   }
   return Object.values(inventory.summary).reduce((sum, count) => sum + count, 0);
+}
+
+export function codeInventoryRouteCount(inventory: CodeInventory | null | undefined): number {
+  return inventory?.summary.routes ?? 0;
+}
+
+export function codeInventoryFileCount(inventory: CodeInventory | null | undefined): number {
+  return inventory?.summary.files ?? 0;
+}
+
+export function codeInventorySymbolCount(inventory: CodeInventory | null | undefined): number {
+  if (!inventory) {
+    return 0;
+  }
+  const { routes, files, ...symbols } = inventory.summary;
+  return Object.values(symbols).reduce((sum, count) => sum + count, 0);
+}
+
+export function dbInventoryTableCount(inventory: DbInventory | null | undefined): number {
+  return inventory?.totalTables ?? inventory?.tables.length ?? 0;
 }
 
 export function codeInventoryCodeItems(inventory: CodeInventory | null | undefined): CodeInventoryItem[] {

@@ -1,0 +1,516 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
+import type { VisualMap } from "../../types/visual-map";
+import { AtlasCanvas } from "../atlas/AtlasCanvas";
+import { CodeSourceSection } from "./CodeSourceSection";
+import { DatabaseSourceSection } from "./DatabaseSourceSection";
+import { InspectorPanel } from "./InspectorPanel";
+import { WorkbenchTopBar } from "./WorkbenchTopBar";
+
+describe("stable mode transitions", () => {
+  it("keeps the selected mode structure visible while the canvas reloads", () => {
+    render(
+      <AtlasCanvas
+        openSourceManager={vi.fn()}
+        workspaceControls={{ codeInventory: null } as unknown as WorkspaceControls}
+        dbProfileControls={{ inventory: null } as unknown as DbProfileControls}
+        visualMapControls={loadingControls("api-flow")}
+      />,
+    );
+
+    expect(screen.getByText("API 읽기 경로")).toBeInTheDocument();
+    expect(screen.getByText("Route")).toBeInTheDocument();
+    expect(screen.getByText("DB 후보")).toBeInTheDocument();
+    expect(screen.getByText("새 근거 구성 중")).toBeInTheDocument();
+  });
+
+  it("keeps the evidence sections mounted while their values reload", () => {
+    render(
+      <InspectorPanel
+        workspaceControls={{} as WorkspaceControls}
+        dbProfileControls={{} as DbProfileControls}
+        visualMapControls={loadingControls("column-impact")}
+      />,
+    );
+
+    expect(screen.getByText("선택한 대상")).toBeInTheDocument();
+    expect(screen.getByText("컬럼 변경 영향")).toBeInTheDocument();
+    expect(screen.getByText("직접 연결")).toBeInTheDocument();
+    expect(screen.getByText("근거")).toBeInTheDocument();
+  });
+
+  it("keeps the previous same-mode answer visible but clearly disabled while a new target loads", () => {
+    const previousMap = visualMap("search-focus", "code:function-old");
+    const controls = loadingControls("search-focus", previousMap);
+    const { container } = render(
+      <AtlasCanvas
+        openSourceManager={vi.fn()}
+        workspaceControls={workspaceControls()}
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={controls}
+      />,
+    );
+
+    expect(container.querySelector(".at-canvas.is-refreshing")).toBeInTheDocument();
+    expect(screen.getByText(/이전 결과 표시/)).toBeInTheDocument();
+  });
+
+  it("keeps the previous inspector mounted during a same-mode refresh", () => {
+    const controls = loadingControls("search-focus", visualMap("search-focus", "code:function-old"));
+    const { container } = render(
+      <InspectorPanel
+        workspaceControls={workspaceControls()}
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={controls}
+      />,
+    );
+
+    expect(container.querySelector(".inspector.is-refreshing")).toBeInTheDocument();
+    expect(screen.getByText("새 대상 분석 중 · 이전 근거 표시")).toBeInTheDocument();
+  });
+
+  it("shows a neutral target prompt instead of choosing an item on first mode entry", () => {
+    render(
+      <AtlasCanvas
+        openSourceManager={vi.fn()}
+        workspaceControls={workspaceControls()}
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={{
+          ...loadingControls("api-flow", visualMap("api-flow", "narrow-focus")),
+          focusId: null,
+          loading: false,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("확인할 API 라우트를 선택하세요")).toBeInTheDocument();
+    expect(screen.getByText(/왼쪽 API 라우트 목록/)).toBeInTheDocument();
+  });
+
+  it("uses the requested analysis target when a narrow projection has no focused node", () => {
+    render(
+      <AtlasCanvas
+        openSourceManager={vi.fn()}
+        workspaceControls={workspaceControls()}
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={{
+          ...loadingControls("search-focus", visualMap("search-focus", "narrow-focus")),
+          focusId: "code:function-old",
+          loading: false,
+        }}
+      />,
+    );
+
+    expect(screen.getAllByText("oldFunction").length).toBeGreaterThan(0);
+    expect(screen.queryByText("확인할 코드 항목을 선택하세요")).not.toBeInTheDocument();
+  });
+
+  it("separates unrelated nearby code from a focused target with no relationships", () => {
+    const workspace = workspaceControls();
+    workspace.codeInventory!.functions.push({
+      id: "function-nearby",
+      kind: "function",
+      name: "nearbyFunction",
+      filePath: "src/nearby.ts",
+      line: 8,
+      detail: null,
+    });
+    const currentMap = codeMap();
+    currentMap.nodes.push({
+      id: "code:function-nearby",
+      kind: "function",
+      title: "nearbyFunction",
+      subtitle: "src/nearby.ts",
+      layer: "code",
+      source: "code",
+    });
+
+    const { container } = render(
+      <AtlasCanvas
+        openSourceManager={vi.fn()}
+        workspaceControls={workspace}
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={readyControls(currentMap)}
+      />,
+    );
+
+    expect(container.querySelector(".at-disconnected-focus")).toBeInTheDocument();
+    expect(screen.getByText("확인된 직접 관계가 없습니다")).toBeInTheDocument();
+    expect(screen.queryByText("nearbyFunction")).not.toBeInTheDocument();
+    expect(screen.getByText(/1개 항목은 관계 근거가 없어 지도에서 분리했습니다/)).toBeInTheDocument();
+  });
+
+  it("uses the requested analysis target as the default inspector subject", () => {
+    const currentMap = visualMap("search-focus", "narrow-focus");
+    const { container } = render(
+      <InspectorPanel
+        workspaceControls={workspaceControls()}
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={{ ...readyControls(currentMap), focusId: "code:function-old" }}
+      />,
+    );
+
+    expect(screen.getAllByText("oldFunction").length).toBeGreaterThan(0);
+    expect(Array.from(container.querySelectorAll(".inspector-section > header > strong")).map((node) => node.textContent))
+      .toEqual(["요약", "직접 연결", "근거", "소스", "다음 확인"]);
+  });
+
+  it("keeps source actions for a map node omitted from the bounded inventory", () => {
+    const currentMap = visualMap("search-focus", "code:function-outside-bootstrap");
+    currentMap.nodes = [{
+      id: "code:function-outside-bootstrap",
+      kind: "function",
+      title: "outsideBootstrap",
+      subtitle: "src/outside.ts",
+      layer: "code",
+      source: "code",
+      location: { path: "src/outside.ts", line: 42, column: 3 },
+    }];
+
+    render(
+      <InspectorPanel
+        workspaceControls={workspaceControls()}
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={{ ...readyControls(currentMap), selectedNode: currentMap.nodes[0] }}
+      />,
+    );
+
+    expect(screen.getByText("function · 42행")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "VS Code" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cursor" })).toBeInTheDocument();
+  });
+
+  it("opens source management from the stale source status", () => {
+    const onToggleSourceManager = vi.fn();
+    render(
+      <WorkbenchTopBar
+        sourceManagerOpen={false}
+        onToggleSourceManager={onToggleSourceManager}
+        workspaceControls={{
+          initialized: true,
+          busy: false,
+          currentWorkspace: { id: "workspace-1", name: "Shop API" },
+          workspaces: [{ id: "workspace-1", name: "Shop API" }],
+          codeInventory: null,
+          operationStatus: { phase: "idle", label: "작업 없음", message: "실행 중인 작업 없음" },
+          openWorkspace: vi.fn(),
+        } as unknown as WorkspaceControls}
+        dbProfileControls={{ inventory: null } as unknown as DbProfileControls}
+        visualMapControls={{
+          searchQuery: "",
+          searchGroups: [],
+          snapshotStaleReasons: ["코드 파일이 마지막 읽기 이후 바뀌었습니다"],
+          setSearchQuery: vi.fn(),
+          openSearchPopover: vi.fn(),
+          closeSearchPopover: vi.fn(),
+          runSearch: vi.fn(),
+          selectSearchResult: vi.fn(),
+        } as unknown as VisualMapControls}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "오래됨" }));
+
+    expect(onToggleSourceManager).toHaveBeenCalledOnce();
+  });
+
+  it("keeps code re-reading visible without expanding project details", () => {
+    const indexCodeRepository = vi.fn();
+    const { container } = render(
+      <CodeSourceSection
+        workspaceControls={{
+          ...workspaceWithApi(),
+          busy: false,
+          canIndexCode: true,
+          codeIndexing: false,
+          indexCodeRepository,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "다시 읽기" }));
+
+    expect(indexCodeRepository).toHaveBeenCalledOnce();
+    expect(container.querySelector("details.source-advanced")).not.toHaveAttribute("open");
+  });
+
+  it("keeps database re-reading visible without expanding connection details", () => {
+    const indexProfile = vi.fn();
+    const { container } = render(
+      <DatabaseSourceSection
+        dbProfileControls={{
+          ...dbControlsWithUsers(),
+          hasWorkspace: true,
+          activeProfile: {
+            id: "profile-1",
+            name: "Main DB",
+            source: "ddl-sqlite",
+            path: "D:\\schema.sql",
+            cachePath: "D:\\cache\\db.json",
+            passwordStored: false,
+          },
+          profileName: "Main DB",
+          profileSource: "ddl-sqlite",
+          profilePath: "D:\\schema.sql",
+          connectionString: "",
+          status: null,
+          error: null,
+          errorDetail: null,
+          busy: false,
+          saving: false,
+          indexing: false,
+          deleting: false,
+          canSaveProfile: false,
+          canIndexProfile: true,
+          dbIndexBlockedReason: null,
+          setProfileName: vi.fn(),
+          setProfileSource: vi.fn(),
+          setProfilePath: vi.fn(),
+          setConnectionString: vi.fn(),
+          pickPath: vi.fn(),
+          saveProfile: vi.fn(),
+          indexProfile,
+          deleteProfile: vi.fn(),
+          openTable: vi.fn(),
+          openColumn: vi.fn(),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "다시 읽기" }));
+
+    expect(indexProfile).toHaveBeenCalledOnce();
+    expect(container.querySelector("details.source-advanced")).not.toHaveAttribute("open");
+  });
+
+  it.each([
+    ["api-flow", apiMap()],
+    ["search-focus", codeMap()],
+    ["table-usage", dbMap("table-usage", "db:table:public.users")],
+    ["column-impact", dbMap("column-impact", "db:column:public.users:id")],
+  ])("keeps the same inspector reading order in %s mode", (_mode, currentMap) => {
+    const { container } = render(
+      <InspectorPanel
+        workspaceControls={workspaceWithApi()}
+        dbProfileControls={dbControlsWithUsers()}
+        visualMapControls={readyControls(currentMap)}
+      />,
+    );
+
+    const headings = Array.from(container.querySelectorAll(".inspector-section > header > strong"))
+      .map((node) => node.textContent);
+    expect(headings).toEqual(["요약", "직접 연결", "근거", "소스", "다음 확인"]);
+  });
+
+  it("collapses repeated empty evidence sections until an analysis target is chosen", () => {
+    const { container } = render(
+      <InspectorPanel
+        workspaceControls={workspaceControls()}
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={readyControls(emptyMap("atlas"))}
+      />,
+    );
+
+    const headings = Array.from(container.querySelectorAll(".inspector-section > header > strong"))
+      .map((node) => node.textContent);
+    expect(headings).toEqual(["요약", "다음 확인"]);
+  });
+
+  it("keeps source controls in the scroll area and the next check in a fixed footer", () => {
+    const { container } = render(
+      <InspectorPanel
+        workspaceControls={workspaceWithApi()}
+        dbProfileControls={dbControlsWithUsers()}
+        visualMapControls={readyControls(apiMap())}
+      />,
+    );
+
+    const scrollBody = container.querySelector(".inspector-scroll-body");
+    const footer = container.querySelector(".inspector > .inspector-section:last-child");
+    expect(scrollBody?.querySelectorAll(":scope > .inspector-section")).toHaveLength(4);
+    expect(footer?.querySelector("header > strong")).toHaveTextContent("다음 확인");
+    expect(scrollBody?.contains(footer)).toBe(false);
+  });
+
+  it("opens a direct API relationship without replacing the inspector structure", () => {
+    const selectEdge = vi.fn();
+    const currentMap = apiMap();
+    render(
+      <InspectorPanel
+        workspaceControls={workspaceWithApi()}
+        dbProfileControls={dbControlsWithUsers()}
+        visualMapControls={{ ...readyControls(currentMap), selectEdge } as unknown as VisualMapControls}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /HANDLES.*loadSession/ }));
+    expect(selectEdge).toHaveBeenCalledWith(currentMap.edges[0]);
+    expect(screen.getByText(/route-source: 라우트 소스 위치를 확인했습니다/)).toBeInTheDocument();
+  });
+});
+
+function loadingControls(mode: string, currentMap: VisualMap | null = null): VisualMapControls {
+  return {
+    currentMap,
+    mode,
+    focusId: "code:route-next",
+    loading: true,
+    enriching: false,
+    selectedNode: null,
+    selectedEdge: null,
+  } as unknown as VisualMapControls;
+}
+
+function visualMap(mode: string, focus: string): VisualMap {
+  return {
+    id: `${mode}:${focus}`,
+    workspaceId: "workspace-1",
+    mode,
+    focus,
+    nodes: [],
+    edges: [],
+    warnings: [],
+  };
+}
+
+function readyControls(currentMap: VisualMap): VisualMapControls {
+  return {
+    currentMap,
+    mode: currentMap.mode,
+    focusId: currentMap.focus,
+    loading: false,
+    enriching: false,
+    selectedNode: null,
+    selectedEdge: null,
+    selectNode: vi.fn(),
+    selectEdge: vi.fn(),
+  } as unknown as VisualMapControls;
+}
+
+function emptyMap(mode: string): VisualMap {
+  return visualMap(mode, "narrow-focus");
+}
+
+function codeMap(): VisualMap {
+  return {
+    ...visualMap("search-focus", "code:function-old"),
+    nodes: [{ id: "code:function-old", kind: "function", title: "oldFunction", subtitle: "src/old.ts", layer: "code", source: "code" }],
+  };
+}
+
+function apiMap(): VisualMap {
+  return {
+    ...visualMap("api-flow", "code:route-session"),
+    nodes: [
+      { id: "code:route-session", kind: "api", title: "/api/v1/sessions", subtitle: "src/routes.ts", layer: "api", source: "code" },
+      { id: "code:handler-session", kind: "handler", title: "loadSession", subtitle: "src/handlers.ts", layer: "code", source: "code" },
+    ],
+    edges: [{
+      id: "handles-session",
+      from: "code:route-session",
+      to: "code:handler-session",
+      kind: "code_handle",
+      confidence: "high",
+      evidence: [{ kind: "route-binding", text: "라우트 등록에서 핸들러를 직접 확인했습니다." }],
+    }],
+    apiReading: {
+      subject: "/api/v1/sessions",
+      steps: [{
+        id: "route-step",
+        nodeId: "code:route-session",
+        kind: "api",
+        title: "/api/v1/sessions",
+        detail: "src/routes.ts:12",
+        truthClass: "confirmed",
+        rank: 0,
+        evidence: [{ kind: "route-source", text: "라우트 소스 위치를 확인했습니다." }],
+        depth: 0,
+        lane: "route",
+        laneBasis: "engine-node",
+        incomingEvidence: [],
+      }],
+      dbCandidates: [],
+      unknowns: [],
+      recommendedChecks: [{
+        id: "check-handler",
+        nodeId: "code:handler-session",
+        kind: "action",
+        title: "핸들러 구현 확인",
+        detail: "loadSession의 호출을 이어서 확인합니다.",
+        truthClass: "action",
+        rank: 1,
+        evidence: [],
+      }],
+      hiddenBranches: 0,
+      truncated: false,
+    },
+  };
+}
+
+function dbMap(mode: string, focus: string): VisualMap {
+  return {
+    ...visualMap(mode, focus),
+    nodes: [
+      { id: "db:table:public.users", kind: "table", title: "users", subtitle: "public", layer: "database", source: "db" },
+      { id: "db:column:public.users:id", kind: "column", title: "id", subtitle: "uuid", layer: "database", source: "db" },
+    ],
+  };
+}
+
+function workspaceControls(): WorkspaceControls {
+  return {
+    currentWorkspace: { id: "workspace-1", name: "backend" },
+    codeInventory: {
+      routes: [],
+      services: [],
+      handlers: [],
+      repositories: [],
+      functions: [{ id: "function-old", kind: "function", name: "oldFunction", filePath: "src/old.ts", line: 1 }],
+      classes: [],
+      modules: [],
+      unknown: [],
+      files: [],
+      calls: [],
+      summary: { routes: 0, handlers: 0, services: 0, repositories: 0, functions: 1, classes: 0, modules: 0, files: 0, unknown: 0 },
+    },
+  } as unknown as WorkspaceControls;
+}
+
+function dbProfileControls(): DbProfileControls {
+  return {
+    inventory: null,
+    profileName: "",
+    profilePath: "",
+    connectionString: "",
+    canSaveProfile: false,
+  } as unknown as DbProfileControls;
+}
+
+function workspaceWithApi(): WorkspaceControls {
+  const controls = workspaceControls();
+  return {
+    ...controls,
+    codeInventory: {
+      ...controls.codeInventory!,
+      routes: [{ id: "route-session", kind: "api", name: "/api/v1/sessions", filePath: "src/routes.ts", line: 12 }],
+      handlers: [{ id: "handler-session", kind: "handler", name: "loadSession", filePath: "src/handlers.ts", line: 24 }],
+    },
+  } as WorkspaceControls;
+}
+
+function dbControlsWithUsers(): DbProfileControls {
+  return {
+    ...dbProfileControls(),
+    inventory: {
+      tables: [{
+        schema: "public",
+        name: "users",
+        columns: [{ name: "id", dataType: "uuid", isPrimaryKey: true, isForeignKey: false, nullable: false }],
+      }],
+      summary: { tables: 1, columns: 1 },
+    },
+    selectedTableKey: "public.users",
+    openColumn: vi.fn(),
+  } as unknown as DbProfileControls;
+}

@@ -2,16 +2,25 @@ import {
   type CodeInventory,
   type CodeInventoryItem,
   type DbConstraint,
+  type DbDependentObject,
   type DbForeignKey,
   type DbIndex,
   type DbInventory,
   type DbInventoryTable,
 } from "../types/workspace";
-import type { InventoryItem, InventorySnapshot, SnapshotLink } from "../types/visual-map";
+import type { InventoryItem, InventorySnapshot, InventorySummary, SnapshotLink } from "../types/visual-map";
+import { columnRefFromNodeId } from "../visual/nodeIds";
+import { dbTableNameFromIdentityKey, parseDbStableObjectKey } from "./dbIdentity";
 
-export function codeInventoryFromSnapshot(snapshot: InventorySnapshot, project: string): CodeInventory {
+export function codeInventoryFromSnapshot(
+  snapshot: InventorySnapshot,
+  project: string,
+  inventorySummary?: InventorySummary,
+): CodeInventory {
   const codeItems = snapshot.items.filter((item) => item.source === "code");
-  const routes = codeItems.filter((item) => item.layer === "api").map((item) => codeItemFromSnapshot(item, project));
+  const routes = codeItems
+    .filter((item) => item.layer === "api")
+    .map((item) => codeInventoryItemFromSnapshot(item, project));
   const confirmedRouteIds = new Set(
     (snapshot.links ?? [])
       .filter((link) => link.kind === "code_handle")
@@ -23,8 +32,10 @@ export function codeInventoryFromSnapshot(snapshot: InventorySnapshot, project: 
   );
   const codeSymbols = codeItems
     .filter((item) => item.layer === "code" && item.kind !== "file")
-    .map((item) => codeItemFromSnapshot(item, project));
-  const files = codeItems.filter((item) => item.kind === "file").map((item) => codeItemFromSnapshot(item, project));
+    .map((item) => codeInventoryItemFromSnapshot(item, project));
+  const files = codeItems
+    .filter((item) => item.kind === "file")
+    .map((item) => codeInventoryItemFromSnapshot(item, project));
   const confirmedHandlerIds = new Set(
     (snapshot.links ?? [])
       .filter((link) => link.kind === "code_handle")
@@ -50,7 +61,7 @@ export function codeInventoryFromSnapshot(snapshot: InventorySnapshot, project: 
     classes,
     modules,
     unknown,
-    summary: {
+    summary: codeSummary(inventorySummary, {
       routes: routes.length,
       handlers: handlers.length,
       services: services.length,
@@ -60,10 +71,10 @@ export function codeInventoryFromSnapshot(snapshot: InventorySnapshot, project: 
       modules: modules.length,
       files: files.length,
       unknown: unknown.length,
-    },
+    }),
     architecture: snapshot.metadata?.architecture ?? null,
     calls: (snapshot.links ?? [])
-      .filter((link) => link.kind === "code_call")
+      .filter((link) => link.kind === "code_call" && link.truthClass === "confirmed")
       .map((link) => ({
         from: link.from.replace(/^code:/, ""),
         to: link.to.replace(/^code:/, ""),
@@ -74,10 +85,16 @@ export function codeInventoryFromSnapshot(snapshot: InventorySnapshot, project: 
         route: link.from.replace(/^code:/, ""),
         handler: link.to.replace(/^code:/, ""),
       })),
+    partial: Boolean(inventorySummary?.sources.code && inventorySummary.sources.code.total > codeItems.length),
   };
 }
 
-export function dbInventoryFromSnapshot(snapshot: InventorySnapshot, profileId: string): DbInventory {
+export function dbInventoryFromSnapshot(
+  snapshot: InventorySnapshot,
+  profileId: string,
+  inventorySummary?: InventorySummary,
+): DbInventory {
+  const loadedDbItemCount = snapshot.items.filter((item) => item.source === "db").length;
   const tables = snapshot.items
     .filter((item) => item.source === "db" && item.kind === "table")
     .map((item): DbInventoryTable => {
@@ -86,7 +103,7 @@ export function dbInventoryFromSnapshot(snapshot: InventorySnapshot, profileId: 
       const stableTableKey = isDbObjectKey(item.qualifiedName) ? item.qualifiedName : null;
       return {
         key: stableTableKey,
-        database: dbObjectKeyParts(stableTableKey)?.database ?? null,
+        database: parseDbStableObjectKey(stableTableKey)?.database ?? null,
         schema: item.path ?? null,
         name: item.name,
         columns: snapshot.items
@@ -104,6 +121,7 @@ export function dbInventoryFromSnapshot(snapshot: InventorySnapshot, profileId: 
         inboundForeignKeys: foreignKeysForTable(snapshot, tableKey, "inbound"),
         constraints,
         indexes: dbIndexesForTable(snapshot, item),
+        dependents: dbDependentsForTable(snapshot, item),
       };
     });
 
@@ -111,6 +129,7 @@ export function dbInventoryFromSnapshot(snapshot: InventorySnapshot, profileId: 
   return {
     profileId,
     tables,
+    partial: Boolean(inventorySummary?.sources.db && inventorySummary.sources.db.total > loadedDbItemCount),
     snapshotKey: snapshot.metadata?.db?.snapshotKey ?? null,
     contractVersion: snapshot.metadata?.db?.contractVersion ?? null,
     limitRequested: snapshot.metadata?.db?.limitRequested ?? null,
@@ -131,7 +150,7 @@ export function dbInventoryFromSnapshot(snapshot: InventorySnapshot, profileId: 
   };
 }
 
-function codeItemFromSnapshot(item: InventoryItem, project: string): CodeInventoryItem {
+export function codeInventoryItemFromSnapshot(item: InventoryItem, project: string): CodeInventoryItem {
   const id = item.id.replace(/^code:/, "");
   return {
     id,
@@ -146,6 +165,27 @@ function codeItemFromSnapshot(item: InventoryItem, project: string): CodeInvento
     qualifiedName: item.qualifiedName ?? id,
     engineLabel: item.engineLabel ?? item.kind,
     detail: item,
+  };
+}
+
+function codeSummary(
+  summary: InventorySummary | undefined,
+  fallback: CodeInventory["summary"],
+): CodeInventory["summary"] {
+  const groups = summary?.sources.code?.groups;
+  if (!groups) {
+    return fallback;
+  }
+  return {
+    routes: groups.routes ?? 0,
+    handlers: groups.handlers ?? 0,
+    services: groups.services ?? 0,
+    repositories: groups.repositories ?? 0,
+    functions: groups.functions ?? 0,
+    classes: groups.classes ?? 0,
+    modules: groups.modules ?? 0,
+    files: groups.files ?? 0,
+    unknown: groups.unknown ?? 0,
   };
 }
 
@@ -259,6 +299,49 @@ function dbIndexesForTable(snapshot: InventorySnapshot, table: InventoryItem): D
     });
 }
 
+function dbDependentsForTable(snapshot: InventorySnapshot, table: InventoryItem): DbDependentObject[] {
+  const columnIds = new Set(
+    snapshot.items
+      .filter((item) => item.source === "db" && item.kind === "column" && item.parentId === table.id)
+      .map((item) => item.id),
+  );
+  const itemById = new Map(snapshot.items.map((item) => [item.id, item]));
+  const grouped = new Map<string, DbDependentObject>();
+
+  for (const link of snapshot.links ?? []) {
+    const trigger = link.kind === "db_trigger" && link.from === table.id;
+    const dependency = link.kind === "db_dependency" && (link.to === table.id || columnIds.has(link.to));
+    if (!trigger && !dependency) continue;
+
+    const object = itemById.get(trigger ? link.to : link.from);
+    if (!object || !isDbDependentKey(object.qualifiedName, object.kind)) continue;
+
+    const existing = grouped.get(object.qualifiedName) ?? {
+      key: object.qualifiedName,
+      kind: object.kind,
+      name: object.name,
+      relation: linkEvidence(link, "db-relation") ?? dependentRelation(object.kind),
+      columnKeys: [],
+    };
+    const columnKeys = new Set(existing.columnKeys ?? []);
+    for (const key of linkEvidenceArray(link, "db-column-keys")) columnKeys.add(key);
+    const endpointKey = linkEvidence(link, "db-column-key");
+    if (endpointKey) columnKeys.add(endpointKey);
+    existing.columnKeys = [...columnKeys].sort();
+    grouped.set(object.qualifiedName, existing);
+  }
+
+  return [...grouped.values()].sort(
+    (left, right) => left.key.localeCompare(right.key) || left.relation.localeCompare(right.relation),
+  );
+}
+
+function dependentRelation(kind: string): string {
+  if (kind === "trigger") return "table_has_trigger";
+  if (kind === "view") return "view_depends_on";
+  return "routine_depends_on";
+}
+
 function dbObjectEvidence(snapshot: InventorySnapshot, tableId: string, objectId: string): SnapshotLink | undefined {
   return (snapshot.links ?? []).find(
     (link) => link.kind === "contains" && link.from === tableId && link.to === objectId,
@@ -283,19 +366,19 @@ function linkEvidenceArray(link: SnapshotLink | undefined, kind: string): string
 }
 
 function isDbObjectKey(value: string | null | undefined): value is string {
-  return dbObjectKeyParts(value)?.kind === "table";
+  return parseDbStableObjectKey(value)?.kind === "table";
 }
 
 function isDbColumnKey(value: string | null | undefined): value is string {
-  return dbObjectKeyParts(value)?.kind === "column";
+  return parseDbStableObjectKey(value)?.kind === "column";
 }
 
-function dbObjectKeyParts(value: string | null | undefined): { database: string; kind: string } | null {
-  const parts = value?.split(":") ?? [];
-  if ((parts.length !== 6 && parts.length !== 7) || parts.some((part) => !part)) {
-    return null;
-  }
-  return { database: parts[2], kind: parts[4] };
+function isDbDependentKey(value: string | null | undefined, kind: string): value is string {
+  return matchesDbDependentKind(parseDbStableObjectKey(value)?.kind, kind);
+}
+
+function matchesDbDependentKind(stableKind: string | undefined, itemKind: string): boolean {
+  return stableKind === itemKind && ["view", "trigger", "routine"].includes(itemKind);
 }
 
 function optionalArray(value: string | null): string[] {
@@ -303,20 +386,10 @@ function optionalArray(value: string | null): string[] {
 }
 
 function dbColumnRef(id: string): { tableKey: string; column: string } | null {
-  if (!id.startsWith("db:column:")) {
-    return null;
-  }
-  const body = id.slice("db:column:".length);
-  const splitIndex = body.lastIndexOf(":");
-  if (splitIndex <= 0 || splitIndex === body.length - 1) {
-    return null;
-  }
-  return {
-    tableKey: body.slice(0, splitIndex),
-    column: body.slice(splitIndex + 1),
-  };
+  const ref = columnRefFromNodeId(id);
+  return ref ? { tableKey: ref.tableKey, column: ref.columnName } : null;
 }
 
 function tableNameFromKey(tableKey: string): string {
-  return tableKey.split(".").pop() ?? tableKey;
+  return dbTableNameFromIdentityKey(tableKey);
 }

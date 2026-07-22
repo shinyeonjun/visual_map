@@ -4,6 +4,7 @@ import type { VisualEdge, VisualMap, VisualNode } from "../../types/visual-map";
 import {
   columnLabelFromNodeId,
   columnRefFromNodeId,
+  dbTableIdentityLabel,
   tableKeyFromDbNodeId as tableKeyFromNodeId,
 } from "../../visual/nodeIds";
 import { visualEdgeKindLabel as edgeKindLabel } from "../../visual/labels";
@@ -80,11 +81,12 @@ export function nodesShareTableOrId(a: string, b: string): boolean {
 export function nodeLabel(id: string, map: VisualMap | null): string {
   const node = map?.nodes.find((item) => item.id === id);
   if (!node) {
-    return columnLabelFromNodeId(id) ?? (id.startsWith("db:table:") ? id.slice("db:table:".length) : id);
+    return columnLabelFromNodeId(id) ??
+      (id.startsWith("db:table:") ? dbTableIdentityLabel(id.slice("db:table:".length)) : id);
   }
   if (node?.kind === "column") {
     const tableKey = tableKeyFromNodeId(id);
-    return tableKey ? `${tableKey}.${node.title}` : node.title;
+    return tableKey ? `${dbTableIdentityLabel(tableKey)}.${node.title}` : node.title;
   }
   return node.title;
 }
@@ -144,16 +146,14 @@ export function atlasCodeKindRank(kind: string): number {
 }
 
 export function filterCodeItemsByMap<T extends { id: string }>(items: T[], focusedNodeIds: Set<string>): T[] {
-  const filtered = items.filter((item) => focusedNodeIds.has(`code:${item.id}`));
-  return filtered.length > 0 ? filtered : items;
+  return items.filter((item) => focusedNodeIds.has(`code:${item.id}`));
 }
 
 export function filterTablesByMap(items: DbInventoryTable[], focusedNodeIds: Set<string>): DbInventoryTable[] {
-  const filtered = items.filter((item) => {
+  return items.filter((item) => {
     const tableKey = dbInventoryTableKey(item);
     return focusedNodeIds.has(`db:table:${tableKey}`) || Array.from(focusedNodeIds).some((id) => id.startsWith(`db:column:${tableKey}:`));
   });
-  return filtered.length > 0 ? filtered : items;
 }
 
 export function rankNodeItems<T>(
@@ -298,6 +298,12 @@ function readableRelationEvidence(evidence: string, edge: VisualEdge, tone: Rela
   if (edge.kind === "db_fk" || lower.includes("foreign key") || lower.startsWith("fk ")) {
     return "DB FK 제약으로 확인된 구조 근거";
   }
+  if (edge.kind === "db_dependency") {
+    return "DB 엔진이 읽은 뷰 또는 루틴 의존성 근거";
+  }
+  if (edge.kind === "db_trigger") {
+    return "DB 엔진이 읽은 테이블 트리거 등록 근거";
+  }
   if (tone === "candidate" || lower.includes("name match") || lower.includes("table name match")) {
     return edge.confidence ? `이름 단서가 맞아 후보로 연결 · ${confidenceLabel(edge.confidence)}` : "이름 단서가 맞아 후보로 연결";
   }
@@ -423,7 +429,7 @@ export function tableKeyFromFocusedTable(focusId: string): string | null {
 }
 
 export function relationFocusIdFromMapFocus(focusId: string): string | null {
-  return focusId.startsWith("code:") || focusId.startsWith("db:table:") || focusId.startsWith("db:column:") ? focusId : null;
+  return focusId.startsWith("code:") || focusId.startsWith("db:") ? focusId : null;
 }
 
 function laneCenterX(lane: number): number {
