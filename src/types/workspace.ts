@@ -323,7 +323,18 @@ export function codeInventoryDefaultRoute(
 
 export function codeRouteMethod(route: CodeInventoryItem): string | null {
   const identity = `${route.qualifiedName ?? ""} ${route.id}`;
-  return identity.match(/__route__([A-Z]+)__/i)?.[1]?.toUpperCase() ?? null;
+  return routeMethodFromIdentity(identity);
+}
+
+export function routeMethodFromIdentity(identity: string | null | undefined): string | null {
+  return identity?.match(/__route__([A-Z]+)__/i)?.[1]?.toUpperCase() ?? null;
+}
+
+export function routeDisplayName(subject: string, method: string | null | undefined): string {
+  if (!method || subject.toUpperCase().startsWith(`${method.toUpperCase()} `)) {
+    return subject;
+  }
+  return `${method.toUpperCase()} ${subject}`;
 }
 
 function routeSpecificity(route: CodeInventoryItem): number {

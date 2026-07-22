@@ -5,7 +5,7 @@ import {
   normalizeConfidence,
 } from "../../visual/confidence";
 import type { DbProfileControls } from "../../types/controls";
-import { dbInventoryTableKey } from "../../types/workspace";
+import { codeRouteMethod, dbInventoryTableKey, routeDisplayName } from "../../types/workspace";
 import type { CodeInventoryItem, DbInventoryColumn, DbInventoryTable } from "../../types/workspace";
 import type { VisualEdge, VisualMap, VisualNode } from "../../types/visual-map";
 import {
@@ -52,6 +52,7 @@ export function inspectorAnswer({
   codeItemCount,
   hasWorkspace,
   needsGithub,
+  apiMethod,
 }: {
   edge: VisualEdge | null;
   node: VisualNode | null;
@@ -65,6 +66,7 @@ export function inspectorAnswer({
   codeItemCount: number;
   hasWorkspace: boolean;
   needsGithub: boolean;
+  apiMethod?: string | null;
 }): InspectorAnswer {
   if (edge) {
     const isCandidate = edge.kind.startsWith("candidate");
@@ -135,9 +137,12 @@ export function inspectorAnswer({
     const isCandidateHeavy = counts.candidate > 0 && counts.confirmed === 0;
     const isTypedOnly = counts.typed > 0 && counts.confirmed === 0 && counts.candidate === 0;
     const candidateNote = counts.candidate > 0 ? "후보 근거는 바뀔 수 있는 범위를 넓게 잡는 힌트입니다." : null;
+    const title = node.kind === "api"
+      ? routeDisplayName(nodeDisplayTitle(node), apiMethod ?? (code ? codeRouteMethod(code) : null))
+      : nodeDisplayTitle(node);
     return {
       kicker: `${nodeKindLabel(node.kind, node.source)} 근거`,
-      title: nodeDisplayTitle(node),
+      title,
       sentence: nodeAnswerSentence(node, counts, map),
       tone: isCandidateHeavy ? "candidate" : isTypedOnly || node.source === "projection" ? "neutral" : "confirmed",
       metrics: nodeRelationMetrics(counts),
@@ -149,7 +154,7 @@ export function inspectorAnswer({
   if (code) {
     return {
       kicker: "코드 근거",
-      title: code.name,
+      title: routeDisplayName(code.name, codeRouteMethod(code)),
       sentence: "코드 목록에서 선택한 실제 항목입니다. 저장소 안의 파일/라인을 VS Code나 Cursor에서 바로 열 수 있습니다.",
       tone: "confirmed",
       metrics: [

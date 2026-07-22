@@ -13,7 +13,7 @@ import {
 import { useEffect, useState } from "react";
 import type { ComponentType, CSSProperties } from "react";
 import type { DbInventoryTable } from "../../types/workspace";
-import { dbInventoryTableKey } from "../../types/workspace";
+import { dbInventoryTableKey, routeMethodFromIdentity } from "../../types/workspace";
 import type {
   ApiReadingAnswer,
   ApiReadingStep,
@@ -50,7 +50,7 @@ export function ApiReadingHeader({
   view: ApiReadingView;
   onViewChange: (view: ApiReadingView) => void;
 }) {
-  const method = routeMethod(map.focus);
+  const method = answer.method ?? routeMethodFromIdentity(map.focus);
   const confirmed = map.edges.filter(isConfirmedApiEdge).length;
   const candidates = map.edges.filter(isCandidateEdge).length;
   const databaseRelations = answer.dbRelations?.length ?? 0;
@@ -163,6 +163,7 @@ function ApiConnectionView({
   const [branchesOpen, setBranchesOpen] = useState(false);
   useEffect(() => setBranchesOpen(false), [map.focus]);
   const model = buildApiConnectionModel(answer, map);
+  const method = answer.method ?? routeMethodFromIdentity(map.focus);
   const visibleNodes = model.primaryDatabase
     ? [...model.primaryPath, model.primaryDatabase]
     : model.primaryPath;
@@ -214,7 +215,7 @@ function ApiConnectionView({
           <ApiDiagramNode
             item={item}
             node={node}
-            method={index === 0 ? routeMethod(map.focus) : null}
+            method={index === 0 ? method : null}
             selected={selectedNodeId === node.id}
             style={{ left: nodeX(index), top: NODE_TOP }}
             onSelect={() => onSelectNode(node)}
@@ -528,10 +529,6 @@ function apiLaneMeta(lane: string): {
   if (lane === "db-relation") return { label: "DB Table · 확정", tone: "database", icon: Table2 };
   if (lane === "db-candidate") return { label: "DB Table · 후보", tone: "database", icon: Table2 };
   return { label: "Service / Function", tone: "service", icon: FileCode2 };
-}
-
-function routeMethod(focus: string): string | null {
-  return focus.match(/__route__([A-Z]+)__/i)?.[1]?.toUpperCase() ?? null;
 }
 
 function relationLabel(edge: VisualEdge): string {

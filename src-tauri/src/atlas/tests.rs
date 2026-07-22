@@ -2867,6 +2867,29 @@ fn api_flow_without_handles_reports_an_unknown_gap_without_name_fallback() {
 }
 
 #[test]
+fn api_flow_keeps_http_method_separate_from_the_route_path() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    let route = snapshot
+        .items
+        .iter_mut()
+        .find(|item| item.id == "code:route:orders:create")
+        .unwrap();
+    route.name = "/{session_id}".to_string();
+    route.qualified_name = Some("__route__DELETE__/{session_id}".to_string());
+
+    let answer = visual_map(
+        &snapshot,
+        Some("code:route:orders:create".to_string()),
+        "api-flow".to_string(),
+    )
+    .api_reading
+    .unwrap();
+
+    assert_eq!(answer.method.as_deref(), Some("DELETE"));
+    assert_eq!(answer.subject, "/{session_id}");
+}
+
+#[test]
 fn api_flow_prefers_confirmed_static_sql_over_a_db_candidate() {
     let mut snapshot = fixture_inventory("workspace-1".to_string());
     snapshot.links.push(confirmed_api_link(

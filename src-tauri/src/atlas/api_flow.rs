@@ -839,8 +839,10 @@ fn api_reading_answer(
     }
     assign_review_ranks(&mut recommended_checks);
 
+    let (method, subject) = api_route_identity(route);
     ApiReadingAnswer {
-        subject: route.name.clone(),
+        subject,
+        method,
         steps,
         db_relations,
         db_candidates,
@@ -858,6 +860,42 @@ fn api_reading_answer(
             (!truncation_reasons.is_empty()).then(|| truncation_reasons.join(" "))
         },
     }
+}
+
+fn api_route_identity(route: &InventoryItem) -> (Option<String>, String) {
+    let encoded_method = route
+        .qualified_name
+        .as_deref()
+        .and_then(route_method_from_identity)
+        .or_else(|| route_method_from_identity(&route.id));
+    let named_method = route.name.split_once(' ').and_then(|(method, path)| {
+        (path.starts_with('/')
+            && !method.is_empty()
+            && method
+                .chars()
+                .all(|character| character.is_ascii_alphabetic()))
+        .then(|| method.to_ascii_uppercase())
+    });
+    let method = encoded_method.or(named_method);
+    let subject = method
+        .as_deref()
+        .and_then(|method| route.name.strip_prefix(method))
+        .and_then(|rest| rest.strip_prefix(' '))
+        .filter(|rest| rest.starts_with('/'))
+        .unwrap_or(&route.name)
+        .to_string();
+
+    (method, subject)
+}
+
+fn route_method_from_identity(identity: &str) -> Option<String> {
+    let marker_start = identity.to_ascii_lowercase().find("__route__")? + "__route__".len();
+    let method = identity.get(marker_start..)?.split_once("__")?.0;
+    (!method.is_empty()
+        && method
+            .chars()
+            .all(|character| character.is_ascii_alphabetic()))
+    .then(|| method.to_ascii_uppercase())
 }
 
 fn db_relation_items(

@@ -24,7 +24,13 @@ import type {
   VisualEdge,
   VisualMap,
 } from "../../types/visual-map";
-import { codeInventoryCodeItems, codeInventoryItemCount, dbInventoryTableCount } from "../../types/workspace";
+import {
+  codeInventoryCodeItems,
+  codeInventoryItemCount,
+  dbInventoryTableCount,
+  routeDisplayName,
+  routeMethodFromIdentity,
+} from "../../types/workspace";
 import { visualEdgeKindLabel } from "../../visual/labels";
 import { columnRefFromNodeId, dbTableIdentityLabel, tableKeyFromDbNodeId } from "../../visual/nodeIds";
 import { buildTargetCatalog, type TargetItem } from "./targetModel";
@@ -179,6 +185,8 @@ function AnswerHome({
 
 function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapControls: VisualMapControls }) {
   const answer = map.apiReading!;
+  const method = answer.method ?? routeMethodFromIdentity(map.focus);
+  const subject = routeDisplayName(answer.subject, method);
   const confirmedSteps = answer.steps.filter((step) => step.truthClass === "confirmed" || step.truthClass === "structural");
   const candidateCount = answer.dbCandidates.length + answer.unknowns.length;
   const visibleSteps = confirmedSteps.slice(0, 5);
@@ -196,7 +204,7 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
       <AnswerHeader
         icon={<Braces size={18} />}
         kicker="API 처리 흐름"
-        title={answer.subject}
+        title={subject}
         conclusion={conclusion}
         confirmed={confirmedCount}
         structural={structuralCount}
@@ -217,7 +225,7 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
                   <span className="answer-flow-index">{String(index + 1).padStart(2, "0")}</span>
                   <span className="answer-flow-copy">
                     <small>{apiLaneLabel(step.lane)} · 깊이 {step.depth}</small>
-                    <strong>{step.title}</strong>
+                    <strong>{step.lane === "route" ? routeDisplayName(step.title, method) : step.title}</strong>
                     <em>{step.detail}</em>
                   </span>
                   <TruthMark truthClass={step.truthClass} />

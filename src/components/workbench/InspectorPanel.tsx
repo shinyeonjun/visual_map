@@ -3,9 +3,12 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { dbProfileWorkStarted } from "../../types/controls";
 import {
+  codeRouteMethod,
   codeInventoryItemCount,
   dbInventoryTableKey,
   dbProfileSourceLabel,
+  routeDisplayName,
+  routeMethodFromIdentity,
 } from "../../types/workspace";
 import type { VisualMapControls } from "../../types/controls";
 import type { DbProfileControls, WorkspaceControls } from "../../types/controls";
@@ -91,6 +94,7 @@ export function InspectorPanel({
   const focusedMapNode = visualMapControls.currentMap?.nodes.find((node) => node.id === focusedNodeId) ?? null;
   const selectedCode = codeInventoryItemById(workspaceControls.codeInventory, focusedCodeId)
     ?? codeInventoryItemFromNode(selectedNode ?? focusedMapNode);
+  const apiMethod = apiReading?.method ?? routeMethodFromIdentity(focusedNodeId);
   const dbTables = dbProfileControls.inventory?.tables ?? [];
   const dbMissingColumnTables = dbTables.filter((table) => table.columns.length === 0).length;
   const dbNeedsColumns = dbTables.length > 0 && !dbTables.some((table) => table.columns.length > 0);
@@ -152,6 +156,7 @@ export function InspectorPanel({
     codeItemCount: codeInventoryItemCount(workspaceControls.codeInventory),
     hasWorkspace: Boolean(workspaceControls.currentWorkspace),
     needsGithub: workspaceControls.repoSourceMode === "github",
+    apiMethod,
   });
   const hasSelection = Boolean(selectedEdge || selectedNode || selectedCode || selectedColumn || selectedTable);
   const emptyAction = hasSelection
@@ -523,7 +528,9 @@ export function InspectorPanel({
             <div className="inspector-source-summary">
               <FileText size={14} />
               <span>
-                <strong title={sourceCode.filePath ?? sourceCode.name}>{compactPath(sourceCode.filePath) ?? sourceCode.name}</strong>
+                <strong title={sourceCode.filePath ?? sourceCode.name}>
+                  {compactPath(sourceCode.filePath) ?? routeDisplayName(sourceCode.name, codeRouteMethod(sourceCode))}
+                </strong>
                 <small>{sourceCode.line ? `${sourceCode.kind} · ${sourceCode.line}행` : sourceCode.kind}</small>
               </span>
             </div>
