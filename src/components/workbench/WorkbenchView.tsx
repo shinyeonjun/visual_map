@@ -1,5 +1,5 @@
 import { FileSearch, LoaderCircle, ShieldCheck, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import type { EngineRegistry } from "../../types/engine";
@@ -12,6 +12,7 @@ import { TargetNavigator } from "./TargetNavigator";
 import { WorkbenchLeftPanel } from "./WorkbenchLeftPanel";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
 import { WorkbenchTopBar } from "./WorkbenchTopBar";
+import { targetKindForMode } from "./targetModel";
 
 export function WorkbenchView({
   sourceManagerOpen,
@@ -33,6 +34,7 @@ export function WorkbenchView({
   devSlot?: ReactNode;
 }) {
   const [surface, setSurface] = useState<"answers" | "advanced">("answers");
+  const [pendingSurface, setPendingSurface] = useState<"answers" | "advanced" | null>(null);
   const hasAnswerSource =
     codeInventoryItemCount(workspaceControls.codeInventory) > 0 || Boolean(dbProfileControls.inventory?.tables.length);
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
@@ -54,38 +56,63 @@ export function WorkbenchView({
   const answerHasTarget = ["api-flow", "search-focus", "table-usage", "column-impact"].includes(visibleMode)
     && Boolean(answerFocusId(visualMapControls));
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     lastAnswerRef.current = null;
+    setPendingSurface(null);
     setSurface("answers");
   }, [workspaceId]);
 
-  useEffect(() => {
-    if (["api-flow", "search-focus", "table-usage", "column-impact"].includes(visualMapControls.mode)) {
-      const focusId = answerFocusId(visualMapControls);
+  useLayoutEffect(() => {
+    const committedMap = visualMapControls.currentMap;
+    if (committedMap && targetKindForMode(committedMap.mode)) {
+      const focusId = validAnswerFocus(committedMap.focus);
       if (workspaceId && focusId) {
-        lastAnswerRef.current = { workspaceId, mode: visualMapControls.mode, focusId };
+        lastAnswerRef.current = { workspaceId, mode: committedMap.mode, focusId };
       }
+    }
+
+    if (visualMapControls.loading) return;
+    const committedSurface = surfaceForMode(committedMap?.mode ?? visualMapControls.mode);
+    if (pendingSurface) {
+      if (committedSurface === pendingSurface) setSurface(pendingSurface);
+      setPendingSurface(null);
+    } else if (committedSurface === "answers") {
       setSurface("answers");
     }
-  }, [visualMapControls.mode, visualMapControls.focusId, visualMapControls.currentMap?.focus, workspaceId]);
+  }, [
+    pendingSurface,
+    visualMapControls.loading,
+    visualMapControls.mode,
+    visualMapControls.currentMap?.mode,
+    visualMapControls.currentMap?.focus,
+    workspaceId,
+  ]);
 
   function showAnswers() {
-    setSurface("answers");
+    if (surface === "advanced" && targetKindForMode(visualMapControls.mode)) {
+      if (visualMapControls.loading) setPendingSurface("answers");
+      else setSurface("answers");
+      return;
+    }
     const previous = lastAnswerRef.current;
     if (
       previous?.workspaceId === workspaceId &&
-      !["api-flow", "search-focus", "table-usage", "column-impact"].includes(visualMapControls.mode)
+      !targetKindForMode(visualMapControls.mode)
     ) {
+      setPendingSurface("answers");
       visualMapControls.showMode(previous.mode, previous.focusId);
+      return;
     }
+    setPendingSurface(null);
+    setSurface("answers");
   }
 
   function showAdvanced(mode: "atlas" | "composition") {
     const focusId = answerFocusId(visualMapControls);
-    if (workspaceId && focusId && ["api-flow", "search-focus", "table-usage", "column-impact"].includes(visibleMode)) {
+    if (workspaceId && focusId && targetKindForMode(visibleMode)) {
       lastAnswerRef.current = { workspaceId, mode: visibleMode, focusId };
     }
-    setSurface("advanced");
+    setPendingSurface("advanced");
     visualMapControls.showMode(mode, null);
   }
 
@@ -109,7 +136,7 @@ export function WorkbenchView({
       <WorkbenchTopBar
         sourceManagerOpen={drawerOpen}
         onToggleSourceManager={() => setSourceManagerOpen(!drawerOpen)}
-        surface={surface}
+        surface={pendingSurface ?? surface}
         onShowAnswers={showAnswers}
         onShowAdvanced={() => showAdvanced("atlas")}
         workspaceControls={workspaceControls}
@@ -276,5 +303,14 @@ function answerFocusId(visualMapControls: VisualMapControls): string | null {
   const value = visualMapControls.loading && visualMapControls.currentMap
     ? visualMapControls.currentMap.focus
     : visualMapControls.focusId ?? visualMapControls.currentMap?.focus ?? null;
+  return validAnswerFocus(value);
+}
+
+function validAnswerFocus(value: string | null | undefined): string | null {
   return value && value !== "narrow-focus" && value !== "overview" && !value.startsWith("group:") ? value : null;
+}
+
+function surfaceForMode(mode: string): "answers" | "advanced" | null {
+  if (targetKindForMode(mode)) return "answers";
+  return mode === "atlas" || mode === "composition" ? "advanced" : null;
 }
