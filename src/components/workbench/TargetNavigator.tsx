@@ -102,6 +102,7 @@ export function TargetNavigator({
             className={kind === targetKind ? "active" : ""}
             type="button"
             role="tab"
+            data-target-kind={targetKind}
             aria-selected={kind === targetKind}
             title={`${label}: ${description}`}
             onClick={() => {
@@ -144,6 +145,7 @@ export function TargetNavigator({
               <button
                 className={`${active ? "active" : ""}${pending ? " pending" : ""}`}
                 type="button"
+                data-target-id={item.focusId}
                 aria-current={active ? "true" : undefined}
                 aria-busy={pending || undefined}
                 title={`${item.title} · ${item.meta}`}

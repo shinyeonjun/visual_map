@@ -19,7 +19,10 @@ describe("TargetNavigator", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /\/api\/orders/ }));
+    const apiTarget = screen.getByRole("button", { name: /\/api\/orders/ });
+    expect(screen.getByRole("tab", { name: /API/ })).toHaveAttribute("data-target-kind", "api");
+    expect(apiTarget).toHaveAttribute("data-target-id", "code:route-orders");
+    fireEvent.click(apiTarget);
 
     expect(onSelectTarget).toHaveBeenCalledOnce();
     expect(showMode).toHaveBeenCalledWith("api-flow", "code:route-orders");
