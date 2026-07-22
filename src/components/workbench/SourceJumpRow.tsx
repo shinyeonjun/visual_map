@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { CheckSquare, Copy, ExternalLink, FolderOpen, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { toUserError } from "../../app/operationStatus";
 import type { CodeInventoryItem } from "../../types/workspace";
 import { copyValue } from "../common/copyValue";
 
@@ -96,7 +97,8 @@ export function SourceJumpRow({
       setStatus(editor === "vscode" ? "VS Code에서 열었습니다" : "Cursor에서 열었습니다");
       setStatusTone("success");
     } catch (error) {
-      setStatus(String(error));
+      const editorLabel = editor === "vscode" ? "VS Code" : "Cursor";
+      setStatus(toUserError(error, `${editorLabel}에서 소스를 열지 못했습니다`).message);
       setStatusTone("error");
     } finally {
       setBusyAction(null);
@@ -112,7 +114,7 @@ export function SourceJumpRow({
       setStatus("파일 탐색기에서 표시했습니다");
       setStatusTone("success");
     } catch (error) {
-      setStatus(String(error));
+      setStatus(toUserError(error, "파일 탐색기에서 소스를 표시하지 못했습니다").message);
       setStatusTone("error");
     } finally {
       setBusyAction(null);

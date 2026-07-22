@@ -38,6 +38,23 @@ impl From<String> for CommandError {
                 "필요한 읽기 도구를 찾지 못했습니다",
                 false,
             )
+        } else if value.contains("VS Code를 찾지 못했습니다")
+            || value.contains("Cursor를 찾지 못했습니다")
+        {
+            (
+                "editor_unavailable",
+                "에디터를 찾지 못했습니다. 설치 상태와 PATH를 확인하세요",
+                false,
+            )
+        } else if value.contains("VS Code 실행 실패") || value.contains("Cursor 실행 실패")
+        {
+            ("editor_launch_failed", "에디터를 실행하지 못했습니다", true)
+        } else if value.contains("탐색기에서 소스 표시 실패") {
+            (
+                "file_reveal_failed",
+                "파일 탐색기에서 대상을 표시하지 못했습니다",
+                true,
+            )
         } else if value.contains("프로젝트 폴더") && value.contains("찾을 수 없습니다")
         {
             ("invalid_path", "프로젝트 폴더를 확인하세요", false)
@@ -96,5 +113,27 @@ mod tests {
         assert!(error.retryable);
         assert!(!json.contains("secret"));
         assert!(json.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn source_action_errors_keep_an_actionable_category() {
+        let unavailable = CommandError::from(
+            "VS Code를 찾지 못했습니다. 설치 경로 또는 PATH를 확인하세요.".to_string(),
+        );
+        assert_eq!(unavailable.code, "editor_unavailable");
+        assert_eq!(
+            unavailable.message,
+            "에디터를 찾지 못했습니다. 설치 상태와 PATH를 확인하세요"
+        );
+        assert!(!unavailable.retryable);
+
+        let launch_failed = CommandError::from("Cursor 실행 실패: access denied".to_string());
+        assert_eq!(launch_failed.code, "editor_launch_failed");
+        assert!(launch_failed.retryable);
+
+        let reveal_failed =
+            CommandError::from("탐색기에서 소스 표시 실패: path unavailable".to_string());
+        assert_eq!(reveal_failed.code, "file_reveal_failed");
+        assert!(reveal_failed.retryable);
     }
 }
