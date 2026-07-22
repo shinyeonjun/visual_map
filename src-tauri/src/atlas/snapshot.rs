@@ -2,8 +2,9 @@ use crate::{
     engine::{self, EngineRegistry},
     paths::base_paths,
     workspace::{
-        validate_workspace_id, CodeCall, CodeInventory, CodeInventoryItem, DbConstraint,
-        DbDependentObject, DbForeignKey, DbIndex, DbInventory, DbProfile, DbSource, Workspace,
+        route_binding_id, validate_workspace_id, CodeCall, CodeInventory, CodeInventoryItem,
+        DbConstraint, DbDependentObject, DbForeignKey, DbIndex, DbInventory, DbProfile, DbSource,
+        Workspace,
     },
 };
 use serde::Serialize;
@@ -1127,6 +1128,7 @@ fn canonicalize_snapshot(mut snapshot: InventorySnapshot) -> InventorySnapshot {
         return snapshot;
     }
 
+    normalize_snapshot_route_bindings(&mut snapshot);
     snapshot.items.sort_by(|left, right| {
         left.id
             .cmp(&right.id)
@@ -1278,6 +1280,90 @@ fn canonicalize_snapshot(mut snapshot: InventorySnapshot) -> InventorySnapshot {
         push_unique(&mut snapshot.stale_reasons, REINDEX_REASON);
     }
     snapshot
+}
+
+fn normalize_snapshot_route_bindings(snapshot: &mut InventorySnapshot) {
+    let handler_by_id = snapshot
+        .items
+        .iter()
+        .filter(|item| item.source == "code" && item.layer == "code")
+        .map(|item| (item.id.clone(), item.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut handlers_by_route = HashMap::<String, Vec<String>>::new();
+    for link in snapshot
+        .links
+        .iter()
+        .filter(|link| link.kind == "code_handle")
+    {
+        handlers_by_route
+            .entry(link.from.clone())
+            .or_default()
+            .push(link.to.clone());
+    }
+    for handlers in handlers_by_route.values_mut() {
+        handlers.sort();
+        handlers.dedup();
+    }
+
+    let mut items = Vec::with_capacity(snapshot.items.len().max(snapshot.links.len()));
+    for mut item in std::mem::take(&mut snapshot.items) {
+        let Some(handler_ids) = (item.source == "code" && item.layer == "api")
+            .then(|| handlers_by_route.get(&item.id))
+            .flatten()
+        else {
+            items.push(item);
+            continue;
+        };
+
+        if handler_ids.len() == 1 {
+            hydrate_snapshot_route(&mut item, handler_by_id.get(&handler_ids[0]), false);
+            items.push(item);
+            continue;
+        }
+
+        for handler_id in handler_ids {
+            let mut binding = item.clone();
+            let raw_route_id = item.id.strip_prefix("code:").unwrap_or(&item.id);
+            let raw_handler_id = handler_id.strip_prefix("code:").unwrap_or(handler_id);
+            let raw_binding_id = route_binding_id(raw_route_id, raw_handler_id);
+            binding.id = format!("code:{raw_binding_id}");
+            binding.qualified_name = Some(raw_binding_id);
+            hydrate_snapshot_route(&mut binding, handler_by_id.get(handler_id), true);
+            items.push(binding);
+        }
+    }
+    snapshot.items = items;
+
+    for link in snapshot
+        .links
+        .iter_mut()
+        .filter(|link| link.kind == "code_handle")
+    {
+        if handlers_by_route
+            .get(&link.from)
+            .is_some_and(|handlers| handlers.len() > 1)
+        {
+            let raw_route_id = link.from.strip_prefix("code:").unwrap_or(&link.from);
+            let raw_handler_id = link.to.strip_prefix("code:").unwrap_or(&link.to);
+            let raw_binding_id = route_binding_id(raw_route_id, raw_handler_id);
+            link.from = format!("code:{raw_binding_id}");
+            link.id = format!("code-handle:{raw_binding_id}->{raw_handler_id}");
+        }
+    }
+}
+
+fn hydrate_snapshot_route(
+    route: &mut InventoryItem,
+    handler: Option<&InventoryItem>,
+    prefer_handler_location: bool,
+) {
+    let Some(handler) = handler else {
+        return;
+    };
+    if prefer_handler_location || route.path.is_none() {
+        route.path = handler.path.clone();
+        route.location = handler.location.clone();
+    }
 }
 
 fn code_item(

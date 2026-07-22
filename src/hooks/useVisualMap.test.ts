@@ -241,6 +241,39 @@ describe("useVisualMap transitions", () => {
     await waitFor(() => expect(result.current.visualMap?.focus).toBe("code:route-2"));
   });
 
+  it("clears a legacy collapsed route focus after route bindings are restored", async () => {
+    saveMapContext("workspace-1", "api-flow", "code:route-1");
+    const { result } = renderHook(() => useVisualMap({ currentWorkspaceId: "workspace-1" }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    act(() =>
+      result.current.noteSnapshotLoaded({
+        workspaceId: "workspace-1",
+        savedAt: "2026-07-23T00:00:00Z",
+        items: [
+          {
+            id: "code:route-1#handler=code:function:handler-1",
+            kind: "api",
+            name: "/sessions",
+            layer: "api",
+            source: "code",
+          },
+        ],
+      }),
+    );
+
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "get_visual_map", expect.objectContaining({
+      workspaceId: "workspace-1",
+      mode: "api-flow",
+      focusId: null,
+    }));
+    expect(result.current.mapMode).toBe("api-flow");
+    expect(result.current.mapFocusId).toBeNull();
+    expect(result.current.visualMap).toBeNull();
+    expect(savedMapContext("workspace-1")).toEqual({ mode: "api-flow", focusId: null });
+  });
+
   it("ignores an older response that finishes after the latest request", async () => {
     const { result } = renderHook(() => useVisualMap({ currentWorkspaceId: "workspace-1" }));
 
