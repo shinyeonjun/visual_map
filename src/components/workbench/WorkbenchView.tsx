@@ -5,6 +5,7 @@ import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "..
 import type { EngineRegistry } from "../../types/engine";
 import { codeInventoryItemCount } from "../../types/workspace";
 import { AtlasCanvas } from "../atlas/AtlasCanvas";
+import { focusDbProfileSetup } from "../common/focusSourceSetup";
 import { AnswerCanvas } from "./AnswerCanvas";
 import { InspectorPanel } from "./InspectorPanel";
 import { ModePanel } from "./ModePanel";
@@ -160,6 +161,10 @@ export function WorkbenchView({
               dbProfileControls={dbProfileControls}
               visualMapControls={visualMapControls}
               onSelectTarget={() => setSurface("answers")}
+              onOpenDatabase={() => {
+                setSourceManagerOpen(true);
+                window.requestAnimationFrame(() => focusDbProfileSetup(dbProfileControls));
+              }}
               onOpenAdvanced={showAdvanced}
             />
           )}

@@ -38,12 +38,14 @@ export function TargetNavigator({
   dbProfileControls,
   visualMapControls,
   onSelectTarget,
+  onOpenDatabase,
   onOpenAdvanced,
 }: {
   workspaceControls: WorkspaceControls;
   dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
   onSelectTarget: () => void;
+  onOpenDatabase: () => void;
   onOpenAdvanced: (mode: "atlas" | "composition") => void;
 }) {
   const catalog = useMemo(
@@ -56,6 +58,7 @@ export function TargetNavigator({
   const [kind, setKind] = useState<TargetKind>(() => targetKindForMode(visibleMode) ?? firstAvailableTargetKind(catalog));
   const [query, setQuery] = useState("");
   const listRef = useRef<HTMLDivElement | null>(null);
+  const kindChosenRef = useRef(false);
   const workspaceId = workspaceControls.currentWorkspace?.id ?? null;
 
   useEffect(() => {
@@ -64,15 +67,15 @@ export function TargetNavigator({
   }, [visibleMode]);
 
   useEffect(() => {
+    kindChosenRef.current = false;
     setQuery("");
     setKind(targetKindForMode(visualMapControls.mode) ?? firstAvailableTargetKind(catalog));
   }, [workspaceId]);
 
   useEffect(() => {
-    if (catalog[kind].length === 0) {
-      const available = firstAvailableTargetKind(catalog);
-      if (catalog[available].length > 0) setKind(available);
-    }
+    if (kindChosenRef.current || catalog[kind].length > 0) return;
+    const available = firstAvailableTargetKind(catalog);
+    if (catalog[available].length > 0) setKind(available);
   }, [catalog, kind]);
 
   const normalizedQuery = query.trim().toLocaleLowerCase("ko-KR");
@@ -103,6 +106,7 @@ export function TargetNavigator({
             aria-selected={kind === targetKind}
             title={`${label}: ${description}`}
             onClick={() => {
+              kindChosenRef.current = true;
               setKind(targetKind);
               setQuery("");
               listRef.current?.scrollTo({ top: 0 });
@@ -165,11 +169,23 @@ export function TargetNavigator({
           );
         })}
         {items.length === 0 ? (
-          <p className="target-list-empty">
-            {catalog[kind].length === 0
-              ? `${TARGET_KINDS.find((item) => item.kind === kind)?.label ?? "대상"} 정보를 아직 읽지 못했습니다.`
-              : "필터와 일치하는 대상이 없습니다."}
-          </p>
+          <div className="target-list-empty">
+            <p>
+              {catalog[kind].length > 0
+                ? "필터와 일치하는 대상이 없습니다."
+                : kind === "table" || kind === "column"
+                  ? dbProfileControls.inventory
+                    ? `읽은 DB에서 ${kind === "table" ? "테이블" : "컬럼"} 정보를 찾지 못했습니다.`
+                    : `DB를 연결하면 ${kind === "table" ? "테이블 사용 위치" : "컬럼 변경 영향"}를 볼 수 있습니다.`
+                  : `${TARGET_KINDS.find((item) => item.kind === kind)?.label ?? "대상"} 정보를 아직 읽지 못했습니다.`}
+            </p>
+            {catalog[kind].length === 0 && (kind === "table" || kind === "column") ? (
+              <button type="button" onClick={onOpenDatabase}>
+                <Database size={14} />
+                <span>{dbProfileControls.inventory ? "DB 소스 확인" : "DB 연결"}</span>
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
 

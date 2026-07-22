@@ -14,6 +14,7 @@ describe("TargetNavigator", () => {
         dbProfileControls={{ inventory: null } as DbProfileControls}
         visualMapControls={visualControls(showMode)}
         onSelectTarget={onSelectTarget}
+        onOpenDatabase={vi.fn()}
         onOpenAdvanced={vi.fn()}
       />,
     );
@@ -32,6 +33,7 @@ describe("TargetNavigator", () => {
         dbProfileControls={{ inventory: null } as DbProfileControls}
         visualMapControls={visualControls(vi.fn())}
         onSelectTarget={vi.fn()}
+        onOpenDatabase={vi.fn()}
         onOpenAdvanced={onOpenAdvanced}
       />,
     );
@@ -50,6 +52,7 @@ describe("TargetNavigator", () => {
         dbProfileControls={{ inventory: null } as DbProfileControls}
         visualMapControls={visualControls(vi.fn(), "search-focus")}
         onSelectTarget={vi.fn()}
+        onOpenDatabase={vi.fn()}
         onOpenAdvanced={vi.fn()}
       />,
     );
@@ -58,6 +61,47 @@ describe("TargetNavigator", () => {
     Object.defineProperty(container.querySelector(".target-list"), "scrollTo", { value: vi.fn() });
     fireEvent.change(screen.getByLabelText("코드 목록 필터"), { target: { value: "handler19" } });
     expect(screen.getByRole("button", { name: /handler19/ })).toBeInTheDocument();
+  });
+
+  it("opens database setup from an empty DB target list", () => {
+    const onOpenDatabase = vi.fn();
+    render(
+      <TargetNavigator
+        workspaceControls={workspaceControls()}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={visualControls(vi.fn())}
+        onSelectTarget={vi.fn()}
+        onOpenDatabase={onOpenDatabase}
+        onOpenAdvanced={vi.fn()}
+      />,
+    );
+
+    Object.defineProperty(document.querySelector(".target-list"), "scrollTo", { value: vi.fn() });
+    fireEvent.click(screen.getByRole("tab", { name: /테이블/ }));
+    expect(screen.getByText("DB를 연결하면 테이블 사용 위치를 볼 수 있습니다.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "DB 연결" }));
+
+    expect(onOpenDatabase).toHaveBeenCalledOnce();
+  });
+
+  it("chooses the first available target kind when inventory arrives", () => {
+    const emptyWorkspace = workspaceControls();
+    emptyWorkspace.codeInventory = null;
+    const props = {
+      dbProfileControls: { inventory: null } as DbProfileControls,
+      visualMapControls: visualControls(vi.fn(), "atlas"),
+      onSelectTarget: vi.fn(),
+      onOpenDatabase: vi.fn(),
+      onOpenAdvanced: vi.fn(),
+    };
+    const { rerender } = render(<TargetNavigator workspaceControls={emptyWorkspace} {...props} />);
+
+    const codeWorkspace = workspaceControls();
+    codeWorkspace.codeInventory!.routes = [];
+    codeWorkspace.codeInventory!.handlers = codeItems("handler", 1);
+    rerender(<TargetNavigator workspaceControls={codeWorkspace} {...props} />);
+
+    expect(screen.getByRole("tab", { name: /코드/ })).toHaveAttribute("aria-selected", "true");
   });
 });
 
