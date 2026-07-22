@@ -267,8 +267,15 @@ describe("useVisualMap transitions", () => {
     );
 
     await waitFor(() => expect(requests).toHaveLength(1));
+    act(() => result.current.setSearchQuery("sessions"));
+    expect(result.current.searchQuery).toBe("sessions");
+    expect(result.current.searchPopoverOpen).toBe(true);
+
     rerender({ workspaceId: "workspace-2" });
     await waitFor(() => expect(requests).toHaveLength(2));
+    expect(result.current.searchQuery).toBe("");
+    expect(result.current.searchPopoverOpen).toBe(false);
+    expect(result.current.searchGroups).toEqual([]);
 
     act(() => requests[0].resolve(visualMap("atlas", "overview", "workspace-1")));
     expect(result.current.visualMap).toBeNull();
