@@ -41,6 +41,27 @@ describe("targetModel", () => {
     const catalog = buildTargetCatalog(null, dbInventory());
     expect(firstAvailableTargetKind(catalog)).toBe("table");
   });
+
+  it("puts backend roles ahead of modules and files", () => {
+    const inventory = codeInventory();
+    inventory.services = [codeItem("service", "OrderService")];
+    inventory.handlers = [codeItem("handler", "OrderHandler")];
+    inventory.repositories = [codeItem("repository", "OrderRepository")];
+    inventory.classes = [codeItem("class", "OrderModel")];
+    inventory.modules = [codeItem("module", "orders.module")];
+    inventory.files = [codeItem("file", "orders.ts")];
+
+    expect(buildTargetCatalog(inventory, null).code.map((item) => [item.badge, item.group]))
+      .toEqual([
+        ["HNDL", "핸들러"],
+        ["SVC", "서비스"],
+        ["REPO", "리포지토리"],
+        ["FUNC", "함수"],
+        ["CLASS", "클래스"],
+        ["MOD", "모듈"],
+        ["FILE", "파일"],
+      ]);
+  });
 });
 
 function codeInventory(): CodeInventory {
@@ -58,6 +79,10 @@ function codeInventory(): CodeInventory {
     calls: [],
     summary: { routes: 1, handlers: 0, services: 0, repositories: 0, functions: 1, classes: 0, modules: 0, files: 0, unknown: 0 },
   };
+}
+
+function codeItem(kind: string, name: string) {
+  return { id: `${kind}-${name}`, kind, name, filePath: `src/${name}`, line: 1, detail: null };
 }
 
 function dbInventory(): DbInventory {

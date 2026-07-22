@@ -39,12 +39,32 @@ describe("TargetNavigator", () => {
     fireEvent.click(screen.getByRole("button", { name: "전체 구조" }));
     expect(onOpenAdvanced).toHaveBeenCalledWith("atlas");
   });
+
+  it("bounds each code role by default but searches the full inventory", () => {
+    const workspace = workspaceControls();
+    workspace.codeInventory!.handlers = codeItems("handler", 20);
+    workspace.codeInventory!.functions = codeItems("function", 20);
+    const { container } = render(
+      <TargetNavigator
+        workspaceControls={workspace}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={visualControls(vi.fn(), "search-focus")}
+        onSelectTarget={vi.fn()}
+        onOpenAdvanced={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelectorAll(".target-list button")).toHaveLength(24);
+    Object.defineProperty(container.querySelector(".target-list"), "scrollTo", { value: vi.fn() });
+    fireEvent.change(screen.getByLabelText("코드 목록 필터"), { target: { value: "handler19" } });
+    expect(screen.getByRole("button", { name: /handler19/ })).toBeInTheDocument();
+  });
 });
 
-function visualControls(showMode: ReturnType<typeof vi.fn>): VisualMapControls {
+function visualControls(showMode: ReturnType<typeof vi.fn>, mode = "api-flow"): VisualMapControls {
   return {
     currentMap: null,
-    mode: "api-flow",
+    mode,
     focusId: null,
     loading: false,
     selectedNode: null,
@@ -52,6 +72,17 @@ function visualControls(showMode: ReturnType<typeof vi.fn>): VisualMapControls {
     showMode,
     selectNode: vi.fn(),
   } as unknown as VisualMapControls;
+}
+
+function codeItems(kind: string, count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `${kind}-${index}`,
+    kind,
+    name: `${kind}${index}`,
+    filePath: `src/${kind}${index}.ts`,
+    line: 1,
+    detail: null,
+  }));
 }
 
 function workspaceControls(): WorkspaceControls {
