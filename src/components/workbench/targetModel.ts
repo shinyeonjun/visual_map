@@ -26,6 +26,32 @@ export type TargetItem = {
 
 export type TargetCatalog = Record<TargetKind, TargetItem[]>;
 
+const CODE_TARGET_RANK: Record<string, number> = {
+  handler: 0,
+  controller: 0,
+  service: 1,
+  repository: 2,
+  function: 3,
+  method: 3,
+  class: 4,
+  module: 5,
+  unknown: 6,
+  file: 7,
+};
+
+const CODE_TARGET_GROUP: Record<string, string> = {
+  handler: "핸들러",
+  controller: "핸들러",
+  service: "서비스",
+  repository: "리포지토리",
+  function: "함수",
+  method: "함수",
+  class: "클래스",
+  module: "모듈",
+  unknown: "확인 필요",
+  file: "파일",
+};
+
 export function buildTargetCatalog(
   codeInventory: CodeInventory | null,
   dbInventory: DbInventory | null,
@@ -45,12 +71,13 @@ export function buildTargetCatalog(
     code: [
       ...codeInventoryCodeItems(codeInventory),
       ...(codeInventory?.files ?? []),
-    ].map((item) => ({
+    ].sort(compareCodeTargets).map((item) => ({
       id: `code:${item.id}`,
       kind: "code",
       badge: codeKindChip(item.kind),
       title: item.name,
       meta: sourceLocation(item.filePath, item.line),
+      group: CODE_TARGET_GROUP[item.kind.toLowerCase()] ?? "기타",
       focusId: `code:${item.id}`,
       mode: "search-focus",
     })),
@@ -80,6 +107,11 @@ export function buildTargetCatalog(
       }));
     }),
   };
+}
+
+function compareCodeTargets(left: CodeInventory["functions"][number], right: CodeInventory["functions"][number]): number {
+  const rank = (CODE_TARGET_RANK[left.kind.toLowerCase()] ?? 6) - (CODE_TARGET_RANK[right.kind.toLowerCase()] ?? 6);
+  return rank || left.name.localeCompare(right.name) || (left.filePath ?? "").localeCompare(right.filePath ?? "");
 }
 
 export function targetKindForMode(mode: string): TargetKind | null {

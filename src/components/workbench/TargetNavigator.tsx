@@ -31,6 +31,8 @@ const TARGET_KINDS: Array<{
   { kind: "column", label: "컬럼", description: "변경 영향", icon: Columns3 },
 ];
 
+const DEFAULT_CODE_ITEMS_PER_GROUP = 12;
+
 export function TargetNavigator({
   workspaceControls,
   dbProfileControls,
@@ -78,7 +80,7 @@ export function TargetNavigator({
     !normalizedQuery || [item.badge, item.title, item.meta, item.group]
       .some((value) => value?.toLocaleLowerCase("ko-KR").includes(normalizedQuery)),
   );
-  const items = matchingItems.slice(0, 100);
+  const items = visibleTargetItems(matchingItems, kind, Boolean(normalizedQuery));
   const committedFocus = visualMapControls.loading && visualMapControls.currentMap
     ? visualMapControls.currentMap.focus
     : visualMapControls.focusId ?? visualMapControls.currentMap?.focus ?? null;
@@ -190,4 +192,16 @@ export function TargetNavigator({
       </footer>
     </section>
   );
+}
+
+function visibleTargetItems(items: ReturnType<typeof buildTargetCatalog>[TargetKind], kind: TargetKind, hasQuery: boolean) {
+  if (kind !== "code" || hasQuery) return items.slice(0, 100);
+  const counts = new Map<string, number>();
+  return items.filter((item) => {
+    const group = item.group ?? "기타";
+    const count = counts.get(group) ?? 0;
+    if (count >= DEFAULT_CODE_ITEMS_PER_GROUP) return false;
+    counts.set(group, count + 1);
+    return true;
+  }).slice(0, 100);
 }
