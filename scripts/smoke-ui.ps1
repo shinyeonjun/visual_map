@@ -241,7 +241,7 @@ $sourceJumpExpression = @'
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  const card = await waitFor('.at-domain-card');
+  const card = await waitFor('.at-domain-card.code');
   card.click();
   const sourceNode = await waitFor('.at-domain-band[data-domain-band="2"] .at-domain-member');
   sourceNode.click();
@@ -481,14 +481,14 @@ $stableNavigationExpression = @'
 
   document.querySelector('button[data-mode-id="search"]').click();
   await waitForSettled();
-  let codeCard = document.querySelector('.at-card.code, .at-card.route');
+  let codeCard = document.querySelector('.at-card.code');
   let disconnectedTarget = document.querySelector('.at-disconnected-target');
   if (!codeCard && !disconnectedTarget) {
     const codeTarget = document.querySelector('.product-context-list button[data-context-id]');
     if (!codeTarget) throw new Error('Code mode has no target in the left context list');
     codeTarget.click();
     await waitForSettled();
-    codeCard = document.querySelector('.at-card.code, .at-card.route');
+    codeCard = document.querySelector('.at-card.code');
     disconnectedTarget = document.querySelector('.at-disconnected-target');
   }
   if (!codeCard && !disconnectedTarget) throw new Error('Code mode has no focused target');

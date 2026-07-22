@@ -1014,6 +1014,229 @@ fn replacing_code_inventory_preserves_the_existing_db_source() {
 }
 
 #[test]
+fn replacing_code_inventory_clears_resolved_code_reindex_requirement() {
+    let mut existing = fixture_inventory("workspace-1".to_string());
+    existing.metadata.migration = super::model::SnapshotMigration {
+        source_schema_version: Some(1),
+        reindex_required: true,
+        notes: vec![
+            "Snapshot V1의 안전한 필드를 V2로 이전했습니다.".to_string(),
+            "기존 CALLS에 엔진 신뢰도 정보가 없어 코드를 다시 읽어야 합니다.".to_string(),
+        ],
+    };
+    existing.metadata.gaps.push(super::model::SnapshotGap {
+        id: "gap:code-call-confidence".to_string(),
+        kind: "unscored-code-call".to_string(),
+        message: "old code calls require a fresh read".to_string(),
+        related_ids: Vec::new(),
+    });
+    existing
+        .stale_reasons
+        .push("스냅샷 형식이 호환되지 않아 다시 읽어야 합니다".to_string());
+
+    let incoming = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: existing.workspace_id.clone(),
+        saved_at: "2".to_string(),
+        metadata: super::model::SnapshotMetadata {
+            code: existing.metadata.code.clone(),
+            ..Default::default()
+        },
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items: vec![item(
+            "code:function:fresh",
+            "function",
+            "fresh",
+            "code",
+            "code",
+            None,
+            Some("src/fresh.rs"),
+        )],
+    };
+
+    let merged = replace_inventory_source(Some(existing), incoming, "code").unwrap();
+
+    assert!(!merged.metadata.migration.reindex_required);
+    assert!(!merged
+        .metadata
+        .migration
+        .notes
+        .iter()
+        .any(|note| note.contains("CALLS")));
+    assert!(!merged
+        .metadata
+        .gaps
+        .iter()
+        .any(|gap| gap.kind == "unscored-code-call"));
+    assert!(merged.stale_reasons.is_empty());
+}
+
+#[test]
+fn replacing_code_inventory_clears_a_resolved_code_conflict_without_a_note() {
+    let mut existing = fixture_inventory("workspace-1".to_string());
+    existing.metadata.migration.reindex_required = true;
+    existing.metadata.gaps.push(super::model::SnapshotGap {
+        id: "gap:node-conflict:code:function:old".to_string(),
+        kind: "node-conflict".to_string(),
+        message: "old code conflict".to_string(),
+        related_ids: vec!["code:function:old".to_string()],
+    });
+
+    let incoming = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: existing.workspace_id.clone(),
+        saved_at: "2".to_string(),
+        metadata: super::model::SnapshotMetadata {
+            code: existing.metadata.code.clone(),
+            ..Default::default()
+        },
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items: vec![item(
+            "code:function:fresh",
+            "function",
+            "fresh",
+            "code",
+            "code",
+            None,
+            Some("src/fresh.rs"),
+        )],
+    };
+
+    let merged = replace_inventory_source(Some(existing), incoming, "code").unwrap();
+
+    assert!(!merged.metadata.migration.reindex_required);
+    assert!(!merged
+        .metadata
+        .gaps
+        .iter()
+        .any(|gap| gap.id.contains("code:function:old")));
+    assert!(merged.stale_reasons.is_empty());
+}
+
+#[test]
+fn replacing_code_inventory_keeps_unresolved_global_reindex_requirement() {
+    let mut existing = fixture_inventory("workspace-1".to_string());
+    existing.metadata.migration.reindex_required = true;
+    existing.metadata.migration.notes.push(
+        "주 스냅샷 대신 이전 백업을 복구했습니다. 다시 읽어 최신 상태를 확인하세요.".to_string(),
+    );
+
+    let incoming = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: existing.workspace_id.clone(),
+        saved_at: "2".to_string(),
+        metadata: super::model::SnapshotMetadata {
+            code: existing.metadata.code.clone(),
+            ..Default::default()
+        },
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items: vec![item(
+            "code:function:fresh",
+            "function",
+            "fresh",
+            "code",
+            "code",
+            None,
+            Some("src/fresh.rs"),
+        )],
+    };
+
+    let merged = replace_inventory_source(Some(existing), incoming, "code").unwrap();
+
+    assert!(merged.metadata.migration.reindex_required);
+    assert!(merged
+        .stale_reasons
+        .iter()
+        .any(|reason| reason.contains("다시")));
+    assert!(merged
+        .metadata
+        .migration
+        .notes
+        .iter()
+        .any(|note| note.contains("DB 구조")));
+
+    let incoming_db = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: merged.workspace_id.clone(),
+        saved_at: "3".to_string(),
+        metadata: super::model::SnapshotMetadata {
+            db: merged.metadata.db.clone(),
+            ..Default::default()
+        },
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items: vec![item(
+            "db:table:fresh",
+            "table",
+            "fresh",
+            "database",
+            "db",
+            None,
+            Some("public"),
+        )],
+    };
+
+    let fully_refreshed = replace_inventory_source(Some(merged), incoming_db, "db").unwrap();
+    assert!(!fully_refreshed.metadata.migration.reindex_required);
+    assert!(fully_refreshed.stale_reasons.is_empty());
+}
+
+#[test]
+fn replacing_code_inventory_preserves_incoming_reindex_requirement() {
+    let existing = fixture_inventory("workspace-1".to_string());
+    let incoming = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: existing.workspace_id.clone(),
+        saved_at: "2".to_string(),
+        metadata: super::model::SnapshotMetadata {
+            code: existing.metadata.code.clone(),
+            migration: super::model::SnapshotMigration {
+                source_schema_version: None,
+                reindex_required: true,
+                notes: vec![
+                    "기존 CALLS에 엔진 신뢰도 정보가 없어 코드를 다시 읽어야 합니다.".to_string(),
+                ],
+            },
+            gaps: vec![super::model::SnapshotGap {
+                id: "gap:code-call-confidence".to_string(),
+                kind: "unscored-code-call".to_string(),
+                message: "incoming code calls require a fresh read".to_string(),
+                related_ids: Vec::new(),
+            }],
+            ..Default::default()
+        },
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items: vec![item(
+            "code:function:unscored",
+            "function",
+            "unscored",
+            "code",
+            "code",
+            None,
+            Some("src/unscored.rs"),
+        )],
+    };
+
+    let merged = replace_inventory_source(Some(existing), incoming, "code").unwrap();
+
+    assert!(merged.metadata.migration.reindex_required);
+    assert!(merged
+        .metadata
+        .migration
+        .notes
+        .iter()
+        .any(|note| note.contains("CALLS")));
+    assert!(merged
+        .stale_reasons
+        .iter()
+        .any(|reason| reason.contains("다시")));
+}
+
+#[test]
 fn snapshot_marks_ddl_stale_when_file_contents_change() {
     let root = temp_root("ddl-source-revision");
     fs::create_dir_all(&root).unwrap();

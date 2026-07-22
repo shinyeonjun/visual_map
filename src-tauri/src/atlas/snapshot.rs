@@ -24,10 +24,19 @@ use std::{
 
 use super::model::{
     Evidence, InventoryItem, InventorySnapshot, SnapshotGap, SnapshotLink, SnapshotMetadata,
-    SnapshotSourceMetadata, SourceLocation, SNAPSHOT_SCHEMA_VERSION,
+    SnapshotMigration, SnapshotSourceMetadata, SourceLocation, SNAPSHOT_SCHEMA_VERSION,
 };
 
 const REINDEX_REASON: &str = "스냅샷 형식이 호환되지 않아 다시 읽어야 합니다";
+const V1_MIGRATION_NOTE: &str = "Snapshot V1의 안전한 필드를 V2로 이전했습니다.";
+const V1_CODE_REINDEX_NOTE: &str =
+    "Snapshot V1 코드 항목은 이전 BM25 bucket 분류를 신뢰할 수 없어 다시 읽어야 합니다.";
+const UNSCORED_CODE_CALL_REINDEX_NOTE: &str =
+    "기존 CALLS에 엔진 신뢰도 정보가 없어 코드를 다시 읽어야 합니다.";
+const BACKUP_REINDEX_NOTE: &str =
+    "주 스냅샷 대신 이전 백업을 복구했습니다. 다시 읽어 최신 상태를 확인하세요.";
+const BACKUP_CODE_REINDEX_NOTE: &str = "백업에서 복구한 코드 목록은 다시 읽어야 합니다.";
+const BACKUP_DB_REINDEX_NOTE: &str = "백업에서 복구한 DB 구조는 다시 읽어야 합니다.";
 const CONFIRMED_CODE_CALL_CONFIDENCE: u8 = 85;
 const CANDIDATE_CODE_CALL_CONFIDENCE: u8 = 70;
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
@@ -766,12 +775,19 @@ pub(crate) fn replace_inventory_source(
         return Err("합칠 inventory의 프로젝트 ID가 일치하지 않습니다".to_string());
     }
 
+    let incoming_migration = incoming.metadata.migration.clone();
     let prefix = format!("{source}:");
     let removed_ids = merged
         .items
         .iter()
         .filter(|item| item.source == source)
         .map(|item| item.id.clone())
+        .collect::<HashSet<_>>();
+    let removed_link_ids = merged
+        .links
+        .iter()
+        .filter(|link| removed_ids.contains(&link.from) || removed_ids.contains(&link.to))
+        .map(|link| link.id.clone())
         .collect::<HashSet<_>>();
     merged.items.retain(|item| item.source != source);
     merged
@@ -780,12 +796,16 @@ pub(crate) fn replace_inventory_source(
     merged.metadata.gaps.retain(|gap| {
         !gap.id.starts_with(&format!("gap:{source}"))
             && !gap.kind.starts_with(source)
-            && !gap.related_ids.iter().any(|id| id.starts_with(&prefix))
+            && !gap.related_ids.iter().any(|id| {
+                id.starts_with(&prefix) || removed_ids.contains(id) || removed_link_ids.contains(id)
+            })
     });
+    clear_resolved_migration(&mut merged, source);
 
     merged.items.extend(incoming.items);
     merged.links.extend(incoming.links);
     merged.metadata.gaps.extend(incoming.metadata.gaps);
+    merge_migration(&mut merged.metadata.migration, incoming_migration);
     merged.saved_at = incoming.saved_at;
     merged.stale_reasons.clear();
     if source == "code" {
@@ -795,6 +815,80 @@ pub(crate) fn replace_inventory_source(
         merged.metadata.db = incoming.metadata.db;
     }
     Ok(canonicalize_snapshot(merged))
+}
+
+fn clear_resolved_migration(snapshot: &mut InventorySnapshot, source: &str) {
+    if snapshot
+        .metadata
+        .migration
+        .notes
+        .iter()
+        .any(|note| note == BACKUP_REINDEX_NOTE)
+    {
+        snapshot
+            .metadata
+            .migration
+            .notes
+            .retain(|note| note != BACKUP_REINDEX_NOTE);
+        if snapshot.items.iter().any(|item| item.source == "code") {
+            push_unique(
+                &mut snapshot.metadata.migration.notes,
+                BACKUP_CODE_REINDEX_NOTE,
+            );
+        }
+        if snapshot.items.iter().any(|item| item.source == "db") {
+            push_unique(
+                &mut snapshot.metadata.migration.notes,
+                BACKUP_DB_REINDEX_NOTE,
+            );
+        }
+    }
+
+    if snapshot.items.is_empty() {
+        snapshot.metadata.migration = SnapshotMigration::default();
+        return;
+    }
+
+    match source {
+        "code" => snapshot.metadata.migration.notes.retain(|note| {
+            note != V1_CODE_REINDEX_NOTE
+                && note != UNSCORED_CODE_CALL_REINDEX_NOTE
+                && note != BACKUP_CODE_REINDEX_NOTE
+        }),
+        "db" => snapshot
+            .metadata
+            .migration
+            .notes
+            .retain(|note| note != BACKUP_DB_REINDEX_NOTE),
+        _ => {}
+    }
+
+    snapshot.metadata.migration.reindex_required = migration_has_blocker(snapshot);
+}
+
+fn migration_has_blocker(snapshot: &InventorySnapshot) -> bool {
+    snapshot
+        .metadata
+        .migration
+        .notes
+        .iter()
+        .any(|note| note != V1_MIGRATION_NOTE)
+        || snapshot.metadata.gaps.iter().any(|gap| {
+            matches!(
+                gap.kind.as_str(),
+                "node-conflict" | "relationship-conflict" | "unscored-code-call"
+            )
+        })
+}
+
+fn merge_migration(target: &mut SnapshotMigration, incoming: SnapshotMigration) {
+    target.reindex_required |= incoming.reindex_required;
+    target.source_schema_version = incoming
+        .source_schema_version
+        .or(target.source_schema_version);
+    for note in incoming.notes {
+        push_unique(&mut target.notes, &note);
+    }
 }
 
 #[cfg(test)]
@@ -933,10 +1027,7 @@ fn load_inventory_snapshot_uncached(
                     "스냅샷을 열 수 없습니다: {primary_error}; 백업도 열 수 없습니다: {backup_error}"
                 )
             })?;
-            mark_reindex_required(
-                &mut snapshot,
-                "주 스냅샷 대신 이전 백업을 복구했습니다. 다시 읽어 최신 상태를 확인하세요.",
-            );
+            mark_reindex_required(&mut snapshot, BACKUP_REINDEX_NOTE);
             Ok(snapshot)
         }
     }
@@ -1021,15 +1112,9 @@ fn canonicalize_snapshot(mut snapshot: InventorySnapshot) -> InventorySnapshot {
     snapshot.schema_version = SNAPSHOT_SCHEMA_VERSION;
     if source_version == 1 {
         snapshot.metadata.migration.source_schema_version = Some(1);
-        push_unique(
-            &mut snapshot.metadata.migration.notes,
-            "Snapshot V1의 안전한 필드를 V2로 이전했습니다.",
-        );
+        push_unique(&mut snapshot.metadata.migration.notes, V1_MIGRATION_NOTE);
         if snapshot.items.iter().any(|entry| entry.source == "code") {
-            mark_reindex_required(
-                &mut snapshot,
-                "Snapshot V1 코드 항목은 이전 BM25 bucket 분류를 신뢰할 수 없어 다시 읽어야 합니다.",
-            );
+            mark_reindex_required(&mut snapshot, V1_CODE_REINDEX_NOTE);
         }
     } else if source_version != SNAPSHOT_SCHEMA_VERSION {
         snapshot.metadata.migration.source_schema_version = Some(source_version);
@@ -1175,10 +1260,7 @@ fn canonicalize_snapshot(mut snapshot: InventorySnapshot) -> InventorySnapshot {
             ),
             Vec::new(),
         ));
-        mark_reindex_required(
-            &mut snapshot,
-            "기존 CALLS에 엔진 신뢰도 정보가 없어 코드를 다시 읽어야 합니다.",
-        );
+        mark_reindex_required(&mut snapshot, UNSCORED_CODE_CALL_REINDEX_NOTE);
     }
 
     snapshot.items = items.into_values().collect();
