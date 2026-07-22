@@ -10,6 +10,8 @@ describe("AnswerCanvas", () => {
     const map = apiMap();
     const { container } = renderAnswer(map, "code:route-orders");
 
+    expect(container.querySelector(".answer-canvas")).toHaveAttribute("data-answer-mode", "api-flow");
+    expect(container.querySelector(".answer-canvas")).toHaveAttribute("data-answer-focus", "code:route-orders");
     expect(screen.getByRole("heading", { name: "DELETE /api/orders" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 2, name: "확인된 처리 흐름" })).toBeInTheDocument();
     expect(screen.getByText("loadOrders")).toBeInTheDocument();

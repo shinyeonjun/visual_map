@@ -71,7 +71,12 @@ export function AnswerCanvas({
 
   const map = visualMapControls.currentMap;
   return (
-    <main className={`answer-canvas${visualMapControls.loading ? " is-refreshing" : ""}`} aria-busy={visualMapControls.loading}>
+    <main
+      className={`answer-canvas${visualMapControls.loading ? " is-refreshing" : ""}`}
+      data-answer-mode={visibleMode}
+      data-answer-focus={committedFocus}
+      aria-busy={visualMapControls.loading}
+    >
       {visualMapControls.loading ? (
         <div className="answer-refreshing" role="status" aria-live="polite">
           <LoaderCircle className="spin" size={14} />
