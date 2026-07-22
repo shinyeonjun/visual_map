@@ -1,8 +1,66 @@
+import { waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { Workspace } from "../types/workspace";
 import type { VisualEdge, VisualNode } from "../types/visual-map";
-import { buildVisualMapControls } from "./controlBuilders";
+import { buildVisualMapControls, buildWorkspaceControls } from "./controlBuilders";
 
 type BuildVisualArgs = Parameters<typeof buildVisualMapControls>[0];
+type BuildWorkspaceArgs = Parameters<typeof buildWorkspaceControls>[0];
+
+describe("buildWorkspaceControls", () => {
+  it("reads code immediately after creating a workspace", async () => {
+    const createWorkspace = vi.fn().mockResolvedValueOnce(workspace).mockResolvedValueOnce(null);
+    const indexCodeRepository = vi.fn().mockResolvedValue(undefined);
+    const controls = buildWorkspaceControls({
+      operationStatus: { phase: "idle", label: "준비", message: "준비됨" },
+      repoPathError: null,
+      workspaces: {
+        initialized: true,
+        workspaces: [],
+        recoveryWarnings: [],
+        currentWorkspace: null,
+        repoSourceMode: "local",
+        workspaceName: workspace.name,
+        repoPath: workspace.repoPath,
+        workspaceStatus: null,
+        workspaceError: null,
+        setRepoSourceMode: vi.fn(),
+        setWorkspaceName: vi.fn(),
+        setRepoPath: vi.fn(),
+        pickRepoPath: vi.fn(),
+        createWorkspace,
+        openWorkspace: vi.fn(),
+        refreshGithubWorkspace: vi.fn(),
+        refreshWorkspaces: vi.fn(),
+        repairWorkspaceFromBackup: vi.fn(),
+        deleteWorkspace: vi.fn(),
+      } as unknown as BuildWorkspaceArgs["workspaces"],
+      code: {
+        codeStatus: null,
+        codeError: null,
+        codeErrorDetail: null,
+        codeInventory: null,
+        selectedCodeItem: null,
+        setSelectedCodeItem: vi.fn(),
+        indexCodeRepository,
+      } as unknown as BuildWorkspaceArgs["code"],
+      engineRegistry: null,
+      engineError: null,
+      busy: false,
+      busyAction: null,
+      refreshGithubWorkspace: vi.fn(),
+    });
+
+    controls.createWorkspace();
+
+    await waitFor(() => expect(indexCodeRepository).toHaveBeenCalledWith(workspace));
+
+    controls.createWorkspace();
+    await waitFor(() => expect(createWorkspace).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(indexCodeRepository).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("buildVisualMapControls", () => {
   it("keeps canvas inspection separate from the navigation focus", () => {
@@ -98,3 +156,13 @@ function dbState(): BuildVisualArgs["db"] {
     setSelectedDbTableKey: vi.fn(),
   } as unknown as BuildVisualArgs["db"];
 }
+
+const workspace: Workspace = {
+  id: "workspace-1",
+  name: "Orders",
+  repoPath: "D:\\project\\orders",
+  repoSource: "local",
+  dbProfiles: [],
+  createdAt: "2026-07-23T00:00:00Z",
+  updatedAt: "2026-07-23T00:00:00Z",
+};

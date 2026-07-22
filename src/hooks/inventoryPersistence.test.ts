@@ -48,6 +48,27 @@ describe("inventory snapshot persistence", () => {
     expect(refreshWorkspaces).toHaveBeenCalledWith(workspace.id);
   });
 
+  it("indexes a just-created workspace before the hook state commits", async () => {
+    const refreshWorkspaces = vi.fn(async () => undefined);
+    invokeMock.mockResolvedValue({ workspace, run: { ok: true, stderr: "" }, inventory: codeInventory });
+    const { result } = renderHook(() =>
+      useCodeInventory({
+        currentWorkspace: null,
+        withBusy,
+        setCurrentWorkspace: vi.fn(),
+        refreshWorkspaces,
+        refreshInventorySnapshot: vi.fn(async () => undefined),
+      }),
+    );
+
+    await act(() => result.current.indexCodeRepository(workspace));
+
+    expect(invokeMock).toHaveBeenCalledWith("index_code_repository", {
+      request: { workspaceId: workspace.id },
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledWith(workspace.id);
+  });
+
   it("keeps DB indexing busy until the persisted snapshot is refreshed", async () => {
     const saved = deferred();
     const refreshInventorySnapshot = vi.fn(() => saved.promise);

@@ -105,7 +105,8 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
     }
   }
 
-  async function createWorkspace() {
+  async function createWorkspace(): Promise<Workspace | null> {
+    let createdWorkspace: Workspace | null = null;
     await withBusy(repoSourceMode === "github" ? "workspace-clone" : "workspace-create", async () => {
       const request: CreateWorkspaceRequest = {
         name: workspaceName.trim(),
@@ -139,6 +140,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
         );
         setWorkspaceError(null);
         await refreshWorkspaces(created.id);
+        createdWorkspace = created;
       } catch (error) {
         setWorkspaceStatus(null);
         setWorkspaceError(
@@ -149,6 +151,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
         );
       }
     });
+    return createdWorkspace;
   }
 
   function updateRepoPath(value: string) {

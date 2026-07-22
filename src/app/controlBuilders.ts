@@ -50,6 +50,12 @@ export function buildWorkspaceControls({
     : engineRegistry && !codeEngine?.available
       ? codeEngine?.error ?? "코드 읽기 도구 설치 필요"
       : null;
+  async function createWorkspaceAndReadCode() {
+    const workspace = await workspaces.createWorkspace();
+    if (workspace && !codeIndexBlockedReason) {
+      await code.indexCodeRepository(workspace);
+    }
+  }
 
   return {
     initialized: workspaces.initialized,
@@ -86,7 +92,7 @@ export function buildWorkspaceControls({
     setWorkspaceName: workspaces.setWorkspaceName,
     setRepoPath: workspaces.setRepoPath,
     pickRepoPath: () => void workspaces.pickRepoPath(),
-    createWorkspace: workspaces.createWorkspace,
+    createWorkspace: () => void createWorkspaceAndReadCode(),
     openWorkspace: workspaces.openWorkspace,
     refreshGithubWorkspace,
     indexCodeRepository: () => void code.indexCodeRepository(),
