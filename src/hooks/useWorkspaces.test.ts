@@ -103,6 +103,40 @@ describe("workspace deletion", () => {
 
     expect(result.current.workspaceError).toBe("프로젝트 폴더 선택기를 열지 못했습니다");
   });
+
+  it("returns the created workspace so code reading can continue", async () => {
+    let listCalls = 0;
+    invokeMock.mockImplementation((command) => {
+      if (command === "list_workspaces") {
+        listCalls += 1;
+        return Promise.resolve(listCalls === 1 ? [] : [workspace]);
+      }
+      if (command === "get_workspace_recovery_warnings") {
+        return Promise.resolve([]);
+      }
+      if (command === "create_workspace") {
+        return Promise.resolve(workspace);
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    const { result } = renderHook(() => useWorkspaces({ withBusy }));
+    await waitFor(() => expect(result.current.initialized).toBe(true));
+    act(() => {
+      result.current.setRepoPath(workspace.repoPath);
+    });
+    await waitFor(() => expect(result.current.repoPath).toBe(workspace.repoPath));
+    act(() => {
+      result.current.setWorkspaceName(workspace.name);
+    });
+    await waitFor(() => expect(result.current.workspaceName).toBe(workspace.name));
+
+    let created: Workspace | null = null;
+    await act(async () => {
+      created = await result.current.createWorkspace();
+    });
+
+    expect(created).toEqual(workspace);
+  });
 });
 
 async function withBusy(_action: string, task: () => Promise<void>) {

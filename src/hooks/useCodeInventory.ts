@@ -43,13 +43,13 @@ export function useCodeInventory({
     setCodeErrorDetail(null);
   }, [currentWorkspace?.id]);
 
-  async function indexCodeRepository() {
-    if (!currentWorkspace) {
+  async function indexCodeRepository(workspace: Workspace | null = currentWorkspace) {
+    if (!workspace) {
       setCodeError("프로젝트를 연 뒤 코드 읽기를 실행하세요");
       return;
     }
 
-    const request: IndexCodeRequest = { workspaceId: currentWorkspace.id };
+    const request: IndexCodeRequest = { workspaceId: workspace.id };
 
     await withBusy("code-index", async () => {
       try {
