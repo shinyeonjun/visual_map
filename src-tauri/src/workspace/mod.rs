@@ -6,7 +6,7 @@ mod model;
 mod store;
 
 pub(crate) use code::focused_code_search;
-pub(crate) use code::{code_inventory, index_code_repository};
+pub(crate) use code::{code_inventory, index_code_repository, route_binding_id};
 pub(crate) use db::{db_inventory, delete_db_profile, index_db_profile, save_db_profile};
 pub(crate) use model::{
     CodeCall, CodeIndexResult, CodeInventory, CreateWorkspaceRequest, DbConstraint,

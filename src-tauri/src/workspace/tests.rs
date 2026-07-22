@@ -1656,6 +1656,70 @@ fn code_inventory_normalizes_handles_from_handler_to_route_rows() {
 }
 
 #[test]
+fn code_inventory_splits_collapsed_routes_into_handler_bindings() {
+    let routes = serde_json::json!({
+        "results": [
+            { "name": "/", "qualified_name": "__route__GET__/", "label": "Route" }
+        ]
+    });
+    let code = serde_json::json!({
+        "results": [
+            {
+                "name": "list_events",
+                "qualified_name": "handlers.events.list_events",
+                "label": "Function",
+                "file_path": "routes/events.py",
+                "start_line": 28,
+                "route_path": "/"
+            },
+            {
+                "name": "list_sessions",
+                "qualified_name": "handlers.sessions.list_sessions",
+                "label": "Function",
+                "file_path": "routes/sessions.py",
+                "start_line": 33,
+                "route_path": "/"
+            }
+        ]
+    });
+    let handles = serde_json::json!({
+        "rows": [
+            { "from": "handlers.events.list_events", "to": "__route__GET__/" },
+            { "from": "handlers.sessions.list_sessions", "to": "__route__GET__/" }
+        ]
+    });
+    let mut inventory = extract_code_inventory(
+        "shop-api".to_string(),
+        None,
+        &routes,
+        &code,
+        &serde_json::json!({ "results": [] }),
+    )
+    .unwrap();
+
+    attach_code_handles(&handles, &mut inventory);
+
+    assert_eq!(inventory.routes.len(), 2);
+    assert_eq!(inventory.handles.len(), 2);
+    assert!(inventory
+        .routes
+        .iter()
+        .all(|route| route.id.contains("#handler=") && route.file_path.is_some()));
+    assert_eq!(
+        inventory
+            .routes
+            .iter()
+            .map(|route| route.file_path.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["routes/events.py", "routes/sessions.py"]
+    );
+    assert!(inventory.handles.iter().all(|handle| inventory
+        .routes
+        .iter()
+        .any(|route| route.id == handle.route)));
+}
+
+#[test]
 fn code_inventory_reads_locations_from_the_node_contract() {
     let code = serde_json::json!({
         "results": [{

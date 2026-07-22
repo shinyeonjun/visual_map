@@ -304,7 +304,7 @@ export function useVisualMap({
       }
       const { snapshot } = bootstrap;
       invalidateEnrichedMaps();
-      noteSnapshotLoaded(snapshot);
+      noteSnapshotLoaded(snapshot, false);
       const context = savedMapContext(workspaceId);
       setMapMode(context.mode);
       const map = await loadVisualMap(context.focusId, context.mode, workspaceId);
@@ -617,12 +617,33 @@ export function useVisualMap({
     setSearchPopoverOpen(false);
   }
 
-  function noteSnapshotLoaded(snapshot: InventorySnapshot) {
+  function noteSnapshotLoaded(snapshot: InventorySnapshot, reloadMigratedFocus = true) {
     setSnapshotWorkspaceId(snapshot.workspaceId);
     setSnapshotSavedAt(snapshot.savedAt);
     noteSnapshotFreshness(snapshot.staleReasons ?? []);
     setSnapshotSourceSummary(sourceSummary(snapshot));
     setAnalysisCoverage(coverageFromSnapshot(snapshot));
+
+    const target = visualTargetRef.current;
+    if (
+      target?.workspaceId !== snapshot.workspaceId ||
+      target.mode !== "api-flow" ||
+      !target.focusId ||
+      !snapshot.items.some((item) => item.id.startsWith(`${target.focusId}#handler=`))
+    ) {
+      return;
+    }
+
+    // Older snapshots stored one route focus even when several handlers shared the same path.
+    // The binding split cannot infer which handler the user meant, so return to a neutral answer.
+    saveMapContext(snapshot.workspaceId, "api-flow", null);
+    setMapMode("api-flow");
+    clearVisualSelection();
+    setVisualMap(null);
+    setVisualMapKey(null);
+    if (reloadMigratedFocus) {
+      void loadVisualMap(null, "api-flow", snapshot.workspaceId);
+    }
   }
 
   function noteSnapshotFreshness(staleReasons: string[]) {

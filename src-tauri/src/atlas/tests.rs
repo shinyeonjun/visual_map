@@ -400,6 +400,89 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
 }
 
 #[test]
+fn canonical_builder_splits_legacy_collapsed_route_bindings() {
+    let route = code_test_item("__route__GET__/", "Route", "/", "", 1, 1);
+    let first_handler = code_test_item(
+        "handlers.events.list_events",
+        "Function",
+        "list_events",
+        "routes/events.py",
+        28,
+        30,
+    );
+    let second_handler = code_test_item(
+        "handlers.sessions.list_sessions",
+        "Function",
+        "list_sessions",
+        "routes/sessions.py",
+        33,
+        35,
+    );
+    let code = CodeInventory {
+        project: "shop".to_string(),
+        routes: vec![route],
+        services: Vec::new(),
+        files: Vec::new(),
+        handlers: vec![first_handler, second_handler],
+        repositories: Vec::new(),
+        functions: Vec::new(),
+        classes: Vec::new(),
+        modules: Vec::new(),
+        unknown: Vec::new(),
+        summary: CodeInventorySummary {
+            routes: 1,
+            handlers: 2,
+            services: 0,
+            repositories: 0,
+            functions: 0,
+            classes: 0,
+            modules: 0,
+            files: 0,
+            unknown: 0,
+        },
+        architecture: None,
+        calls: Vec::new(),
+        handles: vec![
+            CodeHandle {
+                handler: "handlers.events.list_events".to_string(),
+                route: "__route__GET__/".to_string(),
+            },
+            CodeHandle {
+                handler: "handlers.sessions.list_sessions".to_string(),
+                route: "__route__GET__/".to_string(),
+            },
+        ],
+        partial: false,
+    };
+
+    let snapshot = build_inventory_snapshot("workspace-1".to_string(), Some(&code), None);
+    let routes = snapshot
+        .items
+        .iter()
+        .filter(|item| item.layer == "api")
+        .collect::<Vec<_>>();
+    let handles = snapshot
+        .links
+        .iter()
+        .filter(|link| link.kind == "code_handle")
+        .collect::<Vec<_>>();
+
+    assert_eq!(routes.len(), 2);
+    assert_eq!(handles.len(), 2);
+    assert!(routes.iter().all(|route| route.id.contains("#handler=")));
+    assert_eq!(
+        routes
+            .iter()
+            .map(|route| route.location.as_ref().unwrap().path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["routes/events.py", "routes/sessions.py"]
+    );
+    assert!(handles
+        .iter()
+        .all(|handle| routes.iter().any(|route| route.id == handle.from)));
+}
+
+#[test]
 fn snapshot_with_metadata_records_code_source() {
     let snapshot = InventorySnapshot {
         schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
