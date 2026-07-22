@@ -108,5 +108,7 @@ jobs:
       - name: Test database adapter against the pinned sidecar
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml workspace::tests::database_memory_v2_adapter_round_trip_is_complete_and_metadata_only -- --ignored --exact
 
-      - name: Build release-mode desktop binary
+      - name: Build internal release-mode desktop binary
+        env:
+          BACKEND_VISUAL_MAP_BUILD_SCOPE: internal
         run: npx tauri build --no-bundle
