@@ -2,11 +2,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::architecture::{mode_node_cap, narrow_focus_map};
 use super::impact_review::{direct_object_kind, direct_review_rank, impact_review_board};
-use super::linker::{candidate_links, merge_evidence};
+use super::linker::{
+    candidate_links, identifier_terms, identifier_tokens, merge_evidence, table_aliases,
+};
 use super::model::{
     ChangeIntent, InventoryItem, InventorySnapshot, SnapshotLink, VisualEdge, VisualMap, VisualNode,
 };
-use super::projection_support::{compact_token, confidence_rank, node_sort_key};
+use super::projection_support::{confidence_rank, node_sort_key};
 use super::visual_map::{confirmed_link_edges, focus_neighborhood_map, visual_node};
 
 pub(super) fn table_detail_map(
@@ -490,8 +492,14 @@ fn column_reference_candidates(
     snapshot: &InventorySnapshot,
     column: &InventoryItem,
 ) -> Vec<VisualEdge> {
-    let full_name = column.name.to_ascii_lowercase();
-    let compact_name = compact_token(&full_name);
+    let column_tokens = identifier_tokens(&column.name);
+    let column_term = column_tokens.join("_");
+    let parent_table_aliases = column
+        .parent_id
+        .as_deref()
+        .and_then(|parent_id| snapshot.items.iter().find(|item| item.id == parent_id))
+        .map(|table| table_aliases(&table.name))
+        .unwrap_or_default();
 
     let mut edges = snapshot
         .links
@@ -527,29 +535,37 @@ fn column_reference_candidates(
             .iter()
             .filter(|item| item.source == "code")
             .filter_map(|item| {
-                let haystack = format!("{} {}", item.name, item.path.clone().unwrap_or_default())
-                    .to_ascii_lowercase();
-                let compact_haystack = compact_token(&haystack);
-                let confidence = if (full_name.len() >= 3 && haystack.contains(&full_name))
-                    || (compact_name.len() >= 4 && compact_haystack.contains(&compact_name))
-                {
-                    Some("medium")
-                } else {
-                    None
-                }?;
+                let terms = identifier_terms(&format!(
+                    "{} {}",
+                    item.name,
+                    item.path.clone().unwrap_or_default()
+                ));
+                let has_column_term = !column_term.is_empty() && terms.contains(&column_term);
+                let has_table_context = column_tokens.len() > 1
+                    || parent_table_aliases
+                        .iter()
+                        .any(|alias| terms.contains(alias));
+                (has_column_term && has_table_context).then_some(())?;
 
                 Some(VisualEdge {
                     id: format!("candidate-column:{}->{}", item.id, column.id),
                     from: item.id.clone(),
                     to: column.id.clone(),
                     kind: "candidate_column_ref".to_string(),
-                    confidence: Some(confidence.to_string()),
+                    confidence: Some("medium".to_string()),
                     evidence: vec![super::model::Evidence {
                         kind: "column-name-match".to_string(),
-                        text: format!(
-                            "{} 코드 항목이 {} 컬럼명과 이름 기반으로 일치합니다",
-                            item.name, column.name
-                        ),
+                        text: if column_tokens.len() > 1 {
+                            format!(
+                                "{} 코드 항목이 {} 컬럼 전체 식별자와 일치합니다",
+                                item.name, column.name
+                            )
+                        } else {
+                            format!(
+                                "{} 코드 항목에서 테이블 문맥과 {} 컬럼명을 함께 찾았습니다",
+                                item.name, column.name
+                            )
+                        },
                     }],
                 })
             }),

@@ -37,13 +37,6 @@ pub(super) fn confidence_rank(confidence: &str) -> u8 {
     }
 }
 
-pub(super) fn compact_token(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .collect::<String>()
-}
-
 pub(super) fn node_sort_key(item: Option<&InventoryItem>) -> (u8, String) {
     match item {
         Some(item) => (layer_rank(&item.layer), item.name.clone()),

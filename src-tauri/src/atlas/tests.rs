@@ -2553,6 +2553,50 @@ fn compound_column_candidates_require_the_full_identifier() {
 }
 
 #[test]
+fn single_column_candidates_require_the_parent_table_context() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    let column = snapshot
+        .items
+        .iter_mut()
+        .find(|item| item.id == "db:column:orders:customer_id")
+        .unwrap();
+    column.name = "status".to_string();
+    snapshot.items.push(item(
+        "code:function:status-only",
+        "function",
+        "resolveStatusText",
+        "code",
+        "code",
+        None,
+        Some("src/runtime/status.ts"),
+    ));
+    snapshot.items.push(item(
+        "code:function:order-status",
+        "function",
+        "loadOrderStatus",
+        "code",
+        "code",
+        None,
+        Some("src/orders/status.ts"),
+    ));
+
+    let map = visual_map(
+        &snapshot,
+        Some("db:column:orders:customer_id".to_string()),
+        "column-impact".to_string(),
+    );
+    let candidate_sources = map
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == "candidate_column_ref")
+        .map(|edge| edge.from.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    assert!(candidate_sources.contains("code:function:order-status"));
+    assert!(!candidate_sources.contains("code:function:status-only"));
+}
+
+#[test]
 fn change_impact_review_board_separates_truth_candidates_unknowns_and_checks() {
     let mut snapshot = fixture_inventory("workspace-1".to_string());
     snapshot.metadata.gaps.push(super::model::SnapshotGap {

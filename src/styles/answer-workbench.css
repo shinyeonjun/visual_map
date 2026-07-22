@@ -238,6 +238,7 @@
 .answer-verdicts .confirmed { color: var(--green); }
 .answer-verdicts .structural { color: var(--blue-ink); }
 .answer-verdicts .candidate { color: var(--orange); }
+.answer-verdicts .unknown { color: var(--red); }
 
 .answer-section {
   padding: 22px 0;

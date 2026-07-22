@@ -35,6 +35,27 @@ describe("AnswerCanvas", () => {
     expect(container.querySelector(".answer-truth.structural")).toBeInTheDocument();
   });
 
+  it("does not label unknown coverage gaps as candidates", () => {
+    const map = tableMap();
+    const unknownLane = map.reviewBoard!.lanes.find((lane) => lane.id === "unknowns")!;
+    unknownLane.total = 1;
+    unknownLane.items = [{
+      id: "missing-code-evidence",
+      nodeId: null,
+      kind: "code-gap",
+      title: "코드 영향 미확인",
+      detail: "직접 코드 근거가 없습니다.",
+      truthClass: "unknown",
+      rank: 1,
+      evidence: [],
+    }];
+
+    const { container } = renderAnswer(map, "db:table:public.orders");
+    expect(container.querySelector(".answer-verdicts .unknown")).toHaveTextContent("확인 필요 1");
+    expect(container.querySelector(".answer-verdicts .candidate")).not.toBeInTheDocument();
+    expect(screen.getByText("확인되지 않은 구간")).toBeInTheDocument();
+  });
+
   it("uses a quiet project start instead of opening the full atlas by default", () => {
     render(
       <AnswerCanvas
