@@ -1,546 +1,548 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  Braces,
+  CircleCheck,
+  Database,
+  FileCode2,
+  FolderCog,
+  GitCompareArrows,
+  LayoutGrid,
+  ListFilter,
+  Search,
+  TriangleAlert,
+  X,
+} from "lucide-react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ComponentType } from "react";
+import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
+import type { VisualMap } from "../../types/visual-map";
+import { savedModeMapContext } from "../../visual/mapContext";
+import {
+  columnRefFromNodeId,
+  dbColumnNodeId,
+  dbTableIdentityLabel,
+  dbTableNodeId,
+} from "../../visual/nodeIds";
 import {
   codeInventoryCodeItems,
-  codeInventoryDefaultRoute,
+  codeInventoryFileCount,
   codeInventoryItemCount,
+  codeInventoryRouteCount,
+  codeInventorySymbolCount,
+  codeKindChip,
+  codeRouteMethod,
+  dbInventoryTableCount,
   dbInventoryTableKey,
 } from "../../types/workspace";
-import type { DbProfileControls, WorkspaceControls } from "../../types/controls";
-import type { VisualMapControls } from "../../types/controls";
-import { focusDbProfileSetup } from "../common/focusSourceSetup";
-import { focusGlobalSearch } from "../common/focusGlobalSearch";
-import { Star, workbenchModes } from "./workbenchModes";
+
+type ModeIcon = ComponentType<{ size?: number }>;
+
+type ModeContextItem = {
+  id: string;
+  badge: string;
+  title: string;
+  meta: string;
+  group?: string;
+  active: boolean;
+  open: () => void;
+};
+
+type ModeContext = {
+  title: string;
+  description: string;
+  total: number;
+  matching: number;
+  items: ModeContextItem[];
+};
+
+const workbenchModes: [ModeIcon, string, string, string][] = [
+  [LayoutGrid, "atlas", "개요", "전체 구조"],
+  [Braces, "api-flow", "API", "라우트부터 DB까지"],
+  [FileCode2, "search-focus", "코드", "함수·클래스·파일"],
+  [Database, "table-usage", "DB", "테이블·컬럼·제약"],
+  [GitCompareArrows, "column-impact", "영향", "직접·후보·미확인"],
+];
 
 export function ModePanel({
   workspaceControls,
   dbProfileControls,
   visualMapControls,
+  onNavigate,
+  onOpenSources,
 }: {
   workspaceControls: WorkspaceControls;
   dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
+  onNavigate?: () => void;
+  onOpenSources?: () => void;
 }) {
-  const noteRef = useRef<HTMLDivElement>(null);
-  const [note, setNote] = useState<ModeUnlockHint | null>(null);
-  const readiness = workbenchReadiness(workspaceControls, dbProfileControls, visualMapControls);
-  const displayedNote = note;
-  const mapHasNoRelations = Boolean(visualMapControls.currentMap && visualMapControls.currentMap.edges.length === 0);
+  const [blockedReason, setBlockedReason] = useState<string | null>(null);
+  const [contextQueries, setContextQueries] = useState<Record<string, string>>({});
+  const [compactContextOpen, setCompactContextOpen] = useState(false);
+  const contextListRef = useRef<HTMLDivElement | null>(null);
+  const contextFilterRef = useRef<HTMLInputElement | null>(null);
+  const contextToggleRef = useRef<HTMLButtonElement | null>(null);
+  const restoreContextFocusRef = useRef(false);
+  const contextScrollRef = useRef(new Map<string, number>());
+  const atlasContextMapRef = useRef<{ workspaceId: string | null; map: VisualMap | null }>({
+    workspaceId: null,
+    map: null,
+  });
+  const counts = navigationCounts(workspaceControls, dbProfileControls);
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
-  const showCardLockReasons = hasWorkspace;
+  const workspaceId = workspaceControls.currentWorkspace?.id ?? null;
+  const cachedAtlasMap = atlasContextMapRef.current.workspaceId === workspaceId
+    ? atlasContextMapRef.current.map
+    : null;
+  const visibleMode = visualMapControls.loading && visualMapControls.currentMap
+    ? visualMapControls.currentMap.mode
+    : visualMapControls.mode;
+  const pendingMode = visualMapControls.loading && visibleMode !== visualMapControls.mode
+    ? visualMapControls.mode
+    : null;
+  const contextQuery = contextQueries[visibleMode] ?? "";
+  const context = modeContext(
+    workspaceControls,
+    dbProfileControls,
+    visualMapControls,
+    visibleMode,
+    contextQuery,
+    cachedAtlasMap,
+  );
 
-  useEffect(() => {
-    setNote(null);
-  }, [
-    workspaceControls.repoSourceMode,
-    workspaceControls.currentWorkspace?.id,
-    workspaceControls.canCreateWorkspace,
-    workspaceControls.codeStatus,
-    workspaceControls.canIndexCode,
-    workspaceControls.codeIndexBlockedReason,
-    workspaceControls.codeInventory,
-    dbProfileControls.activeProfile,
-    dbProfileControls.status,
-    dbProfileControls.dbIndexBlockedReason,
-    dbProfileControls.inventory,
-  ]);
-
-  useEffect(() => {
-    if (note) {
-      noteRef.current?.focus();
+  useLayoutEffect(() => {
+    if (contextListRef.current) {
+      contextListRef.current.scrollTop = contextScrollRef.current.get(visibleMode) ?? 0;
     }
-  }, [note]);
+  }, [visibleMode]);
+
+  useEffect(() => {
+    atlasContextMapRef.current = {
+      workspaceId,
+      map: visualMapControls.currentMap?.mode === "atlas"
+        ? visualMapControls.currentMap
+        : atlasContextMapRef.current.workspaceId === workspaceId
+          ? atlasContextMapRef.current.map
+          : null,
+    };
+  }, [visualMapControls.currentMap, workspaceId]);
+
+  useEffect(() => {
+    if (compactContextOpen) {
+      contextFilterRef.current?.focus();
+    }
+  }, [compactContextOpen]);
+
+  useLayoutEffect(() => {
+    if (!compactContextOpen && restoreContextFocusRef.current) {
+      restoreContextFocusRef.current = false;
+      contextToggleRef.current?.focus();
+    }
+  }, [compactContextOpen]);
+
+  const closeCompactContext = (restoreFocus = false) => {
+    restoreContextFocusRef.current = restoreFocus;
+    setCompactContextOpen(false);
+  };
 
   return (
-    <section className="side-card" aria-label="찾을 답">
-      <div className="panel-header">
-        <Star size={16} />
-        <h2>찾을 답</h2>
-      </div>
-      <div className="mode-list">
-        <div className={`mode-readiness ${readiness.tone}`}>
-          <span>{readiness.badge}</span>
-          <strong>{readiness.title}</strong>
-          <small>{readiness.text}</small>
-        </div>
-        <div className={`mode-note-slot ${displayedNote ? "visible" : ""}`} aria-live="polite">
-          {displayedNote && (
+    <section className="product-nav-panel">
+      <header className="product-nav-project">
+        <span className="project-avatar" aria-hidden="true">
+          {(workspaceControls.currentWorkspace?.name ?? "P").slice(0, 1).toUpperCase()}
+        </span>
+        <span>
+          <strong>{workspaceControls.currentWorkspace?.name ?? (workspaceControls.initialized ? "프로젝트 없음" : "프로젝트 확인 중")}</strong>
+          <small>{hasWorkspace ? "분석 대상" : workspaceControls.initialized ? "소스를 연결하세요" : "잠시만 기다려 주세요"}</small>
+        </span>
+      </header>
+      <div className="product-nav-body">
+        <nav className="product-nav-list" aria-label="프로젝트 보기">
+          {workbenchModes.map(([ModeIcon, mode, title, description]) => {
+            const blockReason = modeBlockReason(mode, workspaceControls, dbProfileControls);
+            const active = visibleMode === mode;
+            const pending = pendingMode === mode;
+            const count = counts[mode] ?? 0;
+            return (
+              <button
+                className={`${active ? "active" : ""} ${pending ? "pending" : ""} ${blockReason ? "locked" : ""}`}
+                type="button"
+                key={mode}
+                data-mode-id={modeTestId(mode)}
+                aria-current={active ? "page" : undefined}
+                aria-busy={pending || undefined}
+                aria-controls={active ? "product-mode-context" : undefined}
+                aria-label={`${title}. ${blockReason ?? description}. ${count.toLocaleString("ko-KR")}개${pending ? ". 준비 중" : ""}`}
+                title={pending ? `${title} 준비 중` : blockReason ?? description}
+                onClick={() => {
+                  if (blockReason) {
+                    setBlockedReason(blockReason);
+                    setCompactContextOpen(false);
+                    return;
+                  }
+                  setBlockedReason(null);
+                  setCompactContextOpen(false);
+                  if (visualMapControls.mode !== mode) {
+                    showWorkbenchMode(mode, workspaceControls, dbProfileControls, visualMapControls);
+                  }
+                  onNavigate?.();
+                }}
+              >
+                <span className="product-nav-icon">
+                  <ModeIcon size={17} />
+                </span>
+                <span className="product-nav-copy">
+                  <strong>{title}</strong>
+                </span>
+              </button>
+            );
+          })}
+          <button
+            className="product-context-toggle"
+            type="button"
+            ref={contextToggleRef}
+            aria-controls="product-mode-context"
+            aria-expanded={compactContextOpen}
+            aria-label={`${context.title} 목록 ${compactContextOpen ? "닫기" : "열기"}`}
+            title={`${context.title} 목록`}
+            disabled={!hasWorkspace}
+            onClick={() => setCompactContextOpen((open) => !open)}
+          >
+            <span className="product-nav-icon">
+              <ListFilter size={17} />
+            </span>
+            <span className="product-nav-copy">
+              <strong>항목</strong>
+            </span>
+          </button>
+        </nav>
+
+        <div className="product-context-column">
+          <section
+            className={`product-context-browser${compactContextOpen ? " compact-open" : ""}`}
+            id="product-mode-context"
+            aria-label={`${context.title} 탐색`}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeCompactContext(true);
+              }
+            }}
+          >
+            <header>
+              <span>
+                <strong>{context.title}</strong>
+                <small>{context.description}</small>
+              </span>
+              <em>{context.total.toLocaleString("ko-KR")}</em>
+              <button
+                className="product-context-close"
+                type="button"
+                aria-label={`${context.title} 목록 닫기`}
+                title="목록 닫기"
+                onClick={() => closeCompactContext(true)}
+              >
+                <X size={14} />
+              </button>
+            </header>
+            <label className="product-context-filter">
+              <Search size={13} aria-hidden="true" />
+              <input
+                aria-label={`${context.title} 항목 필터`}
+                ref={contextFilterRef}
+                disabled={!hasWorkspace || context.total === 0}
+                placeholder={`${context.title} 필터`}
+                value={contextQuery}
+                onChange={(event) => {
+                  contextListRef.current?.scrollTo({ top: 0 });
+                  contextScrollRef.current.set(visibleMode, 0);
+                  setContextQueries((current) => ({
+                    ...current,
+                    [visibleMode]: event.target.value,
+                  }));
+                }}
+              />
+            </label>
             <div
-              ref={noteRef}
-              className={`mode-note ${displayedNote.run ? "" : "passive"}`}
-              tabIndex={note ? -1 : undefined}
+              className="product-context-list"
+              ref={contextListRef}
+              onScroll={(event) => contextScrollRef.current.set(visibleMode, event.currentTarget.scrollTop)}
             >
-              <span>{displayedNote.reason}</span>
-              {displayedNote.run && (
-                <button
-                  className={displayedNote.primary ? "primary-action compact" : "outline-action compact"}
-                  type="button"
-                  onClick={() => {
-                    displayedNote.run?.();
-                    setNote(null);
-                  }}
-                  disabled={displayedNote.disabled || workspaceControls.busy || dbProfileControls.busy}
-                >
-                  {displayedNote.button}
+              {context.items.map((item, index) => (
+                <Fragment key={item.id}>
+                  {item.group && item.group !== context.items[index - 1]?.group ? (
+                    <h3>{item.group}</h3>
+                  ) : null}
+                  <button
+                    className={item.active ? "active" : ""}
+                    type="button"
+                    data-context-id={item.id}
+                    aria-current={item.active ? "true" : undefined}
+                    onClick={() => {
+                      setBlockedReason(null);
+                      setCompactContextOpen(false);
+                      item.open();
+                      onNavigate?.();
+                    }}
+                  >
+                    <span>{item.badge}</span>
+                    <strong title={item.title}>{item.title}</strong>
+                    {item.active ? <em>현재</em> : null}
+                    <small title={item.meta}>{item.meta}</small>
+                  </button>
+                </Fragment>
+              ))}
+              {context.items.length === 0 ? (
+                <p>
+                  {context.total === 0
+                    ? hasWorkspace
+                      ? "현재 보기에서 탐색할 항목이 없습니다."
+                      : "프로젝트를 연결하면 항목이 표시됩니다."
+                    : "필터와 일치하는 항목이 없습니다."}
+                </p>
+              ) : null}
+            </div>
+            <footer>
+              {context.matching > context.items.length
+                ? `${context.items.length.toLocaleString("ko-KR")}개 표시 · 검색으로 좁히세요`
+                : `${context.matching.toLocaleString("ko-KR")}개 표시`}
+            </footer>
+          </section>
+
+          {blockedReason && (
+            <div className="product-nav-notice" role="status">
+              <TriangleAlert size={15} />
+              <span>{blockedReason}</span>
+              {hasWorkspace && onOpenSources ? (
+                <button type="button" onClick={onOpenSources}>
+                  소스 관리
                 </button>
-              )}
+              ) : null}
             </div>
           )}
+
+          <footer className="product-nav-footer">
+            <span className={hasWorkspace ? "ready" : "pending"}>
+              {hasWorkspace ? <CircleCheck size={14} /> : <FolderCog size={14} />}
+              {hasWorkspace ? "프로젝트 연결됨" : workspaceControls.initialized ? "프로젝트 연결 필요" : "프로젝트 확인 중"}
+            </span>
+            {hasWorkspace && (
+              <small>
+                코드 {counts["search-focus"].toLocaleString("ko-KR")} · DB {counts["table-usage"].toLocaleString("ko-KR")}
+              </small>
+            )}
+          </footer>
         </div>
-        {!hasWorkspace && (
-          <div className="mode-empty-hint">
-            프로젝트를 열면 이곳에서 전체 구조, API 흐름, 테이블 연결, 컬럼 변경 범위를 바로 전환합니다.
-          </div>
-        )}
-        {hasWorkspace && workbenchModes.map(([ModeIcon, mode, title, text], index) => {
-          const blockReason = workbenchModeBlockReason(mode, workspaceControls, dbProfileControls);
-          const active = !blockReason && visualMapControls.mode === mode;
-          const displayTitle = modeTitle(mode, title, workspaceControls, dbProfileControls, mapHasNoRelations);
-          const displayText = modeText(mode, text, workspaceControls, dbProfileControls, mapHasNoRelations);
-          const displayAnswer = modeAnswerLabel(mode, workspaceControls, dbProfileControls, mapHasNoRelations);
-          const unlockHint = blockReason ? workbenchModeUnlockHint(mode, blockReason, workspaceControls, dbProfileControls, visualMapControls) : null;
-          const disabledUntilProject = Boolean(blockReason && !workspaceControls.currentWorkspace);
-          const cardBody = (
-            <>
-              <span className="mode-step" aria-hidden="true">{index + 1}</span>
-              <span className="mode-icon">
-                <ModeIcon size={16} />
-              </span>
-              <span className="mode-text">
-                <strong>{displayTitle}</strong>
-                <small>{displayText}</small>
-                <span className="mode-answer">{displayAnswer}</span>
-                <em className="mode-source">{modeDataLabel(mode, workspaceControls, dbProfileControls, mapHasNoRelations)}</em>
-                {blockReason && showCardLockReasons && <small className="mode-lock-reason">{blockReason}</small>}
-              </span>
-            </>
-          );
-          if (disabledUntilProject) {
-            return (
-              <div
-                className="mode-card locked passive"
-                key={title}
-                aria-label={`찾을 답: ${displayAnswer}: ${blockReason}`}
-                title={blockReason ?? undefined}
-              >
-                {cardBody}
-              </div>
-            );
-          }
-          return (
-            <button
-              className={`mode-card ${active ? "active" : ""} ${blockReason ? "locked" : ""}`}
-              key={title}
-              type="button"
-              onClick={() => {
-                if (blockReason) {
-                  setNote(unlockHint);
-                  return;
-                }
-                setNote(null);
-                showWorkbenchMode(mode, workspaceControls, dbProfileControls, visualMapControls);
-                if (mode === "search-focus") {
-                  focusGlobalSearch(visualMapControls);
-                }
-              }}
-              aria-pressed={active}
-              aria-label={`찾을 답: ${displayAnswer}: ${blockReason ?? displayText}`}
-              title={blockReason ?? undefined}
-              disabled={workspaceControls.busy || dbProfileControls.busy}
-            >
-              {cardBody}
-            </button>
-          );
-        })}
       </div>
     </section>
   );
 }
 
-function workbenchReadiness(
+function routeLocation(path: string | null | undefined, line: number | null | undefined): string {
+  if (!path) return line ? `L${line}` : "소스 위치 없음";
+  const normalized = path.replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  const compact = parts.slice(-2).join("/");
+  return `${compact}${line ? `:${line}` : ""}`;
+}
+
+function modeContext(
   workspaceControls: WorkspaceControls,
   dbProfileControls: DbProfileControls,
   visualMapControls: VisualMapControls,
-): {
-  badge: string;
-  title: string;
-  text: string;
-  tone: "pending" | "partial" | "ready";
-} {
-  const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
-  const hasRoutes = Boolean(workspaceControls.codeInventory?.routes.length);
-  const hasCodeItems = codeInventoryCodeItems(workspaceControls.codeInventory).length > 0;
-  const codeSymbolCount = codeInventoryCodeItems(workspaceControls.codeInventory).length;
-  const fileCount = workspaceControls.codeInventory?.files.length ?? 0;
-  const hasCodeContext = hasRoutes || hasCodeItems;
-  const hasCodeInventory = Boolean(workspaceControls.codeInventory);
-  const tables = dbProfileControls.inventory?.tables ?? [];
-  const hasTables = Boolean(tables.length);
-  const hasColumns = Boolean(firstColumn(dbProfileControls));
-  const missingColumnTables = tables.filter((table) => table.columns.length === 0).length;
-  const hasAnyInventory = Boolean(workspaceControls.codeInventory || dbProfileControls.inventory);
-  const hasSearchable = hasSearchableItems(workspaceControls, dbProfileControls);
-  const openModes = 1 + Number(hasRoutes) + Number(hasTables) + Number(hasColumns) + Number(hasSearchable);
-  const needsGithub = workspaceControls.repoSourceMode === "github";
-  const mapHasNoRelations = Boolean(
-    visualMapControls.currentMap &&
-      visualMapControls.currentMap.nodes.length === 0 &&
-      visualMapControls.currentMap.edges.length === 0,
-  );
+  mode: string,
+  query: string,
+  atlasContextMap: VisualMap | null,
+): ModeContext {
+  const focus = visualMapControls.loading && visualMapControls.currentMap
+    ? visualMapControls.currentMap.focus
+    : visualMapControls.focusId;
+  const normalizedQuery = query.trim().toLocaleLowerCase("ko-KR");
+  const finish = (title: string, description: string, items: ModeContextItem[], total = items.length): ModeContext => {
+    const filtered = normalizedQuery
+      ? items.filter((item) => [item.badge, item.title, item.meta, item.group]
+          .some((value) => value?.toLocaleLowerCase("ko-KR").includes(normalizedQuery)))
+      : items;
+    return {
+      title,
+      description,
+      total,
+      matching: normalizedQuery ? filtered.length : total,
+      items: filtered.slice(0, 100),
+    };
+  };
+  const activate = (nodeId: string, open: () => void) => () => {
+    if (visualMapControls.loading) {
+      if (visualMapControls.focusId !== nodeId) {
+        open();
+      }
+      return;
+    }
+    const node = visualMapControls.currentMap?.nodes.find((item) => item.id === nodeId) ?? null;
+    if (focus === nodeId && node) {
+      visualMapControls.selectNode(node);
+      return;
+    }
+    open();
+  };
 
-  if (!hasWorkspace) {
-    if (workspaceControls.canCreateWorkspace) {
-      return {
-        badge: "0/5",
-        title: needsGithub ? "저장소 복제 준비" : "프로젝트 열기 준비",
-        text: needsGithub ? "복제하면 답을 고를 수 있습니다." : "열면 답을 고를 수 있습니다.",
-        tone: "pending",
-      };
-    }
-    return {
-      badge: "0/5",
-      title: needsGithub ? "GitHub URL 필요" : "로컬 폴더 필요",
-      text: needsGithub ? "URL을 붙여넣으면 복제해서 열 수 있습니다." : "폴더를 지정하면 열기 단계가 보입니다.",
-      tone: "pending",
-    };
+  if (mode === "api-flow") {
+    const routes = workspaceControls.codeInventory?.routes ?? [];
+    return finish(
+      "API 라우트",
+      "요청 경로 선택",
+      routes.map((route) => ({
+        id: route.id,
+        badge: codeRouteMethod(route) ?? "API",
+        title: route.name,
+        meta: routeLocation(route.filePath, route.line),
+        active: focus === `code:${route.id}`,
+        open: activate(`code:${route.id}`, () => visualMapControls.showMode("api-flow", `code:${route.id}`)),
+      })),
+      codeInventoryRouteCount(workspaceControls.codeInventory),
+    );
   }
-  if (mapHasNoRelations && (hasSearchable || hasTables) && !(hasTables && !hasColumns) && missingColumnTables === 0) {
-    return {
-      badge: `${openModes}/5`,
-      title: "코드/DB 목록만 있음",
-      text: "관계는 아직 없고 실제 카드부터 확인합니다.",
-      tone: "partial",
-    };
+
+  if (mode === "search-focus") {
+    const toItem = (group: string) => (item: ReturnType<typeof codeInventoryCodeItems>[number]): ModeContextItem => ({
+      id: item.id,
+      badge: codeKindChip(item.kind),
+      title: item.name,
+      meta: routeLocation(item.filePath, item.line),
+      group,
+      active: focus === `code:${item.id}`,
+      open: activate(`code:${item.id}`, () => visualMapControls.showMode("search-focus", `code:${item.id}`)),
+    });
+    const codeItems = [
+      ...(workspaceControls.codeInventory?.routes ?? []).map(toItem("API 라우트")),
+      ...codeInventoryCodeItems(workspaceControls.codeInventory).map(toItem("함수·클래스")),
+      ...(workspaceControls.codeInventory?.files ?? []).map(toItem("파일")),
+    ];
+    return finish(
+      "코드 항목",
+      "함수·클래스·파일",
+      codeItems,
+      codeInventoryItemCount(workspaceControls.codeInventory),
+    );
   }
-  if (hasColumns && missingColumnTables > 0) {
-    return {
-      badge: `${openModes}/5`,
-      title: "컬럼 보강 필요",
-      text: `테이블 ${missingColumnTables}개는 컬럼 보강이 필요합니다.`,
-      tone: "partial",
-    };
+
+  const tables = dbProfileControls.inventory?.tables ?? [];
+  if (mode === "table-usage") {
+    return finish(
+      "DB 테이블",
+      "사용처와 제약",
+      tables.map((table) => {
+        const tableKey = dbInventoryTableKey(table);
+        return {
+          id: tableKey,
+          badge: "TABLE",
+          title: dbTableIdentityLabel(tableKey),
+          meta: `컬럼 ${table.columns.length.toLocaleString("ko-KR")}개`,
+          active: focus === dbTableNodeId(tableKey),
+          open: activate(dbTableNodeId(tableKey), () => dbProfileControls.openTable(tableKey)),
+        };
+      }),
+      dbInventoryTableCount(dbProfileControls.inventory),
+    );
   }
-  if (openModes === workbenchModes.length) {
-    return {
-      badge: "5/5",
-      title: "답 찾기 가능",
-      text: "대상을 좁히고 API·테이블·컬럼 근거 확인",
-      tone: "ready",
-    };
+
+  if (mode === "column-impact") {
+    return finish(
+      "DB 컬럼",
+      "영향을 확인할 컬럼",
+      tables.flatMap((table) => {
+        const tableKey = dbInventoryTableKey(table);
+        return table.columns.map((column) => ({
+            id: dbColumnNodeId(tableKey, column.name),
+            badge: column.isPrimaryKey ? "PK" : column.isForeignKey ? "FK" : "COL",
+            title: column.name,
+            meta: column.dataType ?? "타입 정보 없음",
+            group: dbTableIdentityLabel(tableKey),
+            active: focus === dbColumnNodeId(tableKey, column.name),
+            open: activate(
+              dbColumnNodeId(tableKey, column.name),
+              () => dbProfileControls.openColumn(tableKey, column.name),
+            ),
+          }));
+      }),
+    );
   }
-  if (hasRoutes && !hasTables) {
-    return {
-      badge: `${openModes}/5`,
-      title: "API 라우트 확인",
-      text: "DB 구조를 불러오면 변경 범위까지 볼 수 있습니다.",
-      tone: "partial",
-    };
-  }
-  if (hasTables) {
-    return {
-      badge: `${openModes}/5`,
-      title: hasColumns ? (hasCodeContext ? "키/후보 확인" : "컬럼 제약 가능") : "컬럼 구조 필요",
-      text: hasColumns
-        ? hasRoutes
-          ? "API 경로와 DB 키/후보 확인"
-          : hasCodeItems
-            ? "API 라우트가 없어 DB 제약과 코드 후보를 봅니다."
-            : hasCodeInventory
-              ? "코드 항목이 없어 DB 구조와 컬럼 제약을 봅니다."
-              : "코드 없이도 DB 구조와 컬럼 제약을 볼 수 있습니다."
-        : "컬럼 구조를 불러오면 변경 범위가 열립니다.",
-      tone: "partial",
-    };
-  }
-  if (hasSearchable) {
-    if (hasCodeItems && !hasRoutes && !hasTables) {
-      return {
-        badge: `${openModes}/5`,
-        title: codeSymbolCount > 0 ? "코드 주변 근거" : fileCount > 0 ? "파일 주변 근거" : "대상 좁히기 가능",
-        text: codeSymbolCount > 0 ? "코드나 파일을 고르면 해당 항목으로 좁혀 볼 수 있습니다." : "파일을 고르면 해당 항목으로 좁혀 볼 수 있습니다.",
-        tone: "partial",
-      };
-    }
-    return {
-      badge: `${openModes}/5`,
-      title: "대상 좁히기 가능",
-      text: "라우트나 테이블을 고르면 더 좁혀 볼 수 있습니다.",
-      tone: "partial",
-    };
-  }
-  if (hasAnyInventory) {
-    return {
-      badge: `${openModes}/5`,
-      title: "읽은 결과가 비어 있음",
-      text: "코드, 파일, 테이블 중 하나가 잡혀야 대상을 좁힐 수 있습니다.",
-      tone: "pending",
-    };
-  }
+
+  const atlasMap = visualMapControls.currentMap?.mode === "atlas"
+    ? visualMapControls.currentMap
+    : atlasContextMap?.mode === "atlas"
+      ? atlasContextMap
+      : null;
+  const groups = atlasMap?.nodes.filter(
+    (node) => node.kind === "group-domain" || node.id.startsWith("group:"),
+  ) ?? [];
+  return finish(
+    "구조 영역",
+    "먼저 읽을 경계",
+    groups.map((node) => ({
+      id: node.id,
+      badge: "영역",
+      title: node.title,
+      meta: node.subtitle ?? "구조 상세",
+      active: focus === node.id,
+      open: activate(node.id, () => visualMapControls.showMode("atlas", node.id)),
+    })),
+  );
+}
+
+function modeTestId(mode: string): string {
+  if (mode === "api-flow") return "api";
+  if (mode === "table-usage") return "dependencies";
+  if (mode === "column-impact") return "impact";
+  if (mode === "search-focus") return "search";
+  return "atlas";
+}
+
+function navigationCounts(
+  workspaceControls: WorkspaceControls,
+  dbProfileControls: DbProfileControls,
+): Record<string, number> {
+  const codeItems = codeInventorySymbolCount(workspaceControls.codeInventory);
+  const routes = codeInventoryRouteCount(workspaceControls.codeInventory);
+  const files = codeInventoryFileCount(workspaceControls.codeInventory);
+  const tables = dbProfileControls.inventory?.tables ?? [];
+  const tableCount = dbInventoryTableCount(dbProfileControls.inventory);
   return {
-    badge: "0/5",
-    title: "코드/DB 필요",
-    text: "코드 또는 DB 목록을 불러오면 답을 고를 수 있습니다.",
-    tone: "pending",
+    atlas: codeInventoryItemCount(workspaceControls.codeInventory) + tableCount,
+    "api-flow": routes,
+    "search-focus": routes + codeItems + files,
+    "table-usage": tableCount,
+    "column-impact": tables.reduce((total, table) => total + table.columns.length, 0),
   };
 }
 
-type ModeUnlockHint = {
-  reason: string;
-  button?: string;
-  run?: () => void;
-  primary?: boolean;
-  disabled?: boolean;
-};
-
-function modeTitle(
-  mode: string,
-  fallback: string,
-  workspaceControls: WorkspaceControls,
-  dbProfileControls: DbProfileControls,
-  mapHasNoRelations: boolean,
-): string {
-  if (!workspaceControls.currentWorkspace) {
-    return fallback;
-  }
-  if (mode === "api-flow" && !workspaceControls.codeInventory) {
-    return "API 진입점 보기";
-  }
-  if (mode === "api-flow" && workspaceControls.codeInventory && workspaceControls.codeInventory.routes.length === 0) {
-    return "API 라우트 없음";
-  }
-  if (mode === "api-flow" && mapHasNoRelations) {
-    return "API 진입점 보기";
-  }
-  const hasCodeContext = workbenchHasCodeContext(workspaceControls);
-  const hasTables = Boolean(dbProfileControls.inventory?.tables.length);
-  const hasColumns = Boolean(firstColumn(dbProfileControls));
-  if (mode === "table-usage" && hasTables && !hasColumns) {
-    return "테이블 목록 확인";
-  }
-  if (mode === "table-usage" && hasTables && mapHasNoRelations) {
-    return "테이블 구조 보기";
-  }
-  if (mode === "table-usage" && dbProfileControls.inventory?.tables.length && !hasCodeContext) {
-    return "테이블 구조 보기";
-  }
-  if (mode === "table-usage" && !dbProfileControls.inventory?.tables.length) {
-    return "테이블 사용처 보기";
-  }
-  if (mode === "column-impact" && firstColumn(dbProfileControls) && !hasCodeContext) {
-    return "컬럼 제약 보기";
-  }
-  if (mode === "column-impact" && firstColumn(dbProfileControls) && mapHasNoRelations) {
-    return "컬럼 속성 보기";
-  }
-  if (mode === "column-impact" && !firstColumn(dbProfileControls)) {
-    return dbProfileControls.inventory?.tables.length ? "컬럼 영향 보기" : "컬럼 변경 범위";
-  }
-  return fallback;
-}
-
-function modeText(
-  mode: string,
-  fallback: string,
-  workspaceControls: WorkspaceControls,
-  dbProfileControls: DbProfileControls,
-  mapHasNoRelations: boolean,
-): string {
-  if (!workspaceControls.currentWorkspace) {
-    return fallback;
-  }
-  const hasRoutes = Boolean(workspaceControls.codeInventory?.routes.length);
-  const hasCodeContext = workbenchHasCodeContext(workspaceControls);
-  if (mode === "api-flow") {
-    if (!workspaceControls.codeInventory) {
-      return "코드 읽은 뒤 확인";
-    }
-    if (!hasRoutes) {
-      return "라우트가 잡히면 선택";
-    }
-    if (mapHasNoRelations) {
-      return "라우트 구조 확인";
-    }
-    return fallback;
-  }
-  if (mode === "table-usage" && !dbProfileControls.inventory?.tables.length) {
-    return "DB 연결 후 사용처 확인";
-  }
-  if (mode === "table-usage" && dbProfileControls.inventory?.tables.length && !firstColumn(dbProfileControls)) {
-    return "컬럼 불러오면 관계 확인";
-  }
-  if (mode === "table-usage" && dbProfileControls.inventory?.tables.length && !hasCodeContext) {
-    return "PK/FK 컬럼 확인";
-  }
-  if (mode === "table-usage" && dbProfileControls.inventory?.tables.length && mapHasNoRelations) {
-    return "테이블/컬럼 구조 확인";
-  }
-  if (mode === "column-impact" && !firstColumn(dbProfileControls)) {
-    return dbProfileControls.inventory?.tables.length ? "컬럼 읽으면 선택" : "DB 연결 후 범위 확인";
-  }
-  if (mode === "column-impact" && firstColumn(dbProfileControls) && !hasCodeContext) {
-    return "컬럼 제약 확인";
-  }
-  if (mode === "column-impact" && firstColumn(dbProfileControls) && mapHasNoRelations) {
-    return "컬럼 타입과 키 확인";
-  }
-  if (mode === "search-focus" && workspaceControls.codeInventory && !hasRoutes) {
-    return "코드/파일 선택";
-  }
-  if (mode === "search-focus" && dbProfileControls.inventory?.tables.length && !hasCodeContext) {
-    return "테이블 선택";
-  }
-  return fallback;
-}
-
-function modeDataLabel(
-  mode: string,
-  workspaceControls: WorkspaceControls,
-  dbProfileControls: DbProfileControls,
-  mapHasNoRelations: boolean,
-): string {
-  const hasCodeContext = workbenchHasCodeContext(workspaceControls);
-  if (!workspaceControls.currentWorkspace) {
-    return "열기 후";
-  }
-  if (mode === "api-flow") {
-    if (!workspaceControls.codeInventory) return "코드 필요";
-    if (workspaceControls.codeInventory.routes.length === 0) return "라우트 필요";
-    if (mapHasNoRelations) return "API 목록";
-    return "코드 근거";
-  }
-  if (mode === "table-usage") {
-    if (!dbProfileControls.inventory?.tables.length) return "DB 필요";
-    if (!firstColumn(dbProfileControls)) return "테이블 목록";
-    if (mapHasNoRelations) return "DB 구조";
-    return !hasCodeContext ? "DB 구조" : "코드+DB";
-  }
-  if (mode === "column-impact") {
-    if (!firstColumn(dbProfileControls)) return dbProfileControls.inventory?.tables.length ? "컬럼 대기" : "DB 필요";
-    if (mapHasNoRelations) return "컬럼 목록";
-    return !hasCodeContext ? "컬럼 제약" : "변경 근거";
-  }
-  if (mode === "search-focus") return dbProfileControls.inventory?.tables.length && !hasCodeContext ? "DB 대상" : "대상";
-  return "전체 구조";
-}
-
-function modeAnswerLabel(
-  mode: string,
-  workspaceControls: WorkspaceControls,
-  dbProfileControls: DbProfileControls,
-  mapHasNoRelations: boolean,
-): string {
-  const hasCodeContext = workbenchHasCodeContext(workspaceControls);
-  if (mode === "api-flow") {
-    const hasRoutes = Boolean(workspaceControls.codeInventory?.routes.length);
-    return hasRoutes && !mapHasNoRelations ? "API가 어디까지 닿나?" : "API 진입점은?";
-  }
-  if (mode === "table-usage") {
-    if (!dbProfileControls.inventory?.tables.length) return "이 테이블은 어디에 쓰이나?";
-    return !hasCodeContext || mapHasNoRelations ? "테이블 구조는?" : "이 테이블은 어디에 쓰이나?";
-  }
-  if (mode === "column-impact") {
-    if (!firstColumn(dbProfileControls)) return "이 컬럼을 바꾸면?";
-    return !hasCodeContext || mapHasNoRelations ? "컬럼 제약은?" : "이 컬럼을 바꾸면?";
-  }
-  if (mode === "search-focus") {
-    return "선택 항목 주변은?";
-  }
-  return "전체 구조는?";
-}
-
-function workbenchHasCodeContext(workspaceControls: WorkspaceControls): boolean {
-  return Boolean(workspaceControls.codeInventory?.routes.length) || codeInventoryCodeItems(workspaceControls.codeInventory).length > 0;
-}
-
-function workbenchModeBlockReason(
+function modeBlockReason(
   mode: string,
   workspaceControls: WorkspaceControls,
   dbProfileControls: DbProfileControls,
 ): string | null {
+  if (!workspaceControls.initialized) {
+    return "프로젝트를 확인하고 있습니다.";
+  }
   if (!workspaceControls.currentWorkspace) {
-    return workspaceControls.canCreateWorkspace
-      ? workspaceControls.repoSourceMode === "github"
-        ? "저장소 복제 준비"
-        : "프로젝트 열기 준비"
-      : workspaceControls.repoSourceMode === "github"
-        ? "GitHub URL 필요"
-        : "로컬 폴더 필요";
+    return "프로젝트를 먼저 연결하세요.";
   }
   if (mode === "atlas") {
     return null;
   }
   if (mode === "api-flow") {
-    const codeInventory = workspaceControls.codeInventory;
-    if (!codeInventory) {
-      return "코드 목록을 불러오면 열립니다.";
-    }
-    if (codeInventory.routes.length === 0) {
-      return "API 라우트가 없습니다.";
-    }
+    if (!workspaceControls.codeInventory) return "코드를 먼저 읽어야 API 경로를 볼 수 있습니다.";
+    if (codeInventoryRouteCount(workspaceControls.codeInventory) === 0) return "읽은 코드에서 API 라우트를 찾지 못했습니다.";
+  }
+  if (mode === "search-focus" && codeInventoryItemCount(workspaceControls.codeInventory) === 0) {
+    return "코드나 파일을 먼저 읽어야 합니다.";
   }
   if (mode === "table-usage" && !dbProfileControls.inventory?.tables.length) {
-    return "DB를 연결하면 열립니다.";
+    return "DB 또는 DDL을 연결해야 테이블을 볼 수 있습니다.";
   }
   if (mode === "column-impact" && !firstColumn(dbProfileControls)) {
-    return "컬럼을 읽으면 열립니다.";
-  }
-  if (mode === "search-focus" && !hasSearchableItems(workspaceControls, dbProfileControls)) {
-    return workspaceControls.codeInventory || dbProfileControls.inventory
-      ? "고를 코드, 파일, 테이블이 없습니다."
-      : "코드 또는 DB 목록을 불러오면 고를 수 있습니다.";
+    return "컬럼 구조를 읽어야 변경 영향을 볼 수 있습니다.";
   }
   return null;
-}
-
-function hasSearchableItems(workspaceControls: WorkspaceControls, dbProfileControls: DbProfileControls): boolean {
-  return codeInventoryItemCount(workspaceControls.codeInventory) > 0 || Boolean(dbProfileControls.inventory?.tables.length);
-}
-
-function workbenchModeUnlockHint(
-  mode: string,
-  reason: string,
-  workspaceControls: WorkspaceControls,
-  dbProfileControls: DbProfileControls,
-  visualMapControls: VisualMapControls,
-): ModeUnlockHint {
-  if (mode === "api-flow" && workspaceControls.codeInventory?.routes.length === 0) {
-    const item = firstCodeSearchItem(workspaceControls);
-    if (item) return { reason, button: "코드 주변 보기", run: () => visualMapControls.showMode("search-focus", `code:${item.id}`), primary: true };
-    if (workspaceControls.canIndexCode) return { reason, button: "다시 읽기", run: workspaceControls.indexCodeRepository };
-    return { reason: workspaceControls.codeIndexBlockedReason ?? reason };
-  }
-  if (mode === "api-flow" && !workspaceControls.codeInventory) {
-    const indexed = workspaceControls.codeStatus?.includes("완료") ?? false;
-    if (indexed) return { reason, button: "코드 목록 열기", run: workspaceControls.loadCodeInventory, primary: true };
-    if (workspaceControls.canIndexCode) return { reason, button: "코드 읽기", run: workspaceControls.indexCodeRepository, primary: true };
-    return { reason: workspaceControls.codeIndexBlockedReason ?? reason };
-  }
-  if (mode === "table-usage" || mode === "column-impact") {
-    return workbenchDbUnlockHint(reason, dbProfileControls);
-  }
-  return { reason };
-}
-
-function firstCodeSearchItem(workspaceControls: WorkspaceControls) {
-  return codeInventoryCodeItems(workspaceControls.codeInventory)[0] ?? workspaceControls.codeInventory?.files[0] ?? null;
-}
-
-function workbenchDbUnlockHint(reason: string, dbProfileControls: DbProfileControls): ModeUnlockHint {
-  if (!dbProfileControls.activeProfile) {
-    return dbProfileControls.canSaveProfile
-      ? { reason, button: "DB 연결 저장", run: dbProfileControls.saveProfile, primary: true }
-      : { reason, button: "DB 정보 입력", run: () => focusDbProfileSetup(dbProfileControls) };
-  }
-  const indexed = dbProfileControls.status?.includes("완료") ?? false;
-  if (indexed && !dbProfileControls.inventory) {
-    return { reason, button: "DB 목록 열기", run: dbProfileControls.loadInventory, primary: true };
-  }
-  if (dbProfileControls.canIndexProfile) {
-    return { reason, button: "DB 읽기", run: dbProfileControls.indexProfile, primary: true };
-  }
-  if (dbProfileControls.dbIndexBlockedReason) {
-    return { reason: dbProfileControls.dbIndexBlockedReason };
-  }
-  return { reason, button: "DB 정보 입력", run: () => focusDbProfileSetup(dbProfileControls) };
 }
 
 function showWorkbenchMode(
@@ -549,104 +551,66 @@ function showWorkbenchMode(
   dbProfileControls: DbProfileControls,
   visualMapControls: VisualMapControls,
 ) {
-  if (mode === "api-flow") {
-    const item = selectedRouteOrFirst(workspaceControls);
-    if (item) {
-      visualMapControls.showMode(mode, `code:${item.id}`);
-      return;
-    }
+  const workspaceId = workspaceControls.currentWorkspace?.id;
+  const savedContext = workspaceId ? savedModeMapContext(workspaceId, mode) : null;
+  if (
+    savedContext &&
+    (!savedContext.focusId || modeFocusExists(savedContext.focusId, mode, workspaceControls, dbProfileControls))
+  ) {
+    visualMapControls.showMode(mode, savedContext.focusId);
+    return;
   }
-
-  if (mode === "table-usage") {
-    const tableKey = dbProfileControls.selectedTableKey ?? firstTableKey(dbProfileControls);
-    if (tableKey) {
-      visualMapControls.showMode(mode, `db:table:${tableKey}`);
-      return;
-    }
-  }
-
-  if (mode === "column-impact") {
-    const focusId = firstColumnFocusId(dbProfileControls, visualMapControls);
-    if (focusId) {
-      visualMapControls.showMode(mode, focusId);
-      return;
-    }
-  }
-
-  if (mode === "search-focus") {
-    if (visualMapControls.selectedNode) {
-      visualMapControls.showMode(mode, visualMapControls.selectedNode.id);
-      return;
-    }
-    if (workspaceControls.selectedCodeItem) {
-      visualMapControls.showMode(mode, `code:${workspaceControls.selectedCodeItem.id}`);
-      return;
-    }
-    if (dbProfileControls.selectedTableKey) {
-      visualMapControls.showMode(mode, `db:table:${dbProfileControls.selectedTableKey}`);
-      return;
-    }
-    const item =
-      workspaceControls.codeInventory?.routes[0] ??
-      codeInventoryCodeItems(workspaceControls.codeInventory)[0] ??
-      workspaceControls.codeInventory?.files[0] ??
-      null;
-    if (item) {
-      visualMapControls.showMode(mode, `code:${item.id}`);
-      return;
-    }
-    const tableKey = dbProfileControls.selectedTableKey ?? firstTableKey(dbProfileControls);
-    if (tableKey) {
-      visualMapControls.showMode(mode, `db:table:${tableKey}`);
-      return;
-    }
-  }
-
-  visualMapControls.showMode(mode);
+  visualMapControls.showMode(mode, null);
 }
 
-function selectedRouteOrFirst(workspaceControls: WorkspaceControls) {
-  return codeInventoryDefaultRoute(workspaceControls.codeInventory, workspaceControls.selectedCodeItem?.id);
-}
-
-function firstTableKey(dbProfileControls: DbProfileControls): string | null {
-  const table = dbProfileControls.inventory?.tables[0];
-  return table ? dbInventoryTableKey(table) : null;
+function modeFocusExists(
+  focusId: string | null,
+  mode: string,
+  workspaceControls: WorkspaceControls,
+  dbProfileControls: DbProfileControls,
+): boolean {
+  if (mode === "atlas" || mode === "explore") {
+    return true;
+  }
+  if (!focusId) {
+    return false;
+  }
+  if (focusId.startsWith("code:")) {
+    const codeId = focusId.slice("code:".length);
+    const inventory = workspaceControls.codeInventory;
+    return Boolean(
+      inventory?.routes.some((item) => item.id === codeId) ||
+        codeInventoryCodeItems(inventory).some((item) => item.id === codeId) ||
+        inventory?.files.some((item) => item.id === codeId),
+    );
+  }
+  if (focusId.startsWith("db:table:")) {
+    const tableKey = focusId.slice("db:table:".length);
+    return Boolean(dbProfileControls.inventory?.tables.some((table) => dbInventoryTableKey(table) === tableKey));
+  }
+  if (focusId.startsWith("db:column:")) {
+    const ref = columnRefFromNodeId(focusId);
+    return Boolean(
+      ref &&
+        dbProfileControls.inventory?.tables.some(
+          (table) =>
+            dbInventoryTableKey(table) === ref.tableKey &&
+            table.columns.some((column) => column.name === ref.columnName),
+        ),
+    );
+  }
+  return false;
 }
 
 function firstColumn(dbProfileControls: DbProfileControls): { tableKey: string; columnName: string } | null {
-  const selectedKey = dbProfileControls.selectedTableKey;
-  const tables = dbProfileControls.inventory?.tables ?? [];
-  const selectedTable =
-    (selectedKey && tables.find((item) => dbInventoryTableKey(item) === selectedKey)) || null;
-  const table = selectedTable?.columns.length
-    ? selectedTable
-    : tables.find((item) => item.columns.length > 0) ?? null;
-  const column = table?.columns[0];
-  return table && column ? { tableKey: dbInventoryTableKey(table), columnName: column.name } : null;
-}
-
-function firstColumnFocusId(dbProfileControls: DbProfileControls, visualMapControls: VisualMapControls): string | null {
-  if (visualMapControls.selectedNode?.kind === "column") {
-    return visualMapControls.selectedNode.id;
-  }
   const tables = dbProfileControls.inventory?.tables ?? [];
   const selectedTable =
     (dbProfileControls.selectedTableKey &&
       tables.find((table) => dbInventoryTableKey(table) === dbProfileControls.selectedTableKey)) ||
     null;
-  return (
-    columnFocusId(selectedTable, (column) => column.isForeignKey) ??
-    columnFocusId(selectedTable) ??
-    columnFocusId(tables.find((table) => table.columns.some((column) => column.isForeignKey)) ?? null, (column) => column.isForeignKey) ??
-    columnFocusId(tables.find((table) => table.columns.length > 0) ?? null)
-  );
-}
-
-function columnFocusId(
-  table: NonNullable<DbProfileControls["inventory"]>["tables"][number] | null,
-  pick: (column: NonNullable<DbProfileControls["inventory"]>["tables"][number]["columns"][number]) => boolean = () => true,
-): string | null {
-  const column = table?.columns.find(pick) ?? null;
-  return table && column ? `db:column:${dbInventoryTableKey(table)}:${column.name}` : null;
+  const table = selectedTable?.columns.length
+    ? selectedTable
+    : tables.find((item) => item.columns.length > 0) ?? null;
+  const column = table?.columns[0];
+  return table && column ? { tableKey: dbInventoryTableKey(table), columnName: column.name } : null;
 }

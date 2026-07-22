@@ -13,6 +13,17 @@ select:focus-visible {
 h2, h3 { margin: 0; }
 code, pre { font-family: var(--mono); }
 
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 .app-shell {
   height: 100vh;
   display: flex;
@@ -22,3 +33,35 @@ code, pre { font-family: var(--mono); }
 
 .app-shell[data-view="workbench"] { --accent: var(--teal); --accent-deep: var(--teal-deep); --accent-ink: var(--teal-ink); --accent-soft: rgba(76, 201, 220, 0.14); }
 .app-shell[data-view="atlas"] { --accent: var(--blue); --accent-deep: var(--blue-deep); --accent-ink: var(--blue-ink); --accent-soft: rgba(91, 157, 255, 0.14); }
+
+.app-fatal {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-app);
+}
+
+.app-fatal-panel {
+  width: min(460px, 100%);
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  color: var(--ink-2);
+}
+
+.app-fatal-panel > svg { color: var(--red); }
+.app-fatal-panel strong,
+.app-fatal-panel span { display: block; }
+.app-fatal-panel strong { margin-bottom: 4px; color: var(--ink); font-size: 15px; }
+.app-fatal-panel span { font-size: 12px; line-height: 1.5; }
+.app-fatal-panel details,
+.app-fatal-panel .primary-action { grid-column: 1 / -1; }
+.app-fatal-panel details { font-size: 11px; }
+.app-fatal-panel summary { cursor: pointer; }
+.app-fatal-panel code { display: block; margin-top: 6px; overflow-wrap: anywhere; }
+.app-fatal-panel .primary-action { justify-self: start; }

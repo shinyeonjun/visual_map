@@ -1,15 +1,15 @@
 export type LinkConfidence = "high" | "medium" | "low";
 
 const CONFIDENCE_LABELS: Record<LinkConfidence, string> = {
-  high: "높음",
-  medium: "보통",
-  low: "낮음",
+  high: "단서 강함",
+  medium: "단서 보통",
+  low: "단서 약함",
 };
 
 const CONFIDENCE_REASONS: Record<LinkConfidence, string> = {
-  high: "강한 이름/구조 단서가 일치합니다.",
-  medium: "이름이 비슷한 후보 단서가 있습니다.",
-  low: "약한 이름 단서만 있어 확인이 필요합니다.",
+  high: "식별자나 경로 단서가 강하게 일치합니다. 실제 의존성이 확정된 것은 아닙니다.",
+  medium: "식별자나 경로가 비슷한 후보입니다. 실제 사용 여부를 확인해야 합니다.",
+  low: "약한 이름 단서만 있습니다. 실제 사용 여부를 확인해야 합니다.",
 };
 
 export function normalizeConfidence(value?: string | null): LinkConfidence | null {
@@ -47,10 +47,7 @@ export function confidenceReason(value?: string | null): string {
 
 export function confidenceBadgeTone(value?: string | null): "green" | "amber" | "gray" {
   const confidence = normalizeConfidence(value);
-  if (confidence === "high") {
-    return "green";
-  }
-  if (confidence === "medium") {
+  if (confidence === "high" || confidence === "medium") {
     return "amber";
   }
   return "gray";

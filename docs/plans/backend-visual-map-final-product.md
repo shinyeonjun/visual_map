@@ -206,7 +206,8 @@ Requirements:
 - unique constraint
 - index
 - code function/class/file/module
-- code call/import/route relation when reported by codebase-memory
+- code route relation reported by codebase-memory
+- code call relation only when codebase-memory includes a confidence score of 0.85 or higher
 
 ### Candidate Data
 
@@ -217,6 +218,7 @@ Requirements:
 - route -> table usage
 - service -> table usage
 - repository -> table usage unless SQL/table evidence is exact
+- code call relations scored from 0.70 through 0.84 by codebase-memory
 
 Candidate data must include:
 
@@ -226,6 +228,8 @@ Candidate data must include:
 - target DB object
 
 Never label candidate links as confirmed in v1.
+
+CALLS below 0.70 or without an engine confidence score are unknown evidence. They do not enter a confirmed reading path or add disconnected neighbor cards. Existing snapshots without scored CALLS require a code re-read.
 
 ## Required Product Capabilities
 

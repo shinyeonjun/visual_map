@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
+pub(super) const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 
 fn legacy_snapshot_schema_version() -> u32 {
     1
@@ -8,7 +8,7 @@ fn legacy_snapshot_schema_version() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct InventorySnapshot {
+pub(crate) struct InventorySnapshot {
     #[serde(default = "legacy_snapshot_schema_version")]
     pub schema_version: u32,
     pub workspace_id: String,
@@ -24,7 +24,7 @@ pub struct InventorySnapshot {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SnapshotMetadata {
+pub(crate) struct SnapshotMetadata {
     #[serde(default)]
     pub code: Option<SnapshotSourceMetadata>,
     #[serde(default)]
@@ -39,7 +39,7 @@ pub struct SnapshotMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SnapshotSourceMetadata {
+pub(crate) struct SnapshotSourceMetadata {
     pub saved_at: String,
     #[serde(default)]
     pub engine_id: Option<String>,
@@ -62,6 +62,10 @@ pub struct SnapshotSourceMetadata {
     pub total_tables: Option<usize>,
     #[serde(default)]
     pub truncated: Option<bool>,
+    #[serde(default)]
+    pub source_revision: Option<String>,
+    #[serde(default)]
+    pub source_revision_label: Option<String>,
     pub source_path: Option<String>,
     pub source_type: String,
     pub profile_id: Option<String>,
@@ -69,7 +73,7 @@ pub struct SnapshotSourceMetadata {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SnapshotMigration {
+pub(crate) struct SnapshotMigration {
     #[serde(default)]
     pub source_schema_version: Option<u32>,
     #[serde(default)]
@@ -80,7 +84,7 @@ pub struct SnapshotMigration {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SnapshotGap {
+pub(crate) struct SnapshotGap {
     pub id: String,
     pub kind: String,
     pub message: String,
@@ -90,7 +94,7 @@ pub struct SnapshotGap {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct InventoryItem {
+pub(crate) struct InventoryItem {
     pub id: String,
     pub kind: String,
     pub name: String,
@@ -118,7 +122,7 @@ pub struct InventoryItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SourceLocation {
+pub(crate) struct SourceLocation {
     pub path: String,
     #[serde(default)]
     pub line: Option<u64>,
@@ -132,7 +136,7 @@ pub struct SourceLocation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SnapshotLink {
+pub(crate) struct SnapshotLink {
     pub id: String,
     pub from: String,
     pub to: String,
@@ -150,14 +154,14 @@ pub struct SnapshotLink {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct Evidence {
+pub(crate) struct Evidence {
     pub kind: String,
     pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct CandidateLink {
+pub(super) struct CandidateLink {
     pub id: String,
     pub from: String,
     pub to: String,
@@ -167,7 +171,7 @@ pub struct CandidateLink {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct VisualMap {
+pub(crate) struct VisualMap {
     pub id: String,
     pub workspace_id: String,
     pub mode: String,
@@ -183,7 +187,7 @@ pub struct VisualMap {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct ApiReadingAnswer {
+pub(crate) struct ApiReadingAnswer {
     pub subject: String,
     pub steps: Vec<ApiReadingStep>,
     #[serde(default)]
@@ -202,27 +206,38 @@ pub struct ApiReadingAnswer {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct ApiReadingStep {
+pub(crate) struct ApiReadingStep {
     #[serde(flatten)]
     pub item: ImpactReviewItem,
     pub depth: usize,
     pub lane: String,
+    pub lane_basis: String,
     #[serde(default)]
     pub incoming_evidence: Vec<Evidence>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct ImpactReviewBoard {
+pub(crate) struct ImpactReviewBoard {
     pub subject: String,
     pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_intent: Option<ChangeIntent>,
     pub lanes: Vec<ImpactReviewLane>,
     pub markdown_summary: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChangeIntent {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct ImpactReviewLane {
+pub(crate) struct ImpactReviewLane {
     pub id: String,
     pub order: u8,
     pub title: String,
@@ -236,7 +251,7 @@ pub struct ImpactReviewLane {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct ImpactReviewItem {
+pub(crate) struct ImpactReviewItem {
     pub id: String,
     pub node_id: Option<String>,
     pub kind: String,
@@ -252,18 +267,20 @@ pub struct ImpactReviewItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct VisualNode {
+pub(crate) struct VisualNode {
     pub id: String,
     pub kind: String,
     pub title: String,
     pub subtitle: Option<String>,
     pub layer: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<SourceLocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct VisualEdge {
+pub(crate) struct VisualEdge {
     pub id: String,
     pub from: String,
     pub to: String,

@@ -86,6 +86,11 @@ if (evaluated.result.exceptionDetails) {
 
 let screenshot = null;
 if (screenshotOut && screenshotOut !== "true") {
+  await send("Page.bringToFront");
+  await send("Runtime.evaluate", {
+    expression: "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 2500))))",
+    awaitPromise: true,
+  });
   const captured = await send("Page.captureScreenshot", {
     format: "png",
     captureBeyondViewport: false,

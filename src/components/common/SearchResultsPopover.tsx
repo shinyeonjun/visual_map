@@ -59,7 +59,7 @@ export function SearchResultsPopover({
           ))}
         </div>
       ))}
-      {!hasResults && <small className="search-hint">범위: {searchScope} · API 경로, 파일 경로, 테이블명, 컬럼명 일부를 입력하세요.</small>}
+      {!hasResults && <small className="search-hint">범위: {searchScope} · API, 파일, 테이블, 컬럼, DB 객체 이름 일부를 입력하세요.</small>}
     </div>
   );
 }
@@ -115,6 +115,13 @@ function resultKindLabel(result: SearchResult): string {
   if (result.id.startsWith("column:")) {
     return "컬럼";
   }
+  if (result.id.startsWith("db-object:")) {
+    const kind = result.focusId.split(":", 3)[1];
+    if (kind === "view") return "뷰";
+    if (kind === "trigger") return "트리거";
+    if (kind === "routine") return "DB 함수/프로시저";
+    return "DB 객체";
+  }
   if (result.id.startsWith("file:")) {
     return "파일";
   }
@@ -130,6 +137,7 @@ function codeKindLabel(kind: string): string {
   if (key === "handler" || key === "controller") return "핸들러";
   if (key === "module") return "모듈";
   if (key === "file") return "파일";
+  if (key === "unknown") return "미확인";
   return "코드";
 }
 
@@ -143,6 +151,9 @@ function resultActionLabel(result: SearchResult): string {
   if (result.id.startsWith("column:")) {
     return "영향 보기";
   }
+  if (result.id.startsWith("db-object:")) {
+    return "관계 보기";
+  }
   return "근거 보기";
 }
 
@@ -150,6 +161,7 @@ function resultToneClass(result: SearchResult): string {
   if (result.id.startsWith("api:")) return "api";
   if (result.id.startsWith("table:")) return "table";
   if (result.id.startsWith("column:")) return "column";
+  if (result.id.startsWith("db-object:")) return "table";
   if (result.id.startsWith("file:")) return "file";
   return "code";
 }

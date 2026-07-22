@@ -1,10 +1,18 @@
 import { Code2, Database } from "lucide-react";
 import type { ReactNode } from "react";
 import type { EngineRegistry } from "../../types/engine";
-import { codeInventoryCodeItems, codeInventoryItemCount, dbProfileSourceLabel } from "../../types/workspace";
+import {
+  codeInventoryFileCount,
+  codeInventoryItemCount,
+  codeInventoryRouteCount,
+  codeInventorySymbolCount,
+  dbInventoryTableCount,
+  dbProfileSourceLabel,
+} from "../../types/workspace";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import type { CodeInventory } from "../../types/workspace";
-import type { VisualMap } from "../../types/visual-map";
+import type { AnalysisCoverage, VisualMap } from "../../types/visual-map";
+import { visualMapModeLabel as modeLabel } from "../../visual/labels";
 import { EngineStatus } from "../common/EngineStatus";
 import { DiagnosticsExport } from "../common/DiagnosticsExport";
 
@@ -37,7 +45,8 @@ export function WorkbenchStatusBar({
         : "프로젝트 열기 준비"
       : workspaceRequiredLabel);
   const mapSummary = mapStatusSummary(visualMapControls.currentMap);
-  const evidenceSummary = evidenceStatusSummary(visualMapControls.currentMap);
+  const evidenceSummary = evidenceStatusSummary(visualMapControls.currentMap, visualMapControls.enriching);
+  const coverageSummary = analysisCoverageSummary(visualMapControls.analysisCoverage);
 
   return (
     <footer className="statusbar">
@@ -65,9 +74,18 @@ export function WorkbenchStatusBar({
             {dbSourceStatusSummary(dbProfileControls, hasCodeItems)}
           </span>
           <span className="status-map" title={mapSummary.title}>캔버스: {mapSummary.text}</span>
-          <span className={`status-quality ${evidenceSummary.tone}`} title={evidenceSummary.title}>
+          <span
+            className={`status-quality ${evidenceSummary.tone}`}
+            data-enriching={visualMapControls.enriching ? "true" : "false"}
+            title={evidenceSummary.title}
+          >
             근거: {evidenceSummary.text}
           </span>
+          {coverageSummary ? (
+            <span className="status-coverage" title={coverageSummary.title}>
+              범위: {coverageSummary.text}
+            </span>
+          ) : null}
           <span className="status-source">
             <Code2 size={12} /> 코드 위치: {codeSourceSummary}
           </span>
@@ -76,7 +94,7 @@ export function WorkbenchStatusBar({
       )}
       {workspaceControls.operationStatus.phase !== "idle" && (
         <details className={`operation-details ${workspaceControls.operationStatus.phase}`}>
-          <summary>{workspaceControls.operationStatus.message}</summary>
+          <summary title={workspaceControls.operationStatus.message}>{workspaceControls.operationStatus.message}</summary>
           {workspaceControls.operationStatus.details && <pre>{workspaceControls.operationStatus.details}</pre>}
         </details>
       )}
@@ -95,7 +113,7 @@ export function WorkbenchStatusBar({
 
 function dbSourceStatusSummary(dbProfileControls: DbProfileControls, hasCodeItems: boolean): string {
   const tables = dbProfileControls.inventory?.tables ?? [];
-  const tableCount = tables.length;
+  const tableCount = dbInventoryTableCount(dbProfileControls.inventory);
   const columnCount = tables.reduce((sum, table) => sum + table.columns.length, 0);
   const missingColumnTables = tables.filter((table) => table.columns.length === 0).length;
   const source = dbProfileControls.activeProfile
@@ -122,11 +140,13 @@ function codeSourceStatusSummary(inventory: CodeInventory | null): string {
   if (!inventory) {
     return "코드 읽기 전";
   }
-  const codeCount = codeInventoryCodeItems(inventory).length;
+  const codeCount = codeInventorySymbolCount(inventory);
+  const routeCount = codeInventoryRouteCount(inventory);
+  const fileCount = codeInventoryFileCount(inventory);
   const parts = [
-    inventory.routes.length > 0 ? `API ${inventory.routes.length}` : null,
+    routeCount > 0 ? `API ${routeCount}` : null,
     codeCount > 0 ? `코드 ${codeCount}` : null,
-    inventory.files.length > 0 ? `파일 ${inventory.files.length}` : null,
+    fileCount > 0 ? `파일 ${fileCount}` : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : "비어 있음";
 }
@@ -159,9 +179,19 @@ function mapStatusSummary(map: VisualMap | null): { text: string; title: string 
   };
 }
 
-function evidenceStatusSummary(map: VisualMap | null): { text: string; title: string; tone: "ready" | "candidate" | "empty" } {
+function evidenceStatusSummary(
+  map: VisualMap | null,
+  enriching: boolean,
+): { text: string; title: string; tone: "ready" | "candidate" | "empty" } {
   if (!map) {
     return { text: "연결 대기", title: "코드 또는 DB를 읽으면 근거가 표시됩니다.", tone: "empty" };
+  }
+  if (enriching) {
+    return {
+      text: "확정 근거 표시 · 코드 후보 확인 중",
+      title: "DB 제약과 구조 근거는 먼저 표시했습니다. 코드에서 찾는 후보 근거를 백그라운드에서 확인하고 있습니다.",
+      tone: "candidate",
+    };
   }
   const edges = map.edges;
   if (edges.length === 0) {
@@ -186,10 +216,33 @@ function evidenceStatusSummary(map: VisualMap | null): { text: string; title: st
   };
 }
 
-function modeLabel(mode: VisualMap["mode"]): string {
-  if (mode === "api-flow") return "API가 닿는 코드";
-  if (mode === "table-usage") return "테이블 연결";
-  if (mode === "column-impact") return "컬럼 변경 범위";
-  if (mode === "search-focus") return "대상 주변 근거";
-  return "전체 구조";
+function analysisCoverageSummary(coverage: AnalysisCoverage | null): { text: string; title: string } | null {
+  if (!coverage) {
+    return null;
+  }
+  const code = coverage.code.available
+    ? coverage.code.observed === null
+      ? "코드 수 미확인"
+      : `코드 ${coverage.code.observed}${coverage.code.truncated ? " · 일부" : ""}`
+    : "코드 미연결";
+  const db = coverage.db.available
+    ? coverage.db.observed === null
+      ? coverage.db.total === null
+        ? "DB 수 미확인"
+        : `DB 전체 ${coverage.db.total}`
+      : coverage.db.total === null
+        ? `DB ${coverage.db.observed}${coverage.db.truncated ? " · 일부" : ""}`
+        : `DB ${coverage.db.observed}/${coverage.db.total}${coverage.db.truncated ? " · 일부" : ""}`
+    : "DB 미연결";
+  const gaps = coverage.gaps > 0 ? `미확인 ${coverage.gaps}` : "기록된 누락 0";
+  const capabilities = coverage.capabilities > 0 ? `지원 제한 ${coverage.capabilities}` : null;
+  const limits = [
+    coverage.code.limit ? `코드 상한 ${coverage.code.limit}` : null,
+    coverage.db.limit ? `DB 상한 ${coverage.db.limit}` : null,
+    coverage.reindexRequired ? "재인덱싱 필요" : null,
+  ].filter((value): value is string => Boolean(value));
+  return {
+    text: [code, db, gaps, capabilities].filter(Boolean).join(" · "),
+    title: `${[code, db, gaps, capabilities].filter(Boolean).join(" · ")}${limits.length ? ` · ${limits.join(" · ")}` : ""}. 지원 제한은 실제 누락 건수가 아니라 어댑터가 수집하지 않는 구조 정보 종류입니다. 전체 수를 모르는 소스는 완료율을 계산하지 않습니다.`,
+  };
 }

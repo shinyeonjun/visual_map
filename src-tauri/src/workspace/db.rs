@@ -1,26 +1,27 @@
 use crate::paths::base_paths;
-use crate::{engine, EngineRegistry};
+use crate::EngineRegistry;
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
+use super::database_memory::DatabaseMemoryAdapter;
 use super::model::{
-    DbConstraint, DbForeignKey, DbIndex, DbIndexResult, DbInventory, DbInventoryColumn,
-    DbInventoryGap, DbInventoryTable, DbProfile, DbSource, IndexDbProfileRequest,
-    SaveDbProfileRequest, Workspace,
+    DbConstraint, DbDependentObject, DbForeignKey, DbIndex, DbIndexResult, DbInventory,
+    DbInventoryColumn, DbInventoryGap, DbInventoryTable, DbProfile, DbSource,
+    IndexDbProfileRequest, SaveDbProfileRequest, Workspace,
 };
+#[cfg(test)]
+use super::store::value_items;
 use super::store::{
     engine_json_value, object_bool, object_string, read_workspace_by_id, timestamp,
-    validate_workspace_id, value_items, workspace_db_cache_dir, workspace_id, write_workspace,
+    validate_workspace_id, workspace_db_cache_dir, workspace_id, write_workspace,
 };
 
-const DB_INVENTORY_LIMIT: usize = 1_000;
-// ponytail: legacy fallback starts one process per table; bulk inventory removes this ceiling.
-const MAX_FALLBACK_DESCRIBED_TABLES: usize = 200;
-pub fn save_db_profile(
+const DB_INVENTORY_PAGE_LIMIT: usize = 1_000;
+const MAX_DB_INVENTORY_TABLES: usize = 20_000;
+pub(crate) fn save_db_profile(
     app_data_dir: impl AsRef<Path>,
     request: SaveDbProfileRequest,
 ) -> Result<Workspace, String> {
@@ -85,7 +86,39 @@ pub fn save_db_profile(
     Ok(workspace)
 }
 
-pub fn index_db_profile(
+pub(crate) fn delete_db_profile(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+    profile_id: &str,
+) -> Result<Workspace, String> {
+    validate_workspace_id(workspace_id)?;
+    validate_workspace_id(profile_id)?;
+    let paths = base_paths(app_data_dir);
+    let mut workspace = read_workspace_by_id(&paths.workspaces_dir, workspace_id)?;
+    let profile_index = workspace
+        .db_profiles
+        .iter()
+        .position(|profile| profile.id == profile_id)
+        .ok_or_else(|| "삭제할 DB 연결을 찾을 수 없습니다".to_string())?;
+    let cache_dir = db_cache_path(&paths.workspaces_dir, workspace_id, profile_id)
+        .parent()
+        .map(Path::to_path_buf);
+
+    if let Some(cache_dir) = cache_dir.filter(|path| path.is_dir()) {
+        fs::remove_dir_all(cache_dir)
+            .map_err(|error| format!("DB 연결 캐시를 삭제하지 못했습니다: {error}"))?;
+    }
+    workspace.db_profiles.remove(profile_index);
+    workspace.active_db_profile_id = workspace
+        .db_profiles
+        .first()
+        .map(|profile| profile.id.clone());
+    workspace.updated_at = timestamp();
+    write_workspace(&paths.workspaces_dir, &workspace)?;
+    Ok(workspace)
+}
+
+pub(crate) fn index_db_profile(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
     request: IndexDbProfileRequest,
@@ -113,13 +146,29 @@ pub fn index_db_profile(
     }
 
     let args = db_index_args(&profile, &cache_path, request.connection_string.as_deref())?;
-    let db_engine = registry
-        .engines
-        .iter()
-        .find(|engine| engine.id == "database-memory")
-        .ok_or_else(|| "DB 읽기 도구가 등록되지 않았습니다".to_string())?;
+    let adapter = DatabaseMemoryAdapter::new(registry)?;
+    let snapshot_key = db_snapshot_alias(&profile)?;
 
-    let run = engine::run_engine_command(db_engine, &args, Duration::from_secs(120))?;
+    let run = if db_source_uses_path(&profile.source) {
+        adapter.index(&args, &[], &snapshot_key)?
+    } else {
+        let connection_string = request
+            .connection_string
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "DB 연결 문자열이 필요합니다".to_string())?;
+        let config_path = db_connection_config_path(&cache_path);
+        write_db_connection_config(&profile, &config_path)?;
+        let env_name = db_connection_env_var(&profile.id);
+        let result = adapter.index(
+            &args,
+            &[(env_name.as_str(), connection_string)],
+            &snapshot_key,
+        );
+        let _ = fs::remove_file(config_path);
+        result?
+    };
 
     if run.ok {
         workspace.db_profiles[profile_index].last_indexed_at = Some(timestamp());
@@ -133,10 +182,12 @@ pub fn index_db_profile(
         workspace,
         run,
         index_json,
+        inventory: None,
+        inventory_error: None,
     })
 }
 
-pub fn db_inventory(
+pub(crate) fn db_inventory(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
     workspace_id: &str,
@@ -160,93 +211,99 @@ pub fn db_inventory(
         .find(|profile| profile.id == selected_profile_id)
         .ok_or_else(|| "DB 연결을 찾을 수 없습니다".to_string())?;
     let cache_path = db_cache_path(&paths.workspaces_dir, workspace_id, &profile.id);
-    let db_engine = registry
-        .engines
-        .iter()
-        .find(|engine| engine.id == "database-memory")
-        .ok_or_else(|| "DB 읽기 도구가 등록되지 않았습니다".to_string())?;
-
-    let bulk_args = db_inventory_args(profile, &cache_path)?;
-    if let Some(inventory) =
-        try_bulk_db_inventory(db_engine, &bulk_args, selected_profile_id.clone())
-    {
-        return Ok(inventory);
-    }
-
-    let table_output = run_db_query(db_engine, "find-table", profile, &cache_path)?;
-    let column_output = run_db_query(db_engine, "find-column", profile, &cache_path)?;
-    let table_json = engine_json_value(&table_output.stdout);
-    let column_json = engine_json_value(&column_output.stdout);
-
-    match (table_json, column_json) {
-        (Some(table_json), Some(column_json)) => {
-            let mut inventory =
-                extract_db_inventory(selected_profile_id, &table_json, &column_json);
-            record_bulk_fallback_gap(&mut inventory);
-            enrich_db_inventory_with_describe(&mut inventory, db_engine, profile, &cache_path);
-            Ok(inventory)
-        }
-        (table_json, column_json) => {
-            let table_lines = if table_json.is_none() {
-                table_output.stdout.as_str()
-            } else {
-                ""
-            };
-            let column_lines = if column_json.is_none() {
-                column_output.stdout.as_str()
-            } else {
-                ""
-            };
-            let mut inventory = extract_db_inventory(
-                selected_profile_id.clone(),
-                table_json.as_ref().unwrap_or(&serde_json::Value::Null),
-                column_json.as_ref().unwrap_or(&serde_json::Value::Null),
-            );
-            record_bulk_fallback_gap(&mut inventory);
-            merge_db_inventory_lines(&mut inventory, table_lines, column_lines);
-            enrich_db_inventory_with_describe(&mut inventory, db_engine, profile, &cache_path);
-            Ok(inventory)
-        }
-    }
+    let adapter = DatabaseMemoryAdapter::new(registry)?;
+    read_complete_db_inventory(&adapter, profile, &cache_path, selected_profile_id)
 }
 
-fn try_bulk_db_inventory(
-    db_engine: &engine::EngineAvailability,
-    args: &[String],
-    profile_id: String,
-) -> Option<DbInventory> {
-    let run = engine::run_engine_command(db_engine, args, Duration::from_secs(120)).ok()?;
-    if !run.ok {
-        return None;
-    }
-    let value = engine_json_value(&run.stdout)?;
-    let mut inventory = extract_bulk_db_inventory(profile_id, &value).ok()?;
-    finalize_db_inventory(&mut inventory);
-    Some(inventory)
-}
-
-fn run_db_query(
-    db_engine: &engine::EngineAvailability,
-    command: &str,
+fn read_complete_db_inventory(
+    adapter: &DatabaseMemoryAdapter<'_>,
     profile: &DbProfile,
     cache_path: &Path,
-) -> Result<engine::EngineRunResult, String> {
-    let args = db_find_args(profile, command, cache_path)?;
-    let run = engine::run_engine_command(db_engine, &args, Duration::from_secs(30))?;
+    profile_id: String,
+) -> Result<DbInventory, String> {
+    let snapshot_key = db_snapshot_alias(profile)?;
+    adapter.verify_complete_snapshot(&snapshot_key, cache_path)?;
+    let mut offset = 0;
+    let mut inventory: Option<DbInventory> = None;
+    let mut table_keys = HashSet::new();
+    let mut column_keys = HashSet::new();
 
-    if run.ok {
-        Ok(run)
-    } else {
-        let legacy_args = db_find_legacy_args(profile, command, cache_path)?;
-        let legacy = engine::run_engine_command(db_engine, &legacy_args, Duration::from_secs(30))?;
-        if legacy.ok {
-            Ok(legacy)
-        } else {
-            Err("DB inventory fallback 검색에 실패했습니다.".to_string())
+    loop {
+        let value =
+            adapter.inventory_page(&snapshot_key, cache_path, offset, DB_INVENTORY_PAGE_LIMIT)?;
+        let page = parse_bulk_db_inventory(profile_id.clone(), &value)?;
+        validate_complete_inventory_page(&page, &mut table_keys, &mut column_keys)?;
+
+        if let Some(existing) = inventory.as_ref() {
+            if existing.snapshot_key != page.snapshot_key
+                || existing.contract_version != page.contract_version
+                || existing.total_tables != page.total_tables
+            {
+                return Err(
+                    "DB inventory 페이지의 snapshot, 계약 또는 전체 테이블 수가 일치하지 않습니다"
+                        .to_string(),
+                );
+            }
         }
+
+        let page_count = page.tables.len();
+        let has_more = value
+            .get("has_more")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| "DB inventory has_more 값이 없습니다".to_string())?;
+        let next_offset = value
+            .get("next_offset")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok());
+        if let Some(existing) = inventory.as_mut() {
+            existing.tables.extend(page.tables);
+            existing
+                .capability_warnings
+                .extend(page.capability_warnings);
+            existing.gaps.extend(page.gaps);
+        } else {
+            inventory = Some(page);
+        }
+
+        let total_tables = inventory
+            .as_ref()
+            .and_then(|inventory| inventory.total_tables)
+            .ok_or_else(|| "DB inventory total_tables 값이 없습니다".to_string())?;
+        if total_tables > MAX_DB_INVENTORY_TABLES {
+            return Err(format!(
+                "DB 테이블 수가 제품 안전 한도 {MAX_DB_INVENTORY_TABLES}개를 초과했습니다: {total_tables}개"
+            ));
+        }
+        if !has_more {
+            let mut inventory =
+                inventory.ok_or_else(|| "DB inventory가 비어 있습니다".to_string())?;
+            if inventory.tables.len() != total_tables {
+                return Err(format!(
+                    "DB inventory가 완전하지 않습니다: expected {total_tables} tables, got {}",
+                    inventory.tables.len()
+                ));
+            }
+            inventory.result_count = Some(inventory.tables.len());
+            inventory.truncated = Some(false);
+            finalize_db_inventory(&mut inventory);
+            if let Some(gap) = inventory.gaps.first() {
+                return Err(format!(
+                    "DB inventory 계약 검증에 실패했습니다: {}",
+                    gap.message
+                ));
+            }
+            return Ok(inventory);
+        }
+        let next_offset =
+            next_offset.ok_or_else(|| "DB inventory 다음 페이지 offset이 없습니다".to_string())?;
+        if page_count == 0 || next_offset != offset.saturating_add(page_count) {
+            return Err("DB inventory 페이지 offset이 연속적이지 않습니다".to_string());
+        }
+        offset = next_offset;
     }
 }
 
+#[cfg(test)]
 pub(crate) fn extract_db_inventory(
     profile_id: String,
     table_json: &serde_json::Value,
@@ -327,7 +384,17 @@ pub(crate) fn extract_db_inventory(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn extract_bulk_db_inventory(
+    profile_id: String,
+    value: &serde_json::Value,
+) -> Result<DbInventory, String> {
+    let mut inventory = parse_bulk_db_inventory(profile_id, value)?;
+    record_bulk_completion_gaps(&mut inventory);
+    Ok(inventory)
+}
+
+fn parse_bulk_db_inventory(
     profile_id: String,
     value: &serde_json::Value,
 ) -> Result<DbInventory, String> {
@@ -393,15 +460,6 @@ pub(crate) fn extract_bulk_db_inventory(
             "inventory result_count와 실제 tables 수가 달라 실제 tables만 보존했습니다.",
         ));
     }
-    let omitted = inventory
-        .total_tables
-        .is_some_and(|total| total > inventory.tables.len());
-    if inventory.truncated == Some(true) || omitted {
-        inventory.gaps.push(inventory_gap(
-            "db-inventory-truncated",
-            "DB inventory 안전 한도로 일부 테이블이 생략되어 누락 영역은 알 수 없음입니다.",
-        ));
-    }
     if inventory.limit_clamped == Some(true) {
         inventory.gaps.push(inventory_gap(
             "db-inventory-limit-clamped",
@@ -412,11 +470,76 @@ pub(crate) fn extract_bulk_db_inventory(
     Ok(inventory)
 }
 
-pub(crate) fn record_bulk_fallback_gap(inventory: &mut DbInventory) {
-    inventory.gaps.push(inventory_gap(
-        "db-inventory-bulk-unavailable",
-        "bulk inventory를 사용할 수 없어 legacy find+describe를 사용했습니다. 대규모 DB에서는 일부 테이블 메타데이터가 알 수 없음일 수 있습니다.",
-    ));
+fn validate_complete_inventory_page(
+    page: &DbInventory,
+    table_keys: &mut HashSet<String>,
+    column_keys: &mut HashSet<String>,
+) -> Result<(), String> {
+    if page.contract_version.as_deref() != Some("2") {
+        return Err("DB inventory가 contract v2 응답이 아닙니다".to_string());
+    }
+    if page.snapshot_key.as_deref().is_none() {
+        return Err("DB inventory snapshot key가 없습니다".to_string());
+    }
+    if let Some(gap) = page.gaps.first() {
+        return Err(format!(
+            "DB inventory 계약 검증에 실패했습니다: {}",
+            gap.message
+        ));
+    }
+
+    for table in &page.tables {
+        let table_key = table
+            .key
+            .as_ref()
+            .ok_or_else(|| format!("DB 테이블 {}의 stable key가 없습니다", table.name))?;
+        if stable_object_key_parts(table_key).is_none_or(|parts| parts.object_kind != "table") {
+            return Err(format!(
+                "DB 테이블 stable key가 올바르지 않습니다: {table_key}"
+            ));
+        }
+        if !table_keys.insert(table_key.clone()) {
+            return Err(format!("DB 테이블 stable key가 중복됩니다: {table_key}"));
+        }
+
+        for column in &table.columns {
+            let column_key = column.key.as_ref().ok_or_else(|| {
+                format!(
+                    "DB 컬럼 {}.{}의 stable key가 없습니다",
+                    table.name, column.name
+                )
+            })?;
+            if stable_object_key_parts(column_key).is_none_or(|parts| parts.object_kind != "column")
+            {
+                return Err(format!(
+                    "DB 컬럼 stable key가 올바르지 않습니다: {column_key}"
+                ));
+            }
+            if column.table_key.as_deref() != Some(table_key.as_str()) {
+                return Err(format!(
+                    "DB 컬럼 {}의 table key가 상위 테이블과 일치하지 않습니다",
+                    column.name
+                ));
+            }
+            if !column_keys.insert(column_key.clone()) {
+                return Err(format!("DB 컬럼 stable key가 중복됩니다: {column_key}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn record_bulk_completion_gaps(inventory: &mut DbInventory) {
+    let omitted = inventory
+        .total_tables
+        .is_some_and(|total| total > inventory.tables.len());
+    if inventory.truncated == Some(true) || omitted {
+        inventory.gaps.push(inventory_gap(
+            "db-inventory-truncated",
+            "DB inventory 안전 한도로 일부 테이블이 생략되어 누락 영역은 알 수 없음입니다.",
+        ));
+    }
 }
 
 fn empty_db_table(schema: Option<String>, name: String) -> DbInventoryTable {
@@ -430,9 +553,11 @@ fn empty_db_table(schema: Option<String>, name: String) -> DbInventoryTable {
         inbound_foreign_keys: Vec::new(),
         constraints: Vec::new(),
         indexes: Vec::new(),
+        dependents: Vec::new(),
     }
 }
 
+#[cfg(test)]
 fn db_table_index_by_identity(
     tables: &[DbInventoryTable],
     stable_key: Option<&str>,
@@ -448,6 +573,7 @@ fn db_table_index_by_identity(
         .or_else(|| db_table_index(tables, schema, name))
 }
 
+#[cfg(test)]
 fn db_table_index(tables: &[DbInventoryTable], schema: Option<&str>, name: &str) -> Option<usize> {
     let mut matches = tables
         .iter()
@@ -491,13 +617,13 @@ pub(crate) fn db_index_args(
             .ok_or_else(|| "DB 경로가 필요합니다".to_string())?;
         args.extend(["--path".to_string(), path.to_string()]);
     } else {
-        let connection_string = connection_string
+        connection_string
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| format!("{source} 연결에는 DB 연결 문자열이 필요합니다"))?;
         args.extend([
-            "--connection-string".to_string(),
-            connection_string.to_string(),
+            "--config-path".to_string(),
+            db_connection_config_path(cache_path).display().to_string(),
         ]);
     }
 
@@ -511,149 +637,33 @@ pub(crate) fn db_index_args(
     Ok(args)
 }
 
+pub(crate) fn db_connection_config_path(cache_path: &Path) -> PathBuf {
+    cache_path.with_file_name("database-memory-profile.toml")
+}
+
+pub(crate) fn db_connection_env_var(alias: &str) -> String {
+    let alias = alias
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("DATABASE_MEMORY_{alias}_CONNECTION_STRING")
+}
+
+fn write_db_connection_config(profile: &DbProfile, path: &Path) -> Result<(), String> {
+    let source = db_cli_source(profile)?;
+    let contents = format!("[{}]\nsource = \"{}\"\n", profile.id, source);
+    fs::write(path, contents)
+        .map_err(|error| format!("DB 연결 준비 파일을 만들지 못했습니다: {error}"))
+}
+
 fn db_source_uses_path(source: &DbSource) -> bool {
     matches!(source, DbSource::Sqlite | DbSource::DdlSqlite)
-}
-
-pub(crate) fn db_find_args(
-    profile: &DbProfile,
-    command: &str,
-    cache_path: &Path,
-) -> Result<Vec<String>, String> {
-    Ok(vec![
-        command.to_string(),
-        db_snapshot_alias(profile)?,
-        String::new(),
-        "--format".to_string(),
-        "json".to_string(),
-        "--cache-path".to_string(),
-        cache_path.display().to_string(),
-    ])
-}
-
-fn db_find_legacy_args(
-    profile: &DbProfile,
-    command: &str,
-    cache_path: &Path,
-) -> Result<Vec<String>, String> {
-    Ok(vec![
-        command.to_string(),
-        db_snapshot_alias(profile)?,
-        String::new(),
-        "--cache-path".to_string(),
-        cache_path.display().to_string(),
-    ])
-}
-
-pub(crate) fn db_inventory_args(
-    profile: &DbProfile,
-    cache_path: &Path,
-) -> Result<Vec<String>, String> {
-    Ok(vec![
-        "inventory".to_string(),
-        db_snapshot_alias(profile)?,
-        "--limit".to_string(),
-        DB_INVENTORY_LIMIT.to_string(),
-        "--format".to_string(),
-        "json".to_string(),
-        "--cache-path".to_string(),
-        cache_path.display().to_string(),
-    ])
-}
-
-pub(crate) fn db_describe_table_args(
-    profile: &DbProfile,
-    table_ref: &str,
-    cache_path: &Path,
-) -> Result<Vec<String>, String> {
-    let mut args = vec!["describe-table".to_string(), db_snapshot_alias(profile)?];
-    if stable_object_key_parts(table_ref).is_some() {
-        args.extend(["--object-key".to_string(), table_ref.to_string()]);
-    } else {
-        args.push(table_ref.to_string());
-    }
-    args.extend([
-        "--format".to_string(),
-        "json".to_string(),
-        "--cache-path".to_string(),
-        cache_path.display().to_string(),
-    ]);
-    Ok(args)
-}
-
-pub(crate) fn merge_db_inventory_lines(
-    inventory: &mut DbInventory,
-    table_stdout: &str,
-    column_stdout: &str,
-) {
-    for line in table_stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let (schema, name) = db_ref_schema_name(line);
-        if db_table_index(&inventory.tables, schema.as_deref(), &name).is_none() {
-            inventory.tables.push(empty_db_table(schema, name));
-        }
-    }
-
-    for line in column_stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let Some((table_ref, column_name)) = line.rsplit_once('.') else {
-            continue;
-        };
-        let (schema, table_name) = db_ref_schema_name(table_ref);
-        let column = DbInventoryColumn {
-            key: None,
-            table_key: None,
-            name: column_name.to_string(),
-            data_type: None,
-            nullable: None,
-            is_primary_key: false,
-            is_foreign_key: false,
-        };
-
-        if let Some(index) = db_table_index(&inventory.tables, schema.as_deref(), &table_name) {
-            if !inventory.tables[index]
-                .columns
-                .iter()
-                .any(|item| item.name == column.name)
-            {
-                inventory.tables[index].columns.push(column);
-            }
-        } else {
-            let mut table = empty_db_table(schema, table_name);
-            table.columns.push(column);
-            inventory.tables.push(table);
-        }
-    }
-}
-
-fn enrich_db_inventory_with_describe(
-    inventory: &mut DbInventory,
-    db_engine: &engine::EngineAvailability,
-    profile: &DbProfile,
-    cache_path: &Path,
-) {
-    let (targets, limit_gaps) = db_describe_plan(inventory);
-    inventory.gaps.extend(limit_gaps);
-
-    for (index, table_ref) in targets {
-        match describe_table(db_engine, profile, cache_path, &table_ref) {
-            Ok(description) => {
-                apply_inventory_description_metadata(inventory, &table_ref, &description);
-                apply_table_description(&mut inventory.tables[index], &description);
-            }
-            Err(message) => inventory
-                .gaps
-                .push(db_gap("db-describe-failure", &table_ref, message)),
-        }
-    }
-
-    finalize_db_inventory(inventory);
 }
 
 fn finalize_db_inventory(inventory: &mut DbInventory) {
@@ -699,59 +709,6 @@ pub(crate) fn record_db_identity_gaps(inventory: &mut DbInventory) {
             ));
         }
     }
-}
-
-pub(crate) fn db_describe_plan(
-    inventory: &DbInventory,
-) -> (Vec<(usize, String)>, Vec<DbInventoryGap>) {
-    let targets = inventory
-        .tables
-        .iter()
-        .enumerate()
-        .map(|(index, table)| {
-            (
-                index,
-                table
-                    .key
-                    .clone()
-                    .unwrap_or_else(|| db_table_key(table.schema.as_deref(), &table.name)),
-            )
-        })
-        .collect::<Vec<_>>();
-    let gaps = targets
-        .iter()
-        .skip(MAX_FALLBACK_DESCRIBED_TABLES)
-        .map(|(_, table_ref)| {
-            db_gap(
-                "db-describe-limit",
-                table_ref,
-                "안전 한도를 넘어 describe-table 메타데이터를 읽지 못했습니다.",
-            )
-        })
-        .collect();
-    (
-        targets
-            .into_iter()
-            .take(MAX_FALLBACK_DESCRIBED_TABLES)
-            .collect(),
-        gaps,
-    )
-}
-
-fn describe_table(
-    db_engine: &engine::EngineAvailability,
-    profile: &DbProfile,
-    cache_path: &Path,
-    table_ref: &str,
-) -> Result<serde_json::Value, &'static str> {
-    let args = db_describe_table_args(profile, table_ref, cache_path)
-        .map_err(|_| "describe-table 인자를 만들지 못했습니다.")?;
-    let run = engine::run_engine_command(db_engine, &args, Duration::from_secs(30))
-        .map_err(|_| "describe-table 실행에 실패했습니다.")?;
-    if !run.ok {
-        return Err("describe-table가 메타데이터를 반환하지 못했습니다.");
-    }
-    engine_json_value(&run.stdout).ok_or("describe-table JSON을 해석하지 못했습니다.")
 }
 
 pub(crate) fn apply_inventory_description_metadata(
@@ -892,6 +849,7 @@ pub(crate) fn apply_table_description(
     table.inbound_foreign_keys = inbound_foreign_keys;
     table.constraints = constraints;
     table.indexes = indexes_from_description(description);
+    table.dependents = dependents_from_description(description);
 
     for column in description
         .get("columns")
@@ -937,6 +895,51 @@ pub(crate) fn apply_table_description(
             table.columns.push(described);
         }
     }
+}
+
+fn dependents_from_description(description: &serde_json::Value) -> Vec<DbDependentObject> {
+    let mut dependents = description
+        .get("dependents")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|value| {
+            let key = object_string(value, &["key", "object_key", "objectKey"])?;
+            let kind = object_string(value, &["kind"])?;
+            let name = object_string(value, &["name"])?;
+            let relation = object_string(value, &["relation"])?;
+            matches!(kind.as_str(), "view" | "trigger" | "routine").then(|| {
+                let mut column_keys = string_array(value, &["column_keys", "columnKeys"]);
+                column_keys.sort();
+                column_keys.dedup();
+                DbDependentObject {
+                    key,
+                    kind,
+                    name,
+                    relation,
+                    column_keys,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    dependents.sort_by(|left, right| {
+        left.key
+            .cmp(&right.key)
+            .then_with(|| left.relation.cmp(&right.relation))
+    });
+    let mut merged: Vec<DbDependentObject> = Vec::with_capacity(dependents.len());
+    for dependent in dependents {
+        if let Some(existing) = merged.last_mut().filter(|existing| {
+            existing.key == dependent.key && existing.relation == dependent.relation
+        }) {
+            existing.column_keys.extend(dependent.column_keys);
+            existing.column_keys.sort();
+            existing.column_keys.dedup();
+        } else {
+            merged.push(dependent);
+        }
+    }
+    merged
 }
 
 fn foreign_keys(
@@ -1161,9 +1164,8 @@ fn normalize_constraint_kind(kind: &str) -> String {
 }
 
 fn object_key_schema_name(value: &str) -> Option<(String, String)> {
-    let parts = value.split(':').collect::<Vec<_>>();
-    ((parts.len() == 6 || parts.len() == 7) && parts[4] == "table")
-        .then(|| (parts[3].to_string(), parts[5].to_string()))
+    let parts = stable_object_key_parts(value)?;
+    (parts.object_kind == "table").then_some((parts.schema, parts.object_name))
 }
 
 fn json_scalar_string(value: Option<&serde_json::Value>) -> Option<String> {
@@ -1190,19 +1192,70 @@ fn object_optional_bool(value: &serde_json::Value, keys: &[&str]) -> Option<bool
 struct StableObjectKeyParts {
     database: String,
     schema: String,
+    object_kind: String,
     object_name: String,
 }
 
 fn stable_object_key_parts(value: &str) -> Option<StableObjectKeyParts> {
-    let parts = value.split(':').collect::<Vec<_>>();
-    if !(parts.len() == 6 || parts.len() == 7) || parts.iter().any(|part| part.is_empty()) {
+    let (value, encoded) = value
+        .strip_prefix("v2:")
+        .map_or((value, false), |value| (value, true));
+    let raw_parts = value.split(':').collect::<Vec<_>>();
+    if !(raw_parts.len() == 6 || raw_parts.len() == 7)
+        || raw_parts.iter().any(|part| part.is_empty())
+    {
+        return None;
+    }
+    let parts = raw_parts
+        .into_iter()
+        .map(|part| {
+            if encoded {
+                decode_stable_object_key_part(part)
+            } else {
+                Some(part.to_string())
+            }
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if !matches!(
+        parts[4].as_str(),
+        "database"
+            | "schema"
+            | "table"
+            | "column"
+            | "primary_key"
+            | "foreign_key"
+            | "unique_constraint"
+            | "check_constraint"
+            | "index"
+            | "view"
+            | "trigger"
+            | "routine"
+    ) {
         return None;
     }
     Some(StableObjectKeyParts {
-        database: parts[2].to_string(),
-        schema: parts[3].to_string(),
-        object_name: parts[5].to_string(),
+        database: parts[2].clone(),
+        schema: parts[3].clone(),
+        object_kind: parts[4].clone(),
+        object_name: parts[5].clone(),
     })
+}
+
+fn decode_stable_object_key_part(value: &str) -> Option<String> {
+    let mut decoded = String::with_capacity(value.len());
+    let mut characters = value.chars();
+    while let Some(character) = characters.next() {
+        if character != '%' {
+            decoded.push(character);
+            continue;
+        }
+        match (characters.next(), characters.next()) {
+            (Some('2'), Some('5')) => decoded.push('%'),
+            (Some('3'), Some('A' | 'a')) => decoded.push(':'),
+            _ => return None,
+        }
+    }
+    Some(decoded)
 }
 
 fn inventory_gap(kind: &str, message: &str) -> DbInventoryGap {
@@ -1252,15 +1305,6 @@ fn object_nullable_bool(value: &serde_json::Value, keys: &[&str]) -> Option<bool
         })
 }
 
-fn db_ref_schema_name(value: &str) -> (Option<String>, String) {
-    match value.rsplit_once('.') {
-        Some((schema, name)) if !schema.is_empty() && !name.is_empty() => {
-            (Some(schema.to_string()), name.to_string())
-        }
-        _ => (None, value.to_string()),
-    }
-}
-
 fn db_table_key(schema: Option<&str>, name: &str) -> String {
     match schema.filter(|value| !value.is_empty()) {
         Some(schema) => format!("{schema}.{name}"),
@@ -1287,7 +1331,9 @@ fn db_cli_source(profile: &DbProfile) -> Result<&'static str, String> {
         DbSource::Sqlite => Ok("sqlite"),
         DbSource::DdlSqlite => Ok("ddl-sqlite"),
         DbSource::Postgres => Ok("postgres"),
+        DbSource::Yugabytedb => Ok("yugabytedb"),
         DbSource::Mysql => Ok("mysql"),
+        DbSource::Mariadb => Ok("mariadb"),
         DbSource::Sqlserver => Ok("sqlserver"),
         DbSource::Oracle => Ok("oracle"),
     }

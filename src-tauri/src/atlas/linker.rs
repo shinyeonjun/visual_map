@@ -1,4 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::{
+    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap, HashSet},
+    hash::{Hash, Hasher},
+    sync::{Arc, Mutex, OnceLock},
+};
 
 use crate::workspace::{FocusedCodeSearch, FocusedCodeSearchMatch};
 
@@ -8,10 +12,28 @@ use super::model::{
 };
 
 pub(crate) const MAX_CANDIDATES_PER_CODE_ITEM: usize = 6;
+const CANDIDATE_CACHE_LIMIT: usize = 2;
 const GENERIC_DB_TERMS: &[&str] = &[
     "data", "id", "item", "items", "main", "object", "objects", "public", "record", "records",
     "state", "status", "table", "tables", "type", "value", "values",
 ];
+
+static CANDIDATE_CACHE: OnceLock<Mutex<HashMap<String, CachedCandidates>>> = OnceLock::new();
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CandidateSnapshotIdentity {
+    saved_at: String,
+    schema_version: u32,
+    item_count: usize,
+    link_count: usize,
+    candidate_input_hash: u64,
+}
+
+#[derive(Debug, Clone)]
+struct CachedCandidates {
+    identity: CandidateSnapshotIdentity,
+    links: Arc<Vec<CandidateLink>>,
+}
 
 struct TableTerms<'a> {
     table: &'a InventoryItem,
@@ -243,7 +265,77 @@ fn engine_ascii(value: &str) -> String {
         .collect()
 }
 
-pub fn candidate_links(snapshot: &InventorySnapshot) -> Vec<CandidateLink> {
+pub(super) fn candidate_links(snapshot: &InventorySnapshot) -> Arc<Vec<CandidateLink>> {
+    if has_focused_candidate_evidence(snapshot) {
+        return Arc::new(compute_candidate_links(snapshot));
+    }
+
+    let identity = CandidateSnapshotIdentity {
+        saved_at: snapshot.saved_at.clone(),
+        schema_version: snapshot.schema_version,
+        item_count: snapshot.items.len(),
+        link_count: snapshot.links.len(),
+        candidate_input_hash: candidate_input_hash(snapshot),
+    };
+    let cache = CANDIDATE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(cache) = cache.lock() {
+        if let Some(entry) = cache.get(&snapshot.workspace_id) {
+            if entry.identity == identity {
+                return Arc::clone(&entry.links);
+            }
+        }
+    }
+
+    let links = Arc::new(compute_candidate_links(snapshot));
+    if let Ok(mut cache) = cache.lock() {
+        while cache.len() >= CANDIDATE_CACHE_LIMIT && !cache.contains_key(&snapshot.workspace_id) {
+            let Some(workspace_id) = cache.keys().next().cloned() else {
+                break;
+            };
+            cache.remove(&workspace_id);
+        }
+        cache.insert(
+            snapshot.workspace_id.clone(),
+            CachedCandidates {
+                identity,
+                links: Arc::clone(&links),
+            },
+        );
+    }
+    links
+}
+
+fn candidate_input_hash(snapshot: &InventorySnapshot) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for item in &snapshot.items {
+        item.id.hash(&mut hasher);
+        item.kind.hash(&mut hasher);
+        item.name.hash(&mut hasher);
+        item.source.hash(&mut hasher);
+        item.path.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+pub(super) fn invalidate_candidate_links(workspace_id: &str) {
+    if let Some(cache) = CANDIDATE_CACHE.get() {
+        if let Ok(mut cache) = cache.lock() {
+            cache.remove(workspace_id);
+        }
+    }
+}
+
+fn has_focused_candidate_evidence(snapshot: &InventorySnapshot) -> bool {
+    snapshot.links.iter().any(|link| {
+        link.truth_class == "candidate"
+            && matches!(
+                link.kind.as_str(),
+                "code_db_text_reference" | "code_db_column_text_reference"
+            )
+    })
+}
+
+fn compute_candidate_links(snapshot: &InventorySnapshot) -> Vec<CandidateLink> {
     let tables = snapshot
         .items
         .iter()
@@ -310,7 +402,13 @@ pub fn candidate_links(snapshot: &InventorySnapshot) -> Vec<CandidateLink> {
         snapshot
             .links
             .iter()
-            .filter(|link| link.kind == "code_db_text_reference" && link.truth_class == "candidate")
+            .filter(|link| {
+                link.truth_class == "candidate"
+                    && matches!(
+                        link.kind.as_str(),
+                        "code_db_text_reference" | "code_db_column_text_reference"
+                    )
+            })
             .map(|link| CandidateLink {
                 id: format!("candidate:{}->{}", link.from, link.to),
                 from: link.from.clone(),
@@ -699,6 +797,72 @@ mod tests {
     }
 
     #[test]
+    fn candidate_cache_reuses_only_unenriched_snapshots() {
+        let code = test_item(
+            "code:repository:orders".to_string(),
+            "repository",
+            "OrderRepository".to_string(),
+            "code",
+            Some("src/orders/repository.rs".to_string()),
+        );
+        let mut snapshot = InventorySnapshot {
+            schema_version: 2,
+            workspace_id: "candidate-cache-fixture".to_string(),
+            saved_at: "1".to_string(),
+            metadata: SnapshotMetadata::default(),
+            stale_reasons: Vec::new(),
+            links: Vec::new(),
+            items: vec![
+                code,
+                test_item(
+                    "db:table:orders".to_string(),
+                    "table",
+                    "orders".to_string(),
+                    "db",
+                    None,
+                ),
+                test_item(
+                    "db:table:payments".to_string(),
+                    "table",
+                    "payments".to_string(),
+                    "db",
+                    None,
+                ),
+            ],
+        };
+
+        let first = candidate_links(&snapshot);
+        let second = candidate_links(&snapshot);
+        assert!(Arc::ptr_eq(&first, &second));
+
+        snapshot.items[1].name = "unrelated".to_string();
+        let renamed = candidate_links(&snapshot);
+        assert!(!Arc::ptr_eq(&first, &renamed));
+        assert!(!renamed.iter().any(|link| link.to == "db:table:orders"));
+
+        snapshot.links.push(SnapshotLink {
+            id: "text:orders->payments".to_string(),
+            from: "code:repository:orders".to_string(),
+            to: "db:table:payments".to_string(),
+            kind: "code_db_text_reference".to_string(),
+            label: None,
+            truth_class: "candidate".to_string(),
+            direction: "outbound".to_string(),
+            engine_edge_type: None,
+            evidence: vec![Evidence {
+                kind: "code-search-exact-token".to_string(),
+                text: "payments exact token".to_string(),
+            }],
+        });
+        let enriched = candidate_links(&snapshot);
+
+        assert!(!Arc::ptr_eq(&first, &enriched));
+        assert!(enriched.iter().any(|link| link.to == "db:table:payments"));
+
+        invalidate_candidate_links(&snapshot.workspace_id);
+    }
+
+    #[test]
     fn focused_search_evidence_merges_as_high_candidate_without_source_body() {
         let mut code = test_item(
             "code:repo.loadOrders".to_string(),
@@ -764,6 +928,65 @@ mod tests {
     }
 
     #[test]
+    fn focused_column_evidence_stays_candidate_and_reaches_the_read_model() {
+        let mut code = test_item(
+            "code:repo.loadOrders".to_string(),
+            "repository",
+            "OrderRepository".to_string(),
+            "code",
+            Some("src/orders/repository.ts".to_string()),
+        );
+        code.qualified_name = Some("repo.loadOrders".to_string());
+        code.engine_label = Some("Function".to_string());
+        code.location = Some(super::SourceLocation {
+            path: "src/orders/repository.ts".to_string(),
+            line: Some(10),
+            column: None,
+            end_line: Some(20),
+            end_column: None,
+        });
+        let mut column = test_item(
+            "db:column:orders:status".to_string(),
+            "column",
+            "status".to_string(),
+            "db",
+            None,
+        );
+        column.parent_id = Some("db:table:orders".to_string());
+        let mut snapshot = InventorySnapshot {
+            schema_version: 2,
+            workspace_id: "focused-column-evidence".to_string(),
+            saved_at: "0".to_string(),
+            metadata: SnapshotMetadata::default(),
+            stale_reasons: Vec::new(),
+            links: Vec::new(),
+            items: vec![code, column],
+        };
+        let search = focused_search(
+            vec![FocusedCodeSearchMatch {
+                qualified_name: "repo.loadOrders".to_string(),
+                label: "Function".to_string(),
+                file: "src/orders/repository.ts".to_string(),
+                start_line: 10,
+                end_line: 20,
+                match_lines: vec![16],
+            }],
+            Vec::new(),
+        );
+
+        apply_focused_code_evidence(&mut snapshot, "db:column:orders:status", &search, false);
+
+        assert_eq!(snapshot.links[0].truth_class, "candidate");
+        assert_eq!(snapshot.links[0].kind, "code_db_column_text_reference");
+        let candidates = candidate_links(&snapshot);
+        assert!(candidates.iter().any(|link| {
+            link.from == "code:repo.loadOrders"
+                && link.to == "db:column:orders:status"
+                && link.confidence == "high"
+        }));
+    }
+
+    #[test]
     fn unicode_mapping_is_location_unique_and_schema_ambiguity_caps_confidence() {
         let mut code = test_item(
             "code:서비스.주문조회".to_string(),
@@ -814,8 +1037,9 @@ mod tests {
         apply_focused_code_evidence(&mut snapshot, "db:table:public:orders", &search, true);
 
         let candidate = candidate_links(&snapshot)
-            .into_iter()
+            .iter()
             .find(|link| link.to == "db:table:public:orders")
+            .cloned()
             .unwrap();
         assert_eq!(candidate.confidence, "medium");
         assert!(candidate

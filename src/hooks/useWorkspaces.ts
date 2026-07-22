@@ -1,13 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
+import { githubRepoName, repoPathErrorFor } from "../app/appState";
 import { toUserError } from "../app/operationStatus";
 import { hasTauriRuntime, tauriUnavailableMessage } from "../app/tauriRuntime";
-import type { CreateWorkspaceRequest, RepoSourceMode, Workspace, WorkspaceRecoveryWarning } from "../types/workspace";
+import {
+  workspaceRepoInputValue,
+  type CreateWorkspaceRequest,
+  type RepoSourceMode,
+  type Workspace,
+  type WorkspaceRecoveryWarning,
+} from "../types/workspace";
 
 type WithBusy = (action: string, task: () => Promise<void>) => Promise<void>;
+const lastWorkspaceKey = "backend-visual-map:last-workspace";
+const mapContextKeyPrefix = "backend-visual-map:map-context:v1:";
+const investigationKeyPrefix = "backend-visual-map:investigation:v1:";
 
 export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
+  const [initialized, setInitialized] = useState(!hasTauriRuntime());
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [recoveryWarnings, setRecoveryWarnings] = useState<WorkspaceRecoveryWarning[]>([]);
   const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(null);
@@ -27,6 +38,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       setRecoveryWarnings([]);
       selectWorkspace(null);
       setWorkspaceError(null);
+      setInitialized(true);
       return;
     }
 
@@ -40,6 +52,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       const selected =
         (preferredWorkspaceId ? items.find((workspace) => workspace.id === preferredWorkspaceId) : null) ??
         (currentWorkspace && items.find((workspace) => workspace.id === currentWorkspace.id)) ??
+        items.find((workspace) => workspace.id === rememberedWorkspaceId()) ??
         items[0] ??
         null;
 
@@ -47,6 +60,8 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       setWorkspaceError(null);
     } catch (error) {
       setWorkspaceError(toUserError(error, "프로젝트 목록을 불러오지 못했습니다").message);
+    } finally {
+      setInitialized(true);
     }
   }
 
@@ -56,9 +71,10 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       return;
     }
 
+    rememberWorkspace(workspace.id);
     setWorkspaceName(workspace.name);
-    setRepoPath(workspace.repoPath);
-    setRepoSourceMode("local");
+    setRepoPath(workspaceRepoInputValue(workspace));
+    setRepoSourceMode(workspace.repoSource);
   }
 
   async function pickRepoPath() {
@@ -67,13 +83,19 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       return;
     }
 
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "저장소 폴더 선택",
-    });
+    let selected: string | string[] | null;
+    try {
+      selected = await open({
+        directory: true,
+        multiple: false,
+        title: "저장소 폴더 선택",
+      });
+    } catch (error) {
+      setWorkspaceError(toUserError(error, "프로젝트 폴더 선택기를 열지 못했습니다").message);
+      return;
+    }
 
-    if (!selected) {
+    if (!selected || Array.isArray(selected)) {
       return;
     }
 
@@ -95,14 +117,10 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
         setWorkspaceError("프로젝트 이름과 저장소 경로를 입력하세요");
         return;
       }
-      if (repoSourceMode === "local" && (/^https?:\/\//i.test(request.repoPath) || /^git@/i.test(request.repoPath))) {
+      const repoPathError = repoPathErrorFor(request.repoPath, repoSourceMode);
+      if (repoPathError) {
         setWorkspaceStatus(null);
-        setWorkspaceError("GitHub URL 모드로 전환하세요.");
-        return;
-      }
-      if (repoSourceMode === "github" && !githubRepoName(request.repoPath)) {
-        setWorkspaceStatus(null);
-        setWorkspaceError("https://github.com/owner/repo 형식의 GitHub URL을 입력하세요.");
+        setWorkspaceError(repoPathError);
         return;
       }
       if (!hasTauriRuntime()) {
@@ -188,6 +206,34 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
     });
   }
 
+  async function refreshGithubWorkspace(): Promise<boolean> {
+    const workspaceId = currentWorkspace?.id;
+    if (!workspaceId || currentWorkspace.repoSource !== "github") {
+      return false;
+    }
+    if (!hasTauriRuntime()) {
+      setWorkspaceStatus(null);
+      setWorkspaceError(tauriUnavailableMessage);
+      return false;
+    }
+
+    let refreshed = false;
+    await withBusy("workspace-refresh", async () => {
+      try {
+        const updated = await invoke<Workspace>("refresh_github_workspace", { workspaceId });
+        selectWorkspace(updated);
+        setWorkspaceStatus(`GitHub 업데이트 완료: ${updated.name}`);
+        setWorkspaceError(null);
+        await refreshWorkspaces(updated.id);
+        refreshed = true;
+      } catch (error) {
+        setWorkspaceStatus(null);
+        setWorkspaceError(toUserError(error, "GitHub 프로젝트를 업데이트하지 못했습니다").message);
+      }
+    });
+    return refreshed;
+  }
+
   async function repairWorkspaceFromBackup(workspaceId: string) {
     if (!workspaceId || !hasTauriRuntime()) {
       return;
@@ -205,7 +251,33 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
     });
   }
 
+  async function deleteWorkspace(workspaceId: string) {
+    if (!workspaceId || !hasTauriRuntime()) {
+      return;
+    }
+    const deletedName = workspaces.find((workspace) => workspace.id === workspaceId)?.name ?? "프로젝트";
+    await withBusy("workspace-delete", async () => {
+      try {
+        await invoke("delete_workspace", { workspaceId });
+        clearLocalWorkspaceState(workspaceId);
+        setWorkspaces((items) => items.filter((workspace) => workspace.id !== workspaceId));
+        if (currentWorkspace?.id === workspaceId) {
+          setCurrentWorkspace(null);
+          setWorkspaceName("");
+          setRepoPath("");
+        }
+        await refreshWorkspaces();
+        setWorkspaceStatus(`프로젝트 제거됨: ${deletedName}`);
+        setWorkspaceError(null);
+      } catch (error) {
+        setWorkspaceStatus(null);
+        setWorkspaceError(toUserError(error, "프로젝트를 제거하지 못했습니다").message);
+      }
+    });
+  }
+
   return {
+    initialized,
     workspaces,
     recoveryWarnings,
     currentWorkspace,
@@ -221,8 +293,10 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
     pickRepoPath,
     createWorkspace,
     openWorkspace,
+    refreshGithubWorkspace,
     refreshWorkspaces,
     repairWorkspaceFromBackup,
+    deleteWorkspace,
   };
 }
 
@@ -246,19 +320,30 @@ function workspaceNameForPath(value: string, mode: RepoSourceMode): string | nul
   return mode === "github" ? githubRepoName(value) : lastPathPart(value);
 }
 
-function githubRepoName(value: string): string | null {
-  const trimmed = value.trim().replace(/\/$/, "");
-  const path =
-    trimmed.match(/^https:\/\/github\.com\/(.+)$/i)?.[1] ?? trimmed.match(/^git@github\.com:(.+)$/i)?.[1];
-  if (!path) {
+function rememberedWorkspaceId(): string | null {
+  try {
+    return window.localStorage.getItem(lastWorkspaceKey);
+  } catch {
     return null;
   }
+}
 
-  const parts = path.split("/");
-  if (parts.length !== 2) {
-    return null;
+function rememberWorkspace(workspaceId: string) {
+  try {
+    window.localStorage.setItem(lastWorkspaceKey, workspaceId);
+  } catch {
+    // The workspace list still falls back to its most recently updated entry.
   }
+}
 
-  const repo = parts[1].replace(/\.git$/i, "");
-  return /^[a-z0-9._-]+$/i.test(parts[0]) && /^[a-z0-9._-]+$/i.test(repo) ? repo : null;
+function clearLocalWorkspaceState(workspaceId: string) {
+  try {
+    if (window.localStorage.getItem(lastWorkspaceKey) === workspaceId) {
+      window.localStorage.removeItem(lastWorkspaceKey);
+    }
+    window.localStorage.removeItem(`${mapContextKeyPrefix}${workspaceId}`);
+    window.localStorage.removeItem(`${investigationKeyPrefix}${workspaceId}`);
+  } catch {
+    // Filesystem deletion remains authoritative when local storage is unavailable.
+  }
 }

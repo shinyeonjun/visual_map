@@ -9,14 +9,14 @@ use crate::workspace;
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum SourceEditor {
+pub(crate) enum SourceEditor {
     Vscode,
     Cursor,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct OpenSourceLocationRequest {
+pub(crate) struct OpenSourceLocationRequest {
     pub workspace_id: String,
     pub path: String,
     pub line: Option<u64>,
@@ -26,21 +26,21 @@ pub struct OpenSourceLocationRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RevealSourceLocationRequest {
+pub(crate) struct RevealSourceLocationRequest {
     pub workspace_id: String,
     pub path: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SourceActionResult {
+pub(crate) struct SourceActionResult {
     pub path: String,
     pub line: Option<u64>,
     pub column: Option<u64>,
     pub action: String,
 }
 
-pub fn open_source_location(
+pub(crate) fn open_source_location(
     app_data_dir: impl AsRef<Path>,
     request: OpenSourceLocationRequest,
 ) -> Result<SourceActionResult, String> {
@@ -75,7 +75,7 @@ pub fn open_source_location(
     })
 }
 
-pub fn reveal_source_location(
+pub(crate) fn reveal_source_location(
     app_data_dir: impl AsRef<Path>,
     request: RevealSourceLocationRequest,
 ) -> Result<SourceActionResult, String> {

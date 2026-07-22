@@ -1,4 +1,4 @@
-import type { VisualEdge, VisualMap, VisualNode } from "./visual-map";
+import type { AnalysisCoverage, ChangeIntent, VisualEdge, VisualMap, VisualNode } from "./visual-map";
 import type { OperationStatus } from "./operation";
 import type {
   CodeInventory,
@@ -6,12 +6,13 @@ import type {
   DbInventory,
   DbProfile,
   DbProfileSource,
-    RepoSourceMode,
-    Workspace,
-    WorkspaceRecoveryWarning,
+  RepoSourceMode,
+  Workspace,
+  WorkspaceRecoveryWarning,
 } from "./workspace";
 
 export type WorkspaceControls = {
+  initialized: boolean;
   operationStatus: OperationStatus;
   workspaces: Workspace[];
   recoveryWarnings: WorkspaceRecoveryWarning[];
@@ -30,8 +31,9 @@ export type WorkspaceControls = {
   busy: boolean;
   creating: boolean;
   opening: boolean;
+  refreshing: boolean;
+  deleting: boolean;
   codeIndexing: boolean;
-  codeLoading: boolean;
   canIndexCode: boolean;
   codeIndexBlockedReason: string | null;
   canCreateWorkspace: boolean;
@@ -41,11 +43,11 @@ export type WorkspaceControls = {
   pickRepoPath: () => void;
   createWorkspace: () => void;
   openWorkspace: (workspaceId: string) => void;
+  refreshGithubWorkspace: () => void;
   indexCodeRepository: () => void;
-  loadCodeInventory: () => void;
-  selectCodeItem: (item: CodeInventoryItem) => void;
   refreshWorkspaces: () => void;
   repairWorkspaceFromBackup: (workspaceId: string) => void;
+  deleteWorkspace: (workspaceId: string) => void;
 };
 
 export type DbProfileControls = {
@@ -62,31 +64,34 @@ export type DbProfileControls = {
   errorDetail: string | null;
   busy: boolean;
   saving: boolean;
-  testing: boolean;
   indexing: boolean;
-  loading: boolean;
+  deleting: boolean;
   canSaveProfile: boolean;
-  canTestConnection: boolean;
   canIndexProfile: boolean;
   dbIndexBlockedReason: string | null;
-  canLoadInventory: boolean;
   setProfileName: (value: string) => void;
   setProfileSource: (value: DbProfileSource) => void;
   setProfilePath: (value: string) => void;
   setConnectionString: (value: string) => void;
-  pickPath: () => void;
+  pickPath: (directory?: boolean) => void;
   saveProfile: () => void;
-  testConnection: () => void;
   indexProfile: () => void;
-  loadInventory: () => void;
-  selectTable: (tableKey: string) => void;
-  selectColumn: (tableKey: string, columnName: string) => void;
+  deleteProfile: () => void;
+  openTable: (tableKey: string) => void;
+  openColumn: (tableKey: string, columnName: string) => void;
 };
 
 export type VisualMapControls = {
   currentMap: VisualMap | null;
   mode: string;
+  focusId: string | null;
+  loading: boolean;
+  enriching: boolean;
+  changeIntent: ChangeIntent;
   snapshotSavedAt: string | null;
+  snapshotStaleReasons: string[];
+  snapshotSourceSummary: string | null;
+  analysisCoverage: AnalysisCoverage | null;
   projectionElapsedMs: number | null;
   searchQuery: string;
   searchPopoverOpen: boolean;
@@ -96,6 +101,7 @@ export type VisualMapControls = {
   selectedEdge: VisualEdge | null;
   setSearchQuery: (value: string) => void;
   showMode: (mode: string, focusId?: string | null) => void;
+  setChangeIntent: (intent: ChangeIntent) => void;
   runSearch: () => void;
   selectSearchResult: (result: SearchResult) => void;
   openSearchPopover: () => void;

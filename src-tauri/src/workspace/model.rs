@@ -3,10 +3,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct Workspace {
+pub(crate) struct Workspace {
     pub id: String,
     pub name: String,
     pub repo_path: String,
+    #[serde(default)]
+    pub repo_source: RepoSource,
+    #[serde(default)]
+    pub repo_origin: Option<String>,
     pub code_project: Option<String>,
     #[serde(default)]
     pub engine_cache: WorkspaceEngineCache,
@@ -17,15 +21,23 @@ pub struct Workspace {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum RepoSource {
+    #[default]
+    Local,
+    Github,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkspaceEngineCache {
+pub(crate) struct WorkspaceEngineCache {
     pub code_cache_path: Option<String>,
     pub db_cache_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DbProfile {
+pub(crate) struct DbProfile {
     pub id: String,
     pub name: String,
     pub source: DbSource,
@@ -41,25 +53,27 @@ pub struct DbProfile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum DbSource {
+pub(crate) enum DbSource {
     Sqlite,
     DdlSqlite,
     Postgres,
+    Yugabytedb,
     Mysql,
+    Mariadb,
     Sqlserver,
     Oracle,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateWorkspaceRequest {
+pub(crate) struct CreateWorkspaceRequest {
     pub name: String,
     pub repo_path: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SaveDbProfileRequest {
+pub(crate) struct SaveDbProfileRequest {
     pub workspace_id: String,
     pub name: String,
     pub source: DbSource,
@@ -68,7 +82,7 @@ pub struct SaveDbProfileRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IndexDbProfileRequest {
+pub(crate) struct IndexDbProfileRequest {
     pub workspace_id: String,
     pub profile_id: String,
     pub connection_string: Option<String>,
@@ -76,28 +90,32 @@ pub struct IndexDbProfileRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IndexCodeRequest {
+pub(crate) struct IndexCodeRequest {
     pub workspace_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DbIndexResult {
+pub(crate) struct DbIndexResult {
     pub workspace: Workspace,
     pub run: engine::EngineRunResult,
     pub index_json: Option<serde_json::Value>,
+    pub inventory: Option<DbInventory>,
+    pub inventory_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodeIndexResult {
+pub(crate) struct CodeIndexResult {
     pub workspace: Workspace,
     pub run: engine::EngineRunResult,
+    pub inventory: Option<CodeInventory>,
+    pub inventory_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct CodeInventory {
+pub(crate) struct CodeInventory {
     pub project: String,
     pub routes: Vec<CodeInventoryItem>,
     pub services: Vec<CodeInventoryItem>,
@@ -113,11 +131,13 @@ pub struct CodeInventory {
     pub calls: Vec<CodeCall>,
     #[serde(default)]
     pub handles: Vec<CodeHandle>,
+    #[serde(default)]
+    pub partial: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct CodeInventorySummary {
+pub(crate) struct CodeInventorySummary {
     pub routes: usize,
     pub handlers: usize,
     pub services: usize,
@@ -131,7 +151,7 @@ pub struct CodeInventorySummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct CodeInventoryItem {
+pub(crate) struct CodeInventoryItem {
     pub id: String,
     pub kind: String,
     pub name: String,
@@ -154,21 +174,27 @@ pub struct CodeInventoryItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct CodeCall {
+pub(crate) struct CodeCall {
     pub from: String,
     pub to: String,
+    #[serde(default)]
+    pub confidence: Option<u8>,
+    #[serde(default)]
+    pub strategy: Option<String>,
+    #[serde(default)]
+    pub expression: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct CodeHandle {
+pub(crate) struct CodeHandle {
     pub handler: String,
     pub route: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FocusedCodeSearch {
+pub(crate) struct FocusedCodeSearch {
     pub matches: Vec<FocusedCodeSearchMatch>,
     pub totals: FocusedCodeSearchTotals,
     pub partial: bool,
@@ -177,7 +203,7 @@ pub struct FocusedCodeSearch {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FocusedCodeSearchMatch {
+pub(crate) struct FocusedCodeSearchMatch {
     pub qualified_name: String,
     pub label: String,
     pub file: String,
@@ -188,7 +214,7 @@ pub struct FocusedCodeSearchMatch {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FocusedCodeSearchTotals {
+pub(crate) struct FocusedCodeSearchTotals {
     pub returned: usize,
     pub total_results: usize,
     pub total_grep_matches: usize,
@@ -197,7 +223,7 @@ pub struct FocusedCodeSearchTotals {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DbInventory {
+pub(crate) struct DbInventory {
     pub profile_id: String,
     pub tables: Vec<DbInventoryTable>,
     #[serde(default)]
@@ -224,7 +250,7 @@ pub struct DbInventory {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DbInventoryTable {
+pub(crate) struct DbInventoryTable {
     #[serde(default)]
     pub key: Option<String>,
     #[serde(default)]
@@ -240,11 +266,24 @@ pub struct DbInventoryTable {
     pub constraints: Vec<DbConstraint>,
     #[serde(default)]
     pub indexes: Vec<DbIndex>,
+    #[serde(default)]
+    pub dependents: Vec<DbDependentObject>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DbInventoryColumn {
+pub(crate) struct DbDependentObject {
+    pub key: String,
+    pub kind: String,
+    pub name: String,
+    pub relation: String,
+    #[serde(default)]
+    pub column_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DbInventoryColumn {
     #[serde(default)]
     pub key: Option<String>,
     #[serde(default)]
@@ -258,7 +297,7 @@ pub struct DbInventoryColumn {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DbForeignKey {
+pub(crate) struct DbForeignKey {
     #[serde(default)]
     pub key: Option<String>,
     pub name: Option<String>,
@@ -282,7 +321,7 @@ pub struct DbForeignKey {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DbConstraint {
+pub(crate) struct DbConstraint {
     #[serde(default)]
     pub key: Option<String>,
     #[serde(default)]
@@ -310,7 +349,7 @@ pub struct DbConstraint {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DbIndex {
+pub(crate) struct DbIndex {
     #[serde(default)]
     pub key: Option<String>,
     pub name: String,
@@ -330,7 +369,7 @@ pub struct DbIndex {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DbInventoryGap {
+pub(crate) struct DbInventoryGap {
     pub id: String,
     pub kind: String,
     pub message: String,

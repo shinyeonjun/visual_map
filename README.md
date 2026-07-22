@@ -13,33 +13,46 @@
 ## What it does
 
 - local folder 또는 GitHub URL로 workspace 생성 후 코드 인덱싱
-- SQLite/DDL, PostgreSQL, MySQL/MariaDB, SQL Server, Oracle 메타데이터 인덱싱
-- API Flow, Table Usage, Column Impact를 evidence-backed map으로 탐색
-- bundled codebase/database engine을 sidecar로 실행
+- SQLite, SQLite DDL, PostgreSQL, YugabyteDB YSQL, MySQL, MariaDB, SQL Server, Oracle 메타데이터 인덱싱
+- 고정 내비게이션에서 전체 구조, API 읽기 경로, 코드, DB 구조, 변경 영향을 focused view로 탐색
+- 확정 근거, 후보, 미확인 영역과 분석 범위를 구분해 표시
+- codebase-memory `0.9.0`과 database-memory `0.2.0 / contract 2`를 bundled sidecar로 실행
 
 ## Quick start
 
-1. Windows에서 source를 build하거나 내부 검증용 installer를 생성합니다.
-   - 이 저장소는 source와 local build를 공개하며, 공식 installer binary를 배포하지 않습니다.
-   - `npm run build:internal`은 내부 검증용 installer를 `src-tauri/target/release/bundle/nsis/`에 생성합니다.
-   - 설치 앱에는 `codebase-memory-mcp.exe`와 `database-memory.exe`가 내부 엔진으로 포함됩니다.
-2. 앱을 열고 Workbench에서 워크스페이스를 만듭니다.
-   - 로컬 폴더: 저장소 전체 경로를 입력합니다.
-   - GitHub URL: 앱이 먼저 로컬로 clone한 뒤 그 로컬 복사본을 인덱싱합니다.
-3. `저장소 인덱싱`을 누른 뒤 `코드 불러오기`를 누릅니다.
-4. DB 프로필을 저장합니다.
-   - SQLite/SQLite DDL은 파일 경로를 사용합니다.
-   - PostgreSQL/MySQL/SQL Server/Oracle 연결 문자열은 해당 세션의 인덱싱 실행에만 사용합니다.
-5. `메타데이터 인덱싱`을 누른 뒤 `테이블 불러오기`를 누릅니다.
-6. Workbench 또는 Atlas에서 overview/API Flow/Table Usage/Column Impact를 확인합니다.
+소스에서 실행하려면 다음 명령을 사용합니다. 엔진 실행 파일은 Git에 포함하지 않으므로 최초 한 번 준비해야 합니다.
+
+```powershell
+npm ci
+cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path ..\db_mcp\Cargo.toml
+Copy-Item ..\db_mcp\target\release\database-memory.exe .\src-tauri\engines\database-memory.exe -Force
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-engines.ps1 -AllowDevelopmentArtifact
+npm run tauri dev
+```
+
+DB 엔진 `0.2.0` 공개 바이너리는 아직 배포하지 않았으므로, 위 명령은 함께 checkout한 `db_mcp` 소스의 고정 commit `35ed83de33e51eef74a5276c625cb03b24e020c4`를 빌드합니다.
+
+앱에서는 다음 순서로 연결합니다.
+
+1. `소스 관리`에서 로컬 폴더 또는 GitHub URL을 선택하고 프로젝트를 엽니다.
+2. `코드 읽기`를 누르면 인덱싱과 API·함수·클래스·파일 목록 로드를 한 번에 수행합니다.
+3. DB가 필요하면 연결 이름과 소스를 저장한 뒤 `DB 읽기`를 누릅니다.
+   - SQLite/SQLite DDL은 파일 또는 디렉터리 경로를 사용합니다.
+   - PostgreSQL, YugabyteDB YSQL, MySQL, MariaDB, SQL Server, Oracle 연결 문자열은 해당 읽기 실행에만 사용합니다. Oracle은 별도 Oracle Client 11.2 이상이 필요합니다.
+4. 고정 왼쪽 메뉴에서 `개요`, `API`, `코드`, `데이터베이스`, `변경 영향`을 오가며 근거를 확인합니다.
+
+내부 설치본은 `npm run build:internal`로 생성할 수 있으며, 설치 앱에는 두 엔진이 함께 포함됩니다. 이 저장소는 소스와 로컬 빌드를 공개하며 공식 installer binary는 배포하지 않습니다.
 
 ## Develop and verify
 
 ```powershell
+npm run deadcode
+npm test -- --run
 npm run typecheck
 npm run build
-cd src-tauri
-cargo test
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
 ## 엔진 바이너리
@@ -73,12 +86,12 @@ npm run tauri build
 # 실제 Java, C#/.NET, Python/FastAPI + TypeScript monorepo를 고정 commit으로 검증
 npm run smoke:code-matrix
 
-# 현재 release-candidate installer의 형식, 엔진, notices, checksum 검증
+# 로컬 검증 설치본의 형식, 엔진, notices, checksum 검증
 powershell -File scripts/release-smoke.ps1
 
 ```
 
-제품 소스는 MIT로 공개하며 `database-memory v0.1.1` 공개 release를 고정합니다. `.github/workflows/release.yml`은 PostgreSQL 16/MySQL 8.4, 다국어 코드 필드와 공개 Windows 엔진 계약을 검증합니다.
+제품 소스는 MIT입니다. 현재 코드는 `database-memory 0.2.0 / contract 2`의 고정 source commit과 candidate checksum을 사용하며 `releaseReady=false`로 공개 설치본 생성을 차단합니다. 공개 `v0.2.0` 바이너리를 게시하고 같은 checksum을 검증하기 전까지는 로컬/내부 빌드만 허용합니다.
 
 ## 개인정보와 데이터 접근
 
@@ -89,20 +102,22 @@ powershell -File scripts/release-smoke.ps1
 - DB 연결 문자열은 네트워크 DB 인덱싱 실행 중 세션 입력으로만 사용합니다.
 - 저장되는 파일은 워크스페이스 설정, engine cache 경로, 인벤토리 스냅샷입니다.
 - code-to-DB 관계는 직접 증거가 없는 한 후보(candidate)로 표시합니다.
+- 코드 CALLS는 엔진 신뢰도 85% 이상만 확정 경로에 포함하며, 70~84%는 후보, 그 아래나 점수 없음은 미확인으로 분리합니다.
 
 ## 제한사항
 
 - raw full graph를 그대로 렌더링하지 않습니다. 큰 프로젝트는 grouped/focused map으로 축약합니다.
 - 외부 DB smoke는 로컬 환경에 해당 DB와 드라이버/연결 문자열이 있을 때만 통과할 수 있습니다.
-- SQLite DDL 파서는 DB별 확장 문법 일부를 건너뛰거나 실패할 수 있습니다.
+- SQLite DDL 입력에 지원하지 않는 문법이 있으면 완전한 결과로 가장하지 않고 읽기를 실패 처리합니다.
 - 공식 Windows 설치 파일 배포는 현재 제품 범위가 아닙니다.
 - 현재 제품 목표는 Windows desktop입니다.
 
 ## 문서
 
 - [리서치](docs/research/backend-visual-map.md)
-- [구현 계획](docs/plans/backend-visual-map.md)
-- [제품 완성 계획](docs/plans/backend-visual-map-product-completion.md)
+- [완성 제품 기준](docs/plans/backend-visual-map-final-product.md)
+- [현재 제품 완성 기록](docs/plans/backend-visual-map-production-completion.md)
+- [신뢰성과 UX 검증](docs/plans/product-trust-ux-completion.md)
 - [3분 데모](docs/demo/backend-visual-map.demo.md)
 - [문제 해결](docs/troubleshooting.md)
 - [리포트 규칙](docs/reports/README.md)

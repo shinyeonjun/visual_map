@@ -5,7 +5,7 @@ use std::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BasePaths {
+pub(crate) struct BasePaths {
     pub app_data_dir: PathBuf,
     pub app_state_db: PathBuf,
     pub engines_dir: PathBuf,
@@ -14,14 +14,14 @@ pub struct BasePaths {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AppPaths {
+pub(crate) struct AppPaths {
     pub app_data_dir: String,
     pub app_state_db: String,
     pub engines_dir: String,
     pub workspaces_dir: String,
 }
 
-pub fn base_paths(app_data_dir: impl AsRef<Path>) -> BasePaths {
+pub(crate) fn base_paths(app_data_dir: impl AsRef<Path>) -> BasePaths {
     let app_data_dir = app_data_dir.as_ref().to_path_buf();
 
     BasePaths {
@@ -32,7 +32,7 @@ pub fn base_paths(app_data_dir: impl AsRef<Path>) -> BasePaths {
     }
 }
 
-pub fn ensure_base_dirs(paths: &BasePaths) -> std::io::Result<()> {
+pub(crate) fn ensure_base_dirs(paths: &BasePaths) -> std::io::Result<()> {
     fs::create_dir_all(&paths.app_data_dir)?;
     fs::create_dir_all(&paths.engines_dir)?;
     fs::create_dir_all(&paths.workspaces_dir)?;
@@ -43,7 +43,10 @@ pub fn ensure_base_dirs(paths: &BasePaths) -> std::io::Result<()> {
 /// installation. A Local profile with workspace/state data is authoritative. A directory created
 /// only by WebView or engine setup is not treated as a user profile, so an old workspace can be
 /// moved into it without overwriting any Local user data.
-pub fn migrate_roaming_data_to_local(local: PathBuf, roaming: PathBuf) -> std::io::Result<PathBuf> {
+pub(crate) fn migrate_roaming_data_to_local(
+    local: PathBuf,
+    roaming: PathBuf,
+) -> std::io::Result<PathBuf> {
     if !roaming.exists() {
         return Ok(local);
     }

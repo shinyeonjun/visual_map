@@ -18,8 +18,9 @@ Backend Visual Map을 Windows에서 설치해 처음 보는 대규모 backend re
 
 - 제품 앱은 `D:\project\backend_map`에 있고 공개 저장소 `https://github.com/shinyeonjun/visual_map`에 게시할 준비가 되었다.
 - 코드 엔진은 외부 `DeusData/codebase-memory-mcp`이며 수정하지 않는다.
-- DB 엔진은 자체 `shinyeonjun/rdb-memory-mcp`의 공개 `v0.1.1` 릴리스를 사용한다.
-- 현재 bundled engine binary는 manifest에 고정된 공개 release artifact와 checksum이 동일하다.
+- DB 엔진은 자체 `shinyeonjun/rdb-memory-mcp`의 `0.2.0 / contract 2` 고정 source commit을 사용한다.
+- 현재 bundled DB binary는 manifest의 candidate checksum과 동일하지만 아직 공개 release가 아니므로 `releaseReady=false`이며 로컬/내부 빌드에서만 허용된다.
+- DB adapter는 metadata-only runtime contract와 complete snapshot 인증서를 확인하고, 페이지·개수·stable key가 하나라도 불일치하면 부분 결과를 저장하지 않는다.
 - workspace, clone, engine execution, redaction, cache isolation, snapshot, projection, packaging 기반이 있다.
 - 현재 실제 sidecar contract에서 code kind 오분류, 빈 CALLS, HANDLES 누락이 재현된다.
 - backend atlas group projection과 frontend canvas rendering의 source of truth가 다르다.

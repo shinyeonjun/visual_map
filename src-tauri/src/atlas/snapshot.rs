@@ -2,22 +2,24 @@ use crate::{
     engine::{self, EngineRegistry},
     paths::base_paths,
     workspace::{
-        validate_workspace_id, CodeInventory, CodeInventoryItem, DbConstraint, DbForeignKey,
-        DbIndex, DbInventory, Workspace,
+        validate_workspace_id, CodeCall, CodeInventory, CodeInventoryItem, DbConstraint,
+        DbDependentObject, DbForeignKey, DbIndex, DbInventory, DbProfile, DbSource, Workspace,
     },
 };
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
-    collections::{btree_map::Entry, BTreeMap, BTreeSet, HashMap},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
+    process::Command,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use super::model::{
@@ -26,11 +28,15 @@ use super::model::{
 };
 
 const REINDEX_REASON: &str = "스냅샷 형식이 호환되지 않아 다시 읽어야 합니다";
+const CONFIRMED_CODE_CALL_CONFIDENCE: u8 = 85;
+const CANDIDATE_CODE_CALL_CONFIDENCE: u8 = 70;
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 static SNAPSHOT_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedSnapshot>>> = OnceLock::new();
-// Large code inventories can occupy tens of MB after deserialization. Two entries cover a
-// workspace switch without turning this process-wide cache into an unbounded memory reserve.
+static FRESHNESS_CACHE: OnceLock<Mutex<HashMap<String, CachedFreshness>>> = OnceLock::new();
+// Keep at most two idle inventories. Entries held by active commands may temporarily exceed
+// the limit so concurrent workspace reads do not evict data still in use.
 const SNAPSHOT_CACHE_LIMIT: usize = 2;
+const FRESHNESS_CACHE_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SnapshotFileState {
@@ -45,7 +51,18 @@ struct CachedSnapshot {
     snapshot: Arc<InventorySnapshot>,
 }
 
-pub fn build_inventory_snapshot(
+#[derive(Debug, Clone)]
+struct CachedFreshness {
+    snapshot_saved_at: String,
+    snapshot_schema_version: u32,
+    snapshot_stale_reasons: Vec<String>,
+    workspace: Workspace,
+    registry: EngineRegistry,
+    checked_at: Instant,
+    reasons: Vec<String>,
+}
+
+pub(crate) fn build_inventory_snapshot(
     workspace_id: String,
     code: Option<&CodeInventory>,
     db: Option<&DbInventory>,
@@ -74,6 +91,8 @@ pub fn build_inventory_snapshot(
             result_count: None,
             total_tables: None,
             truncated: None,
+            source_revision: None,
+            source_revision_label: None,
             source_path: None,
             source_type: "unknown".to_string(),
             profile_id: None,
@@ -117,8 +136,12 @@ pub fn build_inventory_snapshot(
                 .map(|entry| code_item(entry, "module", "code", &code.project)),
         );
         snapshot.items.extend(code.unknown.iter().map(|entry| {
-            let kind = entry.engine_label.to_ascii_lowercase();
-            let kind = if kind.is_empty() { "code" } else { &kind };
+            let engine_kind = entry.engine_label.to_ascii_lowercase();
+            let kind = if entry.kind.eq_ignore_ascii_case("unknown") || engine_kind.is_empty() {
+                "code"
+            } else {
+                &engine_kind
+            };
             code_item(entry, kind, "code", &code.project)
         }));
         snapshot.items.extend(
@@ -126,16 +149,7 @@ pub fn build_inventory_snapshot(
                 .iter()
                 .map(|entry| code_item(entry, "file", "code", &code.project)),
         );
-        snapshot.links.extend(code.calls.iter().map(|call| {
-            confirmed_link(
-                format!("code-call:{}->{}", call.from, call.to),
-                format!("code:{}", call.from),
-                format!("code:{}", call.to),
-                "code_call",
-                "CALLS",
-                "codebase-memory CALLS",
-            )
-        }));
+        snapshot.links.extend(code.calls.iter().map(code_call_link));
         snapshot.links.extend(code.handles.iter().map(|handle| {
             let mut link = confirmed_link(
                 format!("code-handle:{}->{}", handle.route, handle.handler),
@@ -164,15 +178,18 @@ pub fn build_inventory_snapshot(
             result_count: db.result_count,
             total_tables: db.total_tables,
             truncated: db.truncated,
+            source_revision: None,
+            source_revision_label: None,
             source_path: None,
             source_type: "unknown".to_string(),
             profile_id: Some(db.profile_id.clone()),
         });
         for (index, warning) in db.capability_warnings.iter().enumerate() {
+            let message = localized_db_capability_warning(warning);
             snapshot.metadata.gaps.push(gap(
                 format!("gap:db-capability:{index}"),
                 "db-capability",
-                warning,
+                &message,
                 Vec::new(),
             ));
         }
@@ -220,7 +237,7 @@ pub fn build_inventory_snapshot(
                 table
                     .columns
                     .iter()
-                    .map(move |column| format!("db:column:{table_key}:{}", column.name))
+                    .map(move |column| db_column_id(&table_key, &column.name))
             })
             .collect::<BTreeSet<_>>();
         let stable_column_ids = db
@@ -229,12 +246,10 @@ pub fn build_inventory_snapshot(
             .flat_map(|table| {
                 let table_key = db_table_key(table.schema.as_deref(), &table.name);
                 table.columns.iter().filter_map(move |column| {
-                    column.key.as_ref().map(|key| {
-                        (
-                            key.clone(),
-                            format!("db:column:{table_key}:{}", column.name),
-                        )
-                    })
+                    column
+                        .key
+                        .as_ref()
+                        .map(|key| (key.clone(), db_column_id(&table_key, &column.name)))
                 })
             })
             .collect::<BTreeMap<_, _>>();
@@ -251,7 +266,11 @@ pub fn build_inventory_snapshot(
                 None,
                 table.schema.as_deref(),
             );
-            table_item.qualified_name = table.key.clone().or_else(|| Some(table_key.clone()));
+            let display_table_name = db_qualified_table_name(table.schema.as_deref(), &table.name);
+            table_item.qualified_name = table
+                .key
+                .clone()
+                .or_else(|| Some(display_table_name.clone()));
             table_item.engine_label = Some("Table".to_string());
             table_item.project_id = Some(db.profile_id.clone());
             table_item.group_id = table.schema.clone();
@@ -259,7 +278,7 @@ pub fn build_inventory_snapshot(
 
             snapshot.items.extend(table.columns.iter().map(|column| {
                 let mut column_item = InventoryItem {
-                    id: format!("db:column:{table_key}:{}", column.name),
+                    id: db_column_id(&table_key, &column.name),
                     kind: "column".to_string(),
                     name: column.name.clone(),
                     layer: "data".to_string(),
@@ -269,7 +288,7 @@ pub fn build_inventory_snapshot(
                     qualified_name: column
                         .key
                         .clone()
-                        .or_else(|| Some(format!("{table_key}.{}", column.name))),
+                        .or_else(|| Some(format!("{display_table_name}.{}", column.name))),
                     engine_label: Some("Column".to_string()),
                     project_id: Some(db.profile_id.clone()),
                     group_id: table.schema.clone(),
@@ -301,6 +320,16 @@ pub fn build_inventory_snapshot(
                     &db.profile_id,
                     index,
                     &column_ids,
+                    &stable_column_ids,
+                );
+            }
+            for dependent in &table.dependents {
+                append_db_dependent(
+                    &mut snapshot,
+                    &table_key,
+                    table.schema.as_deref(),
+                    &db.profile_id,
+                    dependent,
                     &stable_column_ids,
                 );
             }
@@ -473,7 +502,7 @@ pub(crate) fn normalize_inventory(
     build_inventory_snapshot(workspace_id, code, db)
 }
 
-pub fn snapshot_with_metadata(
+pub(crate) fn snapshot_with_metadata(
     mut snapshot: InventorySnapshot,
     workspace: &Workspace,
     registry: &EngineRegistry,
@@ -483,6 +512,14 @@ pub fn snapshot_with_metadata(
         || snapshot.items.iter().any(|entry| entry.source == "code");
     let has_db =
         snapshot.metadata.db.is_some() || snapshot.items.iter().any(|entry| entry.source == "db");
+    let code_revision = has_code.then(|| code_source_revision(workspace)).flatten();
+    let profile = workspace.active_db_profile_id.as_deref().and_then(|id| {
+        workspace
+            .db_profiles
+            .iter()
+            .find(|profile| profile.id == id)
+    });
+    let db_revision = profile.and_then(db_source_revision);
     snapshot.saved_at = saved_at.clone();
     snapshot.metadata.code = has_code.then(|| SnapshotSourceMetadata {
         saved_at: saved_at.clone(),
@@ -497,6 +534,8 @@ pub fn snapshot_with_metadata(
         result_count: None,
         total_tables: None,
         truncated: None,
+        source_revision: code_revision.as_ref().map(|(revision, _)| revision.clone()),
+        source_revision_label: code_revision.map(|(_, label)| label),
         source_path: Some(workspace.repo_path.clone()),
         source_type: code_source_type(workspace),
         profile_id: None,
@@ -508,51 +547,48 @@ pub fn snapshot_with_metadata(
     let db_snapshot_key = previous_db_metadata
         .as_ref()
         .and_then(|metadata| metadata.snapshot_key.clone());
-    snapshot.metadata.db = has_db.then(|| {
-        let profile = workspace.active_db_profile_id.as_deref().and_then(|id| {
-            workspace
-                .db_profiles
-                .iter()
-                .find(|profile| profile.id == id)
-        });
-        SnapshotSourceMetadata {
-            saved_at: saved_at.clone(),
-            engine_id: Some("database-memory".to_string()),
-            engine_version: engine_version(registry, "database-memory"),
-            engine_checksum: engine_checksum(registry, "database-memory"),
-            contract_version: db_contract_version
-                .or_else(|| engine_contract_version(registry, "database-memory")),
-            snapshot_key: db_snapshot_key,
-            limit_requested: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.limit_requested),
-            limit_applied: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.limit_applied),
-            limit_clamped: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.limit_clamped),
-            result_count: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.result_count),
-            total_tables: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.total_tables),
-            truncated: previous_db_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.truncated),
-            source_path: profile.and_then(|profile| profile.path.clone()),
-            source_type: profile
-                .map(|profile| db_source_key(&profile.source))
-                .unwrap_or_else(|| "unknown".to_string()),
-            profile_id: profile.map(|profile| profile.id.clone()),
-        }
+    snapshot.metadata.db = has_db.then(|| SnapshotSourceMetadata {
+        saved_at: saved_at.clone(),
+        engine_id: Some("database-memory".to_string()),
+        engine_version: engine_version(registry, "database-memory"),
+        engine_checksum: engine_checksum(registry, "database-memory"),
+        contract_version: db_contract_version
+            .or_else(|| engine_contract_version(registry, "database-memory")),
+        snapshot_key: db_snapshot_key,
+        limit_requested: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.limit_requested),
+        limit_applied: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.limit_applied),
+        limit_clamped: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.limit_clamped),
+        result_count: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.result_count),
+        total_tables: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.total_tables),
+        truncated: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.truncated),
+        source_revision: db_revision.as_ref().map(|(revision, _)| revision.clone()),
+        source_revision_label: db_revision
+            .map(|(_, label)| label)
+            .or_else(|| profile.map(|_| "외부 DB · 마지막 읽기 기준".to_string())),
+        source_path: profile.and_then(|profile| profile.path.clone()),
+        source_type: profile
+            .map(|profile| db_source_key(&profile.source))
+            .unwrap_or_else(|| "unknown".to_string()),
+        profile_id: profile.map(|profile| profile.id.clone()),
     });
     snapshot.stale_reasons.clear();
     canonicalize_snapshot(snapshot)
 }
 
-pub fn mark_snapshot_staleness(
+#[cfg(test)]
+pub(crate) fn mark_snapshot_staleness(
     mut snapshot: InventorySnapshot,
     workspace: &Workspace,
     registry: &EngineRegistry,
@@ -561,7 +597,53 @@ pub fn mark_snapshot_staleness(
     snapshot
 }
 
-pub fn snapshot_staleness_reasons(
+pub(crate) fn snapshot_staleness_reasons_cached(
+    snapshot: &InventorySnapshot,
+    workspace: &Workspace,
+    registry: &EngineRegistry,
+) -> Vec<String> {
+    let cache = FRESHNESS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(cache) = cache.lock() {
+        if let Some(entry) = cache.get(&workspace.id) {
+            if entry.checked_at.elapsed() < FRESHNESS_CACHE_TTL
+                && entry.snapshot_saved_at == snapshot.saved_at
+                && entry.snapshot_schema_version == snapshot.schema_version
+                && entry.snapshot_stale_reasons == snapshot.stale_reasons
+                && entry.workspace == *workspace
+                && entry.registry == *registry
+            {
+                return entry.reasons.clone();
+            }
+        }
+    }
+
+    let reasons = snapshot_staleness_reasons(snapshot, workspace, registry);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(
+            workspace.id.clone(),
+            CachedFreshness {
+                snapshot_saved_at: snapshot.saved_at.clone(),
+                snapshot_schema_version: snapshot.schema_version,
+                snapshot_stale_reasons: snapshot.stale_reasons.clone(),
+                workspace: workspace.clone(),
+                registry: registry.clone(),
+                checked_at: Instant::now(),
+                reasons: reasons.clone(),
+            },
+        );
+    }
+    reasons
+}
+
+pub(crate) fn invalidate_snapshot_freshness(workspace_id: &str) {
+    if let Some(cache) = FRESHNESS_CACHE.get() {
+        if let Ok(mut cache) = cache.lock() {
+            cache.remove(workspace_id);
+        }
+    }
+}
+
+pub(crate) fn snapshot_staleness_reasons(
     snapshot: &InventorySnapshot,
     workspace: &Workspace,
     registry: &EngineRegistry,
@@ -575,8 +657,20 @@ pub fn snapshot_staleness_reasons(
     if has_code {
         match &snapshot.metadata.code {
             Some(code) => {
-                if code.source_path.as_deref() != Some(workspace.repo_path.as_str()) {
+                let same_path = code.source_path.as_deref() == Some(workspace.repo_path.as_str());
+                if !same_path {
                     push_unique(&mut reasons, "코드 프로젝트 경로가 바뀌었습니다");
+                } else {
+                    let current_revision = code_source_revision(workspace);
+                    mark_source_revision_staleness(
+                        code.source_revision.as_deref(),
+                        current_revision.as_ref(),
+                        Path::new(&workspace.repo_path).is_dir(),
+                        "코드 소스 지문이 없어 다시 읽어야 합니다",
+                        "코드 파일이 마지막 읽기 이후 바뀌었습니다",
+                        "코드 변경 상태를 확인할 수 없습니다",
+                        &mut reasons,
+                    );
                 }
                 mark_engine_staleness(code, registry, "codebase-memory", "코드", &mut reasons);
             }
@@ -603,6 +697,21 @@ pub fn snapshot_staleness_reasons(
                         }
                         if db.source_path.as_deref() != profile.path.as_deref() {
                             push_unique(&mut reasons, "DB 연결 경로가 바뀌었습니다");
+                        } else if profile.path.is_some() {
+                            let current_revision = db_source_revision(profile);
+                            let source_exists = profile
+                                .path
+                                .as_deref()
+                                .is_some_and(|path| Path::new(path).exists());
+                            mark_source_revision_staleness(
+                                db.source_revision.as_deref(),
+                                current_revision.as_ref(),
+                                source_exists,
+                                "DB 소스 지문이 없어 다시 읽어야 합니다",
+                                "DB 파일이 마지막 읽기 이후 바뀌었습니다",
+                                "DB 파일 변경 상태를 확인할 수 없습니다",
+                                &mut reasons,
+                            );
                         }
                     }
                     None => push_unique(&mut reasons, "DB 연결을 찾을 수 없습니다"),
@@ -619,7 +728,7 @@ pub fn snapshot_staleness_reasons(
     reasons
 }
 
-pub fn save_inventory_snapshot(
+pub(crate) fn save_inventory_snapshot(
     app_data_dir: impl AsRef<Path>,
     snapshot: &InventorySnapshot,
 ) -> Result<(), String> {
@@ -637,17 +746,140 @@ pub fn save_inventory_snapshot(
         &snapshot.workspace_id,
     )?;
     invalidate_cached_snapshot(&path);
+    invalidate_snapshot_freshness(&snapshot.workspace_id);
+    super::linker::invalidate_candidate_links(&snapshot.workspace_id);
     Ok(())
 }
 
-pub fn load_inventory_snapshot(
+pub(crate) fn replace_inventory_source(
+    existing: Option<InventorySnapshot>,
+    incoming: InventorySnapshot,
+    source: &str,
+) -> Result<InventorySnapshot, String> {
+    if !matches!(source, "code" | "db") {
+        return Err(format!("지원하지 않는 inventory 소스입니다: {source}"));
+    }
+    let Some(mut merged) = existing else {
+        return Ok(canonicalize_snapshot(incoming));
+    };
+    if merged.workspace_id != incoming.workspace_id {
+        return Err("합칠 inventory의 프로젝트 ID가 일치하지 않습니다".to_string());
+    }
+
+    let prefix = format!("{source}:");
+    let removed_ids = merged
+        .items
+        .iter()
+        .filter(|item| item.source == source)
+        .map(|item| item.id.clone())
+        .collect::<HashSet<_>>();
+    merged.items.retain(|item| item.source != source);
+    merged
+        .links
+        .retain(|link| !removed_ids.contains(&link.from) && !removed_ids.contains(&link.to));
+    merged.metadata.gaps.retain(|gap| {
+        !gap.id.starts_with(&format!("gap:{source}"))
+            && !gap.kind.starts_with(source)
+            && !gap.related_ids.iter().any(|id| id.starts_with(&prefix))
+    });
+
+    merged.items.extend(incoming.items);
+    merged.links.extend(incoming.links);
+    merged.metadata.gaps.extend(incoming.metadata.gaps);
+    merged.saved_at = incoming.saved_at;
+    merged.stale_reasons.clear();
+    if source == "code" {
+        merged.metadata.code = incoming.metadata.code;
+        merged.metadata.architecture = incoming.metadata.architecture;
+    } else {
+        merged.metadata.db = incoming.metadata.db;
+    }
+    Ok(canonicalize_snapshot(merged))
+}
+
+#[cfg(test)]
+pub(crate) fn load_inventory_snapshot(
     app_data_dir: impl AsRef<Path>,
     workspace_id: &str,
 ) -> Result<InventorySnapshot, String> {
     Ok((*load_inventory_snapshot_cached(app_data_dir, workspace_id)?).clone())
 }
 
-pub fn load_inventory_snapshot_cached(
+pub(crate) fn load_inventory_snapshot_optional(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+) -> Result<Option<InventorySnapshot>, String> {
+    Ok(
+        load_inventory_snapshot_optional_cached(app_data_dir, workspace_id)?
+            .map(|snapshot| (*snapshot).clone()),
+    )
+}
+
+pub(crate) fn load_inventory_snapshot_optional_cached(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+) -> Result<Option<Arc<InventorySnapshot>>, String> {
+    validate_workspace_id(workspace_id)?;
+    let path = snapshot_path(app_data_dir.as_ref(), workspace_id);
+    if !path.is_file() && !snapshot_backup_path(&path).is_file() {
+        return Ok(None);
+    }
+    load_inventory_snapshot_cached(app_data_dir, workspace_id).map(Some)
+}
+
+pub(crate) fn remove_db_inventory_snapshot(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+) -> Result<(), String> {
+    let app_data_dir = app_data_dir.as_ref();
+    let Some(mut snapshot) = load_inventory_snapshot_optional(app_data_dir, workspace_id)? else {
+        return Ok(());
+    };
+
+    snapshot.items.retain(|item| item.source != "db");
+    let retained_ids = snapshot
+        .items
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+    snapshot.links.retain(|link| {
+        retained_ids.contains(link.from.as_str()) && retained_ids.contains(link.to.as_str())
+    });
+    snapshot.metadata.db = None;
+    snapshot.metadata.gaps.retain(|gap| {
+        !gap.id.starts_with("gap:db")
+            && !gap.kind.starts_with("db-")
+            && gap
+                .related_ids
+                .iter()
+                .all(|id| retained_ids.contains(id.as_str()))
+    });
+    snapshot.stale_reasons.clear();
+
+    let path = snapshot_path(app_data_dir, workspace_id);
+    if snapshot.items.is_empty() {
+        remove_file_if_exists(&path)?;
+        remove_file_if_exists(&snapshot_backup_path(&path))?;
+        invalidate_cached_snapshot(&path);
+        invalidate_snapshot_freshness(workspace_id);
+        return Ok(());
+    }
+
+    save_inventory_snapshot(app_data_dir, &snapshot)?;
+    fs::copy(&path, snapshot_backup_path(&path))
+        .map_err(|error| format!("DB 구조 백업을 정리하지 못했습니다: {error}"))?;
+    Ok(())
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+pub(crate) fn load_inventory_snapshot_cached(
     app_data_dir: impl AsRef<Path>,
     workspace_id: &str,
 ) -> Result<Arc<InventorySnapshot>, String> {
@@ -668,10 +900,13 @@ pub fn load_inventory_snapshot_cached(
 
     let snapshot = Arc::new(load_inventory_snapshot_uncached(&path, workspace_id)?);
     if let Ok(mut cache) = cache.lock() {
-        if cache.len() >= SNAPSHOT_CACHE_LIMIT && !cache.contains_key(&path) {
-            if let Some(evicted) = cache.keys().next().cloned() {
-                cache.remove(&evicted);
-            }
+        while cache.len() >= SNAPSHOT_CACHE_LIMIT && !cache.contains_key(&path) {
+            let Some(evicted) = cache.iter().find_map(|(cached_path, entry)| {
+                (Arc::strong_count(&entry.snapshot) == 1).then(|| cached_path.clone())
+            }) else {
+                break;
+            };
+            cache.remove(&evicted);
         }
         cache.insert(
             path,
@@ -873,7 +1108,25 @@ fn canonicalize_snapshot(mut snapshot: InventorySnapshot) -> InventorySnapshot {
     });
     let mut links = BTreeMap::<String, SnapshotLink>::new();
     let mut relationships = BTreeSet::new();
+    let mut unscored_code_calls = 0usize;
     for mut link in std::mem::take(&mut snapshot.links) {
+        if link.kind == "code_call"
+            && !link
+                .evidence
+                .iter()
+                .any(|evidence| evidence.kind == "engine-confidence")
+        {
+            link.truth_class = "unknown".to_string();
+            link.evidence.push(Evidence {
+                kind: "engine-confidence".to_string(),
+                text: "unknown".to_string(),
+            });
+            link.evidence.push(Evidence {
+                kind: "engine-confidence-score".to_string(),
+                text: "점수 없음".to_string(),
+            });
+            unscored_code_calls += 1;
+        }
         normalize_link(&mut link);
         if !node_ids.contains(&link.from) || !node_ids.contains(&link.to) {
             gaps.push(gap(
@@ -911,6 +1164,21 @@ fn canonicalize_snapshot(mut snapshot: InventorySnapshot) -> InventorySnapshot {
                 snapshot.metadata.migration.reindex_required = true;
             }
         }
+    }
+
+    if unscored_code_calls > 0 {
+        gaps.push(gap(
+            "gap:code-call-confidence".to_string(),
+            "unscored-code-call",
+            &format!(
+                "엔진 신뢰도 정보가 없는 CALLS {unscored_code_calls}개를 확정 관계에서 제외했습니다."
+            ),
+            Vec::new(),
+        ));
+        mark_reindex_required(
+            &mut snapshot,
+            "기존 CALLS에 엔진 신뢰도 정보가 없어 코드를 다시 읽어야 합니다.",
+        );
     }
 
     snapshot.items = items.into_values().collect();
@@ -1203,6 +1471,152 @@ fn append_db_index(
     }
 }
 
+fn append_db_dependent(
+    snapshot: &mut InventorySnapshot,
+    table_key: &str,
+    table_schema: Option<&str>,
+    profile_id: &str,
+    dependent: &DbDependentObject,
+    stable_column_ids: &BTreeMap<String, String>,
+) {
+    let table_id = format!("db:table:{table_key}");
+    let dependent_id = format!(
+        "db:{}:{}",
+        dependent.kind,
+        encode_db_identity_component(&dependent.key)
+    );
+    let parent_id = (dependent.kind == "trigger").then_some(table_id.as_str());
+    let mut dependent_item = item(
+        &dependent_id,
+        &dependent.kind,
+        &dependent.name,
+        "data",
+        "db",
+        parent_id,
+        None,
+    );
+    dependent_item.qualified_name = Some(dependent.key.clone());
+    dependent_item.engine_label = Some(
+        match dependent.kind.as_str() {
+            "view" => "View",
+            "trigger" => "Trigger",
+            "routine" => "Routine",
+            _ => "DB Object",
+        }
+        .to_string(),
+    );
+    dependent_item.project_id = Some(profile_id.to_string());
+    dependent_item.group_id = if dependent.kind == "trigger" {
+        table_schema.map(str::to_string)
+    } else {
+        None
+    };
+    snapshot.items.push(dependent_item);
+
+    let evidence = dependent_evidence(dependent);
+    if dependent.kind == "trigger" {
+        snapshot.links.push(db_evidence_link(
+            table_id,
+            dependent_id,
+            "db_trigger",
+            Some(dependent.name.clone()),
+            "TABLE_HAS_TRIGGER",
+            "confirmed",
+            evidence,
+        ));
+        return;
+    }
+
+    let column_edge_type = match dependent.kind.as_str() {
+        "view" => "VIEW_DEPENDS_ON_COLUMN",
+        "routine" => "ROUTINE_DEPENDS_ON_COLUMN",
+        _ => "DB_OBJECT_DEPENDS_ON_COLUMN",
+    };
+    let table_edge_type = match dependent.kind.as_str() {
+        "view" => "VIEW_DEPENDS_ON_TABLE",
+        "routine" => "ROUTINE_DEPENDS_ON_TABLE",
+        _ => "DB_OBJECT_DEPENDS_ON_TABLE",
+    };
+    let mut resolved_columns = 0usize;
+    for column_key in &dependent.column_keys {
+        let Some(column_id) = stable_column_ids.get(column_key).cloned() else {
+            snapshot.metadata.gaps.push(gap(
+                format!("gap:db-dependent-column:{dependent_id}:{column_key}"),
+                "db-dependent-missing-column",
+                "DB 의존 객체의 컬럼 endpoint가 inventory에 없어 해당 컬럼 관계를 만들지 않았습니다.",
+                vec![dependent_id.clone(), table_id.clone()],
+            ));
+            continue;
+        };
+        let mut link = db_evidence_link(
+            dependent_id.clone(),
+            column_id,
+            "db_dependency",
+            Some(dependent.name.clone()),
+            column_edge_type,
+            "confirmed",
+            evidence.clone(),
+        );
+        push_evidence(&mut link.evidence, "db-column-key", Some(column_key));
+        snapshot.links.push(link);
+        resolved_columns += 1;
+    }
+
+    if dependent.column_keys.is_empty() {
+        snapshot.links.push(db_evidence_link(
+            dependent_id,
+            table_id,
+            "db_dependency",
+            Some(dependent.name.clone()),
+            table_edge_type,
+            "confirmed",
+            evidence,
+        ));
+    } else if resolved_columns == 0 {
+        let mut link = db_evidence_link(
+            dependent_id,
+            table_id,
+            "db_dependency",
+            Some(dependent.name.clone()),
+            "DEPENDENCY_SCOPE",
+            "structural",
+            evidence,
+        );
+        link.evidence.push(Evidence {
+            kind: "db-normalization".to_string(),
+            text: "확정된 컬럼 endpoint를 복원하지 못해 의존 객체가 이 테이블 범위에 속한다는 사실만 보존했습니다."
+                .to_string(),
+        });
+        snapshot.links.push(link);
+    }
+}
+
+fn dependent_evidence(dependent: &DbDependentObject) -> Vec<Evidence> {
+    vec![
+        Evidence {
+            kind: "db-object-key".to_string(),
+            text: dependent.key.clone(),
+        },
+        Evidence {
+            kind: "db-dependent-kind".to_string(),
+            text: dependent.kind.clone(),
+        },
+        Evidence {
+            kind: "db-relation".to_string(),
+            text: dependent.relation.clone(),
+        },
+        Evidence {
+            kind: "db-column-keys".to_string(),
+            text: serde_json::to_string(&dependent.column_keys)
+                .unwrap_or_else(|_| "[]".to_string()),
+        },
+        Evidence {
+            kind: "db-contract-field".to_string(),
+            text: "dependents".to_string(),
+        },
+    ]
+}
+
 fn resolve_db_column_id(
     table_key: &str,
     column: Option<&str>,
@@ -1214,7 +1628,7 @@ fn resolve_db_column_id(
         .and_then(|key| stable_column_ids.get(key).cloned())
         .or_else(|| {
             column
-                .map(|column| format!("db:column:{table_key}:{column}"))
+                .map(|column| db_column_id(table_key, column))
                 .filter(|column_id| column_ids.contains(column_id))
         })
 }
@@ -1343,6 +1757,56 @@ fn stable_hash(value: &str) -> u64 {
     value.bytes().fold(0xcbf29ce484222325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
     })
+}
+
+fn code_call_link(call: &CodeCall) -> SnapshotLink {
+    let (truth_class, confidence) = match call.confidence {
+        Some(score) if score >= CONFIRMED_CODE_CALL_CONFIDENCE => ("confirmed", "high"),
+        Some(score) if score >= CANDIDATE_CODE_CALL_CONFIDENCE => ("candidate", "medium"),
+        Some(_) => ("unknown", "low"),
+        None => ("unknown", "unknown"),
+    };
+    let mut evidence = vec![
+        Evidence {
+            kind: "engine-edge".to_string(),
+            text: "codebase-memory CALLS".to_string(),
+        },
+        Evidence {
+            kind: "engine-confidence".to_string(),
+            text: confidence.to_string(),
+        },
+        Evidence {
+            kind: "engine-confidence-score".to_string(),
+            text: call
+                .confidence
+                .map(|score| format!("{score}%"))
+                .unwrap_or_else(|| "점수 없음".to_string()),
+        },
+    ];
+    if let Some(strategy) = call.strategy.as_deref() {
+        evidence.push(Evidence {
+            kind: "engine-strategy".to_string(),
+            text: strategy.to_string(),
+        });
+    }
+    if let Some(expression) = call.expression.as_deref() {
+        evidence.push(Evidence {
+            kind: "engine-callee".to_string(),
+            text: expression.to_string(),
+        });
+    }
+
+    SnapshotLink {
+        id: format!("code-call:{}->{}", call.from, call.to),
+        from: format!("code:{}", call.from),
+        to: format!("code:{}", call.to),
+        kind: "code_call".to_string(),
+        label: Some("CALLS".to_string()),
+        truth_class: truth_class.to_string(),
+        direction: "outbound".to_string(),
+        engine_edge_type: Some("CALLS".to_string()),
+        evidence,
+    }
 }
 
 fn confirmed_link(
@@ -1605,6 +2069,268 @@ fn mark_engine_staleness(
     }
 }
 
+fn mark_source_revision_staleness(
+    saved: Option<&str>,
+    current: Option<&(String, String)>,
+    source_exists: bool,
+    missing_reason: &str,
+    changed_reason: &str,
+    unavailable_reason: &str,
+    reasons: &mut Vec<String>,
+) {
+    match (saved, current) {
+        (Some(saved), Some((current, _))) if saved != current => {
+            push_unique(reasons, changed_reason)
+        }
+        (Some(_), None) => push_unique(reasons, unavailable_reason),
+        (None, Some(_)) => push_unique(reasons, missing_reason),
+        (None, None) if source_exists => push_unique(reasons, missing_reason),
+        (None, None) => push_unique(reasons, unavailable_reason),
+        _ => {}
+    }
+}
+
+fn code_source_revision(workspace: &Workspace) -> Option<(String, String)> {
+    let root = Path::new(&workspace.repo_path);
+    git_source_revision(root).or_else(|| folder_source_revision(root))
+}
+
+fn git_source_revision(root: &Path) -> Option<(String, String)> {
+    let head = git_output(root, &["rev-parse", "HEAD"])?;
+    let head = String::from_utf8(head).ok()?.trim().to_string();
+    if head.len() < 7 {
+        return None;
+    }
+    let status = git_output(
+        root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    let paths = git_changed_paths(&status)?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"git\0");
+    hasher.update(head.as_bytes());
+    hasher.update(b"\0status\0");
+    hasher.update(&status);
+    for relative in &paths {
+        hasher.update(b"\0path\0");
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hash_path_state(&mut hasher, &root.join(relative))?;
+    }
+    let revision = format!("{:X}", hasher.finalize());
+    let state = if paths.is_empty() {
+        "clean".to_string()
+    } else {
+        format!("변경 {}개", paths.len())
+    };
+    Some((revision, format!("git {} · {state}", &head[..7])))
+}
+
+fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .ok()?;
+    output.status.success().then_some(output.stdout)
+}
+
+fn git_changed_paths(status: &[u8]) -> Option<BTreeSet<PathBuf>> {
+    let records = status
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .collect::<Vec<_>>();
+    let mut paths = BTreeSet::new();
+    let mut index = 0;
+    while index < records.len() {
+        let record = records[index];
+        if record.len() < 4 || record[2] != b' ' {
+            return None;
+        }
+        let relative = PathBuf::from(String::from_utf8_lossy(&record[3..]).into_owned());
+        if relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return None;
+        }
+        paths.insert(relative);
+        if matches!(record[0], b'R' | b'C') || matches!(record[1], b'R' | b'C') {
+            index += 1;
+        }
+        index += 1;
+    }
+    Some(paths)
+}
+
+fn folder_source_revision(root: &Path) -> Option<(String, String)> {
+    let root = fs::canonicalize(root).ok()?;
+    let mut files = Vec::new();
+    // ponytail: non-Git folders are scanned in full; add a persisted manifest cache only if
+    // measured startup time becomes material on very large source trees.
+    collect_source_files(&root, &mut files)?;
+    files.sort();
+    let mut hasher = Sha256::new();
+    hasher.update(b"folder\0");
+    for path in &files {
+        let relative = path.strip_prefix(&root).ok()?;
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hash_path_state(&mut hasher, path)?;
+    }
+    let revision = format!("{:X}", hasher.finalize());
+    Some((
+        revision.clone(),
+        format!("파일 {}개 · {}", files.len(), short_revision(&revision)),
+    ))
+}
+
+fn collect_source_files(directory: &Path, files: &mut Vec<PathBuf>) -> Option<()> {
+    collect_files(directory, files, ignored_source_directory)
+}
+
+fn collect_files(
+    directory: &Path,
+    files: &mut Vec<PathBuf>,
+    skip_directory: fn(&str) -> bool,
+) -> Option<()> {
+    let mut entries = fs::read_dir(directory)
+        .ok()?
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let file_type = entry.file_type().ok()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            if !skip_directory(&entry.file_name().to_string_lossy()) {
+                collect_files(&path, files, skip_directory)?;
+            }
+        } else if file_type.is_file() {
+            files.push(path);
+        }
+    }
+    Some(())
+}
+
+fn ignored_source_directory(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        ".git"
+            | ".codex"
+            | ".idea"
+            | ".next"
+            | ".openai"
+            | ".venv"
+            | ".vscode"
+            | "__pycache__"
+            | "build"
+            | "coverage"
+            | "dist"
+            | "node_modules"
+            | "out"
+            | "target"
+            | "venv"
+    )
+}
+
+fn db_source_revision(profile: &DbProfile) -> Option<(String, String)> {
+    let path = Path::new(profile.path.as_deref()?);
+    match &profile.source {
+        DbSource::DdlSqlite => ddl_source_revision(path),
+        DbSource::Sqlite => {
+            let metadata = path.metadata().ok()?;
+            let modified = metadata
+                .modified()
+                .ok()?
+                .duration_since(UNIX_EPOCH)
+                .ok()?
+                .as_nanos();
+            let mut hasher = Sha256::new();
+            hasher.update(metadata.len().to_le_bytes());
+            hasher.update(modified.to_le_bytes());
+            let revision = format!("{:X}", hasher.finalize());
+            Some((
+                revision.clone(),
+                format!("SQLite {}", short_revision(&revision)),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn ddl_source_revision(path: &Path) -> Option<(String, String)> {
+    if path.is_file() {
+        let revision = hash_file(path)?;
+        return Some((
+            revision.clone(),
+            format!("DDL {}", short_revision(&revision)),
+        ));
+    }
+    if !path.is_dir() {
+        return None;
+    }
+
+    let root = fs::canonicalize(path).ok()?;
+    let mut files = Vec::new();
+    collect_files(&root, &mut files, |_| false)?;
+    files.sort();
+    let mut hasher = Sha256::new();
+    hasher.update(b"ddl-directory\0");
+    for file in &files {
+        let relative = file.strip_prefix(&root).ok()?;
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hash_path_state(&mut hasher, file)?;
+    }
+    let revision = format!("{:X}", hasher.finalize());
+    Some((
+        revision.clone(),
+        format!("DDL {} · 파일 {}개", short_revision(&revision), files.len()),
+    ))
+}
+
+fn hash_file(path: &Path) -> Option<String> {
+    if !path.is_file() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hash_path_state(&mut hasher, path)?;
+    Some(format!("{:X}", hasher.finalize()))
+}
+
+fn hash_path_state(hasher: &mut Sha256, path: &Path) -> Option<()> {
+    if !path.exists() {
+        hasher.update(b"\0missing");
+        return Some(());
+    }
+    if path.is_dir() {
+        hasher.update(b"\0directory");
+        return Some(());
+    }
+    let mut file = fs::File::open(path).ok()?;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Some(())
+}
+
+fn short_revision(revision: &str) -> &str {
+    revision.get(..8).unwrap_or(revision)
+}
+
 fn code_source_type(workspace: &Workspace) -> String {
     let normalized = workspace.repo_path.replace('\\', "/");
     if normalized.ends_with(&format!("/workspaces/{}/repo", workspace.id)) {
@@ -1619,6 +2345,58 @@ fn db_source_key(source: &impl Serialize) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn localized_db_capability_warning(value: &str) -> String {
+    if let Some((capability, source)) = db_capability_parts(value, " is partially tracked by the ")
+    {
+        return format!("{source} 어댑터는 {capability}를 일부만 추적합니다.");
+    }
+    if let Some((capability, source)) = db_capability_parts(value, " is not tracked by the ") {
+        return format!("{source} 어댑터는 {capability}를 추적하지 않습니다.");
+    }
+    if let Some((capability, source)) = db_capability_parts(value, " support is unknown for the ") {
+        return format!("{source} 어댑터의 {capability} 지원 여부를 확인할 수 없습니다.");
+    }
+
+    match value {
+        "SQLite CHECK and UNIQUE constraints are not emitted as constraint nodes." => {
+            "SQLite CHECK·UNIQUE 제약은 제약 노드로 수집하지 않습니다.".to_string()
+        }
+        "SQLite partial-index predicates and expression-index expressions are not extracted." => {
+            "SQLite 부분 인덱스 조건식과 표현식 인덱스 식은 수집하지 않습니다.".to_string()
+        }
+        "SQLite generated columns are identified, but generation expressions are not extracted." => {
+            "SQLite 생성 열 여부는 식별하지만 생성식은 수집하지 않습니다.".to_string()
+        }
+        "SQLite view dependencies are resolved from prepare-time read authorization; trigger-body dependencies are not emitted." => {
+            "SQLite 뷰 의존성은 준비 단계 읽기 권한으로 확인하며, 트리거 본문의 의존성은 수집하지 않습니다.".to_string()
+        }
+        _ => value.to_string(),
+    }
+}
+
+fn db_capability_parts<'a>(value: &'a str, separator: &str) -> Option<(&'static str, &'a str)> {
+    let (capability, source) = value.split_once(separator)?;
+    let source = source.strip_suffix(" adapter.")?;
+    Some((
+        match capability {
+            "view dependency metadata" => "뷰 의존성 메타데이터",
+            "trigger dependency metadata" => "트리거 의존성 메타데이터",
+            "routine dependency metadata" => "프로시저·함수 의존성 메타데이터",
+            "cross-object dependency metadata" => "객체 간 의존성 메타데이터",
+            _ => return None,
+        },
+        match source {
+            "ddl-sqlite" => "SQLite DDL",
+            "sqlite" => "SQLite",
+            "postgres" => "PostgreSQL",
+            "mysql" => "MySQL/MariaDB",
+            "sqlserver" => "SQL Server",
+            "oracle" => "Oracle",
+            _ => source,
+        },
+    ))
 }
 
 pub(crate) fn item(
@@ -1650,10 +2428,38 @@ pub(crate) fn item(
 }
 
 fn db_table_key(schema: Option<&str>, name: &str) -> String {
+    let name = encode_db_identity_component(name);
+    match schema.filter(|value| !value.is_empty()) {
+        Some(schema) => format!("{}.{name}", encode_db_identity_component(schema)),
+        None => name,
+    }
+}
+
+fn db_qualified_table_name(schema: Option<&str>, name: &str) -> String {
     match schema.filter(|value| !value.is_empty()) {
         Some(schema) => format!("{schema}.{name}"),
         None => name.to_string(),
     }
+}
+
+fn db_column_id(table_key: &str, column_name: &str) -> String {
+    format!(
+        "db:column:{table_key}:{}",
+        encode_db_identity_component(column_name)
+    )
+}
+
+fn encode_db_identity_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '%' => encoded.push_str("%25"),
+            '.' => encoded.push_str("%2E"),
+            ':' => encoded.push_str("%3A"),
+            character => encoded.push(character),
+        }
+    }
+    encoded
 }
 
 fn detail_string(value: &Value, keys: &[&str]) -> Option<String> {

@@ -1,14 +1,13 @@
 import { dbProfileWorkStarted } from "../../types/controls";
 import type { DbProfileControls, WorkspaceControls } from "../../types/controls";
 import { codeInventoryItemCount } from "../../types/workspace";
-import type { View } from "./ViewSwitch";
 
 export function focusSourceSetup(
-  setView: (view: View) => void,
+  openSourceManager: () => void,
   workspaceControls: WorkspaceControls,
   dbProfileControls: DbProfileControls,
 ) {
-  setView("workbench");
+  openSourceManager();
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
       const target = sourceSetupTarget(workspaceControls, dbProfileControls);

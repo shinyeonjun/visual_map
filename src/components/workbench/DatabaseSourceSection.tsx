@@ -1,33 +1,29 @@
-import { CheckCircle2, ChevronRight, Database, Filter, Folder, Plus, RefreshCw, Search, Table2, Type } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { CheckCircle2, Database, File, Folder, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useEffect, useRef } from "react";
 import {
   DB_PROFILE_SOURCE_OPTIONS,
-  dbInventoryTableKey,
+  dbInventoryTableCount,
   dbProfileSourceLabel,
   dbProfileSourceUsesPath,
 } from "../../types/workspace";
 import type { DbProfileSource } from "../../types/workspace";
-import type { DbProfileControls, VisualMapControls } from "../../types/controls";
+import type { DbProfileControls } from "../../types/controls";
 import { focusDbProfileSetup as focusDbProfileInput } from "../common/focusSourceSetup";
 import { PanelHeader } from "../common/PanelHeader";
 
 export function DatabaseSourceSection({
   dbProfileControls,
-  visualMapControls,
 }: {
   dbProfileControls: DbProfileControls;
-  visualMapControls: VisualMapControls;
 }) {
   const operationMessageRef = useRef<HTMLSpanElement>(null);
   const sourceUsesPath = dbProfileSourceUsesPath(dbProfileControls.profileSource);
   const sourceCopy = dbSourceCopy[dbProfileControls.profileSource];
-  const [tableFilter, setTableFilter] = useState("");
-  const filter = tableFilter.trim().toLowerCase();
   const hasWorkspace = dbProfileControls.hasWorkspace;
   const allTables = dbProfileControls.inventory?.tables ?? [];
   const hasProfile = Boolean(dbProfileControls.activeProfile);
   const hasInventory = Boolean(dbProfileControls.inventory);
-  const hasTables = allTables.length > 0;
+  const hasTables = dbInventoryTableCount(dbProfileControls.inventory) > 0;
   const hasColumns = allTables.some((table) => table.columns.length > 0);
   const missingColumnTables = allTables.filter((table) => table.columns.length === 0).length;
   const hasCompleteColumns = hasTables && missingColumnTables === 0;
@@ -51,18 +47,12 @@ export function DatabaseSourceSection({
   const requirementCopy = isSnapshotInventory
     ? "저장된 DB 구조를 복구했습니다. 다시 읽으려면 DB 연결을 저장하세요."
     : dbRequirementCopy(sourceCopy.required, hasInventory, hasTables, hasColumns, sourceUsesPath);
-  const tables = filter
-    ? allTables.filter((table) => dbInventoryTableKey(table).toLowerCase().includes(filter))
-    : allTables;
-  const focusedMapId = visualMapControls.selectedNode?.id ?? visualMapControls.currentMap?.focus ?? "";
   const nextAction = dbNextAction(dbProfileControls, hasProfile, hasInventory, hasTables, hasColumns, missingColumnTables);
   const compactReady = hasInventory && (profileMatchesForm || isSnapshotInventory);
   const showDbOperationMessage = Boolean(
     dbProfileControls.error ||
       dbProfileControls.saving ||
-      dbProfileControls.testing ||
       dbProfileControls.indexing ||
-      dbProfileControls.loading ||
       (!hasInventory && dbProfileControls.status),
   );
   const sourceSettings = (
@@ -99,12 +89,25 @@ export function DatabaseSourceSection({
           <button
             className="square-button"
             type="button"
-            onClick={dbProfileControls.pickPath}
+            onClick={() => dbProfileControls.pickPath(false)}
             disabled={dbProfileControls.busy}
-            aria-label={`${sourceCopy.label} 선택`}
+            aria-label={dbProfileControls.profileSource === "ddl-sqlite" ? "DDL 파일 선택" : `${sourceCopy.label} 선택`}
+            title={dbProfileControls.profileSource === "ddl-sqlite" ? "DDL 파일 선택" : `${sourceCopy.label} 선택`}
           >
-            <Folder size={14} />
+            <File size={14} />
           </button>
+          {dbProfileControls.profileSource === "ddl-sqlite" ? (
+            <button
+              className="square-button"
+              type="button"
+              onClick={() => dbProfileControls.pickPath(true)}
+              disabled={dbProfileControls.busy}
+              aria-label="DDL 폴더 선택"
+              title="DDL 폴더 선택"
+            >
+              <Folder size={14} />
+            </button>
+          ) : null}
         </div>
       ) : (
         <>
@@ -132,21 +135,26 @@ export function DatabaseSourceSection({
     <section className={`side-card database-source ${hasWorkspace ? "" : "locked"} ${compactReady ? "ready" : ""}`}>
       <PanelHeader icon={<Database size={16} />} title="데이터베이스" />
       <div className={`source-next ${nextAction.tone === "ready" ? "source-ready" : ""}`}>
-          <span>
-            <b>{nextAction.label}</b>
-            <small>{nextAction.text}</small>
-          </span>
-          {nextAction.run && (
-            <button
-              className={nextAction.primary ? "primary-action compact" : "outline-action compact"}
-              type="button"
-              onClick={nextAction.run}
-              disabled={dbProfileControls.busy || nextAction.disabled}
-            >
-              <span>{nextAction.button}</span>
-            </button>
-          )}
-        </div>
+        <span>
+          <b>{nextAction.label}</b>
+          <small>{nextAction.text}</small>
+        </span>
+        {nextAction.run && (
+          <button
+            className={nextAction.primary ? "primary-action compact" : "outline-action compact"}
+            type="button"
+            onClick={nextAction.run}
+            disabled={dbProfileControls.busy || nextAction.disabled}
+            title={nextAction.disabled ? dbProfileControls.dbIndexBlockedReason ?? undefined : undefined}
+            data-source-action={nextAction.button === "다시 읽기" || nextAction.button === "DB 읽기" ? "db-index" : undefined}
+          >
+            {nextAction.button === "다시 읽기" && (
+              <RefreshCw size={13} className={dbProfileControls.indexing ? "spin" : undefined} />
+            )}
+            <span>{nextAction.button}</span>
+          </button>
+        )}
+      </div>
       {hasInventory && (
         <div className="source-stat-grid" aria-label="DB 구조 요약">
           <span className={hasTables ? "ready" : ""}>
@@ -205,7 +213,7 @@ export function DatabaseSourceSection({
             <>
               {compactReady ? (
                 <details className="source-advanced">
-                  <summary>DB 연결 / 다시 읽기</summary>
+                  <summary>DB 연결</summary>
                   <label className="field-label" htmlFor="db-profile-name-input">
                     활성 DB 연결
                   </label>
@@ -239,37 +247,18 @@ export function DatabaseSourceSection({
                   )}
                   <span className="secret-note ready-note">{requirementCopy}</span>
                   {sourceSettings}
-                  <div className="source-maintenance three" aria-label="데이터베이스 다시 읽기">
+                  {dbProfileControls.activeProfile && (
                     <button
-                      className="outline-action compact"
+                      className="outline-action compact danger-action source-delete-action"
                       type="button"
-                      onClick={dbProfileControls.loadInventory}
-                      disabled={!dbProfileControls.canLoadInventory || dbProfileControls.busy}
+                      onClick={confirmDeleteProfile}
+                      disabled={dbProfileControls.busy}
+                      title="저장된 DB 연결과 로컬 구조 캐시 삭제"
                     >
-                      {dbProfileControls.loading ? "불러오는 중" : "테이블 새로고침"}
-                      <Database size={13} />
+                      <Trash2 size={13} />
+                      {dbProfileControls.deleting ? "삭제 중" : "DB 연결 삭제"}
                     </button>
-                    <button
-                      className="outline-action compact"
-                      type="button"
-                      onClick={dbProfileControls.testConnection}
-                      disabled={!dbProfileControls.canTestConnection || dbProfileControls.busy}
-                      title={dbProfileControls.dbIndexBlockedReason ?? undefined}
-                    >
-                      {dbProfileControls.testing ? "테스트 중" : "연결 테스트"}
-                      <Database size={13} />
-                    </button>
-                    <button
-                      className="outline-action compact"
-                      type="button"
-                      onClick={dbProfileControls.indexProfile}
-                      disabled={!dbProfileControls.canIndexProfile || dbProfileControls.busy}
-                      title={dbProfileControls.dbIndexBlockedReason ?? undefined}
-                    >
-                      <RefreshCw size={13} className={dbProfileControls.indexing ? "spin" : undefined} />
-                      {dbProfileControls.indexing ? "읽는 중" : "다시 읽기"}
-                    </button>
-                  </div>
+                  )}
                 </details>
               ) : (
                 <>
@@ -312,40 +301,34 @@ export function DatabaseSourceSection({
                   )}
                   <span className={`secret-note ${hasInventory ? "ready-note" : ""}`}>{requirementCopy}</span>
                   {sourceSettings}
+                  {dbProfileControls.activeProfile && (
+                    <button
+                      className="outline-action compact danger-action source-delete-action"
+                      type="button"
+                      onClick={confirmDeleteProfile}
+                      disabled={dbProfileControls.busy}
+                      title="저장된 DB 연결과 로컬 구조 캐시 삭제"
+                    >
+                      <Trash2 size={13} />
+                      {dbProfileControls.deleting ? "삭제 중" : "DB 연결 삭제"}
+                    </button>
+                  )}
                 </>
               )}
             </>
           )}
           {hasInventory && !compactReady && !isSnapshotInventory && (
-            <div className="source-maintenance three" aria-label="데이터베이스 연결 관리">
-              <button
-                className="outline-action compact"
-                type="button"
-                onClick={dbProfileControls.testConnection}
-                disabled={!dbProfileControls.canTestConnection || dbProfileControls.busy}
-                title={dbProfileControls.dbIndexBlockedReason ?? undefined}
-              >
-                {dbProfileControls.testing ? "테스트 중" : "연결 테스트"}
-                <Database size={13} />
-              </button>
+            <div className="source-maintenance" aria-label="데이터베이스 구조 관리">
               <button
                 className="outline-action compact"
                 type="button"
                 onClick={dbProfileControls.indexProfile}
                 disabled={!dbProfileControls.canIndexProfile || dbProfileControls.busy}
                 title={dbProfileControls.dbIndexBlockedReason ?? undefined}
+                data-source-action="db-index"
               >
                 <RefreshCw size={13} className={dbProfileControls.indexing ? "spin" : undefined} />
                 {dbProfileControls.indexing ? "읽는 중" : "다시 읽기"}
-              </button>
-              <button
-                className="outline-action compact"
-                type="button"
-                onClick={dbProfileControls.loadInventory}
-                disabled={!dbProfileControls.canLoadInventory || dbProfileControls.busy}
-              >
-                {dbProfileControls.loading ? "불러오는 중" : "테이블 새로고침"}
-                <Database size={13} />
               </button>
             </div>
           )}
@@ -365,100 +348,22 @@ export function DatabaseSourceSection({
               <pre>{dbProfileControls.errorDetail}</pre>
             </details>
           )}
-          {hasInventory && (
-            <>
-              <div className="tabs" role="tablist" aria-label="DB 구조 유형">
-                <span className="active" role="tab" aria-selected="true">
-                  테이블 <span>{dbProfileControls.inventory?.tables.length ?? 0}</span>
-                </span>
-              </div>
-              <div className="filter-input">
-                <Search size={13} />
-                <input
-                  id="db-table-filter-input"
-                  aria-label="테이블 필터"
-                  value={tableFilter}
-                  onChange={(event) => setTableFilter(event.currentTarget.value)}
-                  placeholder="테이블 필터..."
-                />
-                <Filter size={13} />
-              </div>
-              <div className="list table-list">
-                {tables.map((table) => {
-                  const tableKey = dbInventoryTableKey(table);
-                  const active = tableKey === dbProfileControls.selectedTableKey;
-                  const needsColumns = table.columns.length === 0;
-                  return (
-                    <div className={`table-block ${active ? "open active" : ""}`} key={tableKey}>
-                      <button
-                        className={`table-row table-button ${active ? "active" : ""} ${needsColumns ? "needs-columns" : ""}`}
-                        type="button"
-                        aria-expanded={active}
-                        aria-label={needsColumns ? `${table.name} 컬럼 대기` : undefined}
-                        onClick={() => selectTableFocus(tableKey)}
-                      >
-                        <ChevronRight size={13} />
-                        <Table2 size={14} />
-                        <span className="table-copy">
-                          <span>{table.name}</span>
-                          {table.schema && <small>{table.schema}</small>}
-                        </span>
-                        <em className={needsColumns ? "warn" : ""}>
-                          {needsColumns ? "컬럼 대기" : `${table.columns.length}개 컬럼`}
-                        </em>
-                      </button>
-                      {active && needsColumns && (
-                        <div className="column-row column-empty">
-                          <span>컬럼을 읽으면 관계와 변경 범위가 열립니다.</span>
-                        </div>
-                      )}
-                      {active &&
-                        table.columns.slice(0, 6).map((column) => (
-                          <button
-                            className={`column-row column-button ${
-                              focusedMapId === `db:column:${tableKey}:${column.name}` ? "active" : ""
-                            }`}
-                            type="button"
-                            key={`${tableKey}:${column.name}`}
-                            aria-label={`${table.name}.${column.name} 컬럼 선택`}
-                            onClick={() => selectColumnFocus(tableKey, column.name)}
-                          >
-                            <Type size={12} />
-                            <span>{column.name}</span>
-                            {column.isPrimaryKey && <small>PK</small>}
-                            {column.isForeignKey && <small>FK</small>}
-                            <code>{column.dataType ?? "타입 ?"}</code>
-                          </button>
-                        ))}
-                      {active && table.columns.length > 6 && (
-                        <div className="column-row">
-                          <span className="row-more">+{table.columns.length - 6}개 더</span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {tables.length === 0 && (
-                  <span className="workspace-empty">
-                    {allTables.length > 0 ? "필터와 일치하는 테이블이 없습니다" : "테이블 목록이 비어 있습니다"}
-                  </span>
-                )}
-              </div>
-            </>
-          )}
         </>
       )}
     </section>
   );
 
-  function selectTableFocus(tableKey: string) {
-    dbProfileControls.selectTable(tableKey);
-    visualMapControls.showMode("table-usage", `db:table:${tableKey}`);
-  }
-
-  function selectColumnFocus(tableKey: string, columnName: string) {
-    dbProfileControls.selectColumn(tableKey, columnName);
-    visualMapControls.showMode("column-impact", `db:column:${tableKey}:${columnName}`);
+  function confirmDeleteProfile() {
+    const profile = dbProfileControls.activeProfile;
+    if (!profile) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `\"${profile.name}\" DB 연결을 삭제할까요?\n\n저장된 연결 정보와 로컬 구조 캐시만 삭제하며 DB 서버나 원본 파일은 변경하지 않습니다.`,
+    );
+    if (confirmed) {
+      dbProfileControls.deleteProfile();
+    }
   }
 }
 
@@ -480,7 +385,7 @@ function dbNextAction(
 } {
   const canSaveMissingProfile = !hasProfile && dbProfileControls.canSaveProfile;
   if (hasInventory && hasTables) {
-    const tableCount = dbProfileControls.inventory?.tables.length ?? 0;
+    const tableCount = dbInventoryTableCount(dbProfileControls.inventory);
     const columnCount = dbProfileControls.inventory?.tables.reduce((sum, table) => sum + table.columns.length, 0) ?? 0;
     if (!hasColumns) {
       if (dbProfileControls.dbIndexBlockedReason) {
@@ -518,6 +423,9 @@ function dbNextAction(
     return {
       label: "근거 준비됨",
       text: `테이블 ${tableCount}개 · 컬럼 ${columnCount}개 읽힘`,
+      button: dbProfileControls.indexing ? "읽는 중" : "다시 읽기",
+      run: dbProfileControls.indexProfile,
+      disabled: !dbProfileControls.canIndexProfile,
       tone: "ready",
     };
   }
@@ -559,16 +467,6 @@ function dbNextAction(
         };
   }
   if (!hasInventory) {
-    const indexed = dbProfileControls.status?.includes("완료") ?? false;
-    if (indexed) {
-      return {
-        label: "DB 목록 표시",
-        text: "읽은 테이블과 컬럼을 목록에 표시합니다.",
-        button: "DB 목록 열기",
-        run: dbProfileControls.loadInventory,
-        primary: true,
-      };
-    }
     if (!dbProfileControls.canIndexProfile) {
       if (dbProfileControls.dbIndexBlockedReason) {
         return {
@@ -660,10 +558,22 @@ const dbSourceCopy: Record<
     help: "PostgreSQL catalog 구조를 읽습니다.",
     required: "필수: 연결 저장 후 이번 세션의 연결 문자열",
   },
+  yugabytedb: {
+    label: "YugabyteDB YSQL 연결 문자열",
+    placeholder: "postgres://user:password@localhost:5433/db",
+    help: "YugabyteDB의 PostgreSQL 호환 YSQL catalog 구조를 읽습니다. YCQL은 지원하지 않습니다.",
+    required: "필수: 연결 저장 후 이번 세션의 YSQL 연결 문자열",
+  },
   mysql: {
-    label: "MySQL/MariaDB 연결 문자열",
+    label: "MySQL 연결 문자열",
     placeholder: "mysql://user:password@localhost:3306/db",
-    help: "MySQL/MariaDB information_schema 구조를 읽습니다.",
+    help: "MySQL information_schema 구조를 읽습니다.",
+    required: "필수: 연결 저장 후 이번 세션의 연결 문자열",
+  },
+  mariadb: {
+    label: "MariaDB 연결 문자열",
+    placeholder: "mysql://user:password@localhost:3306/db",
+    help: "MariaDB information_schema 구조를 읽습니다.",
     required: "필수: 연결 저장 후 이번 세션의 연결 문자열",
   },
   sqlserver: {
@@ -674,8 +584,8 @@ const dbSourceCopy: Record<
   },
   oracle: {
     label: "Oracle 연결 문자열",
-    placeholder: "user/password@localhost/XEPDB1",
-    help: "Oracle catalog 구조를 읽습니다.",
-    required: "필수: 연결 저장 후 이번 세션의 연결 문자열",
+    placeholder: "user/password@localhost:1521/FREEPDB1",
+    help: "Oracle Client가 설치된 환경에서 현재 사용자 스키마의 catalog 구조를 읽습니다.",
+    required: "필수: Oracle Client, 연결 저장 후 이번 세션의 연결 문자열",
   },
 };

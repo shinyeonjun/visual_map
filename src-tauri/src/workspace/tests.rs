@@ -3,6 +3,7 @@ use crate::{base_paths, engine, EngineRegistry};
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 fn temp_root(name: &str) -> PathBuf {
@@ -14,6 +15,64 @@ fn temp_root(name: &str) -> PathBuf {
     }
 
     root
+}
+
+fn create_local_workspace(root: &Path, name: &str) -> Workspace {
+    let repo = root.join(format!(
+        "repo-{}",
+        name.to_ascii_lowercase().replace(' ', "-")
+    ));
+    fs::create_dir_all(&repo).unwrap();
+    create_workspace(
+        root,
+        CreateWorkspaceRequest {
+            name: name.to_string(),
+            repo_path: repo.display().to_string(),
+        },
+    )
+    .unwrap()
+}
+
+fn run_test_git(current_dir: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(current_dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git must be available for workspace lifecycle tests");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn create_managed_git_workspace(root: &Path) -> (Workspace, PathBuf, PathBuf) {
+    fs::create_dir_all(root).unwrap();
+    let remote = root.join("remote.git");
+    let seed = root.join("seed");
+    let remote_arg = remote.display().to_string();
+    let seed_arg = seed.display().to_string();
+    run_test_git(root, &["init", "--bare", remote_arg.as_str()]);
+    run_test_git(root, &["init", seed_arg.as_str()]);
+    run_test_git(&seed, &["config", "user.email", "tests@example.com"]);
+    run_test_git(&seed, &["config", "user.name", "Backend Visual Map Tests"]);
+    fs::write(seed.join("README.md"), "first\n").unwrap();
+    run_test_git(&seed, &["add", "README.md"]);
+    run_test_git(&seed, &["commit", "-m", "first"]);
+    run_test_git(&seed, &["remote", "add", "origin", remote_arg.as_str()]);
+    run_test_git(&seed, &["push", "-u", "origin", "HEAD"]);
+
+    let mut workspace = create_local_workspace(root, "Managed GitHub");
+    let paths = base_paths(root);
+    let managed_repo = workspace_repo_dir(&paths.workspaces_dir, &workspace.id);
+    let managed_arg = managed_repo.display().to_string();
+    run_test_git(root, &["clone", remote_arg.as_str(), managed_arg.as_str()]);
+    workspace.repo_path = managed_arg;
+    workspace.repo_source = RepoSource::Github;
+    workspace.repo_origin = Some("https://github.com/acme/managed".to_string());
+    super::store::write_workspace(&paths.workspaces_dir, &workspace).unwrap();
+    (workspace, seed, managed_repo)
 }
 
 fn test_db_profile(source: DbSource, id: &str, path: Option<&str>) -> DbProfile {
@@ -78,6 +137,8 @@ fn workspace_serializes_with_camel_case_contract() {
         id: "shop-api-1".to_string(),
         name: "shop-api".to_string(),
         repo_path: r"D:\projects\shop-api".to_string(),
+        repo_source: RepoSource::Github,
+        repo_origin: Some("https://github.com/acme/shop-api".to_string()),
         code_project: Some("shop-api".to_string()),
         engine_cache: WorkspaceEngineCache::default(),
         db_profiles: vec![DbProfile {
@@ -101,6 +162,8 @@ fn workspace_serializes_with_camel_case_contract() {
     let json = serde_json::to_string(&workspace).unwrap();
 
     assert!(json.contains("\"repoPath\""));
+    assert!(json.contains("\"repoSource\":\"github\""));
+    assert!(json.contains("\"repoOrigin\":\"https://github.com/acme/shop-api\""));
     assert!(json.contains("\"dbProfiles\""));
     assert!(json.contains("\"engineCache\""));
     assert!(json.contains("\"activeDbProfileId\""));
@@ -111,15 +174,7 @@ fn workspace_serializes_with_camel_case_contract() {
 #[test]
 fn create_open_and_list_workspace_round_trip() {
     let root = temp_root("workspace-round-trip");
-
-    let created = create_workspace(
-        &root,
-        CreateWorkspaceRequest {
-            name: "Shop API".to_string(),
-            repo_path: r"D:\projects\shop-api".to_string(),
-        },
-    )
-    .unwrap();
+    let created = create_local_workspace(&root, "Shop API");
 
     let opened = open_workspace(&root, &created.id).unwrap();
     let listed = list_workspaces(&root).unwrap();
@@ -133,6 +188,97 @@ fn create_open_and_list_workspace_round_trip() {
         .join("workspace.json")
         .is_file());
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn github_refresh_rejects_local_workspace() {
+    let root = temp_root("github-refresh-local");
+    let workspace = create_local_workspace(&root, "Local");
+
+    let error = refresh_github_workspace(&root, &workspace.id).unwrap_err();
+
+    assert!(error.contains("앱이 복제한 GitHub 프로젝트만"));
+}
+
+#[test]
+fn github_refresh_fast_forwards_managed_clone() {
+    let root = temp_root("github-refresh-fast-forward");
+    let (workspace, seed, managed_repo) = create_managed_git_workspace(&root);
+    fs::write(seed.join("README.md"), "second\n").unwrap();
+    run_test_git(&seed, &["add", "README.md"]);
+    run_test_git(&seed, &["commit", "-m", "second"]);
+    run_test_git(&seed, &["push"]);
+
+    let refreshed = refresh_github_workspace(&root, &workspace.id).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(managed_repo.join("README.md"))
+            .unwrap()
+            .trim(),
+        "second"
+    );
+    assert_eq!(refreshed.repo_source, RepoSource::Github);
+    assert!(refreshed.updated_at >= workspace.updated_at);
+}
+
+#[test]
+fn github_refresh_preserves_dirty_managed_clone() {
+    let root = temp_root("github-refresh-dirty");
+    let (workspace, _seed, managed_repo) = create_managed_git_workspace(&root);
+    fs::write(managed_repo.join("README.md"), "local change\n").unwrap();
+
+    let error = refresh_github_workspace(&root, &workspace.id).unwrap_err();
+
+    assert!(error.contains("로컬 변경이 있어"));
+    assert_eq!(
+        fs::read_to_string(managed_repo.join("README.md")).unwrap(),
+        "local change\n"
+    );
+}
+
+#[test]
+fn create_workspace_rejects_invalid_local_paths() {
+    let root = temp_root("workspace-invalid-local-path");
+    let missing = root.join("missing");
+    let missing_error = create_workspace(
+        &root,
+        CreateWorkspaceRequest {
+            name: "Missing".to_string(),
+            repo_path: missing.display().to_string(),
+        },
+    )
+    .unwrap_err();
+
+    fs::create_dir_all(&root).unwrap();
+    let file = root.join("not-a-directory.txt");
+    fs::write(&file, "not a repository").unwrap();
+    let file_error = create_workspace(
+        &root,
+        CreateWorkspaceRequest {
+            name: "File".to_string(),
+            repo_path: file.display().to_string(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(missing_error.contains("찾을 수 없습니다"));
+    assert_eq!(file_error, "프로젝트 경로는 폴더여야 합니다");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn delete_workspace_removes_only_app_metadata() {
+    let root = temp_root("workspace-delete");
+    let created = create_local_workspace(&root, "Shop API");
+    let repo = PathBuf::from(&created.repo_path);
+    let workspace_dir = base_paths(&root).workspaces_dir.join(&created.id);
+
+    delete_workspace(&root, &created.id).unwrap();
+
+    assert!(!workspace_dir.exists());
+    assert!(repo.is_dir());
+    assert!(list_workspaces(&root).unwrap().is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -181,14 +327,7 @@ fn open_workspace_rejects_path_traversal_id() {
 #[test]
 fn open_workspace_rejects_workspace_file_id_mismatch() {
     let root = temp_root("workspace-id-mismatch");
-    let mut created = create_workspace(
-        &root,
-        CreateWorkspaceRequest {
-            name: "Shop API".to_string(),
-            repo_path: r"D:\projects\shop-api".to_string(),
-        },
-    )
-    .unwrap();
+    let mut created = create_local_workspace(&root, "Shop API");
     let original_id = created.id.clone();
     let workspace_file = base_paths(&root)
         .workspaces_dir
@@ -224,14 +363,7 @@ fn open_workspace_rejects_empty_id() {
 #[test]
 fn save_db_profile_updates_workspace_without_password_storage() {
     let root = temp_root("db-profile");
-    let created = create_workspace(
-        &root,
-        CreateWorkspaceRequest {
-            name: "Shop API".to_string(),
-            repo_path: r"D:\projects\shop-api".to_string(),
-        },
-    )
-    .unwrap();
+    let created = create_local_workspace(&root, "Shop API");
 
     let updated = save_db_profile(
         &root,
@@ -252,7 +384,7 @@ fn save_db_profile_updates_workspace_without_password_storage() {
     assert!(!updated.db_profiles[0].password_stored);
     assert!(updated.db_profiles[0]
         .cache_path
-        .starts_with(r"engines\database-memory\0.1.1\contract-1\profiles\"));
+        .starts_with(r"engines\database-memory\0.2.0\contract-2\profiles\"));
     assert!(updated.db_profiles[0]
         .cache_path
         .ends_with(r"\graph.sqlite"));
@@ -273,14 +405,7 @@ fn save_db_profile_updates_workspace_without_password_storage() {
 #[test]
 fn save_network_db_profile_does_not_persist_connection_string_shape() {
     let root = temp_root("network-db-profile");
-    let created = create_workspace(
-        &root,
-        CreateWorkspaceRequest {
-            name: "Shop API".to_string(),
-            repo_path: r"D:\projects\shop-api".to_string(),
-        },
-    )
-    .unwrap();
+    let created = create_local_workspace(&root, "Shop API");
     let fixture_secret = "postgres://app:fixture_password@localhost/shop";
 
     let updated = save_db_profile(
@@ -311,6 +436,32 @@ fn save_network_db_profile_does_not_persist_connection_string_shape() {
     assert!(json.contains("\"source\": \"postgres\""));
     assert!(json.contains("\"passwordStored\": false"));
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn delete_db_profile_removes_profile_and_cache() {
+    let root = temp_root("db-profile-delete");
+    let created = create_local_workspace(&root, "Shop API");
+    let updated = save_db_profile(
+        &root,
+        SaveDbProfileRequest {
+            workspace_id: created.id.clone(),
+            name: "Local DDL".to_string(),
+            source: DbSource::DdlSqlite,
+            path: Some(r"D:\schemas\shop.sql".to_string()),
+        },
+    )
+    .unwrap();
+    let profile_id = updated.active_db_profile_id.unwrap();
+    let cache = db_cache_path(&base_paths(&root).workspaces_dir, &created.id, &profile_id);
+    fs::write(&cache, "cache").unwrap();
+
+    let without_profile = delete_db_profile(&root, &created.id, &profile_id).unwrap();
+
+    assert!(without_profile.db_profiles.is_empty());
+    assert_eq!(without_profile.active_db_profile_id, None);
+    assert!(!cache.exists());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -394,6 +545,70 @@ fn db_index_args_match_database_memory_cli_contract() {
 }
 
 #[test]
+#[ignore = "requires bundled database-memory sidecar"]
+fn database_memory_v2_adapter_round_trip_is_complete_and_metadata_only() {
+    let root = temp_root("database-memory-v2-adapter");
+    let created = create_local_workspace(&root, "Adapter Smoke");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("scripts")
+        .join("fixtures")
+        .join("product-smoke-schema.sql");
+    let workspace = save_db_profile(
+        &root,
+        SaveDbProfileRequest {
+            workspace_id: created.id.clone(),
+            name: "Adapter DDL".to_string(),
+            source: DbSource::DdlSqlite,
+            path: Some(fixture.display().to_string()),
+        },
+    )
+    .unwrap();
+    let profile_id = workspace.active_db_profile_id.clone().unwrap();
+    let engine_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("engines");
+    let registry = engine::engine_registry(
+        engine::EngineRuntimeMode::Dev,
+        &root,
+        None,
+        None,
+        Some(&engine_dir),
+    );
+
+    let indexed = index_db_profile(
+        &root,
+        &registry,
+        IndexDbProfileRequest {
+            workspace_id: created.id.clone(),
+            profile_id: profile_id.clone(),
+            connection_string: None,
+        },
+    )
+    .unwrap();
+    assert!(indexed.run.ok, "{}", indexed.run.stderr);
+    assert_eq!(indexed.index_json.as_ref().unwrap()["contract_version"], 2);
+    assert_eq!(indexed.index_json.as_ref().unwrap()["status"], "complete");
+
+    let inventory = db_inventory(&root, &registry, &created.id, Some(&profile_id)).unwrap();
+    assert_eq!(inventory.contract_version.as_deref(), Some("2"));
+    assert_eq!(inventory.result_count, inventory.total_tables);
+    assert_eq!(inventory.truncated, Some(false));
+    assert!(inventory.gaps.is_empty());
+    assert!(inventory.tables.iter().all(|table| {
+        table.key.is_some()
+            && table.columns.iter().all(|column| {
+                column.key.is_some() && column.table_key.as_ref() == table.key.as_ref()
+            })
+    }));
+    assert!(inventory
+        .tables
+        .iter()
+        .any(|table| !table.foreign_keys.is_empty()));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn db_index_args_for_sqlite_uses_path() {
     assert_db_index_args(
         DbSource::Sqlite,
@@ -418,64 +633,101 @@ fn db_index_args_for_ddl_sqlite_uses_path() {
 }
 
 #[test]
-fn db_index_args_for_postgres_uses_connection_string() {
+fn db_index_args_for_postgres_uses_environment_profile() {
     assert_db_index_args(
         DbSource::Postgres,
         "postgres",
         None,
         Some("postgres://app:secret@localhost/shop"),
-        "--connection-string",
-        "postgres://app:secret@localhost/shop",
+        "--config-path",
+        r"D:\cache\database-memory-profile.toml",
     );
 }
 
 #[test]
-fn db_index_args_for_mysql_uses_connection_string() {
+fn db_index_args_for_yugabytedb_uses_environment_profile() {
+    assert_db_index_args(
+        DbSource::Yugabytedb,
+        "yugabytedb",
+        None,
+        Some("postgres://app:secret@localhost:5433/shop"),
+        "--config-path",
+        r"D:\cache\database-memory-profile.toml",
+    );
+}
+
+#[test]
+fn db_index_args_for_mysql_uses_environment_profile() {
     assert_db_index_args(
         DbSource::Mysql,
         "mysql",
         None,
         Some("mysql://app:secret@localhost/shop"),
-        "--connection-string",
-        "mysql://app:secret@localhost/shop",
+        "--config-path",
+        r"D:\cache\database-memory-profile.toml",
     );
 }
 
 #[test]
-fn db_index_args_for_sqlserver_uses_connection_string() {
+fn db_index_args_for_mariadb_uses_environment_profile() {
+    assert_db_index_args(
+        DbSource::Mariadb,
+        "mariadb",
+        None,
+        Some("mysql://app:secret@localhost:3306/shop"),
+        "--config-path",
+        r"D:\cache\database-memory-profile.toml",
+    );
+}
+
+#[test]
+fn db_index_args_for_sqlserver_uses_environment_profile() {
     assert_db_index_args(
         DbSource::Sqlserver,
         "sqlserver",
         None,
         Some("Server=localhost;Database=shop;User Id=app;Password=secret;"),
-        "--connection-string",
-        "Server=localhost;Database=shop;User Id=app;Password=secret;",
+        "--config-path",
+        r"D:\cache\database-memory-profile.toml",
     );
 }
 
 #[test]
-fn db_index_args_for_oracle_uses_connection_string() {
+fn db_index_args_for_oracle_uses_environment_profile() {
     assert_db_index_args(
         DbSource::Oracle,
         "oracle",
         None,
         Some("app/secret@localhost/XEPDB1"),
-        "--connection-string",
-        "app/secret@localhost/XEPDB1",
+        "--config-path",
+        r"D:\cache\database-memory-profile.toml",
+    );
+}
+
+#[test]
+fn db_network_secret_never_enters_process_arguments() {
+    let secret = "postgres://app:secret@localhost/shop";
+    let profile = test_db_profile(DbSource::Postgres, "local-db", None);
+    let args = db_index_args(&profile, Path::new(r"D:\cache\graph.sqlite"), Some(secret)).unwrap();
+
+    assert!(!args.iter().any(|argument| argument.contains(secret)));
+    assert!(!args
+        .iter()
+        .any(|argument| argument == "--connection-string"));
+    assert_eq!(
+        db_connection_env_var("local-db"),
+        "DATABASE_MEMORY_LOCAL_DB_CONNECTION_STRING"
+    );
+    assert_eq!(
+        db_connection_config_path(Path::new(r"D:\cache\graph.sqlite")),
+        PathBuf::from(r"D:\cache\database-memory-profile.toml")
     );
 }
 
 #[test]
 fn index_db_profile_requires_network_connection_string_before_engine_lookup() {
     let root = temp_root("network-index-missing-secret");
-    let created = create_workspace(
-        &root,
-        CreateWorkspaceRequest {
-            name: "Shop API".to_string(),
-            repo_path: r"D:\projects\shop-api".to_string(),
-        },
-    )
-    .unwrap();
+    let created = create_local_workspace(&root, "Shop API");
     let updated = save_db_profile(
         &root,
         SaveDbProfileRequest {
@@ -494,8 +746,8 @@ fn index_db_profile_requires_network_connection_string_before_engine_lookup() {
             label: "rdb-memory".to_string(),
             role: "db".to_string(),
             executable: "database-memory.exe".to_string(),
-            expected_version: "unknown".to_string(),
-            contract_version: "1".to_string(),
+            expected_version: "0.2.0".to_string(),
+            contract_version: "2".to_string(),
             path: r"D:\missing\engines\database-memory.exe".to_string(),
             available: false,
             releasable: false,
@@ -518,65 +770,6 @@ fn index_db_profile_requires_network_connection_string_before_engine_lookup() {
 
     assert_eq!(error, "postgres 연결에는 DB 연결 문자열이 필요합니다");
     fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn db_find_args_use_source_qualified_snapshot_alias() {
-    let profile = test_db_profile(
-        DbSource::DdlSqlite,
-        "local-ddl",
-        Some(r"D:\schemas\shop.sql"),
-    );
-
-    let args = db_find_args(&profile, "find-table", Path::new(r"D:\cache\graph.sqlite")).unwrap();
-
-    assert_eq!(args[0], "find-table");
-    assert_eq!(args[1], "ddl-sqlite:local-ddl");
-    assert_eq!(args[2], "");
-    assert!(args.contains(&"--format".to_string()));
-    assert!(args.contains(&"json".to_string()));
-    assert!(args.contains(&"--cache-path".to_string()));
-    assert!(!args.contains(&"--cache".to_string()));
-}
-
-#[test]
-fn db_inventory_args_use_one_bounded_json_call() {
-    let profile = test_db_profile(DbSource::Sqlite, "shop", Some(r"D:\shop.sqlite"));
-    let args = db_inventory_args(&profile, Path::new(r"D:\cache\graph.sqlite")).unwrap();
-
-    assert_eq!(args[0], "inventory");
-    assert_eq!(args[1], "sqlite:shop");
-    assert_eq!(args[2..6], ["--limit", "1000", "--format", "json"]);
-    assert!(args.contains(&"--cache-path".to_string()));
-}
-
-#[test]
-fn db_describe_table_args_use_source_qualified_snapshot_alias() {
-    let profile = test_db_profile(DbSource::Postgres, "caps-postgres", None);
-
-    let args = db_describe_table_args(
-        &profile,
-        "public.accounts",
-        Path::new(r"D:\cache\graph.sqlite"),
-    )
-    .unwrap();
-
-    assert_eq!(args[0], "describe-table");
-    assert_eq!(args[1], "postgres:caps-postgres");
-    assert_eq!(args[2], "public.accounts");
-    assert!(args.contains(&"--format".to_string()));
-    assert!(args.contains(&"json".to_string()));
-    assert!(args.contains(&"--cache-path".to_string()));
-    assert!(!args.contains(&"--cache".to_string()));
-}
-
-#[test]
-fn db_describe_table_args_prefer_stable_object_key() {
-    let profile = test_db_profile(DbSource::Postgres, "shop", None);
-    let key = "postgres:shop:shop:public:table:orders";
-    let args = db_describe_table_args(&profile, key, Path::new(r"D:\cache\graph.sqlite")).unwrap();
-
-    assert_eq!(args[2..4], ["--object-key", key]);
 }
 
 #[test]
@@ -610,6 +803,7 @@ fn db_description_enriches_column_types_pk_and_named_foreign_keys() {
         inbound_foreign_keys: Vec::new(),
         constraints: Vec::new(),
         indexes: Vec::new(),
+        dependents: Vec::new(),
     };
     let description = serde_json::json!({
         "columns": [
@@ -673,6 +867,63 @@ fn db_description_enriches_column_types_pk_and_named_foreign_keys() {
             referenced_columns: vec!["id".to_string()],
             referenced_column_keys: Vec::new(),
         }]
+    );
+}
+
+#[test]
+fn db_description_preserves_supported_dependents_and_merges_column_evidence() {
+    let mut inventory = extract_db_inventory(
+        "profile-1".to_string(),
+        &serde_json::json!({ "tables": ["orders"] }),
+        &serde_json::json!({ "columns": [] }),
+    );
+    let description = serde_json::json!({
+        "dependents": [
+            {
+                "key": "sqlite:shop:main:view:active_orders",
+                "kind": "view",
+                "name": "active_orders",
+                "relation": "view_depends_on",
+                "columnKeys": ["sqlite:shop:main:column:orders:status"]
+            },
+            {
+                "key": "sqlite:shop:main:view:active_orders",
+                "kind": "view",
+                "name": "active_orders",
+                "relation": "view_depends_on",
+                "column_keys": [
+                    "sqlite:shop:main:column:orders:id",
+                    "sqlite:shop:main:column:orders:status"
+                ]
+            },
+            {
+                "key": "sqlite:shop:main:trigger:orders:trg_orders_status",
+                "kind": "trigger",
+                "name": "trg_orders_status",
+                "relation": "table_has_trigger",
+                "column_keys": []
+            },
+            {
+                "key": "sqlite:shop:main:sequence:orders_id_seq",
+                "kind": "sequence",
+                "name": "orders_id_seq",
+                "relation": "TABLE_USES_SEQUENCE"
+            }
+        ]
+    });
+
+    apply_table_description(&mut inventory.tables[0], &description);
+
+    let dependents = &inventory.tables[0].dependents;
+    assert_eq!(dependents.len(), 2);
+    assert_eq!(dependents[0].kind, "trigger");
+    assert_eq!(dependents[1].kind, "view");
+    assert_eq!(
+        dependents[1].column_keys,
+        vec![
+            "sqlite:shop:main:column:orders:id".to_string(),
+            "sqlite:shop:main:column:orders:status".to_string(),
+        ]
     );
 }
 
@@ -870,32 +1121,6 @@ fn fallback_table_matches_keep_duplicate_schema_identity() {
 }
 
 #[test]
-fn truncated_and_failed_bulk_inventory_are_explicit_unknown_gaps() {
-    let mut value: serde_json::Value = serde_json::from_str(include_str!(
-        "fixtures/database-memory-inventory-contract-1.json"
-    ))
-    .unwrap();
-    value["total_tables"] = serde_json::json!(3);
-    value["truncated"] = serde_json::json!(true);
-    let truncated = extract_bulk_db_inventory("shop".to_string(), &value).unwrap();
-    assert!(truncated
-        .gaps
-        .iter()
-        .any(|gap| gap.kind == "db-inventory-truncated"));
-
-    let mut fallback = extract_db_inventory(
-        "shop".to_string(),
-        &serde_json::json!({ "tables": ["orders"] }),
-        &serde_json::json!({ "columns": [] }),
-    );
-    record_bulk_fallback_gap(&mut fallback);
-    assert!(fallback
-        .gaps
-        .iter()
-        .any(|gap| gap.kind == "db-inventory-bulk-unavailable"));
-}
-
-#[test]
 fn db_inventory_ignores_row_payload_and_secret_shaped_unknown_fields() {
     let mut description: serde_json::Value = serde_json::from_str(include_str!(
         "fixtures/database-memory-describe-contract-1.json"
@@ -917,25 +1142,6 @@ fn db_inventory_ignores_row_payload_and_secret_shaped_unknown_fields() {
     assert!(!json.contains("must-not-persist"));
     assert!(!json.contains("connection_string"));
     assert!(!json.contains("\"rows\""));
-}
-
-#[test]
-fn fallback_describe_plan_is_capped_and_reports_every_unknown_table() {
-    let tables = (0..1_001)
-        .map(|index| serde_json::Value::String(format!("table_{index}")))
-        .collect::<Vec<_>>();
-    let inventory = extract_db_inventory(
-        "profile-1".to_string(),
-        &serde_json::json!({ "tables": tables }),
-        &serde_json::json!({ "columns": [] }),
-    );
-
-    let (targets, gaps) = db_describe_plan(&inventory);
-
-    assert_eq!(targets.len(), 200);
-    assert!(targets.iter().any(|(_, table)| table == "table_40"));
-    assert_eq!(gaps.len(), 801);
-    assert_eq!(gaps[0].table_key.as_deref(), Some("table_200"));
 }
 
 #[test]
@@ -986,48 +1192,6 @@ fn old_db_inventory_json_defaults_new_evidence_fields() {
 }
 
 #[test]
-fn db_inventory_accepts_database_memory_line_output() {
-    let mut inventory = DbInventory {
-        profile_id: "profile-1".to_string(),
-        tables: Vec::new(),
-        snapshot_key: None,
-        contract_version: None,
-        capability_warnings: Vec::new(),
-        limit_requested: None,
-        limit_applied: None,
-        limit_clamped: None,
-        result_count: None,
-        total_tables: None,
-        truncated: None,
-        gaps: Vec::new(),
-    };
-
-    merge_db_inventory_lines(
-        &mut inventory,
-        "sessions\nusers\n",
-        "sessions.id\nsessions.title\nusers.id\n",
-    );
-
-    let sessions = inventory
-        .tables
-        .iter()
-        .find(|table| table.name == "sessions")
-        .unwrap();
-    let users = inventory
-        .tables
-        .iter()
-        .find(|table| table.name == "users")
-        .unwrap();
-
-    assert_eq!(inventory.tables.len(), 2);
-    assert_eq!(sessions.columns.len(), 2);
-    assert!(sessions.columns.iter().any(|column| column.name == "id"));
-    assert!(sessions.columns.iter().any(|column| column.name == "title"));
-    assert_eq!(users.columns.len(), 1);
-    assert_eq!(users.columns[0].name, "id");
-}
-
-#[test]
 fn db_cache_path_is_derived_from_validated_ids() {
     let root = Path::new("workspaces");
     let path = db_cache_path(root, "workspace-1", "profile-1");
@@ -1037,8 +1201,8 @@ fn db_cache_path_is_derived_from_validated_ids() {
         root.join("workspace-1")
             .join("engines")
             .join("database-memory")
-            .join("0.1.1")
-            .join("contract-1")
+            .join("0.2.0")
+            .join("contract-2")
             .join("profiles")
             .join("profile-1")
             .join("graph.sqlite")
@@ -1055,7 +1219,7 @@ fn code_cache_path_is_workspace_scoped() {
         root.join("workspace-1")
             .join("engines")
             .join("codebase-memory")
-            .join("0.8.1")
+            .join("0.9.0")
             .join("contract-1")
             .join("cache")
     );
@@ -1072,36 +1236,27 @@ fn workspace_db_cache_dir_is_workspace_scoped() {
         root.join("workspace-1")
             .join("engines")
             .join("database-memory")
-            .join("0.1.1")
-            .join("contract-1")
+            .join("0.2.0")
+            .join("contract-2")
             .join("profiles")
     );
 }
 
 #[test]
-fn code_index_payload_uses_workspace_repo_without_secrets() {
-    let workspace = Workspace {
-        id: "shop-api-1".to_string(),
-        name: "shop-api".to_string(),
-        repo_path: r"D:\projects\shop-api".to_string(),
-        code_project: None,
-        engine_cache: WorkspaceEngineCache::default(),
-        db_profiles: Vec::new(),
-        active_db_profile_id: None,
-        created_at: "1".to_string(),
-        updated_at: "1".to_string(),
-    };
+fn code_index_payload_forces_full_read_only_mode_without_transport_fields() {
+    let payload = index_payload(r"D:\projects\shop-api", "shop-api");
 
-    let payload = code_index_payload(
-        &workspace,
-        Path::new(r"D:\app\workspaces\shop-api-1\code\cache"),
-    );
-
-    assert!(payload.contains(r"D:\\projects\\shop-api"));
-    assert!(payload.contains(r"D:\\app\\workspaces\\shop-api-1\\code\\cache"));
-    assert!(payload.contains("shop-api"));
-    assert!(!payload.to_ascii_lowercase().contains("password"));
-    assert!(!payload.to_ascii_lowercase().contains("token"));
+    assert_eq!(payload["repo_path"], r"D:\projects\shop-api");
+    assert_eq!(payload["name"], "shop-api");
+    assert_eq!(payload["mode"], "full");
+    assert_eq!(payload["persistence"], false);
+    assert!(payload.get("cache_path").is_none());
+    assert!(payload.get("project_name").is_none());
+    assert!(!payload
+        .to_string()
+        .to_ascii_lowercase()
+        .contains("password"));
+    assert!(!payload.to_string().to_ascii_lowercase().contains("token"));
 }
 
 #[test]
@@ -1218,6 +1373,48 @@ fn code_inventory_extracts_items_from_search_results() {
 }
 
 #[test]
+fn code_inventory_role_buckets_require_class_like_role_names() {
+    let routes = serde_json::json!({ "results": [] });
+    let code = serde_json::json!({
+        "results": [
+            { "name": "OrderService", "qualified_name": "types.OrderService", "label": "Class" },
+            { "name": "OrderRepositoryImpl", "qualified_name": "types.OrderRepositoryImpl", "label": "Class" },
+            { "name": "OrdersController", "qualified_name": "types.OrdersController", "label": "Class" },
+            { "name": "ServiceRegistry", "qualified_name": "types.ServiceRegistry", "label": "Class" },
+            { "name": "services", "qualified_name": "model.services", "label": "Field" },
+            { "name": "sourceRepository", "qualified_name": "config.sourceRepository", "label": "Variable" },
+            { "name": "move_confirmed_handlers", "qualified_name": "code.move_confirmed_handlers", "label": "Function" },
+            { "name": "index_code_repository", "qualified_name": "code.index_code_repository", "label": "Function" }
+        ]
+    });
+    let files = serde_json::json!({ "results": [] });
+
+    let inventory =
+        extract_code_inventory("shop-api".to_string(), None, &routes, &code, &files).unwrap();
+
+    assert_eq!(inventory.services[0].name, "OrderService");
+    assert_eq!(inventory.repositories[0].name, "OrderRepositoryImpl");
+    assert_eq!(inventory.handlers[0].name, "OrdersController");
+    assert!(inventory
+        .classes
+        .iter()
+        .any(|item| item.name == "ServiceRegistry"));
+    assert!(inventory
+        .functions
+        .iter()
+        .any(|item| item.name == "move_confirmed_handlers"));
+    assert!(inventory
+        .functions
+        .iter()
+        .any(|item| item.name == "index_code_repository"));
+    assert!(inventory.unknown.iter().any(|item| item.name == "services"));
+    assert!(inventory
+        .unknown
+        .iter()
+        .any(|item| item.name == "sourceRepository"));
+}
+
+#[test]
 fn code_inventory_extracts_calls_between_known_inventory_items_only() {
     let routes = serde_json::json!({
         "results": [
@@ -1235,11 +1432,24 @@ fn code_inventory_extracts_calls_between_known_inventory_items_only() {
         "rows": [
             {
                 "from": "routes.orders.create",
-                "to": "services.OrderService.create"
+                "to": "services.OrderService.create",
+                "confidence": "0.38",
+                "strategy": "unique_name",
+                "call_expression": "createOrder"
+            },
+            {
+                "from": "routes.orders.create",
+                "to": "services.OrderService.create",
+                "confidence": "0.95",
+                "strategy": "lsp_direct",
+                "call_expression": "OrderService.create"
             },
             {
                 "caller.qualified_name": "services.OrderService.create",
-                "callee.qualified_name": "services.AuditService.record"
+                "callee.qualified_name": "services.AuditService.record",
+                "confidence": 0.75,
+                "strategy": "unique_name",
+                "callExpression": "recordAudit"
             },
             {
                 "from": "routes.orders.create",
@@ -1259,10 +1469,16 @@ fn code_inventory_extracts_calls_between_known_inventory_items_only() {
             CodeCall {
                 from: "routes.orders.create".to_string(),
                 to: "services.OrderService.create".to_string(),
+                confidence: Some(95),
+                strategy: Some("lsp_direct".to_string()),
+                expression: Some("OrderService.create".to_string()),
             },
             CodeCall {
                 from: "services.OrderService.create".to_string(),
                 to: "services.AuditService.record".to_string(),
+                confidence: Some(75),
+                strategy: Some("unique_name".to_string()),
+                expression: Some("recordAudit".to_string()),
             },
         ]
     );
@@ -1294,6 +1510,92 @@ fn code_inventory_rejects_bucket_misclassification_and_conflicting_labels() {
     let error =
         extract_code_inventory("shop-api".to_string(), None, &routes, &code, &empty).unwrap_err();
     assert!(error.contains("서로 다른 label"));
+}
+
+#[test]
+fn code_inventory_discards_obvious_engine_noise() {
+    let routes = serde_json::json!({
+        "results": [
+            { "name": "/api/v1/sessions", "qualified_name": "routes.sessions", "label": "Route" },
+            {
+                "name": "postgresql://user:secret@localhost/app",
+                "qualified_name": "__route__infra__postgresql://user:secret@localhost/app",
+                "label": "Route",
+                "file_path": ".github/workflows/release.yml"
+            }
+        ]
+    });
+    let code = serde_json::json!({
+        "results": [
+            { "name": "#[cfg", "qualified_name": "<decorator:#[cfg>", "label": "Decorator" },
+            { "name": "@authenticated", "qualified_name": "auth.authenticated", "label": "Decorator" }
+        ]
+    });
+    let files = serde_json::json!({ "results": [] });
+
+    let inventory =
+        extract_code_inventory("shop-api".to_string(), None, &routes, &code, &files).unwrap();
+
+    assert_eq!(
+        inventory
+            .routes
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["/api/v1/sessions"]
+    );
+    assert_eq!(
+        inventory
+            .unknown
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["@authenticated"]
+    );
+}
+
+#[test]
+fn code_inventory_downgrades_routes_without_location_or_handles() {
+    let routes = serde_json::json!({
+        "results": [
+            { "name": "GET /located", "qualified_name": "routes.located", "label": "Route", "file_path": "src/routes.rs" },
+            { "name": "GET /handled", "qualified_name": "routes.handled", "label": "Route" },
+            { "name": "GET /string-only", "qualified_name": "routes.string_only", "label": "Route" }
+        ]
+    });
+    let code = serde_json::json!({
+        "results": [
+            { "name": "handled", "qualified_name": "handlers.handled", "label": "Function" }
+        ]
+    });
+    let files = serde_json::json!({ "results": [] });
+    let handles = serde_json::json!({
+        "rows": [
+            { "from": "handlers.handled", "to": "routes.handled" }
+        ]
+    });
+    let mut inventory =
+        extract_code_inventory("shop-api".to_string(), None, &routes, &code, &files).unwrap();
+    attach_code_handles(&handles, &mut inventory);
+
+    downgrade_unverified_routes(&mut inventory);
+
+    assert_eq!(
+        inventory
+            .routes
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["GET /handled", "GET /located"]
+    );
+    let unverified = inventory
+        .unknown
+        .iter()
+        .find(|item| item.name == "GET /string-only")
+        .unwrap();
+    assert_eq!(unverified.kind, "unknown");
+    assert_eq!(unverified.engine_label, "Route");
+    assert_eq!(inventory.summary.routes, 2);
 }
 
 #[test]
@@ -1354,55 +1656,20 @@ fn code_inventory_normalizes_handles_from_handler_to_route_rows() {
 }
 
 #[test]
-fn code_inventory_enriches_real_query_graph_source_location_rows() {
-    let routes = serde_json::json!({ "results": [] });
-    let code = serde_json::json!({
-        "results": [
-            {
-                "name": "createOrder",
-                "qualified_name": "handlers.createOrder",
-                "label": "Function",
-                "file_path": "src/handlers/orders.rs"
-            }
-        ]
-    });
-    let files = serde_json::json!({ "results": [] });
-    let locations = serde_json::json!({
-        "columns": ["source", "path", "start_line", "end_line"],
-        "rows": [
-            ["handlers.createOrder", "src/handlers/orders.rs", "20", "46"]
-        ],
-        "total": 1
-    });
-    let mut inventory =
-        extract_code_inventory("shop-api".to_string(), None, &routes, &code, &files).unwrap();
-
-    assert_eq!(inventory.functions[0].line, None);
-    enrich_code_locations(&locations, &mut inventory).unwrap();
-    assert_eq!(inventory.functions[0].line, Some(20));
-    assert_eq!(inventory.functions[0].column, None);
-    assert_eq!(inventory.functions[0].end_line, Some(46));
-    assert_eq!(inventory.functions[0].end_column, None);
-    assert_eq!(
-        inventory.functions[0].file_path.as_deref(),
-        Some("src/handlers/orders.rs")
-    );
-    assert!(SOURCE_LOCATIONS_QUERY.contains("node.start_line AS start_line"));
-    assert!(SOURCE_LOCATIONS_QUERY.contains("node.start_column AS start_column"));
-    assert!(SOURCE_LOCATIONS_QUERY.contains("node.end_line AS end_line"));
-    assert!(SOURCE_LOCATIONS_QUERY.contains("node.end_column AS end_column"));
-}
-
-#[test]
-fn code_inventory_enriches_six_column_source_location_rows() {
+fn code_inventory_reads_locations_from_the_node_contract() {
     let code = serde_json::json!({
         "results": [{
             "name": "createOrder",
             "qualified_name": "handlers.createOrder",
-            "label": "Function"
+            "label": "Function",
+            "file_path": "src/handlers/orders.rs",
+            "start_line": "20",
+            "start_column": "3",
+            "end_line": "46",
+            "end_column": "18"
         }]
     });
-    let mut inventory = extract_code_inventory(
+    let inventory = extract_code_inventory(
         "shop-api".to_string(),
         None,
         &serde_json::json!({ "results": [] }),
@@ -1410,29 +1677,36 @@ fn code_inventory_enriches_six_column_source_location_rows() {
         &serde_json::json!({ "results": [] }),
     )
     .unwrap();
-    let locations = serde_json::json!({
-        "columns": ["source", "path", "start_line", "start_column", "end_line", "end_column"],
-        "rows": [["handlers.createOrder", "src/handlers/orders.rs", "20", "3", "46", "18"]]
-    });
-
-    enrich_code_locations(&locations, &mut inventory).unwrap();
     let item = &inventory.functions[0];
     assert_eq!(
         (item.line, item.column, item.end_line, item.end_column),
         (Some(20), Some(3), Some(46), Some(18))
     );
+    assert_eq!(item.file_path.as_deref(), Some("src/handlers/orders.rs"));
+
+    let query = inventory_nodes_query();
+    assert!(query.contains("node.start_line AS start_line"));
+    assert!(query.contains("node.start_column AS start_column"));
+    assert!(query.contains("node.end_line AS end_line"));
+    assert!(query.contains("node.end_column AS end_column"));
 }
 
 #[test]
-fn code_engine_queries_use_exact_labels_pagination_and_safe_aliases() {
-    let payload = code_label_payload("shop-api", "Route", r"D:\cache", 500);
+fn code_engine_queries_use_one_bounded_node_contract_and_safe_aliases() {
+    let query = inventory_nodes_query();
 
-    assert_eq!(payload["label"], "Route");
-    assert_eq!(payload["limit"], 500);
-    assert_eq!(payload["offset"], 500);
-    assert!(payload.get("query").is_none());
+    assert!(query.starts_with("MATCH (node:Route|Function|Method|Class|"));
+    assert!(query.contains("|Package|Resource|File)"));
+    assert!(!query.contains("|Union|"));
+    assert!(query.contains("labels(node) AS labels"));
+    assert!(query.ends_with("LIMIT 100000"));
+    assert!(!query.contains("SEMANTICALLY_RELATED"));
+    assert!(!query.contains("SIMILAR_TO"));
     assert!(CALLS_QUERY.contains(" AS source"));
     assert!(CALLS_QUERY.contains(" AS target"));
+    assert!(CALLS_QUERY.contains(" AS confidence"));
+    assert!(CALLS_QUERY.contains(" AS strategy"));
+    assert!(CALLS_QUERY.contains(" AS call_expression"));
     assert!(!CALLS_QUERY.contains(" AS from"));
     assert!(HANDLES_QUERY.starts_with("MATCH (handler)-[:HANDLES]->(route)"));
     assert!(HANDLES_QUERY.contains(" AS source"));
@@ -1442,7 +1716,7 @@ fn code_engine_queries_use_exact_labels_pagination_and_safe_aliases() {
 #[test]
 fn bundled_code_engine_fixture_preserves_route_handler_call_and_location() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "fixtures/codebase-memory-contract-v0.8.1.json"
+        "fixtures/codebase-memory-contract-v0.9.0.json"
     ))
     .unwrap();
     let project = fixture["project"].as_str().unwrap().to_string();
@@ -1457,23 +1731,21 @@ fn bundled_code_engine_fixture_preserves_route_handler_call_and_location() {
 
     inventory.calls = extract_code_calls(&fixture["calls"], &inventory);
     attach_code_handles(&fixture["handles"], &mut inventory);
-    enrich_code_locations(&fixture["sourceLocations"], &mut inventory).unwrap();
 
-    assert_eq!(fixture["engineVersion"], "0.8.1");
+    assert_eq!(fixture["engineVersion"], "0.9.0");
     assert_eq!(inventory.routes.len(), 2);
     assert_eq!(inventory.handlers.len(), 1);
-    assert_eq!(inventory.handlers[0].name, "bootstrap_admin");
-    assert_eq!(inventory.handlers[0].line, Some(69));
-    assert_eq!(inventory.handlers[0].end_line, Some(86));
+    assert_eq!(inventory.handlers[0].name, "processCreationForm");
+    assert_eq!(inventory.handlers[0].line, Some(77));
+    assert_eq!(inventory.handlers[0].end_line, Some(87));
     assert_eq!(inventory.handles.len(), 1);
-    assert_eq!(
-        inventory.handles[0].route,
-        "__route__POST__/bootstrap-admin"
-    );
+    assert_eq!(inventory.handles[0].route, "__route__POST__/owners/new");
     assert_eq!(inventory.calls.len(), 1);
+    assert_eq!(inventory.calls[0].confidence, Some(75));
+    assert_eq!(inventory.calls[0].strategy.as_deref(), Some("unique_name"));
     assert_eq!(
         inventory.calls[0].to,
-        "D-meeting-overlay-assistant.server.app.api.http.routes.auth._to_session_response"
+        "spring-petclinic.src.main.java.org.springframework.samples.petclinic.model.BaseEntity.getId"
     );
     assert_eq!(inventory.files.len(), 1);
     assert_eq!(inventory.files[0].engine_label, "File");
@@ -1537,17 +1809,13 @@ fn focused_code_search_uses_one_bounded_compact_regex_query() {
         r"(^|[^A-Za-z0-9_])order\[id\]([^A-Za-z0-9_]|$)"
     );
 
-    let args = focused_code_search_args("shop-api", "orders", Some("^src/db/"), 100).unwrap();
-    assert_eq!(args.iter().filter(|arg| *arg == "search_code").count(), 1);
-    assert_eq!(args[0..2], ["cli", "search_code"]);
-    assert_eq!(args.len(), 3);
-    let payload: serde_json::Value = serde_json::from_str(&args[2]).unwrap();
+    let payload = focused_code_search_payload("shop-api", "orders", Some("^src/db/"), 100).unwrap();
     assert_eq!(payload["regex"], true);
     assert_eq!(payload["mode"], "compact");
     assert_eq!(payload["context"], 0);
     assert_eq!(payload["limit"], 32);
     assert_eq!(payload["path_filter"], "^src/db/");
-    assert!(focused_code_search_args("shop-api", "orders", Some("\n"), 8).is_err());
+    assert!(focused_code_search_payload("shop-api", "orders", Some("\n"), 8).is_err());
 }
 
 #[test]
@@ -1600,22 +1868,8 @@ fn focused_code_search_discards_bodies_and_reports_every_partial_reason() {
 #[test]
 fn corrupt_workspace_is_isolated_from_the_healthy_workspace_list() {
     let root = temp_root("workspace-corruption-isolation");
-    let healthy = create_workspace(
-        &root,
-        CreateWorkspaceRequest {
-            name: "Healthy API".to_string(),
-            repo_path: r"D:\projects\healthy-api".to_string(),
-        },
-    )
-    .unwrap();
-    let corrupt = create_workspace(
-        &root,
-        CreateWorkspaceRequest {
-            name: "Corrupt API".to_string(),
-            repo_path: r"D:\projects\corrupt-api".to_string(),
-        },
-    )
-    .unwrap();
+    let healthy = create_local_workspace(&root, "Healthy API");
+    let corrupt = create_local_workspace(&root, "Corrupt API");
     let workspaces_dir = base_paths(&root).workspaces_dir;
     fs::write(
         workspaces_dir.join(&corrupt.id).join("workspace.json"),
@@ -1637,14 +1891,7 @@ fn corrupt_workspace_is_isolated_from_the_healthy_workspace_list() {
 #[test]
 fn valid_workspace_backup_recovers_and_repairs_active_db_profile_without_overwrite() {
     let root = temp_root("workspace-backup-repair");
-    let mut workspace = create_workspace(
-        &root,
-        CreateWorkspaceRequest {
-            name: "Shop API".to_string(),
-            repo_path: r"D:\projects\shop-api".to_string(),
-        },
-    )
-    .unwrap();
+    let mut workspace = create_local_workspace(&root, "Shop API");
     let profile = test_db_profile(DbSource::Postgres, "production-db", None);
     workspace.active_db_profile_id = Some(profile.id.clone());
     workspace.db_profiles.push(profile.clone());
@@ -1686,14 +1933,7 @@ fn valid_workspace_backup_recovers_and_repairs_active_db_profile_without_overwri
 #[test]
 fn incomplete_workspace_temp_write_leaves_the_last_complete_generation_readable() {
     let root = temp_root("workspace-mid-write");
-    let mut workspace = create_workspace(
-        &root,
-        CreateWorkspaceRequest {
-            name: "Shop API".to_string(),
-            repo_path: r"D:\projects\shop-api".to_string(),
-        },
-    )
-    .unwrap();
+    let mut workspace = create_local_workspace(&root, "Shop API");
     let original = workspace.clone();
     workspace.name = "Shop API Updated".to_string();
     workspace.updated_at = "2".to_string();

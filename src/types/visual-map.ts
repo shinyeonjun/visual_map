@@ -25,17 +25,26 @@ export type ApiReadingAnswer = {
 export type ApiReadingStep = ImpactReviewItem & {
   depth: number;
   lane: "route" | "handler" | "service-function" | "repository-query" | string;
+  laneBasis: "engine-node" | "confirmed-handles" | "name-inferred" | string;
   incomingEvidence: { kind: string; text: string }[];
 };
 
 export type ImpactReviewBoard = {
   subject: string;
   scope: string;
+  changeIntent?: ChangeIntent | null;
   lanes: ImpactReviewLane[];
   markdownSummary: string;
 };
 
-export type ImpactReviewLane = {
+export type ChangeIntentKind = "rename" | "drop" | "type" | "nullability";
+
+export type ChangeIntent = {
+  kind: ChangeIntentKind;
+  value?: string | null;
+};
+
+type ImpactReviewLane = {
   id: "direct" | "candidates" | "unknowns" | "checks" | string;
   order: number;
   title: string;
@@ -67,6 +76,7 @@ export type VisualNode = {
   subtitle?: string | null;
   layer: string;
   source: string;
+  location?: SourceLocation | null;
 };
 
 export type VisualEdge = {
@@ -96,7 +106,7 @@ export type InventoryItem = {
   nullable?: boolean | null;
 };
 
-export type SourceLocation = {
+type SourceLocation = {
   path: string;
   line?: number | null;
   column?: number | null;
@@ -126,7 +136,37 @@ export type InventorySnapshot = {
   items: InventoryItem[];
 };
 
-export type SnapshotMetadata = {
+export type InventoryBootstrap = {
+  snapshot: InventorySnapshot;
+  summary: InventorySummary;
+};
+
+export type InventorySummary = {
+  workspaceId: string;
+  savedAt: string;
+  totalItems: number;
+  totalLinks: number;
+  sources: Record<string, InventorySourceSummary>;
+};
+
+type InventorySourceSummary = {
+  total: number;
+  groups: Record<string, number>;
+};
+
+export type InventorySearchResult = {
+  hits: InventorySearchHit[];
+  total: number;
+  counts: Record<string, number>;
+  truncated: boolean;
+};
+
+type InventorySearchHit = {
+  group: "api" | "code" | "file" | "table" | "column" | string;
+  item: InventoryItem;
+};
+
+type SnapshotMetadata = {
   code?: SnapshotSourceMetadata | null;
   db?: SnapshotSourceMetadata | null;
   architecture?: unknown;
@@ -134,7 +174,23 @@ export type SnapshotMetadata = {
   gaps?: SnapshotGap[];
 };
 
-export type SnapshotSourceMetadata = {
+export type AnalysisCoverage = {
+  code: AnalysisCoverageSource;
+  db: AnalysisCoverageSource;
+  gaps: number;
+  capabilities: number;
+  reindexRequired: boolean;
+};
+
+type AnalysisCoverageSource = {
+  available: boolean;
+  observed: number | null;
+  total: number | null;
+  limit: number | null;
+  truncated: boolean;
+};
+
+type SnapshotSourceMetadata = {
   savedAt: string;
   engineId?: string | null;
   engineVersion?: string | null;
@@ -147,18 +203,20 @@ export type SnapshotSourceMetadata = {
   resultCount?: number | null;
   totalTables?: number | null;
   truncated?: boolean | null;
+  sourceRevision?: string | null;
+  sourceRevisionLabel?: string | null;
   sourcePath?: string | null;
   sourceType: string;
   profileId?: string | null;
 };
 
-export type SnapshotMigration = {
+type SnapshotMigration = {
   sourceSchemaVersion?: number | null;
   reindexRequired?: boolean;
   notes?: string[];
 };
 
-export type SnapshotGap = {
+type SnapshotGap = {
   id: string;
   kind: string;
   message: string;

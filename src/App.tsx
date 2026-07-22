@@ -1,10 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import "./styles/index.css";
 import type { AppPaths } from "./components/common/DevDiagnostics";
 import { DevDiagnostics } from "./components/common/DevDiagnostics";
-import type { View } from "./components/common/ViewSwitch";
-import { AtlasView } from "./components/atlas/AtlasView";
 import { WorkbenchView } from "./components/workbench/WorkbenchView";
 import { currentOperationStatus, repoPathErrorFor } from "./app/appState";
 import { buildDbProfileControls, buildVisualMapControls, buildWorkspaceControls } from "./app/controlBuilders";
@@ -15,18 +13,19 @@ import { useEngineRegistry } from "./hooks/useEngineRegistry";
 import { useVisualMap } from "./hooks/useVisualMap";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { codeInventoryFromSnapshot, dbInventoryFromSnapshot } from "./inventory/snapshotRestore";
-import { codeInventoryItemCount, dbInventoryTableKey, type CodeInventory, type DbInventory, type DbProfile, type Workspace } from "./types/workspace";
-import type { InventorySnapshot } from "./types/visual-map";
+import { codeInventoryItemCount } from "./types/workspace";
+import type { InventoryBootstrap } from "./types/visual-map";
+import { prepareSearchIndex } from "./visual/search";
 
 function App() {
-  const [view, setViewState] = useState<View>("workbench");
+  const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
   const [appPaths, setAppPaths] = useState<AppPaths | null>(null);
   const [appPathError, setAppPathError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [latestOperationAction, setLatestOperationAction] = useState<string | null>(null);
+  const [snapshotRestoring, setSnapshotRestoring] = useState(false);
   const [snapshotRecoveryNotice, setSnapshotRecoveryNotice] = useState<string | null>(null);
   const busyActionRef = useRef<string | null>(null);
-  const codeInventoryRef = useRef<CodeInventory | null>(null);
-  const dbInventoryRef = useRef<DbInventory | null>(null);
 
   useEffect(() => {
     if (!import.meta.env.DEV || !hasTauriRuntime()) {
@@ -44,30 +43,27 @@ function App() {
     }
 
     busyActionRef.current = action;
+    setLatestOperationAction(action);
     setBusyAction(action);
     try {
       await task();
     } finally {
       if (busyActionRef.current === action) {
         busyActionRef.current = null;
+        setLatestOperationAction(action);
         setBusyAction(null);
       }
     }
   }
 
-  function setView(view: View) {
-    setViewState(view);
-  }
-
   const workspaces = useWorkspaces({ withBusy });
   const { engineRegistry, engineError } = useEngineRegistry();
-  const visual = useVisualMap({ currentWorkspaceId: workspaces.currentWorkspace?.id ?? null });
-  async function saveInventorySnapshot(
-    workspaceId: string,
-    codeInventory: CodeInventory | null,
-    dbInventory: DbInventory | null,
-  ) {
-    if (await visual.saveInventorySnapshot(workspaceId, codeInventory, dbInventory)) {
+  const visual = useVisualMap({
+    currentWorkspaceId: workspaces.currentWorkspace?.id ?? null,
+    onOperation: setLatestOperationAction,
+  });
+  async function refreshInventorySnapshot(workspaceId: string) {
+    if (await visual.refreshInventorySnapshot(workspaceId)) {
       setSnapshotRecoveryNotice(null);
     }
   }
@@ -76,8 +72,7 @@ function App() {
     withBusy,
     setCurrentWorkspace: workspaces.setCurrentWorkspace,
     refreshWorkspaces: workspaces.refreshWorkspaces,
-    saveInventorySnapshot,
-    getDbInventory: () => dbInventoryRef.current,
+    refreshInventorySnapshot,
   });
   const db = useDbProfiles({
     currentWorkspace: workspaces.currentWorkspace,
@@ -85,91 +80,44 @@ function App() {
     setCurrentWorkspace: workspaces.setCurrentWorkspace,
     refreshWorkspaces: workspaces.refreshWorkspaces,
     clearVisualMap: visual.clearVisualMap,
-    saveInventorySnapshot,
-    getCodeInventory: () => codeInventoryRef.current,
+    refreshInventorySnapshot,
   });
 
-  codeInventoryRef.current = code.codeInventory;
-  dbInventoryRef.current = db.dbInventory;
-
   useEffect(() => {
+    if (!code.codeInventory && !db.dbInventory) {
+      return;
+    }
+    const timer = window.setTimeout(() => prepareSearchIndex(code.codeInventory, db.dbInventory), 0);
+    return () => window.clearTimeout(timer);
+  }, [code.codeInventory, db.dbInventory]);
+
+  useLayoutEffect(() => {
     const workspace = workspaces.currentWorkspace;
     if (!workspace) {
+      setSnapshotRestoring(false);
       return;
     }
 
     setSnapshotRecoveryNotice(null);
+    setSnapshotRestoring(true);
     let cancelled = false;
-    const restoreCachedInventory = async (fallbackSnapshot?: InventorySnapshot) => {
-      const expectsCode = fallbackSnapshot ? snapshotHasSource(fallbackSnapshot, "code") : false;
-      const expectsDb = fallbackSnapshot ? snapshotHasSource(fallbackSnapshot, "db") : false;
-      const restoredCode = await cachedCodeInventory(workspace, () => cancelled);
-      if (cancelled) {
-        return;
-      }
-
-      const profile = indexedDbProfile(workspace);
-      const restoredDb = profile ? await cachedDbInventory(workspace, profile, () => cancelled) : null;
-      if (cancelled) {
-        return;
-      }
-
-      const fallbackCode = fallbackSnapshot
-        ? codeInventoryFromSnapshot(fallbackSnapshot, workspace.codeProject ?? workspace.name)
-        : null;
-      const fallbackDb = fallbackSnapshot
-        ? dbInventoryFromSnapshot(
-            fallbackSnapshot,
-            db.activeProfile?.id ?? workspace.activeDbProfileId ?? "snapshot",
-          )
-        : null;
-      const codeCacheRecovered =
-        restoredCode !== null &&
-        (!fallbackSnapshot?.items.some((item) => item.source === "code") || codeInventoryItemCount(restoredCode) > 0);
-      const dbCacheRecovered =
-        restoredDb !== null &&
-        (!fallbackSnapshot?.items.some((item) => item.source === "db") || restoredDb.tables.length > 0);
-      if (codeCacheRecovered && restoredCode && codeInventoryItemCount(restoredCode) > 0) {
-        code.restoreCodeInventory(restoredCode);
-      } else if (expectsCode && fallbackCode && codeInventoryItemCount(fallbackCode) > 0) {
-        code.restoreCodeInventory(fallbackCode);
-      }
-      if (dbCacheRecovered && restoredDb?.tables.length) {
-        db.restoreDbInventory(restoredDb, dbInventoryTableKey(restoredDb.tables[0]));
-      } else if (expectsDb && fallbackDb?.tables.length) {
-        db.restoreDbInventory(fallbackDb, null);
-      }
-
-      const recoveredEveryExpectedSource = (!expectsCode || codeCacheRecovered) && (!expectsDb || dbCacheRecovered);
-      if ((restoredCode || restoredDb) && (!fallbackSnapshot || recoveredEveryExpectedSource)) {
-        setSnapshotRecoveryNotice(null);
-        await visual.saveInventorySnapshot(workspace.id, restoredCode, restoredDb);
-      } else if (fallbackSnapshot) {
-        const missing = [expectsCode && !codeCacheRecovered ? "코드" : null, expectsDb && !dbCacheRecovered ? "DB" : null]
-          .filter(Boolean)
-          .join("·");
-        visual.noteSnapshotLoaded(fallbackSnapshot.savedAt);
-        setSnapshotRecoveryNotice(
-          `${missing || "일부"} 캐시를 복구하지 못해 기존 snapshot을 보존했습니다. 코드와 DB를 다시 읽어 주세요.`,
-        );
-      }
-    };
-
-    void invoke<InventorySnapshot>("load_inventory_snapshot", { workspaceId: workspace.id })
-      .then((snapshot) => {
-        if (cancelled) {
+    void invoke<InventoryBootstrap | null>("load_inventory_bootstrap", { workspaceId: workspace.id })
+      .then((bootstrap) => {
+        if (cancelled || !bootstrap) {
           return;
         }
+        const { snapshot, summary } = bootstrap;
         if (snapshot.staleReasons?.length) {
-          void restoreCachedInventory(snapshot);
+          visual.noteSnapshotLoaded(snapshot);
           return;
         }
-        visual.noteSnapshotLoaded(snapshot.savedAt);
+        visual.noteSnapshotLoaded(snapshot);
 
-        const restoredCode = codeInventoryFromSnapshot(snapshot, workspace.codeProject ?? workspace.name);
+        const restoredCode = codeInventoryFromSnapshot(snapshot, workspace.codeProject ?? workspace.name, summary);
         const restoredDb = dbInventoryFromSnapshot(
           snapshot,
           db.activeProfile?.id ?? workspace.activeDbProfileId ?? "snapshot",
+          summary,
         );
         if (codeInventoryItemCount(restoredCode) > 0) {
           code.restoreCodeInventory(restoredCode);
@@ -179,7 +127,14 @@ function App() {
         }
       })
       .catch(() => {
-        void restoreCachedInventory();
+        if (!cancelled) {
+          setSnapshotRecoveryNotice("저장된 읽기 결과를 확인할 수 없습니다. 코드와 DB를 다시 읽어 주세요.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSnapshotRestoring(false);
+        }
       });
 
     return () => {
@@ -187,10 +142,33 @@ function App() {
     };
   }, [workspaces.currentWorkspace?.id]);
 
-  const busy = Boolean(busyAction);
+  useEffect(() => {
+    const workspaceId = workspaces.currentWorkspace?.id;
+    if (!workspaceId || !hasTauriRuntime()) {
+      return;
+    }
+
+    const refreshFreshness = () => {
+      void invoke<string[]>("refresh_snapshot_freshness", { workspaceId })
+        .then((reasons) => {
+          visual.noteSnapshotFreshness(reasons);
+          setSnapshotRecoveryNotice(null);
+        })
+        .catch(() => {
+          // A workspace without a saved snapshot has nothing to refresh yet.
+        });
+    };
+
+    window.addEventListener("focus", refreshFreshness);
+    return () => window.removeEventListener("focus", refreshFreshness);
+  }, [workspaces.currentWorkspace?.id]);
+
+  const activeBusyAction = busyAction ?? (snapshotRestoring ? "snapshot-restore" : null);
+  const busy = Boolean(activeBusyAction);
   const repoPathError = repoPathErrorFor(workspaces.repoPath, workspaces.repoSourceMode);
   const currentStatus = currentOperationStatus({
-    busyAction,
+    busyAction: activeBusyAction,
+    latestAction: latestOperationAction,
     workspaceStatus: workspaces.workspaceStatus,
     workspaceError: workspaces.workspaceError,
     codeStatus: code.codeStatus,
@@ -206,8 +184,13 @@ function App() {
   });
   const operationStatus =
     snapshotRecoveryNotice && currentStatus.phase !== "running" && currentStatus.phase !== "error"
-      ? { phase: "error" as const, label: "Snapshot", message: snapshotRecoveryNotice }
+      ? { phase: "error" as const, label: "저장 결과", message: snapshotRecoveryNotice }
       : currentStatus;
+  async function refreshGithubWorkspace() {
+    if (await workspaces.refreshGithubWorkspace()) {
+      await code.indexCodeRepository();
+    }
+  }
   const workspaceControls = buildWorkspaceControls({
     operationStatus,
     repoPathError,
@@ -215,10 +198,9 @@ function App() {
     code,
     engineRegistry,
     engineError,
-    db,
-    visual,
     busy,
-    busyAction,
+    busyAction: activeBusyAction,
+    refreshGithubWorkspace: () => void refreshGithubWorkspace(),
   });
   const dbProfileControls = buildDbProfileControls({
     hasWorkspace: Boolean(workspaces.currentWorkspace),
@@ -228,26 +210,15 @@ function App() {
     code,
     visual,
     busy,
-    busyAction,
+    busyAction: activeBusyAction,
   });
   const visualMapControls = buildVisualMapControls({ visual, code, db });
   const devSlot = import.meta.env.DEV && hasTauriRuntime() ? <DevDiagnostics paths={appPaths} error={appPathError} /> : null;
 
-  return view === "workbench" ? (
+  return (
     <WorkbenchView
-      view={view}
-      setView={setView}
-      workspaceControls={workspaceControls}
-      dbProfileControls={dbProfileControls}
-      visualMapControls={visualMapControls}
-      engineRegistry={engineRegistry}
-      engineError={engineError}
-      devSlot={devSlot}
-    />
-  ) : (
-    <AtlasView
-      view={view}
-      setView={setView}
+      sourceManagerOpen={sourceManagerOpen}
+      setSourceManagerOpen={setSourceManagerOpen}
       workspaceControls={workspaceControls}
       dbProfileControls={dbProfileControls}
       visualMapControls={visualMapControls}
@@ -259,42 +230,3 @@ function App() {
 }
 
 export default App;
-
-async function cachedCodeInventory(workspace: Workspace, cancelled: () => boolean): Promise<CodeInventory | null> {
-  if (!workspace.codeProject || cancelled()) {
-    return null;
-  }
-
-  try {
-    return await invoke<CodeInventory>("get_code_inventory", { workspaceId: workspace.id });
-  } catch {
-    return null;
-  }
-}
-
-async function cachedDbInventory(
-  workspace: Workspace,
-  profile: DbProfile,
-  cancelled: () => boolean,
-): Promise<DbInventory | null> {
-  if (!profile.lastIndexedAt || cancelled()) {
-    return null;
-  }
-
-  try {
-    return await invoke<DbInventory>("get_db_inventory", { workspaceId: workspace.id, profileId: profile.id });
-  } catch {
-    return null;
-  }
-}
-
-function indexedDbProfile(workspace: Workspace): DbProfile | null {
-  const active = workspace.activeDbProfileId
-    ? workspace.dbProfiles.find((profile) => profile.id === workspace.activeDbProfileId)
-    : null;
-  return active?.lastIndexedAt ? active : workspace.dbProfiles.find((profile) => profile.lastIndexedAt) ?? null;
-}
-
-function snapshotHasSource(snapshot: InventorySnapshot, source: "code" | "db"): boolean {
-  return Boolean(snapshot.metadata?.[source]) || snapshot.items.some((item) => item.source === source);
-}

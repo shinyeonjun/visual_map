@@ -5,8 +5,13 @@ import type { useWorkspaces } from "../hooks/useWorkspaces";
 import type { OperationStatus } from "../types/operation";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../types/controls";
 import type { EngineRegistry } from "../types/engine";
-import { codeInventoryCodeItems, dbProfileSourceUsesPath, type CodeInventoryItem } from "../types/workspace";
-import type { VisualEdge, VisualNode } from "../types/visual-map";
+import {
+  codeInventoryCodeItems,
+  dbProfileSourceUsesPath,
+  workspaceRepoInputValue,
+  type CodeInventoryItem,
+} from "../types/workspace";
+import { dbColumnNodeId, dbTableNodeId, tableKeyFromDbNodeId } from "../visual/nodeIds";
 
 type WorkspacesState = ReturnType<typeof useWorkspaces>;
 type CodeState = ReturnType<typeof useCodeInventory>;
@@ -20,10 +25,9 @@ export function buildWorkspaceControls({
   code,
   engineRegistry,
   engineError,
-  db,
-  visual,
   busy,
   busyAction,
+  refreshGithubWorkspace,
 }: {
   operationStatus: OperationStatus;
   repoPathError: string | null;
@@ -31,15 +35,14 @@ export function buildWorkspaceControls({
   code: CodeState;
   engineRegistry: EngineRegistry | null;
   engineError: string | null;
-  db: DbState;
-  visual: VisualState;
   busy: boolean;
   busyAction: string | null;
+  refreshGithubWorkspace: () => void;
 }): WorkspaceControls {
   const currentWorkspaceMatchesForm = Boolean(
     workspaces.currentWorkspace &&
       workspaces.currentWorkspace.name === workspaces.workspaceName.trim() &&
-      workspaces.currentWorkspace.repoPath === workspaces.repoPath.trim(),
+      workspaceRepoInputValue(workspaces.currentWorkspace) === workspaces.repoPath.trim(),
   );
   const codeEngine = engineRegistry?.engines.find((engine) => engine.role === "code") ?? null;
   const codeIndexBlockedReason = engineError
@@ -49,6 +52,7 @@ export function buildWorkspaceControls({
       : null;
 
   return {
+    initialized: workspaces.initialized,
     operationStatus,
     workspaces: workspaces.workspaces,
     recoveryWarnings: workspaces.recoveryWarnings,
@@ -67,8 +71,9 @@ export function buildWorkspaceControls({
     busy,
     creating: busyAction === "workspace-create",
     opening: busyAction === "workspace-open",
+    refreshing: busyAction === "workspace-refresh",
+    deleting: busyAction === "workspace-delete",
     codeIndexing: busyAction === "code-index",
-    codeLoading: busyAction === "code-load",
     canIndexCode: !codeIndexBlockedReason,
     codeIndexBlockedReason,
     canCreateWorkspace: Boolean(
@@ -83,20 +88,12 @@ export function buildWorkspaceControls({
     pickRepoPath: () => void workspaces.pickRepoPath(),
     createWorkspace: workspaces.createWorkspace,
     openWorkspace: workspaces.openWorkspace,
+    refreshGithubWorkspace,
     indexCodeRepository: () => void code.indexCodeRepository(),
-    loadCodeInventory: () => void code.loadCodeInventory(),
-    selectCodeItem: (item) => {
-      code.setSelectedCodeItem(item);
-      db.setSelectedDbTableKey(null);
-      visual.showMapMode(codeItemMode(item), `code:${item.id}`);
-    },
     refreshWorkspaces: () => void workspaces.refreshWorkspaces(),
     repairWorkspaceFromBackup: (workspaceId) => void workspaces.repairWorkspaceFromBackup(workspaceId),
+    deleteWorkspace: (workspaceId) => void workspaces.deleteWorkspace(workspaceId),
   };
-}
-
-function codeItemMode(item: CodeInventoryItem): string {
-  return item.kind === "route" || item.kind === "api" ? "api-flow" : "search-focus";
 }
 
 export function buildDbProfileControls({
@@ -146,9 +143,8 @@ export function buildDbProfileControls({
     errorDetail: db.dbErrorDetail,
     busy,
     saving: busyAction === "db-save",
-    testing: busyAction === "db-test",
     indexing: busyAction === "db-index",
-    loading: busyAction === "db-load",
+    deleting: busyAction === "db-delete",
     canSaveProfile: Boolean(
       !activeProfileMatchesForm &&
         db.dbProfileName.trim() &&
@@ -160,32 +156,24 @@ export function buildDbProfileControls({
         db.activeProfile &&
         (dbProfileSourceUsesPath(db.activeProfile.source) || db.dbConnectionString.trim()),
     ),
-    canTestConnection: Boolean(
-      canRunDbEngine &&
-      activeProfileMatchesForm &&
-        db.activeProfile &&
-        (dbProfileSourceUsesPath(db.activeProfile.source) || db.dbConnectionString.trim()),
-    ),
     dbIndexBlockedReason,
-    canLoadInventory: Boolean(db.activeProfile),
     setProfileName: db.setDbProfileName,
     setProfileSource: db.setDbProfileSource,
     setProfilePath: db.setDbProfilePath,
     setConnectionString: db.setDbConnectionString,
-    pickPath: () => void db.pickDbPath(),
+    pickPath: (directory) => void db.pickDbPath(directory),
     saveProfile: () => void db.saveDbProfile(),
-    testConnection: () => void db.testDbConnection(),
     indexProfile: () => void db.indexDbProfile(),
-    loadInventory: () => void db.loadDbInventory(),
-    selectTable: (tableKey) => {
+    deleteProfile: () => void db.deleteDbProfile(),
+    openTable: (tableKey) => {
       db.setSelectedDbTableKey(tableKey);
       code.setSelectedCodeItem(null);
-      visual.showMapMode("table-usage", `db:table:${tableKey}`);
+      visual.showMapMode("table-usage", dbTableNodeId(tableKey));
     },
-    selectColumn: (tableKey, columnName) => {
+    openColumn: (tableKey, columnName) => {
       db.setSelectedDbTableKey(tableKey);
       code.setSelectedCodeItem(null);
-      visual.showMapMode("column-impact", `db:column:${tableKey}:${columnName}`);
+      visual.showMapMode("column-impact", dbColumnNodeId(tableKey, columnName));
     },
   };
 }
@@ -207,11 +195,33 @@ export function buildVisualMapControls({
     db.setSelectedDbTableKey(tableKey);
     code.setSelectedCodeItem(null);
   };
+  const showMode = (mode: string, focusId?: string | null) => {
+    if (focusId?.startsWith("code:")) {
+      code.setSelectedCodeItem(codeItemFromNodeId(focusId, code.codeInventory));
+      db.setSelectedDbTableKey(null);
+    } else {
+      const tableKey = focusId ? tableKeyFromDbNodeId(focusId) : null;
+      if (tableKey) {
+        selectDbOnly(tableKey);
+      } else {
+        code.setSelectedCodeItem(null);
+        db.setSelectedDbTableKey(null);
+      }
+    }
+    visual.showMapMode(mode, focusId);
+  };
 
   return {
     currentMap: visual.visualMap,
     mode: visual.mapMode,
+    focusId: visual.mapFocusId,
+    loading: visual.visualMapLoading,
+    enriching: visual.visualMapEnriching,
+    changeIntent: visual.changeIntent,
     snapshotSavedAt: visual.snapshotSavedAt,
+    snapshotStaleReasons: visual.snapshotStaleReasons,
+    snapshotSourceSummary: visual.snapshotSourceSummary,
+    analysisCoverage: visual.analysisCoverage,
     projectionElapsedMs: visual.projectionElapsedMs,
     searchQuery: visual.searchQuery,
     searchPopoverOpen: visual.searchPopoverOpen,
@@ -226,7 +236,8 @@ export function buildVisualMapControls({
         selectCodeItem: selectCodeOnly,
         selectDbTable: selectDbOnly,
       }),
-    showMode: visual.showMapMode,
+    showMode,
+    setChangeIntent: visual.setChangeIntent,
     runSearch: () =>
       visual.runSearch({
         codeInventory: code.codeInventory,
@@ -237,50 +248,10 @@ export function buildVisualMapControls({
     selectSearchResult: visual.selectSearchResult,
     openSearchPopover: visual.openSearchPopover,
     closeSearchPopover: visual.closeSearchPopover,
-    selectNode: (node: VisualNode) => {
-      visual.setSelectedVisualNode(node);
-      visual.setSelectedVisualEdge(null);
-      if (node.id.startsWith("db:table:")) {
-        selectDbOnly(node.id.slice("db:table:".length));
-      } else if (node.id.startsWith("db:column:")) {
-        const tableKey = tableKeyFromColumnNodeId(node.id);
-        if (tableKey) {
-          selectDbOnly(tableKey);
-        }
-      } else if (node.id.startsWith("code:")) {
-        const item = codeItemFromNodeId(node.id, code.codeInventory);
-        if (item) {
-          selectCodeOnly(item);
-        } else {
-          db.setSelectedDbTableKey(null);
-        }
-      }
-    },
-    selectEdge: (edge: VisualEdge) => {
-      visual.setSelectedVisualEdge(edge);
-      visual.setSelectedVisualNode(null);
-      const tableKey = tableKeyFromDbNodeId(edge.from) ?? tableKeyFromDbNodeId(edge.to);
-      if (tableKey) {
-        selectDbOnly(tableKey);
-      } else {
-        db.setSelectedDbTableKey(null);
-      }
-    },
+    selectNode: visual.setSelectedVisualNode,
+    selectEdge: visual.setSelectedVisualEdge,
     clearSelection: visual.clearVisualSelection,
   };
-}
-
-function tableKeyFromDbNodeId(nodeId: string): string | null {
-  if (nodeId.startsWith("db:table:")) {
-    return nodeId.slice("db:table:".length);
-  }
-  return tableKeyFromColumnNodeId(nodeId);
-}
-
-function tableKeyFromColumnNodeId(nodeId: string): string | null {
-  const body = nodeId.startsWith("db:column:") ? nodeId.slice("db:column:".length) : "";
-  const splitIndex = body.lastIndexOf(":");
-  return splitIndex > 0 ? body.slice(0, splitIndex) : null;
 }
 
 function codeItemFromNodeId(nodeId: string, inventory: CodeState["codeInventory"]): CodeInventoryItem | null {

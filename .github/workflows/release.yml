@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           repository: shinyeonjun/rdb-memory-mcp
-          ref: acedac7bcc92f6f2c25b5890f121b64da2a90779
+          ref: 35ed83de33e51eef74a5276c625cb03b24e020c4
           path: database-engine
 
       - name: Install pinned Rust toolchain
@@ -56,6 +56,26 @@ jobs:
 
       - name: Build pinned database CLI
         run: cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path database-engine/Cargo.toml
+
+      - name: Seed required database evidence
+        shell: pwsh
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+        run: |
+          @'
+          CREATE TABLE users (id BIGSERIAL PRIMARY KEY, email VARCHAR(255) NOT NULL UNIQUE);
+          CREATE TABLE orders (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id), status VARCHAR(32) NOT NULL);
+          CREATE INDEX idx_orders_status ON orders(status);
+          '@ | docker exec -i $env:POSTGRES_CONTAINER psql -U postgres -d backend_map_smoke -v ON_ERROR_STOP=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @'
+          CREATE TABLE users (id BIGINT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(255) NOT NULL UNIQUE);
+          CREATE TABLE orders (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, status VARCHAR(32) NOT NULL, CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES users(id));
+          CREATE INDEX idx_orders_status ON orders(status);
+          '@ | docker exec -i $env:MYSQL_CONTAINER mysql -uroot -pmysql backend_map_smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Required PostgreSQL and MySQL matrix
         shell: pwsh
@@ -96,3 +116,10 @@ jobs:
       - name: Exact Windows database engine contract
         shell: pwsh
         run: .\scripts\smoke-rdb-productization.ps1 -DatabaseMemory .\src-tauri\engines\database-memory.exe
+
+      - name: Build local release-mode installer
+        run: npm run tauri build
+
+      - name: Smoke local installer bundle
+        shell: pwsh
+        run: .\scripts\release-smoke.ps1 -ExerciseInstall -AcknowledgeSystemChanges

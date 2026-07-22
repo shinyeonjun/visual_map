@@ -1,0 +1,82 @@
+{
+  "engineVersion": "0.9.0",
+  "project": "spring-petclinic",
+  "routes": {
+    "total": 2,
+    "results": [
+      {
+        "name": "/owners/new",
+        "qualified_name": "__route__GET__/owners/new",
+        "label": "Route",
+        "file_path": "src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java",
+        "method": "GET",
+        "source": "decorator"
+      },
+      {
+        "name": "/owners/new",
+        "qualified_name": "__route__POST__/owners/new",
+        "label": "Route",
+        "file_path": "src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java",
+        "method": "POST",
+        "source": "decorator"
+      }
+    ],
+    "has_more": false
+  },
+  "code": {
+    "total": 2,
+    "results": [
+      {
+        "name": "processCreationForm",
+        "qualified_name": "spring-petclinic.src.main.java.org.springframework.samples.petclinic.owner.OwnerController.processCreationForm",
+        "label": "Method",
+        "file_path": "src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java",
+        "start_line": "77",
+        "end_line": "87"
+      },
+      {
+        "name": "getId",
+        "qualified_name": "spring-petclinic.src.main.java.org.springframework.samples.petclinic.model.BaseEntity.getId",
+        "label": "Method",
+        "file_path": "src/main/java/org/springframework/samples/petclinic/model/BaseEntity.java"
+      }
+    ],
+    "has_more": false
+  },
+  "files": {
+    "total": 1,
+    "results": [
+      {
+        "name": "OwnerController.java",
+        "qualified_name": "spring-petclinic.src.main.java.org.springframework.samples.petclinic.owner.OwnerController.__file__",
+        "label": "File",
+        "file_path": "src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java",
+        "extension": ".java"
+      }
+    ],
+    "has_more": false
+  },
+  "calls": {
+    "columns": ["source", "target", "confidence", "strategy", "call_expression"],
+    "rows": [
+      [
+        "spring-petclinic.src.main.java.org.springframework.samples.petclinic.owner.OwnerController.processCreationForm",
+        "spring-petclinic.src.main.java.org.springframework.samples.petclinic.model.BaseEntity.getId",
+        "0.75",
+        "unique_name",
+        "owner.getId"
+      ]
+    ],
+    "total": 1
+  },
+  "handles": {
+    "columns": ["source", "target"],
+    "rows": [
+      [
+        "spring-petclinic.src.main.java.org.springframework.samples.petclinic.owner.OwnerController.processCreationForm",
+        "__route__POST__/owners/new"
+      ]
+    ],
+    "total": 1
+  }
+}

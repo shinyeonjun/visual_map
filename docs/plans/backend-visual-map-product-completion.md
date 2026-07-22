@@ -1,8 +1,10 @@
 # Backend Visual Map Product Completion Plan
 
-Status: Hold (Phases 41-75 implemented; release blockers remain)
+Status: Historical implementation record (Phases 41-75 complete)
 Scale: Large
 Date: 2026-07-06
+
+Current completion and release evidence is maintained in `backend-visual-map-production-completion.md` and `product-trust-ux-completion.md`. The baseline gaps below describe the state at the start of this plan, not the current product.
 
 ## Purpose
 
@@ -44,7 +46,7 @@ Then it turns those inventories into visual maps for these questions:
 - Prefer small patches per phase.
 - Write a report for every phase.
 
-## Current Baseline
+## Baseline At Plan Start
 
 Already complete:
 
@@ -59,7 +61,7 @@ Already complete:
 - Korean UI direction
 - refactor pass for Workbench, Atlas, CSS, common components, types, Rust workspace, Rust atlas
 
-Known gaps:
+Gaps recorded at plan start and resolved by the completed phases:
 
 - Atlas to Workbench navigation can break.
 - Loading/progress/error UX is not reliable enough.

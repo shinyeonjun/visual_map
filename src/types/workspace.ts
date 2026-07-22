@@ -1,10 +1,22 @@
-export type DbProfileSource = "sqlite" | "ddl-sqlite" | "postgres" | "mysql" | "sqlserver" | "oracle";
+import { dbTableIdentityKey } from "../inventory/dbIdentity";
+
+export type DbProfileSource =
+  | "sqlite"
+  | "ddl-sqlite"
+  | "postgres"
+  | "yugabytedb"
+  | "mysql"
+  | "mariadb"
+  | "sqlserver"
+  | "oracle";
 
 export const DB_PROFILE_SOURCE_OPTIONS: { value: DbProfileSource; label: string }[] = [
   { value: "ddl-sqlite", label: "SQLite DDL" },
   { value: "sqlite", label: "SQLite" },
   { value: "postgres", label: "PostgreSQL" },
-  { value: "mysql", label: "MySQL/MariaDB" },
+  { value: "yugabytedb", label: "YugabyteDB (YSQL)" },
+  { value: "mysql", label: "MySQL" },
+  { value: "mariadb", label: "MariaDB" },
   { value: "sqlserver", label: "SQL Server" },
   { value: "oracle", label: "Oracle" },
 ];
@@ -29,6 +41,7 @@ const CODE_KIND_CHIPS: Record<string, string> = {
   repository: "REPO",
   handler: "HNDL",
   controller: "CTRL",
+  unknown: "CHECK",
 };
 
 export function codeKindChip(kind: string): string {
@@ -40,6 +53,8 @@ export type Workspace = {
   id: string;
   name: string;
   repoPath: string;
+  repoSource: RepoSourceMode;
+  repoOrigin?: string | null;
   codeProject?: string | null;
   engineCache?: WorkspaceEngineCache | null;
   dbProfiles: DbProfile[];
@@ -55,12 +70,16 @@ export type WorkspaceRecoveryWarning = {
   action: "repair-from-backup" | "recreate-workspace" | string;
 };
 
-export type WorkspaceEngineCache = {
+type WorkspaceEngineCache = {
   codeCachePath?: string | null;
   dbCacheDir?: string | null;
 };
 
 export type RepoSourceMode = "local" | "github";
+
+export function workspaceRepoInputValue(workspace: Workspace): string {
+  return workspace.repoOrigin ?? workspace.repoPath;
+}
 
 export type DbProfile = {
   id: string;
@@ -108,6 +127,14 @@ export type DbInventoryColumn = {
   isForeignKey: boolean;
 };
 
+export type DbDependentObject = {
+  key: string;
+  kind: "view" | "trigger" | "routine" | string;
+  name: string;
+  relation: string;
+  columnKeys?: string[];
+};
+
 export type DbInventoryTable = {
   key?: string | null;
   database?: string | null;
@@ -118,6 +145,7 @@ export type DbInventoryTable = {
   inboundForeignKeys?: DbForeignKey[];
   constraints?: DbConstraint[];
   indexes?: DbIndex[];
+  dependents?: DbDependentObject[];
 };
 
 export type DbForeignKey = {
@@ -161,7 +189,7 @@ export type DbIndex = {
   expression?: string | null;
 };
 
-export type DbInventoryGap = {
+type DbInventoryGap = {
   id: string;
   kind: string;
   message: string;
@@ -169,12 +197,13 @@ export type DbInventoryGap = {
 };
 
 export function dbInventoryTableKey(table: DbInventoryTable): string {
-  return table.schema ? `${table.schema}.${table.name}` : table.name;
+  return dbTableIdentityKey(table.schema, table.name);
 }
 
 export type DbInventory = {
   profileId: string;
   tables: DbInventoryTable[];
+  partial?: boolean;
   snapshotKey?: string | null;
   contractVersion?: string | null;
   capabilityWarnings?: string[];
@@ -217,6 +246,7 @@ export type CodeInventory = {
   architecture?: unknown;
   calls: CodeCall[];
   handles?: CodeHandle[];
+  partial?: boolean;
 };
 
 export function codeInventoryItemCount(inventory: CodeInventory | null | undefined): number {
@@ -224,6 +254,26 @@ export function codeInventoryItemCount(inventory: CodeInventory | null | undefin
     return 0;
   }
   return Object.values(inventory.summary).reduce((sum, count) => sum + count, 0);
+}
+
+export function codeInventoryRouteCount(inventory: CodeInventory | null | undefined): number {
+  return inventory?.summary.routes ?? 0;
+}
+
+export function codeInventoryFileCount(inventory: CodeInventory | null | undefined): number {
+  return inventory?.summary.files ?? 0;
+}
+
+export function codeInventorySymbolCount(inventory: CodeInventory | null | undefined): number {
+  if (!inventory) {
+    return 0;
+  }
+  const { routes, files, ...symbols } = inventory.summary;
+  return Object.values(symbols).reduce((sum, count) => sum + count, 0);
+}
+
+export function dbInventoryTableCount(inventory: DbInventory | null | undefined): number {
+  return inventory?.totalTables ?? inventory?.tables.length ?? 0;
 }
 
 export function codeInventoryCodeItems(inventory: CodeInventory | null | undefined): CodeInventoryItem[] {
@@ -271,6 +321,11 @@ export function codeInventoryDefaultRoute(
   return best;
 }
 
+export function codeRouteMethod(route: CodeInventoryItem): string | null {
+  const identity = `${route.qualifiedName ?? ""} ${route.id}`;
+  return identity.match(/__route__([A-Z]+)__/i)?.[1]?.toUpperCase() ?? null;
+}
+
 function routeSpecificity(route: CodeInventoryItem): number {
   const segments = route.name.split(/[/?]/).filter(Boolean);
   const staticSegments = segments.filter((segment) => !segment.startsWith(":") && !segment.startsWith("{")).length;
@@ -278,18 +333,18 @@ function routeSpecificity(route: CodeInventoryItem): number {
   return staticSegments * 120 + Math.min(route.name.length, 80) - (route.id.includes("__route__ANY__") ? 500 : 0);
 }
 
-export type CodeCall = {
+type CodeCall = {
   from: string;
   to: string;
 };
 
 /** Raw engine HANDLES direction: handler -> route. Product projections reverse it to Route -> Handler. */
-export type CodeHandle = {
+type CodeHandle = {
   handler: string;
   route: string;
 };
 
-export type CodeInventorySummary = {
+type CodeInventorySummary = {
   routes: number;
   handlers: number;
   services: number;
