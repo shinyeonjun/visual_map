@@ -487,6 +487,10 @@ __UI_HELPERS__
     () => answerStatus.getAttribute('data-state') === 'ready' && Boolean(answerStatus.textContent?.trim()),
     'Committed answer was not announced',
   );
+  const answerContext = await waitFor('.answer-header-context');
+  if (!answerContext.textContent?.trim() || !answerContext.textContent.includes(':')) {
+    throw new Error('Code answer does not identify its source location');
+  }
   const switcherAfter = switcher.getBoundingClientRect();
   const switcherShift = Math.max(
     Math.abs(switcherBefore.left - switcherAfter.left),
@@ -563,7 +567,7 @@ __UI_HELPERS__
   sourceManager.querySelector('.source-manager-header .tool')?.click();
   await waitUntil(() => !document.querySelector('.source-manager'), 'Source manager did not close', 2000);
   assertNoOverflow();
-  return { ok: true, labels: ['surfaces:2', 'advanced-modes:2', 'tabs:keyboard', 'targets:roving', 'target:restored', 'switcher:fixed', 'evidence:stable', 'search:single-enter', 'answer:announced'] };
+  return { ok: true, labels: ['surfaces:2', 'advanced-modes:2', 'tabs:keyboard', 'targets:roving', 'target:restored', 'switcher:fixed', 'evidence:stable', 'search:single-enter', 'answer:announced', 'answer:located'] };
 })()
 '@
 
