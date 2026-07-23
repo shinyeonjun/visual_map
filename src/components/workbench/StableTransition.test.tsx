@@ -497,6 +497,34 @@ describe("stable mode transitions", () => {
     expect(screen.getByText(/소스 근거: 라우트 소스 위치를 확인했습니다/)).toBeInTheDocument();
     expect(screen.getByText(/경로 근거: 정적 prefix를 합성해 전체 경로를 확인했습니다/)).toBeInTheDocument();
   });
+
+  it("presents code engine evidence in reader-facing language", () => {
+    const currentMap = apiMap();
+    currentMap.edges[0].evidence = [
+      { kind: "code-call", text: "bootstrap_admin 코드 항목이 _to_session_response 코드 항목을 호출합니다" },
+      { kind: "engine-callee", text: "_to_session_response" },
+      { kind: "engine-confidence", text: "high" },
+      { kind: "engine-confidence-score", text: "95%" },
+      { kind: "engine-edge", text: "codebase-memory CALLS" },
+      { kind: "engine-strategy", text: "lsp_direct" },
+    ];
+
+    render(
+      <InspectorPanel
+        workspaceControls={workspaceWithApi()}
+        dbProfileControls={dbControlsWithUsers()}
+        visualMapControls={{ ...readyControls(currentMap), selectedEdge: currentMap.edges[0] }}
+      />,
+    );
+
+    expect(screen.getByText("호출 관계: bootstrap_admin 코드 항목이 _to_session_response 코드 항목을 호출합니다")).toBeInTheDocument();
+    expect(screen.getByText("호출 표현: _to_session_response")).toBeInTheDocument();
+    expect(screen.getByText("신뢰 수준: 높음")).toBeInTheDocument();
+    expect(screen.getByText("신뢰 점수: 95%")).toBeInTheDocument();
+    expect(screen.getByText("관계 근거: 코드 엔진에서 호출 관계를 확인했습니다.")).toBeInTheDocument();
+    expect(screen.getByText("분석 방식: LSP 직접 확인")).toBeInTheDocument();
+    expect(screen.queryByText(/lsp_direct|codebase-memory CALLS|근거: high/)).not.toBeInTheDocument();
+  });
 });
 
 function loadingControls(mode: string, currentMap: VisualMap | null = null): VisualMapControls {
