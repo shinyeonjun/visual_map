@@ -555,7 +555,7 @@ export function InspectorPanel({
         )}
         </InspectorSection> : null}
 
-        <InspectorSection title="근거" count={evidenceItems.length > 6 ? `6/${evidenceItems.length}` : evidenceItems.length}>
+        <InspectorSection title="근거" count={evidenceItems.length}>
         {evidenceItems.length > 0 ? (
           <>
             <div className="inspector-evidence-list">
