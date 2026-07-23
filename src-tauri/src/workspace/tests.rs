@@ -1281,6 +1281,20 @@ fn code_project_uses_index_stdout_project_name() {
 }
 
 #[test]
+fn code_project_generations_are_transport_safe_and_never_reused() {
+    let first = next_code_project_generation();
+    let second = next_code_project_generation();
+
+    assert_ne!(first, second);
+    for project in [first, second] {
+        assert!(project.starts_with("visual-map-"));
+        assert!(project
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'));
+    }
+}
+
+#[test]
 fn engine_json_value_accepts_log_prefixed_json_line() {
     let value =
         engine_json_value("level=info msg=mem.init\n{\"results\":[{\"name\":\"GET /health\"}]}")

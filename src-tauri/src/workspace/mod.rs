@@ -24,7 +24,7 @@ pub(crate) use store::{
 #[cfg(test)]
 pub(crate) use code::{
     attach_code_handles, code_project_from_index_stdout, downgrade_unverified_routes,
-    extract_code_calls, extract_code_handles, extract_code_inventory,
+    extract_code_calls, extract_code_handles, extract_code_inventory, next_code_project_generation,
 };
 #[cfg(test)]
 pub(crate) use codebase_memory::{

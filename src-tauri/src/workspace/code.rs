@@ -4,9 +4,10 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::Path,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
-use super::codebase_memory::{CodebaseMemoryAdapter, CODE_NODE_LABELS};
+use super::codebase_memory::{CodebaseMemoryAdapter, CodebaseMemoryInventory, CODE_NODE_LABELS};
 use super::model::{
     CodeCall, CodeHandle, CodeIndexResult, CodeInventory, CodeInventoryItem, CodeInventorySummary,
     FocusedCodeSearch, IndexCodeRequest,
@@ -15,6 +16,8 @@ use super::store::{
     engine_json_value, object_string, read_workspace_by_id, timestamp, validate_workspace_id,
     value_items, workspace_code_cache_path, workspace_db_cache_dir, write_workspace,
 };
+
+static NEXT_CODE_PROJECT_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn index_code_repository(
     app_data_dir: impl AsRef<Path>,
@@ -34,19 +37,47 @@ pub(crate) fn index_code_repository(
             .to_string(),
     );
     let adapter = CodebaseMemoryAdapter::new(registry, &code_cache_path)?;
-    let run = adapter.index_repository(&workspace.repo_path, &workspace.name)?;
+    let previous_project = workspace
+        .code_project
+        .clone()
+        .unwrap_or_else(|| workspace.name.clone());
+    let requested_project = next_code_project_generation();
+    let mut run = adapter.index_repository(&workspace.repo_path, &requested_project)?;
+    let mut inventory = None;
+    let mut inventory_error = None;
 
     if run.ok {
-        workspace.code_project = Some(code_project_from_index_stdout(&run.stdout, &workspace.name));
-        workspace.updated_at = timestamp();
-        write_workspace(&paths.workspaces_dir, &workspace)?;
+        let project = code_project_from_index_stdout(&run.stdout, &requested_project);
+        match code_inventory_from_adapter(&adapter, project.clone()) {
+            Ok(indexed_inventory) => {
+                workspace.code_project = Some(project.clone());
+                workspace.updated_at = timestamp();
+                if let Err(error) = write_workspace(&paths.workspaces_dir, &workspace) {
+                    let _ = adapter.delete_project(&project);
+                    return Err(error);
+                }
+                if previous_project != project {
+                    let _ = adapter.delete_project(&previous_project);
+                }
+                inventory = Some(indexed_inventory);
+            }
+            Err(error) => {
+                let _ = adapter.delete_project(&project);
+                run.ok = false;
+                run.stderr = format!("새 코드 인덱스를 검증하지 못했습니다: {error}");
+                inventory_error = Some(error);
+            }
+        }
+    } else {
+        let project = code_project_from_index_stdout(&run.stdout, &requested_project);
+        let _ = adapter.delete_project(&project);
     }
 
     Ok(CodeIndexResult {
         workspace,
         run,
-        inventory: None,
-        inventory_error: None,
+        inventory,
+        inventory_error,
     })
 }
 
@@ -65,7 +96,14 @@ pub(crate) fn code_inventory(
         .clone()
         .unwrap_or_else(|| workspace.name.clone());
     let adapter = CodebaseMemoryAdapter::new(registry, code_cache_path)?;
-    let result = adapter.inventory(&project)?;
+    code_inventory_from_adapter(&adapter, project)
+}
+
+fn code_inventory_from_adapter(
+    adapter: &CodebaseMemoryAdapter<'_>,
+    project: String,
+) -> Result<CodeInventory, String> {
+    let result: CodebaseMemoryInventory = adapter.inventory(&project)?;
     let (routes, services, files) = split_inventory_nodes(&result.nodes)?;
     let mut inventory = extract_code_inventory(
         project,
@@ -78,6 +116,16 @@ pub(crate) fn code_inventory(
     attach_code_handles(&result.handles, &mut inventory);
     downgrade_unverified_routes(&mut inventory);
     Ok(inventory)
+}
+
+pub(crate) fn next_code_project_generation() -> String {
+    let sequence = NEXT_CODE_PROJECT_GENERATION.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "visual-map-{}-{}-{}",
+        std::process::id(),
+        timestamp(),
+        sequence
+    )
 }
 
 pub(crate) fn focused_code_search(

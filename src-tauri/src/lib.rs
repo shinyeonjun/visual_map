@@ -135,7 +135,11 @@ fn index_code_repository(
 
     let mut result = workspace::index_code_repository(&app_data_dir, &registry, request)?;
     if result.run.ok {
-        match workspace::code_inventory(&app_data_dir, &registry, &workspace_id) {
+        let inventory =
+            result.inventory.take().map(Ok).unwrap_or_else(|| {
+                workspace::code_inventory(&app_data_dir, &registry, &workspace_id)
+            });
+        match inventory {
             Ok(inventory) => match persist_code_inventory(
                 &app_data_dir,
                 &result.workspace,
