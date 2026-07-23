@@ -1240,12 +1240,33 @@ fn sql_identifier_chain(bytes: &[u8], start: usize) -> (String, usize) {
 const EXECUTION_CALLS: &[&str] = &[
     ".executenonqueryasync",
     ".executenonquery",
+    ".executereaderasync",
+    ".executereader",
+    ".executescalarasync",
+    ".executescalar",
+    ".executesqlrawasync",
+    ".executesqlraw",
     ".executequery",
     ".executeasync",
     ".execute",
+    ".queryfirstordefaultasync",
+    ".queryfirstordefault",
+    ".queryfirstasync",
+    ".queryfirst",
+    ".querysingleordefaultasync",
+    ".querysingleordefault",
+    ".querysingleasync",
+    ".querysingle",
+    ".querymultipleasync",
+    ".querymultiple",
+    ".queryforobject",
+    ".queryforlist",
     ".querycontext",
     ".queryasync",
     ".query",
+    ".sqlqueryraw",
+    ".batchupdate",
+    ".update",
     ".execcontext",
     ".execasync",
     ".exec",
@@ -1298,13 +1319,49 @@ fn direct_execution_call_accepts_literal(source: &str, literal: &StaticLiteral) 
             let Some(close) = matching_paren(&lower, open) else {
                 return false;
             };
-            open < literal_start
-                && literal_end <= close
-                && call_depth_at(&lower, open, literal_start) == Some(1)
-                && lower[open + 1..literal_start].trim().is_empty()
-                && literal_ends_as_direct_argument(&lower, literal_end, close)
+            if open >= literal_start || literal_end > close {
+                return false;
+            }
+            match call_depth_at(&lower, open, literal_start) {
+                Some(1) => {
+                    lower[open + 1..literal_start].trim().is_empty()
+                        && literal_ends_as_direct_argument(&lower, literal_end, close)
+                }
+                Some(2) => static_sql_wrapper_accepts_literal(
+                    &lower,
+                    open,
+                    literal_start,
+                    literal_end,
+                    close,
+                ),
+                _ => false,
+            }
         })
     })
+}
+
+fn static_sql_wrapper_accepts_literal(
+    source: &str,
+    call_open: usize,
+    literal_start: usize,
+    literal_end: usize,
+    call_close: usize,
+) -> bool {
+    let prefix = source[call_open + 1..literal_start]
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect::<Vec<_>>();
+    if !matches!(prefix.as_slice(), b"text(" | b"sqlalchemy.text(") {
+        return false;
+    }
+    let Some(after_wrapper) = source[literal_end..call_close]
+        .trim_start()
+        .strip_prefix(')')
+    else {
+        return false;
+    };
+    let after_wrapper = after_wrapper.trim_start();
+    after_wrapper.is_empty() || after_wrapper.starts_with(',')
 }
 
 fn literal_ends_as_direct_argument(source: &str, literal_end: usize, call_close: usize) -> bool {
@@ -1883,6 +1940,54 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].operation, QueryOperation::Select);
+    }
+
+    #[test]
+    fn confirms_static_sql_across_common_framework_execution_apis() {
+        for (source, operation) in [
+            (
+                r#"return connection.QuerySingleAsync<Order>("SELECT id, status FROM orders WHERE id = @id");"#,
+                QueryOperation::Select,
+            ),
+            (
+                r#"context.Database.ExecuteSqlRaw("UPDATE orders SET status = ? WHERE id = ?");"#,
+                QueryOperation::Update,
+            ),
+            (
+                r#"jdbcTemplate.queryForObject("SELECT id FROM orders WHERE id = ?", mapper, id);"#,
+                QueryOperation::Select,
+            ),
+            (
+                r#"session.execute(text("SELECT id FROM orders WHERE id = :id"), params)"#,
+                QueryOperation::Select,
+            ),
+        ] {
+            let result = analyze_source(
+                source,
+                "orders",
+                None,
+                &["id", "status", "created_at"],
+                false,
+            );
+            assert_eq!(
+                result.len(),
+                1,
+                "explicit static SQL should be confirmed: {source}"
+            );
+            assert_eq!(result[0].operation, operation);
+        }
+
+        for source in [
+            r#"reporter.QuerySingle("SELECT id FROM orders")"#,
+            r#"session.execute(text(prefix + "SELECT id FROM orders"))"#,
+            r#"session.execute(text("SELECT id FROM orders" + suffix))"#,
+            r#"session.execute(render("SELECT id FROM orders"))"#,
+        ] {
+            assert!(
+                analyze_source(source, "orders", None, &["id"], false).is_empty(),
+                "non-evidence execution form must stay unconfirmed: {source}"
+            );
+        }
     }
 
     #[test]
