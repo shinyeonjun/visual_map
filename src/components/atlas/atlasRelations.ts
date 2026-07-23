@@ -7,7 +7,7 @@ import {
   dbTableIdentityLabel,
   tableKeyFromDbNodeId as tableKeyFromNodeId,
 } from "../../visual/nodeIds";
-import { visualEdgeKindLabel as edgeKindLabel } from "../../visual/labels";
+import { visualEdgeKindLabel as edgeKindLabel, visualEdgeTruthClass } from "../../visual/labels";
 import type { RelationSummary } from "./ArchitectureMap";
 
 export type RelationTone = "confirmed" | "typed" | "candidate" | "inferred";
@@ -455,19 +455,8 @@ function bandCenterPercent(bands: Array<"api" | "code" | "db">, target: "api" | 
 }
 
 function relationTone(edge: VisualEdge): RelationTone {
-  if (edge.kind.startsWith("candidate")) {
-    return "candidate";
-  }
-  if (edge.kind.startsWith("structural_")) {
-    return "typed";
-  }
-  if (edge.kind === "contains" || edge.kind === "group_contains") {
-    return "typed";
-  }
-  if (edge.kind === "code_flow") {
-    return "inferred";
-  }
-  return edge.evidence.length > 0 ? "confirmed" : "typed";
+  const truthClass = visualEdgeTruthClass(edge);
+  return truthClass === "structural" ? "typed" : truthClass;
 }
 
 function relationRank(edge: VisualEdge): number {
@@ -483,7 +472,7 @@ function relationRank(edge: VisualEdge): number {
 
 function relationLabel(tone: RelationTone): string {
   if (tone === "confirmed") {
-    return "직접";
+    return "확정";
   }
   if (tone === "typed") {
     return "구조";

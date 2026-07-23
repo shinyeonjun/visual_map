@@ -48,7 +48,7 @@ describe("inspector trust model", () => {
     expect(nodeEvidenceSummary(node, mapWith(candidate))).toMatchObject({
       confidence: "후보 단서 강함",
       badgeTone: "amber",
-      connectionSummary: "직접 0 · 구조 0 · 후보 1 · 이름 단서 0",
+      connectionSummary: "확정 0 · 구조 0 · 후보 1 · 이름 단서 0",
     });
   });
 

@@ -10,6 +10,7 @@ import type { CodeInventoryItem, DbInventoryColumn, DbInventoryTable } from "../
 import type { VisualEdge, VisualMap, VisualNode } from "../../types/visual-map";
 import {
   visualEdgeKindLabel as edgeKindLabel,
+  visualEdgeTruthClass,
   visualMapModeLabel as modeLabel,
   visualNodeKindLabel as nodeKindLabel,
 } from "../../visual/labels";
@@ -69,9 +70,11 @@ export function inspectorAnswer({
   apiMethod?: string | null;
 }): InspectorAnswer {
   if (edge) {
-    const isCandidate = edge.kind.startsWith("candidate");
-    const isInferred = edge.kind === "code_flow";
-    const isStructural = isStructuralEdge(edge);
+    const truthClass = visualEdgeTruthClass(edge);
+    const isCandidate = truthClass === "candidate";
+    const isInferred = truthClass === "inferred";
+    const isStructural = truthClass === "structural";
+    const isContainment = edge.kind === "contains" || edge.kind === "group_contains" || edge.kind.startsWith("structural_");
     const hasCodeEndpoint = edgeHasCodeEndpoint(edge);
     const hasEvidence = edge.evidence.length > 0;
     return {
@@ -87,23 +90,23 @@ export function inspectorAnswer({
             : "후보 연결입니다. 근거 확인 후 구조에 반영하세요."
         : isInferred
           ? "이름 단서 연결입니다. 실제 호출과 구분하세요."
-          : isStructural
+          : isContainment
             ? "프로젝트 구조를 읽기 쉽게 묶은 관계입니다. 직접 호출이나 DB 제약과 구분하세요."
-          : !hasEvidence
+          : isStructural
             ? hasCodeEndpoint
               ? "읽은 코드 구조의 관계입니다. 양끝 항목을 확인하세요."
               : "읽은 DB 구조/제약 관계입니다. 양끝 항목을 확인하세요."
           : hasCodeEndpoint
             ? "읽은 코드에서 확인된 1차 근거입니다."
             : "읽은 DB 구조에서 확인된 1차 근거입니다.",
-      tone: isCandidate ? "candidate" : isInferred || isStructural || !hasEvidence ? "neutral" : "confirmed",
+      tone: isCandidate ? "candidate" : isInferred || isStructural ? "neutral" : "confirmed",
       metrics: [
         { label: "관계", value: edgeKindLabel(edge) },
         { label: "근거 수준", value: edgeTrustLabel(edge), tone: edgeTrustTone(edge) },
         { label: "근거 문장", value: hasEvidence ? `${edge.evidence.length}개` : "없음" },
       ],
       steps: [hasEvidence ? "근거 문장 확인" : "관계 구조와 출처 확인"],
-      note: isCandidate ? "후보 근거는 이름 토큰 기반일 수 있어 직접 근거와 섞어 판단하면 안 됩니다." : undefined,
+      note: isCandidate ? "후보 근거는 이름 토큰 기반일 수 있어 확정 근거와 섞어 판단하면 안 됩니다." : undefined,
     };
   }
 
@@ -386,13 +389,10 @@ export function edgeCopySummary(edge: VisualEdge, map: VisualMap | null): string
 }
 
 function relationPriority(edge: VisualEdge): number {
-  if (!edge.kind.startsWith("candidate") && edge.kind !== "code_flow" && !isStructuralEdge(edge) && edge.evidence.length > 0) {
-    return 0;
-  }
-  if (!edge.kind.startsWith("candidate") && edge.kind !== "code_flow") {
-    return 1;
-  }
-  return edge.kind.startsWith("candidate") ? 2 : 3;
+  const truthClass = visualEdgeTruthClass(edge);
+  if (truthClass === "confirmed") return 0;
+  if (truthClass === "structural") return 1;
+  return truthClass === "candidate" ? 2 : 3;
 }
 
 function mapEdgeCounts(map: VisualMap): EdgeCounts {
@@ -402,15 +402,11 @@ function mapEdgeCounts(map: VisualMap): EdgeCounts {
 function edgeCounts(edges: VisualEdge[]): EdgeCounts {
   const counts: EdgeCounts = { confirmed: 0, typed: 0, inferred: 0, candidate: 0 };
   for (const edge of edges) {
-    if (edge.kind.startsWith("candidate")) {
-      counts.candidate += 1;
-    } else if (edge.kind === "code_flow") {
-      counts.inferred += 1;
-    } else if (isStructuralEdge(edge) || edge.evidence.length === 0) {
-      counts.typed += 1;
-    } else {
-      counts.confirmed += 1;
-    }
+    const truthClass = visualEdgeTruthClass(edge);
+    if (truthClass === "candidate") counts.candidate += 1;
+    else if (truthClass === "inferred") counts.inferred += 1;
+    else if (truthClass === "structural") counts.typed += 1;
+    else counts.confirmed += 1;
   }
   return counts;
 }
@@ -421,7 +417,7 @@ function nodeRelationMetrics(counts: EdgeCounts): InspectorAnswer["metrics"] {
     return [{ label: "관계", value: "0", tone: "gray" }];
   }
   return [
-    ...(counts.confirmed > 0 ? [{ label: "직접", value: String(counts.confirmed), tone: "green" as const }] : []),
+    ...(counts.confirmed > 0 ? [{ label: "확정", value: String(counts.confirmed), tone: "green" as const }] : []),
     ...(counts.typed > 0 ? [{ label: "구조", value: String(counts.typed), tone: "gray" as const }] : []),
     ...(counts.candidate > 0 ? [{ label: "후보", value: String(counts.candidate), tone: "amber" as const }] : []),
     ...(counts.inferred > 0 ? [{ label: "이름 단서", value: String(counts.inferred), tone: "gray" as const }] : []),
@@ -523,60 +519,59 @@ function tableKeyColumnNote(pkColumns: string[], fkColumns: string[]): string {
 }
 
 export function relationshipSourceLabel(edge: VisualEdge): string {
-  if (edge.kind.startsWith("candidate")) {
+  const truthClass = visualEdgeTruthClass(edge);
+  if (truthClass === "candidate") {
     return "후보";
   }
-  if (edge.kind === "code_flow") {
+  if (truthClass === "inferred") {
     return "이름 단서";
   }
-  if (isStructuralEdge(edge)) {
+  if (truthClass === "structural") {
     return "구조";
   }
-  return edge.evidence.length > 0 ? "직접" : "구조";
-}
-
-function isStructuralEdge(edge: VisualEdge): boolean {
-  return edge.kind === "contains" || edge.kind === "group_contains" || edge.kind.startsWith("structural_");
+  return "확정";
 }
 
 export function edgeTrustLabel(edge: VisualEdge): string {
-  if (edge.kind.startsWith("candidate")) {
+  const truthClass = visualEdgeTruthClass(edge);
+  if (truthClass === "candidate") {
     return `후보 ${confidenceLabel(edge.confidence) ?? "낮음"}`;
   }
-  if (edge.kind === "code_flow") {
+  if (truthClass === "inferred") {
     return "이름 단서";
   }
-  if (isStructuralEdge(edge)) {
+  if (truthClass === "structural") {
     return "구조 근거";
   }
-  return edge.evidence.length > 0 ? "근거 있음" : "구조 근거";
+  return "근거 있음";
 }
 
 export function edgeTrustTone(edge: VisualEdge): "green" | "amber" | "gray" {
-  if (edge.kind.startsWith("candidate")) {
+  const truthClass = visualEdgeTruthClass(edge);
+  if (truthClass === "candidate") {
     return confidenceBadgeTone(edge.confidence);
   }
-  return edge.kind === "code_flow" || isStructuralEdge(edge) || edge.evidence.length === 0 ? "gray" : "green";
+  return truthClass === "confirmed" ? "green" : "gray";
 }
 
 export function edgeTrustReason(edge: VisualEdge): string {
-  if (edge.kind.startsWith("candidate")) {
+  const truthClass = visualEdgeTruthClass(edge);
+  if (truthClass === "candidate") {
     return confidenceReasonLabel(edge.confidence);
   }
-  if (edge.kind === "code_flow") {
+  if (truthClass === "inferred") {
     return "이름이 비슷해 이어 둔 후보 근거입니다.";
   }
-  if (isStructuralEdge(edge)) {
+  if (truthClass === "structural") {
     return edge.evidence[0]?.text ?? "프로젝트를 읽기 쉽게 묶은 구조 근거입니다.";
   }
-  return edge.evidence[0]?.text ?? "상세 근거 문장 없이 구조 근거만 표시합니다.";
+  return edge.evidence[0]?.text ?? "확정 근거입니다.";
 }
 
 export function edgeEvidenceTone(edge: VisualEdge): "candidate" | "confirmed" | "neutral" {
-  if (edge.kind.startsWith("candidate")) {
-    return "candidate";
-  }
-  return edge.kind === "code_flow" || isStructuralEdge(edge) || edge.evidence.length === 0 ? "neutral" : "confirmed";
+  const truthClass = visualEdgeTruthClass(edge);
+  if (truthClass === "candidate") return "candidate";
+  return truthClass === "confirmed" ? "confirmed" : "neutral";
 }
 
 export function endpointLabel(id: string, map: VisualMap | null): string {
@@ -647,11 +642,9 @@ export function nodeSourceLabel(source: string): string {
 }
 
 export function relationshipReason(edge: VisualEdge): string {
-  if (edge.kind.startsWith("candidate")) {
+  const truthClass = visualEdgeTruthClass(edge);
+  if (truthClass === "candidate") {
     return edge.evidence[0]?.text ?? "이름이 비슷해 이어 둔 후보 근거입니다";
-  }
-  if (isStructuralEdge(edge)) {
-    return edge.evidence[0]?.text ?? "프로젝트를 읽기 위한 포함/구조 영역 관계입니다";
   }
   if (edge.kind === "db_constraint" || edge.kind === "db_fk") {
     return edge.evidence[0]?.text ?? "DB 제약 구조입니다";
@@ -673,6 +666,9 @@ export function relationshipReason(edge: VisualEdge): string {
   }
   if (edge.kind === "code_flow") {
     return edge.evidence[0]?.text ?? "이름 단서로 이어 둔 연결입니다";
+  }
+  if (truthClass === "structural") {
+    return edge.evidence[0]?.text ?? "프로젝트를 읽기 위한 포함/구조 영역 관계입니다";
   }
   return edge.evidence[0]?.text ?? "이름과 구조 단서로 연결했습니다";
 }
@@ -710,14 +706,10 @@ export function nodeEvidenceSummary(
   relatedFiles: string[];
 } {
   const relatedEdges = map?.edges.filter((edge) => edgeTouchesNode(edge, node)) ?? [];
-  const candidateEdges = relatedEdges.filter((edge) => edge.kind.startsWith("candidate"));
-  const inferredEdges = relatedEdges.filter((edge) => edge.kind === "code_flow");
-  const confirmedEdges = relatedEdges.filter(
-    (edge) => !edge.kind.startsWith("candidate") && edge.kind !== "code_flow" && !isStructuralEdge(edge) && edge.evidence.length > 0,
-  );
-  const typedEdges = relatedEdges.filter(
-    (edge) => !edge.kind.startsWith("candidate") && edge.kind !== "code_flow" && (isStructuralEdge(edge) || edge.evidence.length === 0),
-  );
+  const candidateEdges = relatedEdges.filter((edge) => visualEdgeTruthClass(edge) === "candidate");
+  const inferredEdges = relatedEdges.filter((edge) => visualEdgeTruthClass(edge) === "inferred");
+  const confirmedEdges = relatedEdges.filter((edge) => visualEdgeTruthClass(edge) === "confirmed");
+  const typedEdges = relatedEdges.filter((edge) => visualEdgeTruthClass(edge) === "structural");
   const candidateConfidence = strongestCandidateConfidence(candidateEdges);
   const nodeTrust = nodeTrustSummary({
     candidateConfidence,
@@ -731,7 +723,7 @@ export function nodeEvidenceSummary(
   return {
     confidence: nodeTrust.label,
     badgeTone: nodeTrust.tone,
-    connectionSummary: `직접 ${confirmedEdges.length} · 구조 ${typedEdges.length} · 후보 ${candidateEdges.length} · 이름 단서 ${inferredEdges.length}`,
+    connectionSummary: `확정 ${confirmedEdges.length} · 구조 ${typedEdges.length} · 후보 ${candidateEdges.length} · 이름 단서 ${inferredEdges.length}`,
     evidence: [
       {
         key: "source",

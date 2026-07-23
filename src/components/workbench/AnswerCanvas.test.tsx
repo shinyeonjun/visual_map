@@ -13,7 +13,7 @@ describe("AnswerCanvas", () => {
     expect(container.querySelector(".answer-canvas")).toHaveAttribute("data-answer-mode", "api-flow");
     expect(container.querySelector(".answer-canvas")).toHaveAttribute("data-answer-focus", "code:route-orders");
     expect(screen.getByRole("heading", { name: "DELETE /api/orders" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 2, name: "확인된 처리 흐름" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "처리 흐름" })).toBeInTheDocument();
     expect(screen.getByText("loadOrders")).toBeInTheDocument();
     expect(container.querySelector(".answer-candidates")).not.toHaveAttribute("open");
     expect(screen.getByText("orders 테이블 후보")).toBeInTheDocument();
@@ -23,8 +23,27 @@ describe("AnswerCanvas", () => {
     renderAnswer(codeMap(), "code:function-load-orders");
 
     expect(screen.getByRole("heading", { name: "loadOrders" })).toBeInTheDocument();
-    expect(screen.getByText("확인된 직접 연결은 없습니다.")).toBeInTheDocument();
-    expect(screen.getByText("확인된 직접 관계가 없습니다")).toBeInTheDocument();
+    expect(screen.getByText("확인된 연결은 없습니다.")).toBeInTheDocument();
+    expect(screen.getByText("확인된 관계가 없습니다")).toBeInTheDocument();
+  });
+
+  it("does not promote a structural edge with evidence to confirmed", () => {
+    const map = codeMap();
+    map.nodes.push({ id: "code:file-orders", kind: "file", title: "orders.ts", layer: "code", source: "code" });
+    map.edges.push({
+      id: "contains-orders",
+      from: "code:file-orders",
+      to: "code:function-load-orders",
+      kind: "contains",
+      evidence: [{ kind: "engine", text: "파일에 포함된 심볼입니다." }],
+    });
+
+    const { container } = renderAnswer(map, "code:function-load-orders");
+
+    expect(container.querySelector(".answer-verdicts .confirmed")).toHaveTextContent("확정 0");
+    expect(container.querySelector(".answer-verdicts .structural")).toHaveTextContent("구조 1");
+    expect(container.querySelector(".answer-edge-items .answer-truth.structural")).toHaveTextContent("구조");
+    expect(screen.getByText("확정 연결은 없으며 구조 근거 1개를 찾았습니다.")).toBeInTheDocument();
   });
 
   it("separates structural facts and discloses engine-truncated evidence", () => {
@@ -33,7 +52,8 @@ describe("AnswerCanvas", () => {
     expect(screen.getByText("확인된 코드 사용")).toBeInTheDocument();
     expect(screen.getByText("DB 구조 근거")).toBeInTheDocument();
     expect(screen.getByText("직접 근거 2개는 엔진 표시 상한 때문에 이 답에서 접혔습니다.")).toBeInTheDocument();
-    expect(screen.getByText("구조")).toHaveClass("structural");
+    expect(container.querySelector(".answer-verdicts .confirmed")).toHaveTextContent("확정 0");
+    expect(container.querySelector(".answer-verdicts .structural")).toHaveTextContent("구조 1");
     expect(container.querySelector(".answer-truth.structural")).toBeInTheDocument();
   });
 

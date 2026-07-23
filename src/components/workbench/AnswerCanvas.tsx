@@ -31,7 +31,7 @@ import {
   routeDisplayName,
   routeMethodFromIdentity,
 } from "../../types/workspace";
-import { visualEdgeKindLabel } from "../../visual/labels";
+import { visualEdgeKindLabel, visualEdgeTruthClass } from "../../visual/labels";
 import { columnRefFromNodeId, dbTableIdentityLabel, tableKeyFromDbNodeId } from "../../visual/nodeIds";
 
 const ANSWER_MODES = new Set(["api-flow", "search-focus", "table-usage", "column-impact"]);
@@ -160,18 +160,18 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
   const answer = map.apiReading!;
   const method = answer.method ?? routeMethodFromIdentity(map.focus);
   const subject = routeDisplayName(answer.subject, method);
-  const confirmedSteps = answer.steps.filter((step) => step.truthClass === "confirmed" || step.truthClass === "structural");
+  const knownSteps = answer.steps.filter((step) => step.truthClass === "confirmed" || step.truthClass === "structural");
   const candidateCount = answer.dbCandidates.length;
   const unknownCount = answer.unknowns.length;
-  const visibleSteps = confirmedSteps.slice(0, 5);
-  const hiddenSteps = confirmedSteps.slice(5);
-  const maxDepth = confirmedSteps.reduce((depth, step) => Math.max(depth, step.depth), 0);
-  const directItems = [...confirmedSteps, ...(answer.dbRelations ?? [])];
+  const visibleSteps = knownSteps.slice(0, 5);
+  const hiddenSteps = knownSteps.slice(5);
+  const maxDepth = knownSteps.reduce((depth, step) => Math.max(depth, step.depth), 0);
+  const directItems = [...knownSteps, ...(answer.dbRelations ?? [])];
   const confirmedCount = directItems.filter((item) => item.truthClass === "confirmed").length;
   const structuralCount = directItems.filter((item) => item.truthClass === "structural").length;
-  const conclusion = confirmedSteps.length > 1
-    ? `${confirmedSteps.length}개 코드 항목을 호출 깊이 ${maxDepth}까지 확인했습니다${answer.dbRelations?.length ? ` · DB 직접 연결 ${answer.dbRelations.length}개` : ""}.`
-    : "라우트는 확인했지만 다음 확정 호출 경로는 찾지 못했습니다.";
+  const conclusion = knownSteps.length > 1
+    ? `${knownSteps.length}개 코드 항목을 호출 깊이 ${maxDepth}까지 추적했습니다${answer.dbRelations?.length ? ` · DB 연결 ${answer.dbRelations.length}개` : ""}.`
+    : "라우트는 찾았지만 다음 호출 경로는 확인하지 못했습니다.";
 
   return (
     <>
@@ -186,7 +186,7 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
         unknowns={unknownCount}
       />
 
-      <AnswerSection title="확인된 처리 흐름" count={confirmedSteps.length} description="호출 깊이와 역할로 정렬한 코드 근거">
+      <AnswerSection title="처리 흐름" count={knownSteps.length} description="호출 깊이로 정렬한 확정 근거와 구조 관계">
         {visibleSteps.length > 0 ? (
           <ol className="answer-flow">
             {visibleSteps.map((step, index) => (
@@ -208,7 +208,7 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
             ))}
           </ol>
         ) : (
-          <AnswerEmpty title="확인된 다음 호출이 없습니다" detail="라우트 소스에서 실제 핸들러 연결을 먼저 확인하세요." />
+          <AnswerEmpty title="다음 호출을 찾지 못했습니다" detail="라우트 소스에서 실제 핸들러 연결을 먼저 확인하세요." />
         )}
         {hiddenSteps.length > 0 ? (
           <details className="answer-more">
@@ -253,17 +253,19 @@ function ImpactAnswer({ map, visualMapControls }: { map: VisualMap; visualMapCon
   const hiddenCandidateCount = (candidates?.hidden ?? 0) + (unknowns?.hidden ?? 0);
   const candidateCount = candidates?.total ?? 0;
   const unknownCount = unknowns?.total ?? 0;
-  const confirmedCount = direct?.total ?? 0;
+  const directCount = direct?.total ?? 0;
   const hiddenDirectCount = direct?.hidden ?? 0;
   const subject = impactSubject(map, board.subject);
+  const confirmedCount = (direct?.items ?? []).filter((item) => item.truthClass === "confirmed").length;
+  const structuralCount = (direct?.items ?? []).filter((item) => item.truthClass === "structural").length;
   const codeUsageItems = tableUsage ? (direct?.items ?? []).filter(isCodeUsageReviewItem) : [];
   const structuralItems = tableUsage ? (direct?.items ?? []).filter((item) => !isCodeUsageReviewItem(item)) : [];
   const conclusion = tableUsage
     ? codeUsageItems.length > 0
       ? `표시된 확정 코드 사용 ${codeUsageItems.length}개와 DB 구조 근거 ${structuralItems.length}개를 찾았습니다.`
       : `표시된 확정 코드 사용은 없으며, DB 구조 근거 ${structuralItems.length}개를 확인했습니다.`
-    : confirmedCount > 0
-      ? `${confirmedCount}개의 직접 영향을 찾았습니다.`
+    : directCount > 0
+      ? `${directCount}개의 직접 영향을 찾았습니다.`
       : "확인된 직접 영향은 없습니다.";
 
   return (
@@ -274,7 +276,7 @@ function ImpactAnswer({ map, visualMapControls }: { map: VisualMap; visualMapCon
         title={subject}
         conclusion={conclusion}
         confirmed={confirmedCount}
-        confirmedLabel="직접 근거"
+        structural={structuralCount}
         candidates={candidateCount}
         unknowns={unknownCount}
       />
@@ -311,7 +313,7 @@ function ImpactAnswer({ map, visualMapControls }: { map: VisualMap; visualMapCon
       ) : (
         <AnswerSection
           title={direct?.title ?? "직접 영향"}
-          count={confirmedCount}
+          count={directCount}
           description={direct?.description ?? "확정된 구조와 코드 근거"}
         >
           {direct?.items.length ? (
@@ -362,11 +364,15 @@ function CodeAnswer({
   ].find((item) => item.id === itemId) ?? null;
   const title = node?.title ?? inventoryItem?.name ?? itemId;
   const edges = (map?.edges ?? []).filter((edge) => edge.from === focusId || edge.to === focusId);
-  const confirmed = edges.filter((edge) => !isCandidateEdge(edge));
-  const candidates = edges.filter(isCandidateEdge);
+  const confirmed = edges.filter((edge) => answerEdgeTruthClass(edge) === "confirmed");
+  const structural = edges.filter((edge) => answerEdgeTruthClass(edge) === "structural");
+  const candidates = edges.filter((edge) => answerEdgeTruthClass(edge) === "candidate");
+  const known = edges.filter((edge) => answerEdgeTruthClass(edge) !== "candidate");
   const conclusion = confirmed.length > 0
-    ? `${confirmed.length}개의 직접 연결을 찾았습니다.`
-    : "확인된 직접 연결은 없습니다.";
+    ? `${confirmed.length}개의 확정 연결을 찾았습니다${structural.length ? ` · 구조 근거 ${structural.length}개` : ""}.`
+    : structural.length > 0
+      ? `확정 연결은 없으며 구조 근거 ${structural.length}개를 찾았습니다.`
+      : "확인된 연결은 없습니다.";
 
   return (
     <>
@@ -376,22 +382,22 @@ function CodeAnswer({
         title={title}
         conclusion={conclusion}
         confirmed={confirmed.length}
-        confirmedLabel="직접"
+        structural={structural.length}
         candidates={candidates.length}
       />
-      <AnswerSection title="직접 연결" count={confirmed.length} description="호출과 데이터 사용을 확정 근거 우선으로 정렬">
-        {confirmed.length > 0 ? (
-          <EdgeItems edges={confirmed.slice(0, 5)} focusId={focusId} map={map} visualMapControls={visualMapControls} />
+      <AnswerSection title="바로 연결" count={known.length} description="한 단계 이내의 확정 근거와 구조 관계">
+        {known.length > 0 ? (
+          <EdgeItems edges={known.slice(0, 5)} focusId={focusId} map={map} visualMapControls={visualMapControls} />
         ) : (
           <AnswerEmpty
-            title="확인된 직접 관계가 없습니다"
+            title="확인된 관계가 없습니다"
             detail="관계가 없다는 사실과 분석하지 못했다는 상태를 구분해 오른쪽 근거에서 확인할 수 있습니다."
           />
         )}
-        {confirmed.length > 5 ? (
+        {known.length > 5 ? (
           <details className="answer-more">
-            <summary>나머지 직접 연결 {confirmed.length - 5}개 보기</summary>
-            <EdgeItems edges={confirmed.slice(5)} focusId={focusId} map={map} visualMapControls={visualMapControls} />
+            <summary>나머지 연결 {known.length - 5}개 보기</summary>
+            <EdgeItems edges={known.slice(5)} focusId={focusId} map={map} visualMapControls={visualMapControls} />
           </details>
         ) : null}
       </AnswerSection>
@@ -520,15 +526,16 @@ function EdgeItems({
         const outbound = edge.from === focusId;
         const otherId = outbound ? edge.to : edge.from;
         const other = map?.nodes.find((node) => node.id === otherId) ?? null;
+        const truthClass = answerEdgeTruthClass(edge);
         return (
           <button type="button" onClick={() => visualMapControls.selectEdge(edge)} key={edge.id}>
             <span className={`answer-edge-direction${outbound ? "" : " inbound"}`}><ArrowRight size={14} /></span>
             <span>
               <small>{visualEdgeKindLabel(edge)}</small>
               <strong>{other?.title ?? otherId}</strong>
-              <em>{edge.evidence[0]?.text ?? (isCandidateEdge(edge) ? "직접 근거 없음" : "구조 관계")}</em>
+              <em>{edge.evidence[0]?.text ?? (truthClass === "candidate" ? "확정 근거 없음" : "구조 관계")}</em>
             </span>
-            <TruthMark truthClass={isCandidateEdge(edge) ? "candidate" : edge.evidence.length ? "confirmed" : "structural"} />
+            <TruthMark truthClass={truthClass} />
           </button>
         );
       })}
@@ -720,8 +727,9 @@ function selectReviewNode(nodeId: string | null | undefined, map: VisualMap, con
   if (node) controls.selectNode(node);
 }
 
-function isCandidateEdge(edge: VisualEdge): boolean {
-  return edge.kind.startsWith("candidate") || edge.kind === "code_flow";
+function answerEdgeTruthClass(edge: VisualEdge): "confirmed" | "structural" | "candidate" {
+  const truthClass = visualEdgeTruthClass(edge);
+  return truthClass === "inferred" ? "candidate" : truthClass;
 }
 
 function isCodeUsageReviewItem(item: ImpactReviewItem): boolean {

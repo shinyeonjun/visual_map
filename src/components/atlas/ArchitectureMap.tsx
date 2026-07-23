@@ -2,7 +2,7 @@ import { ArrowLeft, ChevronRight, Cog, FileText, Layers3, List, Network, Table2 
 import { useState } from "react";
 import type { CSSProperties } from "react";
 import type { VisualEdge, VisualMap, VisualNode } from "../../types/visual-map";
-import { visualNodeKindLabel as nodeKindLabel } from "../../visual/labels";
+import { visualEdgeTruthClass, visualNodeKindLabel as nodeKindLabel } from "../../visual/labels";
 
 const OVERVIEW_GROUP_LIMIT = 7;
 const OVERVIEW_CONNECTION_LIMIT = 10;
@@ -172,7 +172,7 @@ function ArchitectureOverviewMap({
           <span>{nodes.length}개 핵심 영역 · 관계 {map.edges.length.toLocaleString("ko-KR")}개</span>
         </div>
         <div className="at-architecture-legend" aria-label="관계 판단 범례">
-          <span className="confirmed">직접</span>
+          <span className="confirmed">확정</span>
           <span className="typed">구조</span>
           <span className="candidate">후보</span>
         </div>
@@ -464,7 +464,7 @@ export function RelationBadge({ summary }: { summary?: RelationSummary }) {
   }
   const dominant =
     summary.confirmed > 0
-      ? { label: "직접", count: summary.confirmed }
+      ? { label: "확정", count: summary.confirmed }
       : summary.typed > 0
         ? { label: "구조", count: summary.typed }
         : summary.candidate > 0
@@ -473,7 +473,7 @@ export function RelationBadge({ summary }: { summary?: RelationSummary }) {
   const badgeLabel = dominant.label === "이름 단서" ? "단서" : dominant.label;
   const label = `${badgeLabel} ${dominant.count}/${total}`;
   const tone = summary.confirmed > 0 ? "confirmed" : summary.typed > 0 ? "typed" : summary.candidate > 0 ? "candidate" : "inferred";
-  const title = `카드 선택 시 답 화면 열기 · 관계 ${total}개 · 직접 ${summary.confirmed} · 구조 ${summary.typed} · 후보 ${summary.candidate} · 이름 단서 ${summary.inferred}`;
+  const title = `카드 선택 시 답 화면 열기 · 관계 ${total}개 · 확정 ${summary.confirmed} · 구조 ${summary.typed} · 후보 ${summary.candidate} · 이름 단서 ${summary.inferred}`;
   return (
     <span className={`at-relation-badge ${tone}`} title={title} aria-label={title}>
       {label}
@@ -613,7 +613,7 @@ function architectureConnectionPath(connection: ArchitectureConnection, mapHeigh
 
 function architectureConnectionLabel(connection: ArchitectureConnection): string {
   const toneLabel = connection.tone === "confirmed"
-    ? "직접"
+    ? "확정"
     : connection.tone === "typed"
       ? "구조"
       : connection.tone === "candidate"
@@ -625,16 +625,8 @@ function architectureConnectionLabel(connection: ArchitectureConnection): string
 }
 
 function architectureEdgeTone(edge: VisualEdge): ArchitectureConnection["tone"] {
-  if (edge.kind.startsWith("candidate")) {
-    return "candidate";
-  }
-  if (edge.kind.startsWith("structural_") || edge.kind === "contains" || edge.kind === "group_contains") {
-    return "typed";
-  }
-  if (edge.kind === "code_flow") {
-    return "inferred";
-  }
-  return edge.evidence.length > 0 ? "confirmed" : "typed";
+  const truthClass = visualEdgeTruthClass(edge);
+  return truthClass === "structural" ? "typed" : truthClass;
 }
 
 function architectureEdgeRank(edge: VisualEdge): number {
