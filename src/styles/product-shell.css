@@ -155,7 +155,7 @@
   grid-template-columns: 284px minmax(0, 1fr) 320px;
 }
 
-.product-workspace.is-onboarding {
+.product-workspace.is-single-column {
   grid-template-columns: minmax(0, 1fr);
 }
 

@@ -61,7 +61,47 @@ describe("WorkbenchView surface transitions", () => {
     expect(screen.getByRole("heading", { name: "프로젝트를 연결하세요" })).toBeInTheDocument();
     expect(screen.queryByTestId("answer-navigation")).not.toBeInTheDocument();
     expect(screen.queryByTestId("advanced-navigation")).not.toBeInTheDocument();
-    expect(container.querySelector(".product-workspace")).toHaveClass("is-onboarding");
+    expect(container.querySelector(".product-workspace")).toHaveClass("is-single-column");
+  });
+
+  it.each([
+    ["the project opens", true, false],
+    ["the saved answer restores", false, true],
+  ])("keeps project content hidden while %s", (_phase, opening, restoringSnapshot) => {
+    const { container } = render(
+      <WorkbenchView
+        sourceManagerOpen={false}
+        setSourceManagerOpen={vi.fn()}
+        workspaceControls={{
+          initialized: true,
+          currentWorkspace: { id: "workspace-1", name: "Orders" },
+          opening,
+          restoringSnapshot,
+          codeInventory: null,
+          operationStatus: { phase: "running", label: "저장 결과 확인", message: "저장 결과 확인 진행 중" },
+        } as unknown as WorkspaceControls}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={{
+          currentMap: null,
+          mode: "atlas",
+          focusId: null,
+          loading: false,
+          snapshotStaleReasons: [],
+          selectedNode: null,
+          selectedEdge: null,
+          clearSelection: vi.fn(),
+          showMode: vi.fn(),
+        } as unknown as VisualMapControls}
+        engineRegistry={null}
+        engineError={null}
+      />,
+    );
+
+    expect(screen.getByText("프로젝트 분석을 불러오고 있습니다")).toBeInTheDocument();
+    expect(screen.queryByTestId("answer-navigation")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("advanced-navigation")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "프로젝트를 연결하세요" })).not.toBeInTheDocument();
+    expect(container.querySelector(".product-workspace")).toHaveClass("is-single-column");
   });
 
   it("keeps the committed layout until the requested map commits", async () => {

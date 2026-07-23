@@ -39,15 +39,18 @@ export function WorkbenchView({
   const hasAnswerSource =
     codeInventoryItemCount(workspaceControls.codeInventory) > 0 || Boolean(dbProfileControls.inventory?.tables.length);
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
+  const workspaceTransitioning = workspaceControls.opening || workspaceControls.restoringSnapshot;
+  const workspaceReady =
+    workspaceControls.initialized && hasWorkspace && !workspaceTransitioning;
   const hasSnapshotState =
     hasAnswerSource ||
     visualMapControls.snapshotStaleReasons.length > 0 ||
     Boolean(visualMapControls.snapshotSavedAt);
   // Keep the evidence column mounted once a project exists so mode changes do not
   // resize the canvas. Its contents can change; the workspace geometry cannot.
-  const showInspector = hasWorkspace;
+  const showInspector = workspaceReady;
   const inspectorVisible = Boolean(visualMapControls.selectedNode || visualMapControls.selectedEdge);
-  const drawerOpen = sourceManagerOpen && hasWorkspace;
+  const drawerOpen = sourceManagerOpen && workspaceReady;
   const sourceManagerRef = useRef<HTMLElement | null>(null);
   const lastAnswerRef = useRef<{ workspaceId: string; mode: string; focusId: string } | null>(null);
   const workspaceId = workspaceControls.currentWorkspace?.id ?? null;
@@ -145,8 +148,8 @@ export function WorkbenchView({
         dbProfileControls={dbProfileControls}
         visualMapControls={visualMapControls}
       />
-      <div className={`workspace product-workspace ${hasWorkspace ? "" : "is-onboarding"} ${showInspector ? "has-inspector" : ""} ${inspectorVisible ? "inspector-visible" : ""}`}>
-        {hasWorkspace ? <aside className="product-navigation" aria-label="주요 탐색">
+      <div className={`workspace product-workspace ${workspaceReady ? "" : "is-single-column"} ${showInspector ? "has-inspector" : ""} ${inspectorVisible ? "inspector-visible" : ""}`}>
+        {workspaceReady ? <aside className="product-navigation" aria-label="주요 탐색">
           {surface === "advanced" ? (
             <ModePanel
               workspaceControls={workspaceControls}
@@ -169,11 +172,19 @@ export function WorkbenchView({
             />
           )}
         </aside> : null}
-        {!workspaceControls.initialized ? (
+        {!workspaceControls.initialized || workspaceTransitioning ? (
           <main className="workspace-initializing" aria-busy="true" aria-live="polite">
             <LoaderCircle className="spin" size={22} />
-            <strong>프로젝트를 확인하고 있습니다</strong>
-            <span>마지막으로 열었던 작업 공간을 준비합니다.</span>
+            <strong>
+              {workspaceTransitioning
+                ? "프로젝트 분석을 불러오고 있습니다"
+                : "프로젝트를 확인하고 있습니다"}
+            </strong>
+            <span>
+              {workspaceTransitioning
+                ? "대상과 마지막 답을 준비합니다."
+                : "마지막으로 열었던 작업 공간을 준비합니다."}
+            </span>
           </main>
         ) : hasWorkspace && surface === "advanced" ? (
           <AtlasCanvas
@@ -236,7 +247,7 @@ export function WorkbenchView({
           </aside>
         )}
       </div>
-      {hasSnapshotState && surface === "advanced" && (
+      {workspaceReady && hasSnapshotState && surface === "advanced" && (
         <WorkbenchStatusBar
           workspaceControls={workspaceControls}
           dbProfileControls={dbProfileControls}
