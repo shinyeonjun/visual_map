@@ -122,6 +122,16 @@ pub(crate) struct InventoryItem {
     pub nullable: Option<bool>,
 }
 
+impl InventoryItem {
+    pub(crate) fn is_project_code_item(&self) -> bool {
+        self.source == "code"
+            && !self
+                .path
+                .as_deref()
+                .is_some_and(|path| path.trim().starts_with('<'))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SourceLocation {
