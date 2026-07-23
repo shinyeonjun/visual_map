@@ -38,7 +38,7 @@ const BACKUP_REINDEX_NOTE: &str =
     "주 스냅샷 대신 이전 백업을 복구했습니다. 다시 읽어 최신 상태를 확인하세요.";
 const BACKUP_CODE_REINDEX_NOTE: &str = "백업에서 복구한 코드 목록은 다시 읽어야 합니다.";
 const BACKUP_DB_REINDEX_NOTE: &str = "백업에서 복구한 DB 구조는 다시 읽어야 합니다.";
-const CODE_ADAPTER_VERSION: &str = "2";
+const CODE_ADAPTER_VERSION: &str = "3";
 const CONFIRMED_CODE_CALL_CONFIDENCE: u8 = 85;
 const CANDIDATE_CODE_CALL_CONFIDENCE: u8 = 70;
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
