@@ -2,6 +2,7 @@ import {
   ArrowRight,
   Braces,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   CircleDashed,
   Code2,
@@ -597,8 +598,8 @@ function CandidateDetails({
   return (
     <details className="answer-candidates">
       <summary>
-        <span><TriangleAlert size={16} /><strong>{title}</strong><small>확정 사실과 분리해서 검토</small></span>
-        <em>{items.length + hidden}</em>
+        <span className="answer-candidates-copy"><TriangleAlert size={16} /><strong>{title}</strong><small>확정 사실과 분리해서 검토</small></span>
+        <span className="answer-candidates-meta"><em>{items.length + hidden}</em><ChevronDown size={15} /></span>
       </summary>
       <ReviewItems items={items} map={map} visualMapControls={visualMapControls} />
       {hidden > 0 ? <CoverageNote>확인 항목 {hidden}개는 엔진 표시 상한 때문에 접혔습니다.</CoverageNote> : null}
