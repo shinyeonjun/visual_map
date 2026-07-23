@@ -100,11 +100,15 @@ pub(crate) fn visual_map_with_change(
             included_ids.swap(0, index);
         }
     }
-    let cap = mode_node_cap(&mode);
-    let included_count = included_ids.len();
-    let mut nodes: Vec<VisualNode> = included_ids
+    let included_items = included_ids
         .into_iter()
         .filter_map(|id| item_by_id.get(id.as_str()))
+        .filter(|item| item.source != "code" || item.is_project_code_item())
+        .collect::<Vec<_>>();
+    let cap = mode_node_cap(&mode);
+    let included_count = included_items.len();
+    let mut nodes: Vec<VisualNode> = included_items
+        .into_iter()
         .take(cap)
         .map(|item| VisualNode {
             id: item.id.clone(),
@@ -170,7 +174,7 @@ pub(crate) fn visual_map_with_change(
         edges,
         warnings: if included_count > cap {
             vec![format!(
-                "결과가 너무 넓어 {cap}개 항목만 표시합니다. 대상을 좁히세요."
+                "주변 항목 {included_count}개 중 {cap}개만 표시합니다. 표시되지 않은 관계가 있을 수 있습니다."
             )]
         } else {
             Vec::new()
@@ -216,11 +220,15 @@ pub(super) fn focus_neighborhood_map(
     include_snapshot_link_neighbors(snapshot, &item_by_id, &mut included);
     let mut included_ids: Vec<&String> = included.iter().collect();
     included_ids.sort();
-    let cap = mode_node_cap(&mode);
-    let included_count = included_ids.len();
-    let mut nodes: Vec<VisualNode> = included_ids
+    let included_items = included_ids
         .into_iter()
         .filter_map(|id| item_by_id.get(id.as_str()))
+        .filter(|item| item.source != "code" || item.is_project_code_item())
+        .collect::<Vec<_>>();
+    let cap = mode_node_cap(&mode);
+    let included_count = included_items.len();
+    let mut nodes: Vec<VisualNode> = included_items
+        .into_iter()
         .take(cap)
         .map(|item| visual_node(item))
         .collect();
@@ -278,7 +286,7 @@ pub(super) fn focus_neighborhood_map(
         edges,
         warnings: if included_count > cap {
             vec![format!(
-                "결과가 너무 넓어 {cap}개 항목만 표시합니다. 대상을 좁히세요."
+                "주변 항목 {included_count}개 중 {cap}개만 표시합니다. 표시되지 않은 관계가 있을 수 있습니다."
             )]
         } else {
             Vec::new()
@@ -419,12 +427,13 @@ fn include_snapshot_link_neighbors(
     item_by_id: &HashMap<&str, &InventoryItem>,
     included: &mut HashSet<String>,
 ) {
+    let seeds = included.clone();
     for link in snapshot
         .links
         .iter()
         .filter(|link| link.truth_class == "confirmed")
     {
-        if !(included.contains(&link.from) || included.contains(&link.to)) {
+        if !(seeds.contains(&link.from) || seeds.contains(&link.to)) {
             continue;
         }
         for id in [&link.from, &link.to] {

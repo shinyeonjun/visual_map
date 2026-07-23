@@ -5050,10 +5050,105 @@ fn capped_search_focus_map_always_keeps_the_requested_target() {
         .find(|node| node.id == focus_id)
         .and_then(|node| node.location.as_ref())
         .is_some_and(|location| location.line == Some(42) && location.column == Some(3)));
+    assert_eq!(
+        map.warnings,
+        vec!["주변 항목 51개 중 32개만 표시합니다. 표시되지 않은 관계가 있을 수 있습니다."]
+    );
     assert!(map.edges.iter().all(|edge| {
         map.nodes.iter().any(|node| node.id == edge.from)
             && map.nodes.iter().any(|node| node.id == edge.to)
     }));
+}
+
+#[test]
+fn focused_map_does_not_expand_confirmed_links_transitively() {
+    let focus_id = "code:function:focus";
+    let direct_id = "code:function:direct";
+    let transitive_id = "code:function:transitive";
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot.items = vec![
+        item(focus_id, "function", "focus", "code", "code", None, None),
+        item(direct_id, "function", "direct", "code", "code", None, None),
+        item(
+            transitive_id,
+            "function",
+            "transitive",
+            "code",
+            "code",
+            None,
+            None,
+        ),
+    ];
+    snapshot.links = vec![
+        confirmed_api_link(
+            "call:focus->direct",
+            focus_id,
+            direct_id,
+            "code_call",
+            "CALLS",
+        ),
+        confirmed_api_link(
+            "call:direct->transitive",
+            direct_id,
+            transitive_id,
+            "code_call",
+            "CALLS",
+        ),
+    ];
+
+    let map = visual_map(
+        &snapshot,
+        Some(focus_id.to_string()),
+        "search-focus".to_string(),
+    );
+
+    assert!(map.nodes.iter().any(|node| node.id == direct_id));
+    assert!(!map.nodes.iter().any(|node| node.id == transitive_id));
+}
+
+#[test]
+fn focused_map_excludes_engine_virtual_code_symbols() {
+    let focus_id = "code:function:focus";
+    let builtin_id = "code:function:builtin-str";
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot.items = vec![
+        item(
+            focus_id,
+            "function",
+            "focus",
+            "code",
+            "code",
+            None,
+            Some("src/focus.py"),
+        ),
+        item(
+            builtin_id,
+            "function",
+            "str",
+            "code",
+            "code",
+            None,
+            Some("<python-builtins>"),
+        ),
+    ];
+    snapshot.links = vec![confirmed_api_link(
+        "call:focus->builtin-str",
+        focus_id,
+        builtin_id,
+        "code_call",
+        "CALLS",
+    )];
+
+    let map = visual_map(
+        &snapshot,
+        Some(focus_id.to_string()),
+        "search-focus".to_string(),
+    );
+
+    assert_eq!(map.nodes.len(), 1);
+    assert_eq!(map.nodes[0].id, focus_id);
+    assert!(map.edges.is_empty());
+    assert!(map.warnings.is_empty());
 }
 
 #[test]
