@@ -50,11 +50,42 @@ const INSPECTOR_EVIDENCE_LABELS: Record<string, string> = {
   "route-mount": "경로 근거",
   "route-source": "소스 근거",
   "route-binding": "라우트 연결",
+  "code-call": "호출 관계",
+  "code-handle": "라우트 연결",
+  "code-db-read": "DB 조회",
+  "code-db-write": "DB 변경",
+  "code-db-column": "컬럼 사용",
+  "db-constraint": "DB 제약",
+  "db-dependency": "DB 의존",
+  "db-trigger": "DB 트리거",
+  "snapshot-link": "확정 연결",
   "engine-node": "코드 항목",
-  "engine-edge": "엔진 관계",
+  "engine-edge": "관계 근거",
+  "engine-confidence": "신뢰 수준",
   "engine-confidence-score": "신뢰 점수",
+  "engine-strategy": "분석 방식",
+  "engine-callee": "호출 표현",
   "candidate-source": "후보 출처",
   "static-sql": "정적 SQL",
+};
+
+const INSPECTOR_CONFIDENCE_LABELS: Record<string, string> = {
+  high: "높음",
+  medium: "중간",
+  low: "낮음",
+  unknown: "확인 필요",
+};
+
+const INSPECTOR_STRATEGY_LABELS: Record<string, string> = {
+  lsp_direct: "LSP 직접 확인",
+  lsp_implicit_this: "LSP 현재 객체 추적",
+  lsp_type_dispatch: "LSP 타입 추적",
+  lsp_virtual_dispatch: "LSP 가상 호출 추적",
+  import_map: "import 연결 확인",
+  import_map_suffix: "import 경로 추적",
+  same_module: "같은 모듈 확인",
+  service_pattern: "프레임워크 패턴 확인",
+  unique_name: "고유 이름 일치",
 };
 
 export function InspectorPanel({
@@ -696,7 +727,14 @@ function uniqueInspectorEvidence<T extends { key: string; text: string }>(items:
 }
 
 function inspectorEvidenceText(kind: string, text: string): string {
-  return `${INSPECTOR_EVIDENCE_LABELS[kind] ?? "근거"}: ${text}`;
+  const value = kind === "engine-confidence"
+    ? INSPECTOR_CONFIDENCE_LABELS[text] ?? text
+    : kind === "engine-strategy"
+      ? INSPECTOR_STRATEGY_LABELS[text] ?? text
+      : kind === "engine-edge" && text === "codebase-memory CALLS"
+        ? "코드 엔진에서 호출 관계를 확인했습니다."
+        : text;
+  return `${INSPECTOR_EVIDENCE_LABELS[kind] ?? "근거"}: ${value}`;
 }
 
 function InspectorSection({
