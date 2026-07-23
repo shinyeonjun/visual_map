@@ -199,6 +199,19 @@ __UI_HELPERS__
   if (inspector.querySelectorAll('.inspector-section').length < 3) {
     throw new Error('API evidence panel is incomplete');
   }
+  const evidenceHeadings = [...inspector.querySelectorAll('.inspector-section > header > strong')]
+    .map((heading) => heading.textContent?.trim());
+  if (evidenceHeadings[0] !== '\uC120\uD0DD') {
+    throw new Error('Answer evidence repeats the main summary: ' + evidenceHeadings.join('|'));
+  }
+  const repeatedSummary = inspector.querySelector('.answer-summary p, .answer-summary .answer-lead');
+  if (repeatedSummary && getComputedStyle(repeatedSummary).display !== 'none') {
+    throw new Error('Answer evidence repeats conclusion copy from the main answer');
+  }
+  const evidenceList = inspector.querySelector('.inspector-evidence-list');
+  if (evidenceList && ['auto', 'scroll'].includes(getComputedStyle(evidenceList).overflowY)) {
+    throw new Error('Answer evidence has a nested vertical scroll area');
+  }
   const sourceActions = [...inspector.querySelectorAll('[data-source-action]')]
     .map((button) => button.getAttribute('data-source-action'));
   if (!sourceActions.includes('reveal')) throw new Error('API evidence has no source location action');

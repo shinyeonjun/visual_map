@@ -601,7 +601,10 @@
   border-radius: 0;
   background: transparent;
 }
-.answer-inspector .answer-summary p { -webkit-line-clamp: 3; }
+.answer-inspector .answer-summary p,
+.answer-inspector .answer-lead,
+.answer-inspector .answer-summary > small { display: none; }
+.answer-inspector .inspector-evidence-list { max-height: none; overflow: visible; }
 .answer-inspector .answer-head {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
