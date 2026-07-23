@@ -57,10 +57,11 @@ export function buildTargetCatalog(
   codeInventory: CodeInventory | null,
   dbInventory: DbInventory | null,
 ): TargetCatalog {
-  const tables = dbInventory?.tables ?? [];
+  const tables = [...(dbInventory?.tables ?? [])]
+    .sort((left, right) => dbInventoryTableKey(left).localeCompare(dbInventoryTableKey(right)));
 
   return {
-    api: (codeInventory?.routes ?? []).filter(isProjectCodeItem).map((route) => ({
+    api: [...(codeInventory?.routes ?? [])].filter(isProjectCodeItem).sort(compareApiTargets).map((route) => ({
       id: `api:${route.id}`,
       kind: "api",
       badge: codeRouteMethod(route) ?? "API",
@@ -108,6 +109,14 @@ export function buildTargetCatalog(
       }));
     }),
   };
+}
+
+function compareApiTargets(left: CodeInventory["routes"][number], right: CodeInventory["routes"][number]): number {
+  return left.name.localeCompare(right.name)
+    || (codeRouteMethod(left) ?? "").localeCompare(codeRouteMethod(right) ?? "")
+    || (left.filePath ?? "").localeCompare(right.filePath ?? "")
+    || (left.line ?? 0) - (right.line ?? 0)
+    || left.id.localeCompare(right.id);
 }
 
 function compareCodeTargets(left: CodeInventory["functions"][number], right: CodeInventory["functions"][number]): number {

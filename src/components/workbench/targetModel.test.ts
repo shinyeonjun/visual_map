@@ -86,6 +86,26 @@ describe("targetModel", () => {
       "server/…/events/query.py:116",
     ]);
   });
+
+  it("keeps API and table positions stable when engine result order changes", () => {
+    const inventory = codeInventory();
+    inventory.routes = [
+      { ...inventory.routes[0], id: "route-z", name: "/api/zebra" },
+      { ...inventory.routes[0], id: "route-a", name: "/api/accounts" },
+    ];
+    const database = dbInventory();
+    database.tables = [
+      { schema: "public", name: "users", columns: [] },
+      { schema: "audit", name: "events", columns: [] },
+    ];
+
+    const catalog = buildTargetCatalog(inventory, database);
+
+    expect(catalog.api.map((item) => item.title)).toEqual(["/api/accounts", "/api/zebra"]);
+    expect(catalog.table.map((item) => item.title)).toEqual(["audit.events", "public.users"]);
+    expect(inventory.routes.map((item) => item.name)).toEqual(["/api/zebra", "/api/accounts"]);
+    expect(database.tables.map((table) => table.name)).toEqual(["users", "events"]);
+  });
 });
 
 function codeInventory(): CodeInventory {
