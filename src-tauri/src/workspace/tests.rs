@@ -1770,6 +1770,112 @@ fn code_inventory_reads_locations_from_the_node_contract() {
 }
 
 #[test]
+#[ignore = "requires the pinned C# field repository and bundled code sidecar"]
+fn code_field_fastendpoints_adapter_proves_real_routes_and_handlers() {
+    let repo_path = std::env::var("BACKEND_MAP_TEST_CODE_REPO")
+        .expect("BACKEND_MAP_TEST_CODE_REPO must point to the pinned C# repository");
+    let engine_path = std::env::var("BACKEND_MAP_TEST_CODE_ENGINE")
+        .expect("BACKEND_MAP_TEST_CODE_ENGINE must point to codebase-memory-mcp");
+    let root = temp_root("fastendpoints-field");
+    fs::create_dir_all(&root).unwrap();
+    let workspace = create_workspace(
+        &root,
+        CreateWorkspaceRequest {
+            name: "Pinned FastEndpoints".to_string(),
+            repo_path,
+        },
+    )
+    .unwrap();
+    let registry = EngineRegistry {
+        mode: engine::EngineRuntimeMode::Dev,
+        engine_dir: Path::new(&engine_path)
+            .parent()
+            .unwrap()
+            .display()
+            .to_string(),
+        engines: vec![engine::EngineAvailability {
+            id: "codebase-memory".to_string(),
+            label: "codebase-memory".to_string(),
+            role: "code".to_string(),
+            executable: "codebase-memory-mcp.exe".to_string(),
+            expected_version: "0.9.0".to_string(),
+            contract_version: "1".to_string(),
+            path: engine_path,
+            available: true,
+            releasable: true,
+            integrity: "field-test".to_string(),
+            sha256: None,
+            error: None,
+        }],
+    };
+
+    let result = index_code_repository(
+        &root,
+        &registry,
+        IndexCodeRequest {
+            workspace_id: workspace.id,
+        },
+    )
+    .unwrap();
+    assert!(result.run.ok, "{}", result.run.stderr);
+    let inventory = result.inventory.expect("field inventory");
+    let derived = inventory
+        .routes
+        .iter()
+        .filter(|route| {
+            route.detail["routePathSource"]
+                .as_str()
+                .is_some_and(|source| source == "fastendpoints-static-configure")
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        derived.len() >= 5,
+        "expected the pinned fixture's real FastEndpoints routes, got {}",
+        derived.len()
+    );
+    let create_route = derived
+        .iter()
+        .find(|route| {
+            route.name == "/Contributors"
+                && route.detail["routeMethod"].as_str() == Some("POST")
+                && route.detail["handlerQualifiedName"]
+                    .as_str()
+                    .is_some_and(|handler| {
+                        handler.contains(
+                            "Clean.Architecture.Web.Contributors.Create.Create.ExecuteAsync",
+                        )
+                    })
+        })
+        .expect("main project POST /Contributors route");
+    let derived_ids = derived
+        .iter()
+        .map(|route| route.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let derived_handles = inventory
+        .handles
+        .iter()
+        .filter(|handle| derived_ids.contains(handle.route.as_str()))
+        .count();
+    assert!(inventory
+        .handles
+        .iter()
+        .any(|handle| handle.route == create_route.id));
+    assert_eq!(derived_handles, derived.len());
+    assert!(derived
+        .iter()
+        .all(|route| !route.name.contains("nameof") && !route.name.contains("://")));
+    println!(
+        "product FastEndpoints routes={} handles={} handlers={} calls={}",
+        derived.len(),
+        derived_handles,
+        inventory.handlers.len(),
+        inventory.calls.len()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn code_engine_queries_use_one_bounded_node_contract_and_safe_aliases() {
     let query = inventory_nodes_query();
 

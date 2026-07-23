@@ -116,6 +116,7 @@ fn code_inventory_from_adapter(
     inventory.calls = extract_code_calls(&result.calls, &inventory);
     attach_code_handles(&result.handles, &mut inventory);
     super::fastapi_routes::enrich_fastapi_route_paths(repo_path, &mut inventory);
+    super::fastendpoints_routes::enrich_fastendpoints_routes(repo_path, &mut inventory);
     downgrade_unverified_routes(&mut inventory);
     Ok(inventory)
 }
@@ -322,6 +323,16 @@ pub(crate) fn extract_code_handles(
 
 pub(crate) fn attach_code_handles(handles_json: &serde_json::Value, inventory: &mut CodeInventory) {
     let handles = extract_code_handles(handles_json, inventory);
+    attach_route_handles(handles, inventory);
+}
+
+pub(super) fn attach_route_handles(mut handles: Vec<CodeHandle>, inventory: &mut CodeInventory) {
+    handles.sort_by(|left, right| {
+        left.route
+            .cmp(&right.route)
+            .then_with(|| left.handler.cmp(&right.handler))
+    });
+    handles.dedup();
     let handler_ids = handles
         .iter()
         .map(|handle| handle.handler.as_str())

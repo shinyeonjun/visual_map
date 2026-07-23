@@ -3,6 +3,7 @@ mod codebase_memory;
 mod database_memory;
 mod db;
 mod fastapi_routes;
+mod fastendpoints_routes;
 mod model;
 mod store;
 

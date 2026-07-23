@@ -1,7 +1,7 @@
 # Product Support Boundary
 
 Status: Current product contract
-Last updated: 2026-07-22
+Last updated: 2026-07-24
 
 Backend Visual Map separates three different claims:
 
@@ -20,13 +20,17 @@ handler, and call-chain quality for every parser grammar.
 | Product validation set | Pinned fixture | Validated product fields |
 | --- | --- | --- |
 | Java / Spring | `spring-projects/spring-petclinic@51045d1` | routes, symbols, source locations, scored calls |
-| C# / .NET | `ardalis/CleanArchitecture@a064d0b` | routes, symbols, source locations, scored calls |
+| C# / .NET FastEndpoints | `ardalis/CleanArchitecture@a064d0b` | static `Configure` routes, exact `ExecuteAsync` / `HandleAsync` handlers, symbols, source locations, scored calls |
 | Python / FastAPI + TypeScript | `fastapi/full-stack-fastapi-template@4cd0d9e` | routes, symbols, source locations, scored calls |
 
 Other engine-readable languages remain available for inventory exploration,
 but their framework route extraction and end-to-end call quality are not
 product-certified. A missing route, handler, or call edge is shown as unknown;
 it is never inferred from a familiar name alone.
+For FastEndpoints, the product accepts only one static HTTP registration in an
+indexed `Configure` method on an `Endpoint` type, one exact execution method in
+the same type, and either a literal route or an exact indexed `const string`.
+Dynamic, ambiguous, and non-endpoint `Configure` methods fail closed.
 
 ### Code Relationship Rules
 
