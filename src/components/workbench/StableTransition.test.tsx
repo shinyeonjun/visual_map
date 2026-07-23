@@ -6,6 +6,7 @@ import { AtlasCanvas } from "../atlas/AtlasCanvas";
 import { CodeSourceSection } from "./CodeSourceSection";
 import { DatabaseSourceSection } from "./DatabaseSourceSection";
 import { InspectorPanel } from "./InspectorPanel";
+import { WorkspaceCard } from "./WorkspaceCard";
 import { WorkbenchTopBar } from "./WorkbenchTopBar";
 
 describe("stable mode transitions", () => {
@@ -496,6 +497,49 @@ describe("stable mode transitions", () => {
     expect(selectEdge).toHaveBeenCalledWith(currentMap.edges[0]);
     expect(screen.getByText(/소스 근거: 라우트 소스 위치를 확인했습니다/)).toBeInTheDocument();
     expect(screen.getByText(/경로 근거: 정적 prefix를 합성해 전체 경로를 확인했습니다/)).toBeInTheDocument();
+  });
+
+  it("starts another project with an empty draft while keeping the current project visible", () => {
+    const setRepoSourceMode = vi.fn();
+    const setRepoPath = vi.fn();
+    const setWorkspaceName = vi.fn();
+    const currentWorkspace = {
+      id: "workspace-1",
+      name: "backend",
+      repoPath: "D:/backend",
+      repoSource: "local",
+    };
+    render(
+      <WorkspaceCard
+        workspaceControls={{
+          currentWorkspace,
+          workspaces: [currentWorkspace],
+          recoveryWarnings: [],
+          repoSourceMode: "local",
+          workspaceName: "backend",
+          repoPath: "D:/backend",
+          repoPathError: null,
+          canCreateWorkspace: false,
+          busy: false,
+          setRepoSourceMode,
+          setRepoPath,
+          setWorkspaceName,
+          refreshWorkspaces: vi.fn(),
+          refreshGithubWorkspace: vi.fn(),
+          deleteWorkspace: vi.fn(),
+        } as unknown as WorkspaceControls}
+      />,
+    );
+
+    const newProjectDetails = screen.getByText("다른 프로젝트 열기").closest("details")!;
+    newProjectDetails.open = true;
+    fireEvent(newProjectDetails, new Event("toggle", { bubbles: true }));
+
+    expect(screen.getByText("backend")).toBeInTheDocument();
+    expect(screen.getByText("현재 프로젝트 관리")).toBeInTheDocument();
+    expect(setRepoSourceMode).toHaveBeenCalledWith("local");
+    expect(setRepoPath).toHaveBeenCalledWith("");
+    expect(setWorkspaceName).toHaveBeenCalledWith("");
   });
 
   it("presents code engine evidence in reader-facing language", () => {
