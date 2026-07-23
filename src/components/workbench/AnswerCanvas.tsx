@@ -184,6 +184,7 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
         structural={structuralCount}
         candidates={candidateCount}
         unknowns={unknownCount}
+        onOpenEvidence={() => selectReviewNode(map.focus, map, visualMapControls)}
       />
 
       <AnswerSection title="처리 흐름" count={knownSteps.length} description="호출 깊이로 정렬한 확정 근거와 구조 관계">
@@ -279,6 +280,7 @@ function ImpactAnswer({ map, visualMapControls }: { map: VisualMap; visualMapCon
         structural={structuralCount}
         candidates={candidateCount}
         unknowns={unknownCount}
+        onOpenEvidence={() => selectReviewNode(map.focus, map, visualMapControls)}
       />
       {!tableUsage ? (
         <ChangeIntentBar intent={board.changeIntent ?? visualMapControls.changeIntent} onChange={visualMapControls.setChangeIntent} />
@@ -384,6 +386,7 @@ function CodeAnswer({
         confirmed={confirmed.length}
         structural={structural.length}
         candidates={candidates.length}
+        onOpenEvidence={map ? () => selectReviewNode(focusId, map, visualMapControls) : undefined}
       />
       <AnswerSection title="바로 연결" count={known.length} description="한 단계 이내의 확정 근거와 구조 관계">
         {known.length > 0 ? (
@@ -425,6 +428,7 @@ function AnswerHeader({
   structural = 0,
   candidates,
   unknowns = 0,
+  onOpenEvidence,
 }: {
   icon: ReactNode;
   kicker: string;
@@ -435,6 +439,7 @@ function AnswerHeader({
   structural?: number;
   candidates: number;
   unknowns?: number;
+  onOpenEvidence?: () => void;
 }) {
   return (
     <header className="answer-header">
@@ -451,6 +456,12 @@ function AnswerHeader({
         {structural > 0 ? <span className="structural"><CircleDashed size={14} />구조 {structural}</span> : null}
         {candidates > 0 ? <span className="candidate"><TriangleAlert size={14} />후보 {candidates}</span> : null}
         {unknowns > 0 ? <span className="unknown"><ShieldAlert size={14} />확인 필요 {unknowns}</span> : null}
+        {onOpenEvidence ? (
+          <button className="answer-evidence-action" type="button" onClick={onOpenEvidence} aria-label="근거 패널 열기">
+            <FileSearch size={14} />
+            근거
+          </button>
+        ) : null}
       </div>
     </header>
   );
