@@ -4,6 +4,7 @@ import {
   codeKindChip,
   codeRouteMethod,
   dbInventoryTableKey,
+  isProjectCodeItem,
 } from "../../types/workspace";
 import {
   dbColumnNodeId,
@@ -59,7 +60,7 @@ export function buildTargetCatalog(
   const tables = dbInventory?.tables ?? [];
 
   return {
-    api: (codeInventory?.routes ?? []).map((route) => ({
+    api: (codeInventory?.routes ?? []).filter(isProjectCodeItem).map((route) => ({
       id: `api:${route.id}`,
       kind: "api",
       badge: codeRouteMethod(route) ?? "API",
@@ -71,7 +72,7 @@ export function buildTargetCatalog(
     code: [
       ...codeInventoryCodeItems(codeInventory),
       ...(codeInventory?.files ?? []),
-    ].filter(isBrowsableCodeTarget).sort(compareCodeTargets).map((item) => ({
+    ].filter(isProjectCodeItem).sort(compareCodeTargets).map((item) => ({
       id: `code:${item.id}`,
       kind: "code",
       badge: codeKindChip(item.kind),
@@ -107,10 +108,6 @@ export function buildTargetCatalog(
       }));
     }),
   };
-}
-
-function isBrowsableCodeTarget(item: CodeInventory["functions"][number]): boolean {
-  return !item.filePath?.trim().startsWith("<");
 }
 
 function compareCodeTargets(left: CodeInventory["functions"][number], right: CodeInventory["functions"][number]): number {

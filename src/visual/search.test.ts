@@ -48,6 +48,35 @@ describe("developer search", () => {
     expect(searchSummaryText(collection)).toBe("찾은 대상 1개 · 코드 1");
   });
 
+  it("keeps virtual engine symbols out of developer search", () => {
+    const inventory = codeInventory([]);
+    inventory.functions = [
+      {
+        id: "project-length",
+        kind: "function",
+        name: "length",
+        filePath: "src/strings.py",
+        detail: null,
+      },
+      {
+        id: "builtin-len",
+        kind: "function",
+        name: "len",
+        filePath: "<python-builtins>",
+        detail: null,
+      },
+    ];
+    inventory.summary.functions = inventory.functions.length;
+
+    const collection = collectSearchResults("len", inventory, null);
+
+    expect(collection.total).toBe(1);
+    expect(collection.results[0]).toMatchObject({
+      id: "code:project-length",
+      title: "length",
+    });
+  });
+
   it("maps a full-snapshot search hit that was omitted from the bounded bootstrap", () => {
     const result: InventorySearchResult = {
       hits: [

@@ -51,6 +51,14 @@ describe("ModePanel navigation context", () => {
       line: index + 1,
       detail: null,
     }));
+    workspace.codeInventory!.functions.push({
+      id: "builtin-abs",
+      kind: "function",
+      name: "abs",
+      filePath: "<python-builtins>",
+      line: 1,
+      detail: null,
+    });
     const { container } = render(
       <ModePanel
         workspaceControls={workspace}
@@ -68,6 +76,7 @@ describe("ModePanel navigation context", () => {
 
     expect(toggleCompositionFocus).toHaveBeenCalledWith("db:table:public.orders");
     expect(controls.showMode).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-context-id="code:builtin-abs"]')).not.toBeInTheDocument();
   });
 
   it("allows DB-only composition when a table and column are available", () => {

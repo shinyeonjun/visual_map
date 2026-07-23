@@ -231,6 +231,10 @@ export type CodeInventoryItem = {
   detail: unknown;
 };
 
+export function isProjectCodeItem(item: CodeInventoryItem): boolean {
+  return !item.filePath?.trim().startsWith("<");
+}
+
 export type CodeInventory = {
   project: string;
   routes: CodeInventoryItem[];

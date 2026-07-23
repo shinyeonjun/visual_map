@@ -6,7 +6,12 @@ import {
   parseDbStableObjectKey,
 } from "../inventory/dbIdentity";
 import { codeInventoryItemFromSnapshot } from "../inventory/snapshotRestore";
-import { codeInventoryCodeItems, codeRouteMethod, dbInventoryTableKey } from "../types/workspace";
+import {
+  codeInventoryCodeItems,
+  codeRouteMethod,
+  dbInventoryTableKey,
+  isProjectCodeItem,
+} from "../types/workspace";
 import type { InventorySearchResult } from "../types/visual-map";
 import type {
   CodeInventory,
@@ -280,9 +285,9 @@ export function searchSummaryText(collection: SearchCollection): string {
 
 export function searchScopeText(codeInventory: CodeInventory | null, dbInventory: DbInventory | null): string {
   const scopes = [
-    codeInventory?.routes.length ? "API" : null,
-    codeInventoryCodeItems(codeInventory).length ? "코드" : null,
-    codeInventory?.files.length ? "파일" : null,
+    codeInventory?.routes.some(isProjectCodeItem) ? "API" : null,
+    codeInventoryCodeItems(codeInventory).some(isProjectCodeItem) ? "코드" : null,
+    codeInventory?.files.some(isProjectCodeItem) ? "파일" : null,
     dbInventory?.tables.length ? "테이블" : null,
     dbInventory?.tables.some((table) => (table.dependents?.length ?? 0) > 0) ? "DB 객체" : null,
     dbInventory?.tables.some((table) => table.columns.length > 0) ? "컬럼" : null,
@@ -303,9 +308,9 @@ function codeSearchIndex(inventory: CodeInventory | null): CodeSearchIndex {
     return cached;
   }
   const index = {
-    routes: inventory.routes.map(indexCodeItem),
-    code: codeInventoryCodeItems(inventory).map(indexCodeItem),
-    files: inventory.files.map(indexCodeItem),
+    routes: inventory.routes.filter(isProjectCodeItem).map(indexCodeItem),
+    code: codeInventoryCodeItems(inventory).filter(isProjectCodeItem).map(indexCodeItem),
+    files: inventory.files.filter(isProjectCodeItem).map(indexCodeItem),
   };
   codeSearchIndexes.set(inventory, index);
   return index;

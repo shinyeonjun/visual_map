@@ -812,6 +812,44 @@ fn inventory_bootstrap_caps_code_but_keeps_exact_counts_and_full_search() {
 }
 
 #[test]
+fn full_inventory_search_excludes_virtual_code_symbols() {
+    let snapshot = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: "project-search".to_string(),
+        saved_at: "1".to_string(),
+        metadata: Default::default(),
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items: vec![
+            item(
+                "code:function:project-length",
+                "function",
+                "length",
+                "code",
+                "code",
+                None,
+                Some("src/strings.py"),
+            ),
+            item(
+                "code:function:builtin-len",
+                "function",
+                "len",
+                "code",
+                "code",
+                None,
+                Some("<python-builtins>"),
+            ),
+        ],
+    };
+
+    let result = search_inventory(&snapshot, "len");
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.counts["code"], 1);
+    assert_eq!(result.hits[0].item.id, "code:function:project-length");
+}
+
+#[test]
 fn inventory_bootstrap_caps_db_tables_with_their_children_and_keeps_full_search() {
     let mut items = Vec::new();
     for index in 0..150 {
