@@ -10,6 +10,7 @@ use crate::{
 use std::{
     collections::{BTreeSet, HashSet},
     fs,
+    process::Command,
     time::{Duration, Instant},
 };
 
@@ -697,6 +698,105 @@ fn snapshot_marks_code_stale_when_source_contents_change() {
         .stale_reasons
         .iter()
         .any(|reason| reason.contains("확인할 수 없습니다")));
+}
+
+#[test]
+fn git_source_revision_stays_scoped_to_the_workspace_subdirectory() {
+    let root = temp_root("scoped-git-source-revision");
+    let service_a = root.join("service-a");
+    let service_b = root.join("service-b");
+    fs::create_dir_all(&service_a).unwrap();
+    fs::create_dir_all(&service_b).unwrap();
+    fs::write(service_a.join("main.rs"), "fn service_a() {}\n").unwrap();
+    fs::write(service_b.join("main.rs"), "fn service_b() {}\n").unwrap();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["add", "."]);
+    git(&["commit", "-m", "initial"]);
+
+    let workspace = test_workspace(service_a.to_str().unwrap());
+    let code_snapshot = |saved_at: &str| {
+        snapshot_with_metadata(
+            InventorySnapshot {
+                schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+                workspace_id: workspace.id.clone(),
+                saved_at: saved_at.to_string(),
+                metadata: Default::default(),
+                stale_reasons: Vec::new(),
+                links: Vec::new(),
+                items: vec![item(
+                    "code:file:main",
+                    "file",
+                    "main.rs",
+                    "code",
+                    "code",
+                    None,
+                    Some("main.rs"),
+                )],
+            },
+            &workspace,
+            &test_registry(),
+        )
+    };
+    let snapshot = code_snapshot("1");
+
+    fs::write(
+        service_b.join("main.rs"),
+        "fn service_b() { println!(\"outside\"); }\n",
+    )
+    .unwrap();
+    assert!(
+        mark_snapshot_staleness(snapshot.clone(), &workspace, &test_registry())
+            .stale_reasons
+            .is_empty()
+    );
+    git(&["add", "service-b/main.rs"]);
+    git(&["commit", "-m", "change other service"]);
+    assert!(
+        mark_snapshot_staleness(snapshot.clone(), &workspace, &test_registry())
+            .stale_reasons
+            .is_empty()
+    );
+
+    fs::write(
+        service_a.join("main.rs"),
+        "fn service_a() { println!(\"inside\"); }\n",
+    )
+    .unwrap();
+    assert!(
+        mark_snapshot_staleness(snapshot, &workspace, &test_registry())
+            .stale_reasons
+            .iter()
+            .any(|reason| reason.contains("코드 파일"))
+    );
+
+    let dirty_snapshot = code_snapshot("2");
+    fs::write(
+        service_a.join("main.rs"),
+        "fn service_a() { println!(\"inside again\"); }\n",
+    )
+    .unwrap();
+    assert!(
+        mark_snapshot_staleness(dirty_snapshot, &workspace, &test_registry())
+            .stale_reasons
+            .iter()
+            .any(|reason| reason.contains("코드 파일"))
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

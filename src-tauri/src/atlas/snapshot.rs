@@ -2269,20 +2269,39 @@ fn git_source_revision(root: &Path) -> Option<(String, String)> {
     if head.len() < 7 {
         return None;
     }
+    let prefix = git_output(root, &["rev-parse", "--show-prefix"])?;
+    let prefix = PathBuf::from(
+        String::from_utf8(prefix)
+            .ok()?
+            .trim_end_matches(['/', '\\']),
+    );
+    let tracked = git_output(root, &["ls-files", "-s", "-z", "--", "."])?;
     let status = git_output(
         root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            ".",
+        ],
     )?;
     let paths = git_changed_paths(&status)?;
     let mut hasher = Sha256::new();
-    hasher.update(b"git\0");
-    hasher.update(head.as_bytes());
+    hasher.update(b"git-scope\0");
+    hasher.update(&tracked);
     hasher.update(b"\0status\0");
     hasher.update(&status);
     for relative in &paths {
+        let scoped = if prefix.as_os_str().is_empty() {
+            relative.as_path()
+        } else {
+            relative.strip_prefix(&prefix).ok()?
+        };
         hasher.update(b"\0path\0");
-        hasher.update(relative.to_string_lossy().as_bytes());
-        hash_path_state(&mut hasher, &root.join(relative))?;
+        hasher.update(scoped.to_string_lossy().as_bytes());
+        hash_path_state(&mut hasher, &root.join(scoped))?;
     }
     let revision = format!("{:X}", hasher.finalize());
     let state = if paths.is_empty() {
