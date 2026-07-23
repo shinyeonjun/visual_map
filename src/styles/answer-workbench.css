@@ -177,7 +177,14 @@
   padding: 9px 10px 10px;
   border-top: 1px solid var(--line);
 }
-.target-navigator-footer > small { color: var(--ink-4); font-size: 10.5px; }
+.target-navigator-footer > small {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px 6px;
+  color: var(--ink-4);
+  font-size: 10.5px;
+}
+.target-navigator-footer > small > span { white-space: nowrap; }
 .target-navigator-footer > button {
   min-width: 0;
   height: 32px;

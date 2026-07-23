@@ -81,6 +81,7 @@ describe("TargetNavigator", () => {
     const workspace = workspaceControls();
     workspace.codeInventory!.handlers = codeItems("handler", 20);
     workspace.codeInventory!.functions = codeItems("function", 20);
+    workspace.codeInventory!.partial = true;
     const { container } = render(
       <TargetNavigator
         workspaceControls={workspace}
@@ -93,6 +94,7 @@ describe("TargetNavigator", () => {
     );
 
     expect(container.querySelectorAll(".target-list button")).toHaveLength(24);
+    expect(screen.getByText("24/40개 표시 · 전체는 상단 검색")).toBeInTheDocument();
     Object.defineProperty(container.querySelector(".target-list"), "scrollTo", { value: vi.fn() });
     fireEvent.change(screen.getByLabelText("코드 목록 필터"), { target: { value: "handler19" } });
     expect(screen.getByRole("button", { name: /handler19/ })).toBeInTheDocument();
@@ -116,7 +118,8 @@ describe("TargetNavigator", () => {
     );
 
     expect(screen.queryByRole("button", { name: /len/ })).not.toBeInTheDocument();
-    expect(screen.getByText("1개 · 내장 심볼 1개 제외")).toBeInTheDocument();
+    expect(screen.getByText("1개")).toBeInTheDocument();
+    expect(screen.getByText("내장 심볼 1개 제외")).toBeInTheDocument();
   });
 
   it("opens database setup from an empty DB target list", () => {

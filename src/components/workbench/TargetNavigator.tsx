@@ -89,6 +89,10 @@ export function TargetNavigator({
       + (workspaceControls.codeInventory?.files.length ?? 0)
       - catalog.code.length
     : 0;
+  const fullSearchAvailable = kind === "code" && workspaceControls.codeInventory?.partial;
+  const visibleCountLabel = matchingItems.length > items.length
+    ? `${items.length.toLocaleString("ko-KR")}/${matchingItems.length.toLocaleString("ko-KR")}개 표시`
+    : `${matchingItems.length.toLocaleString("ko-KR")}개`;
   const committedFocus = visualMapControls.loading && visualMapControls.currentMap
     ? visualMapControls.currentMap.focus
     : visualMapControls.focusId ?? visualMapControls.currentMap?.focus ?? null;
@@ -192,14 +196,15 @@ export function TargetNavigator({
       </div>
 
       <footer className="target-navigator-footer">
-        {matchingItems.length > items.length ? (
-          <small>{items.length}개 표시 · 검색으로 범위를 좁히세요</small>
-        ) : (
-          <small>
-            {matchingItems.length.toLocaleString("ko-KR")}개
-            {hiddenEngineCodeCount > 0 ? ` · 내장 심볼 ${hiddenEngineCodeCount}개 제외` : ""}
-          </small>
-        )}
+        <small>
+          <span>
+            {visibleCountLabel}
+            {fullSearchAvailable ? " · 전체는 상단 검색" : ""}
+          </span>
+          {hiddenEngineCodeCount > 0
+            ? <span>내장 심볼 {hiddenEngineCodeCount.toLocaleString("ko-KR")}개 제외</span>
+            : ""}
+        </small>
         <button type="button" title="여러 대상을 선택해 관계 보기" onClick={onOpenRelations}>
           <GitCompareArrows size={15} />
           <span>여러 대상 관계</span>
