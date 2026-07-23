@@ -199,7 +199,35 @@ def create_order(request):
         }
     }
 
-    Write-Host "Code engine contract smoke passed for project $project."
+    $nextIndex = Invoke-CodeTool "index_repository" @{
+        repo_path = $sourceRoot
+        mode = "full"
+        name = "backend-visual-map-contract-next"
+        persistence = $false
+    }
+    $nextProject = [string]$nextIndex.project
+    if ([string]::IsNullOrWhiteSpace($nextProject) -or $nextProject -eq $project) {
+        throw "A fresh code index did not create a distinct project generation."
+    }
+    $nextRoutes = Invoke-CodeTool "query_graph" @{
+        project = $nextProject
+        query = "MATCH (route:Route) RETURN route.qualified_name AS route"
+    }
+    if (@($nextRoutes.rows).Count -eq 0) {
+        throw "The fresh project generation returned no Route node."
+    }
+
+    Invoke-CodeTool "delete_project" @{ project = $project } | Out-Null
+    $projects = Invoke-CodeTool "list_projects" @{}
+    $remaining = @($projects.projects)
+    if (@($remaining | Where-Object { [string]$_.name -eq $project }).Count -ne 0) {
+        throw "The previous project generation was not removed."
+    }
+    if (@($remaining | Where-Object { [string]$_.name -eq $nextProject }).Count -ne 1) {
+        throw "The fresh project generation was not preserved."
+    }
+
+    Write-Host "Code engine contract smoke passed for project $nextProject."
 }
 finally {
     Remove-Item Env:CBM_CACHE_DIR -ErrorAction SilentlyContinue

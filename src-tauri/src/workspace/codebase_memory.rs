@@ -90,6 +90,15 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         )
     }
 
+    pub(crate) fn delete_project(&self, project: &str) -> Result<(), String> {
+        self.invoke_json(
+            CodebaseMemoryTool::DeleteProject,
+            &json!({ "project": project }),
+            Duration::from_secs(30),
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn inventory(&self, project: &str) -> Result<CodebaseMemoryInventory, String> {
         let architecture = self.invoke_json(
             CodebaseMemoryTool::GetArchitecture,
@@ -195,6 +204,7 @@ impl<'a> CodebaseMemoryAdapter<'a> {
 #[derive(Clone, Copy)]
 enum CodebaseMemoryTool {
     IndexRepository,
+    DeleteProject,
     GetArchitecture,
     QueryGraph,
     SearchCode,
@@ -204,6 +214,7 @@ impl CodebaseMemoryTool {
     fn as_str(self) -> &'static str {
         match self {
             Self::IndexRepository => "index_repository",
+            Self::DeleteProject => "delete_project",
             Self::GetArchitecture => "get_architecture",
             Self::QueryGraph => "query_graph",
             Self::SearchCode => "search_code",
@@ -508,6 +519,7 @@ mod tests {
     fn adapter_exposes_only_product_tools() {
         let tools = [
             CodebaseMemoryTool::IndexRepository,
+            CodebaseMemoryTool::DeleteProject,
             CodebaseMemoryTool::GetArchitecture,
             CodebaseMemoryTool::QueryGraph,
             CodebaseMemoryTool::SearchCode,
@@ -518,6 +530,7 @@ mod tests {
             tools,
             [
                 "index_repository",
+                "delete_project",
                 "get_architecture",
                 "query_graph",
                 "search_code"
