@@ -411,6 +411,35 @@ __UI_HELPERS__
     () => codeTab.getAttribute('aria-selected') === 'true' && document.activeElement === codeTab,
     'Target tabs did not move left with the keyboard',
   );
+  const targetButtons = [...document.querySelectorAll('.target-list button[data-target-id]')];
+  const targetTabStops = targetButtons.filter((button) => button.tabIndex >= 0);
+  if (targetTabStops.length !== 1) {
+    throw new Error('Target list exposes ' + targetTabStops.length + ' tab stops');
+  }
+  const targetStart = targetTabStops[0];
+  const targetStartIndex = targetButtons.indexOf(targetStart);
+  const targetNextIndex = targetStartIndex < targetButtons.length - 1
+    ? targetStartIndex + 1
+    : targetStartIndex - 1;
+  const targetNext = targetButtons[targetNextIndex];
+  const targetMoveKey = targetNextIndex > targetStartIndex ? 'ArrowDown' : 'ArrowUp';
+  const answerFocusBeforeTargetMove = document.querySelector('.answer-canvas')?.getAttribute('data-answer-focus');
+  targetStart.focus();
+  targetStart.dispatchEvent(new KeyboardEvent('keydown', { key: targetMoveKey, bubbles: true }));
+  await waitUntil(
+    () => document.activeElement === targetNext,
+    'Target list did not move focus with the keyboard',
+  );
+  await sleep(80);
+  if (targetButtons.filter((button) => button.tabIndex >= 0).length !== 1 || targetNext.tabIndex !== 0) {
+    throw new Error('Target list did not preserve one roving tab stop');
+  }
+  if (document.querySelector('.answer-refreshing')) {
+    throw new Error('Target keyboard navigation restarted analysis');
+  }
+  if (document.querySelector('.answer-canvas')?.getAttribute('data-answer-focus') !== answerFocusBeforeTargetMove) {
+    throw new Error('Target keyboard navigation changed the current answer');
+  }
   const switcher = await waitFor('.product-view-switch');
   const switcherBefore = switcher.getBoundingClientRect();
   const workspace = await waitFor('.product-workspace');
@@ -510,7 +539,7 @@ __UI_HELPERS__
   sourceManager.querySelector('.source-manager-header .tool')?.click();
   await waitUntil(() => !document.querySelector('.source-manager'), 'Source manager did not close', 2000);
   assertNoOverflow();
-  return { ok: true, labels: ['surfaces:2', 'advanced-modes:2', 'tabs:keyboard', 'target:restored', 'switcher:fixed', 'evidence:stable'] };
+  return { ok: true, labels: ['surfaces:2', 'advanced-modes:2', 'tabs:keyboard', 'targets:roving', 'target:restored', 'switcher:fixed', 'evidence:stable'] };
 })()
 '@
 
