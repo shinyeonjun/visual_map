@@ -67,6 +67,27 @@ describe("TargetNavigator", () => {
     expect(screen.getByRole("button", { name: /handler19/ })).toBeInTheDocument();
   });
 
+  it("hides engine-only builtins while disclosing the excluded count", () => {
+    const workspace = workspaceControls();
+    workspace.codeInventory!.functions = [
+      ...codeItems("function", 1),
+      { ...codeItems("function", 1)[0], id: "builtin-len", name: "len", filePath: "<python-builtins>" },
+    ];
+    render(
+      <TargetNavigator
+        workspaceControls={workspace}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={visualControls(vi.fn(), "search-focus")}
+        onSelectTarget={vi.fn()}
+        onOpenDatabase={vi.fn()}
+        onOpenRelations={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /len/ })).not.toBeInTheDocument();
+    expect(screen.getByText("1개 · 내장 심볼 1개 제외")).toBeInTheDocument();
+  });
+
   it("opens database setup from an empty DB target list", () => {
     const onOpenDatabase = vi.fn();
     render(
