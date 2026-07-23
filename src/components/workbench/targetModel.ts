@@ -129,6 +129,9 @@ export function firstAvailableTargetKind(catalog: TargetCatalog): TargetKind {
 
 function sourceLocation(path: string | null | undefined, line: number | null | undefined): string {
   if (!path) return line ? `L${line}` : "소스 위치 없음";
-  const compactPath = path.replace(/\\/g, "/").split("/").filter(Boolean).slice(-2).join("/");
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  const compactPath = parts.length > 3
+    ? `${parts[0]}/…/${parts.slice(-2).join("/")}`
+    : parts.join("/");
   return `${compactPath}${line ? `:${line}` : ""}`;
 }
