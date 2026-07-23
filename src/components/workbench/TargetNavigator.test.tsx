@@ -28,6 +28,37 @@ describe("TargetNavigator", () => {
     expect(showMode).toHaveBeenCalledWith("api-flow", "code:route-orders");
   });
 
+  it("does not turn the current target into a hidden evidence action", () => {
+    const showMode = vi.fn();
+    const selectNode = vi.fn();
+    const onSelectTarget = vi.fn();
+    render(
+      <TargetNavigator
+        workspaceControls={workspaceControls()}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={{
+          ...visualControls(showMode),
+          currentMap: {
+            mode: "api-flow",
+            focus: "code:route-orders",
+            nodes: [{ id: "code:route-orders", kind: "api", title: "/api/orders", layer: "api", source: "code" }],
+          },
+          focusId: "code:route-orders",
+          selectNode,
+        } as unknown as VisualMapControls}
+        onSelectTarget={onSelectTarget}
+        onOpenDatabase={vi.fn()}
+        onOpenRelations={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /\/api\/orders/ }));
+
+    expect(onSelectTarget).toHaveBeenCalledOnce();
+    expect(showMode).not.toHaveBeenCalled();
+    expect(selectNode).not.toHaveBeenCalled();
+  });
+
   it("opens multi-target relationships from one explicit action", () => {
     const onOpenRelations = vi.fn();
     render(

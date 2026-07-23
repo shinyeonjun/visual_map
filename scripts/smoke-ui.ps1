@@ -450,9 +450,16 @@ __UI_HELPERS__
   if (switcherShift > 1) throw new Error('Primary surface controls moved by ' + switcherShift + 'px');
 
   restoredTarget.click();
+  await sleep(80);
+  if (workspace.classList.contains('inspector-visible')) {
+    throw new Error('Current target opened evidence through a hidden alternate action');
+  }
+  if (document.querySelector('.answer-refreshing')) throw new Error('Current target restarted analysis');
+  const evidenceAction = await waitFor('.answer-evidence-action');
+  evidenceAction.click();
   await waitUntil(
     () => workspace.classList.contains('inspector-visible'),
-    'Selecting the restored target did not open evidence',
+    'Explicit evidence action did not open evidence',
   );
   if (document.querySelector('.answer-refreshing')) throw new Error('Evidence selection restarted analysis');
   const inspectorBody = await waitFor('.inspector-scroll-body');
