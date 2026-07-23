@@ -400,6 +400,11 @@ function CodeAnswer({
     ...(workspaceControls.codeInventory?.files ?? []),
   ].find((item) => item.id === itemId) ?? null;
   const title = node?.title ?? inventoryItem?.name ?? itemId;
+  const sourceContext = node?.location
+    ? sourceLabel(node.location.path, node.location.line)
+    : inventoryItem?.filePath
+      ? sourceLabel(inventoryItem.filePath, inventoryItem.line)
+      : null;
   const edges = (map?.edges ?? []).filter((edge) => edge.from === focusId || edge.to === focusId);
   const confirmed = edges.filter((edge) => answerEdgeTruthClass(edge) === "confirmed");
   const structural = edges.filter((edge) => answerEdgeTruthClass(edge) === "structural");
@@ -417,6 +422,7 @@ function CodeAnswer({
         icon={<Code2 size={18} />}
         kicker="코드 호출 경로"
         title={title}
+        context={sourceContext ? `코드 정의 · ${sourceContext}` : null}
         analysisBasis={analysisBasis}
         conclusion={conclusion}
         confirmed={confirmed.length}

@@ -65,6 +65,7 @@ describe("AnswerCanvas", () => {
     );
 
     expect(screen.getByRole("heading", { name: "loadOrders" })).toBeInTheDocument();
+    expect(screen.getByText("코드 정의 · src/orders.ts:23")).toBeInTheDocument();
     expect(screen.getByText("분석 범위 · 코드")).toBeInTheDocument();
     expect(screen.queryByText(/DB codex-ddl-smoke/)).not.toBeInTheDocument();
     expect(screen.getByText("확인된 연결은 없습니다.")).toBeInTheDocument();
