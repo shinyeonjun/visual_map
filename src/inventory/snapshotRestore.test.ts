@@ -3,6 +3,21 @@ import type { InventorySnapshot } from "../types/visual-map";
 import { codeInventoryFromSnapshot, dbInventoryFromSnapshot } from "./snapshotRestore";
 
 describe("code inventory snapshot restore", () => {
+  it("restores stale snapshots instead of treating them as missing data", () => {
+    const snapshot: InventorySnapshot = {
+      workspaceId: "workspace-1",
+      savedAt: "1",
+      staleReasons: ["source changed"],
+      items: [
+        { id: "code:route", kind: "api", name: "GET /orders", layer: "api", source: "code" },
+        { id: "db:table:orders", kind: "table", name: "orders", layer: "data", source: "db" },
+      ],
+    };
+
+    expect(codeInventoryFromSnapshot(snapshot, "shop").routes[0].name).toBe("GET /orders");
+    expect(dbInventoryFromSnapshot(snapshot, "profile-1").tables[0].name).toBe("orders");
+  });
+
   it("restores only confirmed calls for route ranking", () => {
     const snapshot: InventorySnapshot = {
       workspaceId: "workspace-1",
