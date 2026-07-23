@@ -21,7 +21,7 @@ handler, and call-chain quality for every parser grammar.
 | --- | --- | --- |
 | Java / Spring | `spring-projects/spring-petclinic@51045d1` | routes, symbols, source locations, scored calls |
 | C# / .NET FastEndpoints | `ardalis/CleanArchitecture@a064d0b` | static `Configure` routes, exact `ExecuteAsync` / `HandleAsync` handlers, symbols, source locations, scored calls |
-| Python / FastAPI + TypeScript | `fastapi/full-stack-fastapi-template@4cd0d9e` | routes, symbols, source locations, scored calls |
+| Python / FastAPI + TypeScript | `fastapi/full-stack-fastapi-template@4cd0d9e` | routes, symbols, source locations, scored calls, bounded static-import calls |
 
 Other engine-readable languages remain available for inventory exploration,
 but their framework route extraction and end-to-end call quality are not
@@ -34,9 +34,14 @@ Dynamic, ambiguous, and non-endpoint `Configure` methods fail closed.
 
 ### Code Relationship Rules
 
-- `HANDLES` and `CALLS` keep the confidence emitted by the code engine.
+- `HANDLES` keeps the confidence emitted by the code engine. `CALLS` does too,
+  except for the bounded FastAPI rule below.
 - CALLS at 85% or above may enter a confirmed path; 70-84% stays candidate;
   lower or unscored output stays unknown.
+- A FastAPI `unique_name` call may be raised to 95% only when one unshadowed
+  `from ... import ...` module alias, the exact `alias.member` expression, and
+  the target Python module and symbol all agree. Ambiguous, rebound, or deeper
+  expressions stay at the engine score.
 - A CALLS edge from production source into a test-only path is discarded even
   when the engine score is high; test code calling production code is retained.
 - A stale source snapshot must be read again before it can answer a focused

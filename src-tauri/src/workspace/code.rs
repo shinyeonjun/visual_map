@@ -116,7 +116,7 @@ fn code_inventory_from_adapter(
     )?;
     inventory.calls = extract_code_calls(&result.calls, &inventory);
     attach_code_handles(&result.handles, &mut inventory);
-    super::fastapi_routes::enrich_fastapi_route_paths(repo_path, &mut inventory);
+    super::fastapi_routes::enrich_fastapi_evidence(repo_path, &mut inventory);
     super::fastendpoints_routes::enrich_fastendpoints_routes(repo_path, &mut inventory);
     downgrade_unverified_routes(&mut inventory);
     Ok(inventory)

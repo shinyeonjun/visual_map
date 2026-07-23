@@ -271,6 +271,12 @@ try {
   $csharpResult.productAdapterRoutes = $productRouteCount
   $csharpResult.productAdapterHandles = $productHandleCount
 
+  $env:BACKEND_MAP_TEST_CODE_REPO = Join-Path $matrixRoot "full-stack-fastapi-template"
+  & cargo test --locked --manifest-path $manifestPath code_field_fastapi_adapter_proves_real_import_calls -- --ignored --nocapture
+  if ($LASTEXITCODE -ne 0) {
+    throw "The product FastAPI static import field test failed."
+  }
+
   $results | Format-Table -AutoSize | Out-String | Write-Output
   $results | ConvertTo-Json -Depth 4 | Write-Output
   Write-Output "PASS: pinned multi-language code field matrix completed."

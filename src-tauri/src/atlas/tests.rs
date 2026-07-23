@@ -520,7 +520,7 @@ fn snapshot_with_metadata_records_code_source() {
     assert_eq!(code.source_path.as_deref(), Some(r"D:\repo\shop-api"));
     assert_eq!(code.source_type, "local-folder");
     assert_eq!(code.engine_version.as_deref(), Some("0.9.0"));
-    assert_eq!(code.adapter_version.as_deref(), Some("2"));
+    assert_eq!(code.adapter_version.as_deref(), Some("3"));
     assert!(snapshot.stale_reasons.is_empty());
 }
 

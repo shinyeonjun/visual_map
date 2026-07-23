@@ -1819,19 +1819,17 @@ fn code_inventory_reads_locations_from_the_node_contract() {
     assert!(query.contains("node.end_column AS end_column"));
 }
 
-#[test]
-#[ignore = "requires the pinned C# field repository and bundled code sidecar"]
-fn code_field_fastendpoints_adapter_proves_real_routes_and_handlers() {
+fn pinned_code_field_inventory(label: &str) -> (PathBuf, CodeInventory) {
     let repo_path = std::env::var("BACKEND_MAP_TEST_CODE_REPO")
-        .expect("BACKEND_MAP_TEST_CODE_REPO must point to the pinned C# repository");
+        .expect("BACKEND_MAP_TEST_CODE_REPO must point to the pinned field repository");
     let engine_path = std::env::var("BACKEND_MAP_TEST_CODE_ENGINE")
         .expect("BACKEND_MAP_TEST_CODE_ENGINE must point to codebase-memory-mcp");
-    let root = temp_root("fastendpoints-field");
+    let root = temp_root(label);
     fs::create_dir_all(&root).unwrap();
     let workspace = create_workspace(
         &root,
         CreateWorkspaceRequest {
-            name: "Pinned FastEndpoints".to_string(),
+            name: format!("Pinned {label}"),
             repo_path,
         },
     )
@@ -1868,7 +1866,13 @@ fn code_field_fastendpoints_adapter_proves_real_routes_and_handlers() {
     )
     .unwrap();
     assert!(result.run.ok, "{}", result.run.stderr);
-    let inventory = result.inventory.expect("field inventory");
+    (root, result.inventory.expect("field inventory"))
+}
+
+#[test]
+#[ignore = "requires the pinned C# field repository and bundled code sidecar"]
+fn code_field_fastendpoints_adapter_proves_real_routes_and_handlers() {
+    let (root, inventory) = pinned_code_field_inventory("fastendpoints-field");
     let derived = inventory
         .routes
         .iter()
@@ -1928,6 +1932,42 @@ fn code_field_fastendpoints_adapter_proves_real_routes_and_handlers() {
         inventory.handlers.len(),
         inventory.calls.len()
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "requires the pinned FastAPI field repository and bundled code sidecar"]
+fn code_field_fastapi_adapter_proves_real_import_calls() {
+    let (root, inventory) = pinned_code_field_inventory("fastapi-field");
+    let route = inventory
+        .routes
+        .iter()
+        .find(|route| route.name.ends_with("/login/access-token"))
+        .expect("POST /login/access-token route");
+    let handler = inventory
+        .handles
+        .iter()
+        .find(|handle| handle.route == route.id)
+        .map(|handle| handle.handler.as_str())
+        .expect("login route handler");
+    let proven = inventory
+        .calls
+        .iter()
+        .filter(|call| {
+            call.from == handler
+                && call.confidence == Some(95)
+                && call.strategy.as_deref() == Some("python_static_import")
+        })
+        .map(|call| call.to.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(proven
+        .iter()
+        .any(|target| target.ends_with(".backend.app.crud.authenticate")));
+    assert!(proven
+        .iter()
+        .any(|target| target.ends_with(".backend.app.core.security.create_access_token")));
+    println!("product FastAPI static import calls={}", proven.len());
     fs::remove_dir_all(root).unwrap();
 }
 

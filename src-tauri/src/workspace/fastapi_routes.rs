@@ -79,13 +79,15 @@ struct MountedRoutePath {
     mounted: String,
 }
 
-pub(super) fn enrich_fastapi_route_paths(repo_path: &str, inventory: &mut CodeInventory) {
+pub(super) fn enrich_fastapi_evidence(repo_path: &str, inventory: &mut CodeInventory) {
     let sources = read_python_sources(repo_path, inventory);
     if sources.is_empty() {
         return;
     }
 
-    enrich_fastapi_route_paths_from_sources(&sources, inventory);
+    let graph = FastApiGraph::from_sources(&sources);
+    enrich_fastapi_route_paths_from_graph(&graph, inventory);
+    enrich_fastapi_import_calls(&graph, inventory);
 }
 
 fn read_python_sources(repo_path: &str, inventory: &CodeInventory) -> BTreeMap<String, String> {
@@ -144,11 +146,16 @@ fn read_python_sources(repo_path: &str, inventory: &CodeInventory) -> BTreeMap<S
         .collect()
 }
 
+#[cfg(test)]
 fn enrich_fastapi_route_paths_from_sources(
     sources: &BTreeMap<String, String>,
     inventory: &mut CodeInventory,
 ) {
     let graph = FastApiGraph::from_sources(sources);
+    enrich_fastapi_route_paths_from_graph(&graph, inventory);
+}
+
+fn enrich_fastapi_route_paths_from_graph(graph: &FastApiGraph, inventory: &mut CodeInventory) {
     let handlers = inventory
         .handlers
         .iter()
@@ -202,6 +209,144 @@ fn enrich_fastapi_route_paths_from_sources(
         }
         route.name = resolved_path.mounted;
     }
+}
+
+fn enrich_fastapi_import_calls(graph: &FastApiGraph, inventory: &mut CodeInventory) {
+    let python_items = inventory
+        .handlers
+        .iter()
+        .chain(inventory.services.iter())
+        .chain(inventory.repositories.iter())
+        .chain(inventory.functions.iter())
+        .chain(inventory.classes.iter())
+        .chain(inventory.modules.iter())
+        .chain(inventory.unknown.iter())
+        .filter_map(|item| {
+            let path = item.file_path.as_deref()?;
+            let (module, _) = python_module(path)?;
+            Some((
+                item.id.clone(),
+                (path.to_string(), module, item.name.clone()),
+            ))
+        })
+        .collect::<HashMap<_, _>>();
+
+    for call in &mut inventory.calls {
+        if call.confidence.is_some_and(|confidence| confidence >= 85)
+            || call.strategy.as_deref() != Some("unique_name")
+        {
+            continue;
+        }
+        let Some((caller_path, _, _)) = python_items.get(&call.from) else {
+            continue;
+        };
+        let Some((_, target_module, target_name)) = python_items.get(&call.to) else {
+            continue;
+        };
+        let Some(source_module) = graph
+            .module_for_path(caller_path)
+            .and_then(|module| graph.modules.get(module))
+        else {
+            continue;
+        };
+        let Some((alias, imported, symbol)) = call
+            .expression
+            .as_deref()
+            .and_then(|expression| imported_member_target(source_module, expression))
+        else {
+            continue;
+        };
+        let expected_module = format!("{}.{}", imported.module, imported.symbol);
+        if alias_is_rebound(source_module, &alias)
+            || target_name != &symbol
+            || !module_matches(target_module, &expected_module)
+        {
+            continue;
+        }
+
+        call.confidence = Some(95);
+        call.strategy = Some("python_static_import".to_string());
+    }
+}
+
+fn imported_member_target(
+    module: &ModuleSource,
+    expression: &str,
+) -> Option<(String, RouterKey, String)> {
+    let (alias, symbol) = expression.trim().split_once('.')?;
+    if !is_identifier(alias) || !is_identifier(symbol) {
+        return None;
+    }
+    let imported = module.imports.get(alias)?;
+    Some((alias.to_string(), imported.clone(), symbol.to_string()))
+}
+
+fn alias_is_rebound(module: &ModuleSource, alias: &str) -> bool {
+    module
+        .statements
+        .iter()
+        .filter(|statement| from_import_binds_alias(&statement.text, alias))
+        .count()
+        != 1
+        || module.statements.iter().any(|statement| {
+            let statement = statement.text.trim();
+            if statement.starts_with("from ") {
+                return false;
+            }
+            let assigned = split_assignment(statement).is_some_and(|(left, _)| {
+                left.split(|character: char| character != '_' && !character.is_ascii_alphanumeric())
+                    .any(|name| name == alias)
+            });
+            let parameter = is_function_definition(statement)
+                && call_args(statement).is_some_and(|arguments| {
+                    split_top_level(arguments, ',').into_iter().any(|argument| {
+                        argument
+                            .trim()
+                            .trim_start_matches('*')
+                            .split([':', '='])
+                            .next()
+                            .is_some_and(|name| name.trim() == alias)
+                    })
+                });
+            assigned
+                || parameter
+                || statement.starts_with(&format!("for {alias} "))
+                || statement.contains(&format!(" for {alias} "))
+                || statement.contains(&format!("lambda {alias}"))
+                || statement.contains(&format!(" as {alias}"))
+                || statement == format!("global {alias}")
+                || statement == format!("nonlocal {alias}")
+                || statement == format!("del {alias}")
+        })
+}
+
+fn from_import_binds_alias(statement: &str, alias: &str) -> bool {
+    let Some((_, imports)) = statement
+        .trim()
+        .strip_prefix("from ")
+        .and_then(|statement| statement.split_once(" import "))
+    else {
+        return false;
+    };
+    let imports = imports
+        .trim()
+        .strip_prefix('(')
+        .and_then(|imports| imports.strip_suffix(')'))
+        .unwrap_or(imports);
+    split_top_level(imports, ',').into_iter().any(|import| {
+        import
+            .trim()
+            .split_once(" as ")
+            .map_or(import.trim(), |(_, alias)| alias.trim())
+            == alias
+    })
+}
+
+fn module_matches(actual: &str, expected: &str) -> bool {
+    actual == expected
+        || actual
+            .strip_suffix(expected)
+            .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
 impl FastApiGraph {
@@ -995,7 +1140,7 @@ fn is_function_definition(statement: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::model::{CodeHandle, CodeInventorySummary};
+    use crate::workspace::model::{CodeCall, CodeHandle, CodeInventorySummary};
 
     fn sources(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
         entries
@@ -1082,6 +1227,23 @@ mod tests {
             line: None,
             column: None,
             end_line: None,
+            end_column: None,
+            detail: serde_json::json!({}),
+        }
+    }
+
+    fn function_item(id: &str, name: &str, path: &str) -> CodeInventoryItem {
+        CodeInventoryItem {
+            id: id.to_string(),
+            kind: "Function".to_string(),
+            name: name.to_string(),
+            project: "test".to_string(),
+            qualified_name: id.to_string(),
+            engine_label: "Function".to_string(),
+            file_path: Some(path.to_string()),
+            line: Some(1),
+            column: None,
+            end_line: Some(2),
             end_column: None,
             detail: serde_json::json!({}),
         }
@@ -1184,6 +1346,96 @@ def include_control_routes(app: FastAPI):
     }
 
     #[test]
+    fn confirms_only_unambiguous_unshadowed_fastapi_import_calls() {
+        let route_path = "backend/app/api/routes/login.py";
+        let sources = sources(&[(
+            route_path,
+            r#"
+from fastapi import APIRouter
+from app import crud, shadowed
+from app.core import security
+router = APIRouter()
+
+@router.post("/login")
+def list_sessions(shadowed):
+    user = crud.authenticate()
+    shadowed.run()
+    return security.create_access_token(user.id)
+"#,
+        )]);
+        let graph = FastApiGraph::from_sources(&sources);
+        let mut inventory = inventory_for_route(route_path, 8);
+        let caller = inventory.handlers[0].id.clone();
+        inventory.functions = vec![
+            function_item(
+                "backend.app.crud.authenticate",
+                "authenticate",
+                "backend/app/crud.py",
+            ),
+            function_item(
+                "backend.app.core.security.create_access_token",
+                "create_access_token",
+                "backend/app/core/security.py",
+            ),
+            function_item("backend.app.shadowed.run", "run", "backend/app/shadowed.py"),
+        ];
+        inventory.calls = vec![
+            CodeCall {
+                from: caller.clone(),
+                to: "backend.app.crud.authenticate".to_string(),
+                confidence: Some(38),
+                strategy: Some("unique_name".to_string()),
+                expression: Some("crud.authenticate".to_string()),
+            },
+            CodeCall {
+                from: caller.clone(),
+                to: "backend.app.core.security.create_access_token".to_string(),
+                confidence: Some(38),
+                strategy: Some("unique_name".to_string()),
+                expression: Some("security.create_access_token".to_string()),
+            },
+            CodeCall {
+                from: caller.clone(),
+                to: "backend.app.shadowed.run".to_string(),
+                confidence: Some(38),
+                strategy: Some("unique_name".to_string()),
+                expression: Some("shadowed.run".to_string()),
+            },
+            CodeCall {
+                from: caller,
+                to: "backend.app.crud.authenticate".to_string(),
+                confidence: Some(38),
+                strategy: Some("unique_name".to_string()),
+                expression: Some("crud.users.authenticate".to_string()),
+            },
+        ];
+
+        enrich_fastapi_import_calls(&graph, &mut inventory);
+
+        assert_eq!(
+            inventory
+                .calls
+                .iter()
+                .map(|call| (
+                    call.expression.as_deref().unwrap(),
+                    call.confidence,
+                    call.strategy.as_deref().unwrap()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("crud.authenticate", Some(95), "python_static_import"),
+                (
+                    "security.create_access_token",
+                    Some(95),
+                    "python_static_import"
+                ),
+                ("shadowed.run", Some(38), "unique_name"),
+                ("crud.users.authenticate", Some(38), "unique_name"),
+            ]
+        );
+    }
+
+    #[test]
     fn preserves_an_empty_decorator_path_after_engine_root_normalization() {
         let sources = sources(&[
             (
@@ -1258,7 +1510,7 @@ app.include_router(session_router)
             file_item("app/route_groups/control.py"),
         ];
 
-        enrich_fastapi_route_paths(root.to_str().unwrap(), &mut inventory);
+        enrich_fastapi_evidence(root.to_str().unwrap(), &mut inventory);
 
         assert_eq!(inventory.routes[0].name, "/api/v1/sessions/");
         fs::remove_dir_all(root).unwrap();
