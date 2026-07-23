@@ -180,6 +180,7 @@ function ApiAnswer({
   const directItems = [...knownSteps, ...(answer.dbRelations ?? [])];
   const confirmedCount = directItems.filter((item) => item.truthClass === "confirmed").length;
   const structuralCount = directItems.filter((item) => item.truthClass === "structural").length;
+  const routeDefinition = answer.steps.find((step) => step.lane === "route")?.detail ?? null;
   const conclusion = knownSteps.length > 1
     ? `${knownSteps.length}개 코드 항목을 호출 깊이 ${maxDepth}까지 추적했습니다${answer.dbRelations?.length ? ` · DB 연결 ${answer.dbRelations.length}개` : ""}.`
     : "라우트는 찾았지만 다음 호출 경로는 확인하지 못했습니다.";
@@ -190,6 +191,7 @@ function ApiAnswer({
         icon={<Braces size={18} />}
         kicker="API 처리 흐름"
         title={subject}
+        context={routeDefinition ? `라우트 정의 · ${routeDefinition}` : null}
         conclusion={conclusion}
         confirmed={confirmedCount}
         structural={structuralCount}
@@ -443,6 +445,7 @@ function AnswerHeader({
   icon,
   kicker,
   title,
+  context,
   conclusion,
   confirmed,
   confirmedLabel = "확정",
@@ -454,6 +457,7 @@ function AnswerHeader({
   icon: ReactNode;
   kicker: string;
   title: string;
+  context?: string | null;
   conclusion: string;
   confirmed: number;
   confirmedLabel?: string;
@@ -469,6 +473,7 @@ function AnswerHeader({
         <div className="answer-header-copy">
           <span>{kicker}</span>
           <h1>{title}</h1>
+          {context ? <code className="answer-header-context">{context}</code> : null}
           <p>{conclusion}</p>
         </div>
       </div>
