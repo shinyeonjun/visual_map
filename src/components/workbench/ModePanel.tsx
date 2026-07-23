@@ -14,18 +14,10 @@ import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "..
 import type { VisualMap } from "../../types/visual-map";
 import { savedModeMapContext } from "../../visual/mapContext";
 import {
-  dbColumnNodeId,
-  dbTableIdentityLabel,
-  dbTableNodeId,
-} from "../../visual/nodeIds";
-import {
-  codeInventoryCodeItems,
   codeInventoryItemCount,
-  codeKindChip,
-  codeRouteMethod,
   dbInventoryTableCount,
-  dbInventoryTableKey,
 } from "../../types/workspace";
+import { buildTargetCatalog } from "./targetModel";
 
 type ModeIcon = ComponentType<{ size?: number }>;
 
@@ -346,14 +338,6 @@ export function ModePanel({
   );
 }
 
-function routeLocation(path: string | null | undefined, line: number | null | undefined): string {
-  if (!path) return line ? `L${line}` : "소스 위치 없음";
-  const normalized = path.replace(/\\/g, "/");
-  const parts = normalized.split("/").filter(Boolean);
-  const compact = parts.slice(-2).join("/");
-  return `${compact}${line ? `:${line}` : ""}`;
-}
-
 function modeContext(
   workspaceControls: WorkspaceControls,
   dbProfileControls: DbProfileControls,
@@ -396,6 +380,10 @@ function modeContext(
 
   if (mode === "composition") {
     const selected = new Set(visualMapControls.compositionFocusIds);
+    const catalog = buildTargetCatalog(
+      workspaceControls.codeInventory,
+      dbProfileControls.inventory,
+    );
     const selectable = (
       nodeId: string,
       badge: string,
@@ -412,57 +400,43 @@ function modeContext(
       selectable: true,
       open: () => visualMapControls.toggleCompositionFocus(nodeId),
     });
-    const routeItems = (workspaceControls.codeInventory?.routes ?? []).map((route) =>
-        selectable(
-          `code:${route.id}`,
-          codeRouteMethod(route) ?? "API",
-          route.name,
-          routeLocation(route.filePath, route.line),
-          "API 라우트",
-        ),
-      );
-    const symbolItems = codeInventoryCodeItems(workspaceControls.codeInventory).map((item) =>
-        selectable(
-          `code:${item.id}`,
-          codeKindChip(item.kind),
-          item.name,
-          routeLocation(item.filePath, item.line),
-          "코드",
-        ),
-      );
-    const fileItems = (workspaceControls.codeInventory?.files ?? []).map((item) =>
-        selectable(
-          `code:${item.id}`,
-          "FILE",
-          item.name,
-          routeLocation(item.filePath, item.line),
-          "파일",
-        ),
-      );
-    const tables = dbProfileControls.inventory?.tables ?? [];
-    const tableItems = tables.map((table) => {
-      const tableKey = dbInventoryTableKey(table);
-      return selectable(
-        dbTableNodeId(tableKey),
-        "TABLE",
-        dbTableIdentityLabel(tableKey),
-        `컬럼 ${table.columns.length.toLocaleString("ko-KR")}개`,
+    const routeItems = catalog.api.map((item) =>
+      selectable(
+        item.focusId,
+        item.badge,
+        item.title,
+        item.meta,
+        "API 라우트",
+      ),
+    );
+    const codeItems = catalog.code.map((item) =>
+      selectable(
+        item.focusId,
+        item.badge,
+        item.title,
+        item.meta,
+        item.group ?? "코드",
+      ),
+    );
+    const tableItems = catalog.table.map((item) =>
+      selectable(
+        item.focusId,
+        item.badge,
+        item.title,
+        item.meta,
         "DB 테이블",
-      );
-    });
-    const columnItems = tables.flatMap((table) => {
-      const tableKey = dbInventoryTableKey(table);
-      return table.columns.map((column) =>
-          selectable(
-            dbColumnNodeId(tableKey, column.name),
-            column.isPrimaryKey ? "PK" : column.isForeignKey ? "FK" : "COL",
-            column.name,
-            column.dataType ?? "타입 정보 없음",
-            `컬럼 · ${dbTableIdentityLabel(tableKey)}`,
-          ),
-        );
-    });
-    const groups = [routeItems, symbolItems, fileItems, tableItems, columnItems]
+      ),
+    );
+    const columnItems = catalog.column.map((item) =>
+      selectable(
+        item.focusId,
+        item.badge,
+        item.title,
+        item.meta,
+        `컬럼 · ${item.group ?? "DB"}`,
+      ),
+    );
+    const groups = [routeItems, codeItems, tableItems, columnItems]
       .map((items) => [...new Map(items.map((item) => [item.id, item])).values()]);
     const allItems = [...new Map(groups.flat().map((item) => [item.id, item])).values()];
     const visibleItems = normalizedQuery ? allItems : balancedCompositionItems(groups, 100);
@@ -562,10 +536,11 @@ function compositionItemCount(
   workspaceControls: WorkspaceControls,
   dbProfileControls: DbProfileControls,
 ): number {
-  const tables = dbProfileControls.inventory?.tables ?? [];
-  return codeInventoryItemCount(workspaceControls.codeInventory)
-    + dbInventoryTableCount(dbProfileControls.inventory)
-    + tables.reduce((total, table) => total + table.columns.length, 0);
+  const catalog = buildTargetCatalog(
+    workspaceControls.codeInventory,
+    dbProfileControls.inventory,
+  );
+  return Object.values(catalog).reduce((total, items) => total + items.length, 0);
 }
 
 function showWorkbenchMode(
