@@ -3214,6 +3214,47 @@ fn api_flow_keeps_http_method_separate_from_the_route_path() {
 }
 
 #[test]
+fn api_flow_excludes_engine_virtual_symbols_from_project_steps() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot.items.push(item(
+        "code:function:builtin-str",
+        "function",
+        "str",
+        "code",
+        "code",
+        None,
+        Some("<python-builtins>"),
+    ));
+    snapshot.links.push(confirmed_api_link(
+        "calls:order-service->builtin-str",
+        "code:class:OrderService",
+        "code:function:builtin-str",
+        "code_call",
+        "CALLS",
+    ));
+
+    let map = visual_map(
+        &snapshot,
+        Some("code:route:orders:create".to_string()),
+        "api-flow".to_string(),
+    );
+    let answer = map.api_reading.as_ref().unwrap();
+
+    assert!(map
+        .nodes
+        .iter()
+        .all(|node| node.id != "code:function:builtin-str"));
+    assert!(map
+        .edges
+        .iter()
+        .all(|edge| edge.to != "code:function:builtin-str"));
+    assert!(answer
+        .steps
+        .iter()
+        .all(|step| step.item.node_id.as_deref() != Some("code:function:builtin-str")));
+}
+
+#[test]
 fn api_flow_exposes_static_route_mount_evidence_on_the_route_step() {
     let mut snapshot = fixture_inventory("workspace-1".to_string());
     snapshot

@@ -169,12 +169,7 @@ pub(crate) fn search_inventory(snapshot: &InventorySnapshot, query: &str) -> Inv
     let mut counts = BTreeMap::<String, usize>::new();
     let mut ranked = BTreeMap::<String, Vec<(u16, &InventoryItem)>>::new();
     for item in &snapshot.items {
-        if item.source == "code"
-            && item
-                .path
-                .as_deref()
-                .is_some_and(|path| path.trim().starts_with('<'))
-        {
+        if item.source == "code" && !item.is_project_code_item() {
             continue;
         }
         let Some(group) = search_group(item) else {

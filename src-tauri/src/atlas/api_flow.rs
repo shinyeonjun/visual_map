@@ -252,7 +252,7 @@ fn reachable_api_flow_links<'a>(
     let code_ids = snapshot
         .items
         .iter()
-        .filter(|item| item.source == "code")
+        .filter(|item| item.is_project_code_item())
         .map(|item| item.id.as_str())
         .collect::<HashSet<_>>();
     let mut handles = snapshot
