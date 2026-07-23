@@ -56,7 +56,7 @@ export function AnswerCanvas({
     : visualMapControls.mode;
   const committedFocus = answerFocusId(visualMapControls);
   const hasTarget = ANSWER_MODES.has(visibleMode) && Boolean(committedFocus);
-  const analysisBasis = dbAnalysisBasis(dbProfileControls);
+  const analysisBasis = analysisBasisForMode(visibleMode, workspaceControls, dbProfileControls);
 
   if (visualMapControls.loading && !visualMapControls.currentMap && visualMapControls.focusId) {
     return <AnswerLoading mode={visualMapControls.mode} />;
@@ -774,16 +774,28 @@ function validAnswerFocus(value: string | null | undefined): value is string {
   return Boolean(value && value !== "narrow-focus" && value !== "overview" && !value.startsWith("group:"));
 }
 
-function dbAnalysisBasis(controls: DbProfileControls): string {
+function analysisBasisForMode(
+  mode: string,
+  workspaceControls: WorkspaceControls,
+  dbProfileControls: DbProfileControls,
+): string {
+  if (mode === "search-focus") {
+    return "분석 범위 · 코드";
+  }
+  const code = codeInventoryItemCount(workspaceControls.codeInventory) > 0 ? "코드" : "코드 미분석";
+  return `분석 범위 · ${code} + ${dbAnalysisSource(dbProfileControls)}`;
+}
+
+function dbAnalysisSource(controls: DbProfileControls): string {
   const profile = controls.activeProfile;
   if (controls.inventory) {
     return profile
-      ? `DB 기준 · ${profile.name} · ${dbProfileSourceLabel(profile.source)}`
-      : "DB 기준 · 저장된 구조";
+      ? `DB ${profile.name} · ${dbProfileSourceLabel(profile.source)}`
+      : "DB 저장된 구조";
   }
   return profile
-    ? `DB 기준 · ${profile.name} · ${dbProfileSourceLabel(profile.source)} · 읽기 전`
-    : "DB 기준 · 미연결";
+    ? `DB ${profile.name} · ${dbProfileSourceLabel(profile.source)} · 읽기 전`
+    : "DB 미연결";
 }
 
 function selectReviewNode(nodeId: string | null | undefined, map: VisualMap, controls: VisualMapControls) {
