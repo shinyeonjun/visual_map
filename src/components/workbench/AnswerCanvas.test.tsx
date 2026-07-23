@@ -14,6 +14,7 @@ describe("AnswerCanvas", () => {
     expect(container.querySelector(".answer-canvas")).toHaveAttribute("data-answer-focus", "code:route-orders");
     expect(screen.getByRole("heading", { name: "DELETE /api/orders" })).toBeInTheDocument();
     expect(screen.getByText("라우트 정의 · src/routes.ts:12")).toBeInTheDocument();
+    expect(screen.getByText("DB 기준 · 미연결")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 2, name: "처리 흐름" })).toBeInTheDocument();
     expect(screen.getByText("loadOrders")).toBeInTheDocument();
     expect(container.querySelector(".answer-candidates")).not.toHaveAttribute("open");
@@ -38,6 +39,21 @@ describe("AnswerCanvas", () => {
 
     expect(openEvidence).toHaveBeenCalledOnce();
     expect(visualMapControls.selectNode).not.toHaveBeenCalled();
+  });
+
+  it("states whether the selected DB profile has been read", () => {
+    const profile = { id: "profile-1", name: "codex-ddl-smoke", source: "ddl-sqlite" } as const;
+    const cases: Array<[DbProfileControls, string]> = [
+      [{ activeProfile: profile, inventory: { profileId: profile.id, tables: [] } } as unknown as DbProfileControls, "DB 기준 · codex-ddl-smoke · SQLite DDL"],
+      [{ activeProfile: profile, inventory: null } as unknown as DbProfileControls, "DB 기준 · codex-ddl-smoke · SQLite DDL · 읽기 전"],
+      [{ activeProfile: null, inventory: { profileId: profile.id, tables: [] } } as unknown as DbProfileControls, "DB 기준 · 저장된 구조"],
+    ];
+
+    for (const [dbProfileControls, expected] of cases) {
+      const view = renderAnswer(apiMap(), "code:route-orders", dbProfileControls);
+      expect(view.container).toHaveTextContent(expected);
+      view.unmount();
+    }
   });
 
   it("states that a code target has no confirmed relationship without inventing one", () => {
@@ -139,11 +155,15 @@ describe("AnswerCanvas", () => {
   });
 });
 
-function renderAnswer(map: VisualMap, focusId: string) {
+function renderAnswer(
+  map: VisualMap,
+  focusId: string,
+  dbProfileControls: DbProfileControls = { inventory: null } as DbProfileControls,
+) {
   return render(
     <AnswerCanvas
       workspaceControls={workspaceControls()}
-      dbProfileControls={{ inventory: null } as DbProfileControls}
+      dbProfileControls={dbProfileControls}
       visualMapControls={controls(map, map.mode, focusId)}
       onOpenSources={vi.fn()}
       onOpenEvidence={vi.fn()}
