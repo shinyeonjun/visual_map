@@ -46,6 +46,17 @@ import {
 } from "./inspectorModel";
 import { SourceJumpRow } from "./SourceJumpRow";
 
+const INSPECTOR_EVIDENCE_LABELS: Record<string, string> = {
+  "route-mount": "경로 근거",
+  "route-source": "소스 근거",
+  "route-binding": "라우트 연결",
+  "engine-node": "코드 항목",
+  "engine-edge": "엔진 관계",
+  "engine-confidence-score": "신뢰 점수",
+  "candidate-source": "후보 출처",
+  "static-sql": "정적 SQL",
+};
+
 export function InspectorPanel({
   onClose,
   title = "선택한 대상",
@@ -183,7 +194,7 @@ export function InspectorPanel({
     : [];
   const directEvidence = uniqueInspectorEvidence(directEdges.flatMap((edge) => edge.evidence.map((item) => ({
     key: `${item.kind}:${item.text}`,
-    text: `${item.kind}: ${item.text}`,
+    text: inspectorEvidenceText(item.kind, item.text),
     tone: edgeEvidenceTone(edge),
   }))));
   const reviewBoardEvidence = uniqueInspectorEvidence(
@@ -201,7 +212,7 @@ export function InspectorPanel({
   const apiStepEvidence = apiStep
     ? apiStep.evidence.map((item) => ({
         key: `${item.kind}:${item.text}`,
-        text: `${item.kind}: ${item.text}`,
+        text: inspectorEvidenceText(item.kind, item.text),
         tone: apiStep.truthClass === "candidate"
           ? "candidate"
           : apiStep.truthClass === "confirmed"
@@ -216,7 +227,7 @@ export function InspectorPanel({
   const evidenceItems: Array<{ key: string; text: string; tone: string }> = selectedEdge
     ? selectedEdge.evidence.map((item) => ({
         key: `${item.kind}:${item.text}`,
-        text: `${item.kind}: ${item.text}`,
+        text: inspectorEvidenceText(item.kind, item.text),
         tone: edgeEvidenceTone(selectedEdge),
       }))
     : nodeEvidenceItems.length
@@ -682,6 +693,10 @@ function uniqueInspectorEvidence<T extends { key: string; text: string }>(items:
     seen.add(key);
     return true;
   });
+}
+
+function inspectorEvidenceText(kind: string, text: string): string {
+  return `${INSPECTOR_EVIDENCE_LABELS[kind] ?? "근거"}: ${text}`;
 }
 
 function InspectorSection({
