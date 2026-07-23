@@ -250,13 +250,13 @@ export function buildVisualMapControls({
     clearCompositionFocus: visual.clearCompositionFocus,
     setRelationView: visual.setRelationView,
     setChangeIntent: visual.setChangeIntent,
-    runSearch: () =>
+    runSearch: (value) =>
       visual.runSearch({
         codeInventory: code.codeInventory,
         dbInventory: db.dbInventory,
         selectCodeItem: selectCodeOnly,
         selectDbTable: selectDbOnly,
-      }),
+      }, value),
     selectSearchResult: visual.selectSearchResult,
     openSearchPopover: visual.openSearchPopover,
     closeSearchPopover: visual.closeSearchPopover,

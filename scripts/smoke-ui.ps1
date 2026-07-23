@@ -527,6 +527,21 @@ __UI_HELPERS__
     throw new Error('Desktop evidence column collapsed after clearing');
   }
 
+  const fastSearchInput = await waitFor('#global-inventory-search');
+  const fastSearchTarget = document.querySelector('.target-list button[aria-current="true"] strong');
+  const fastSearchQuery = fastSearchTarget?.textContent?.trim();
+  if (!fastSearchQuery) throw new Error('Current target cannot seed the fast search check');
+  const inputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  inputValueSetter?.call(fastSearchInput, fastSearchQuery);
+  fastSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+  fastSearchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+  await waitUntil(
+    () => fastSearchInput.value === '' && !document.querySelector('.search-popover'),
+    'One fast Enter did not open and clear the first local search result',
+    3000,
+  );
+  await waitForIdle();
+
   const sourceTrigger = await waitFor('.source-manager-trigger');
   sourceTrigger.click();
   const sourceManager = await waitFor('.source-manager');
@@ -539,7 +554,7 @@ __UI_HELPERS__
   sourceManager.querySelector('.source-manager-header .tool')?.click();
   await waitUntil(() => !document.querySelector('.source-manager'), 'Source manager did not close', 2000);
   assertNoOverflow();
-  return { ok: true, labels: ['surfaces:2', 'advanced-modes:2', 'tabs:keyboard', 'targets:roving', 'target:restored', 'switcher:fixed', 'evidence:stable'] };
+  return { ok: true, labels: ['surfaces:2', 'advanced-modes:2', 'tabs:keyboard', 'targets:roving', 'target:restored', 'switcher:fixed', 'evidence:stable', 'search:single-enter'] };
 })()
 '@
 

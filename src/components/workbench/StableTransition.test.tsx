@@ -311,6 +311,45 @@ describe("stable mode transitions", () => {
     expect(document.activeElement).toBe(sourceManagerButton);
   });
 
+  it("submits a fast search draft with one Enter", () => {
+    const setSearchQuery = vi.fn();
+    const selectSearchResult = vi.fn();
+    const runSearch = vi.fn();
+    render(
+      <WorkbenchTopBar
+        sourceManagerOpen={false}
+        onToggleSourceManager={vi.fn()}
+        workspaceControls={{
+          ...workspaceControls(),
+          initialized: true,
+          busy: false,
+          workspaces: [{ id: "workspace-1", name: "backend" }],
+          operationStatus: { phase: "idle", label: "작업 없음", message: "실행 중인 작업 없음" },
+          openWorkspace: vi.fn(),
+        } as unknown as WorkspaceControls}
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={{
+          searchQuery: "",
+          searchGroups: [],
+          snapshotStaleReasons: [],
+          setSearchQuery,
+          openSearchPopover: vi.fn(),
+          closeSearchPopover: vi.fn(),
+          runSearch,
+          selectSearchResult,
+        } as unknown as VisualMapControls}
+      />,
+    );
+
+    const search = screen.getByRole("textbox", { name: /API, 함수, 파일/ });
+    fireEvent.change(search, { target: { value: "oldFunction" } });
+    fireEvent.keyDown(search, { key: "Enter" });
+
+    expect(runSearch).toHaveBeenCalledWith("oldFunction");
+    expect(setSearchQuery).not.toHaveBeenCalled();
+    expect(selectSearchResult).not.toHaveBeenCalled();
+  });
+
   it("lists each project once in the project switcher", () => {
     const openWorkspace = vi.fn();
     render(

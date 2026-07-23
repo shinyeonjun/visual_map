@@ -60,15 +60,19 @@ export function useSearchHotkey(
     }, SEARCH_COMMIT_DELAY_MS);
   }
 
-  function flushSearch(value: string) {
+  function cancelQueuedSearch() {
     if (commitTimerRef.current !== null) {
       window.clearTimeout(commitTimerRef.current);
       commitTimerRef.current = null;
     }
+  }
+
+  function flushSearch(value: string) {
+    cancelQueuedSearch();
     if (value !== searchValue) {
       commitSearchRef.current(value);
     }
   }
 
-  return { searchInputRef, queueSearch, flushSearch };
+  return { searchInputRef, queueSearch, cancelQueuedSearch, flushSearch };
 }
