@@ -1653,12 +1653,18 @@ fn extract_static_literals(source: &str) -> Vec<StaticLiteral> {
     let mut literals = Vec::new();
     let mut index = 0;
     while index < bytes.len() {
+        if let Some((literal, next)) = rust_raw_literal_at(bytes, index) {
+            if !contains_interpolation_marker(&literal.value) {
+                literals.push(literal);
+            }
+            index = next;
+            continue;
+        }
         let quote = bytes[index];
         if !matches!(quote, b'\'' | b'"' | b'`') {
             index += 1;
             continue;
         }
-        let literal_start = index;
         let triple = bytes.get(index..index + 3) == Some(&[quote, quote, quote]);
         let delimiter_len = if triple { 3 } else { 1 };
         let prefix_start = (0..index)
@@ -1670,6 +1676,7 @@ fn extract_static_literals(source: &str) -> Vec<StaticLiteral> {
             .unwrap_or(index);
         let prefix = &bytes[prefix_start..index];
         let dynamic_prefix = prefix.iter().any(|byte| matches!(byte, b'f' | b'F' | b'$'));
+        let expression_start = static_literal_prefix_start(quote, prefix, prefix_start, index);
         let start = index + delimiter_len;
         index = start;
         while index < bytes.len() {
@@ -1685,10 +1692,10 @@ fn extract_static_literals(source: &str) -> Vec<StaticLiteral> {
             if closes {
                 let value = String::from_utf8_lossy(&bytes[start..index]).into_owned();
                 let dynamic = dynamic_prefix || contains_interpolation_marker(&value);
-                if !dynamic {
+                if let (false, Some(expression_start)) = (dynamic, expression_start) {
                     literals.push(StaticLiteral {
                         value,
-                        start: literal_start,
+                        start: expression_start,
                         end: index + delimiter_len,
                     });
                 }
@@ -1699,6 +1706,57 @@ fn extract_static_literals(source: &str) -> Vec<StaticLiteral> {
         }
     }
     literals
+}
+
+fn rust_raw_literal_at(bytes: &[u8], start: usize) -> Option<(StaticLiteral, usize)> {
+    if bytes.get(start) != Some(&b'r')
+        || start.checked_sub(1).is_some_and(|previous| {
+            bytes[previous].is_ascii_alphanumeric() || bytes[previous] == b'_'
+        })
+    {
+        return None;
+    }
+    let mut quote = start + 1;
+    while bytes.get(quote) == Some(&b'#') {
+        quote += 1;
+    }
+    let hashes = quote.saturating_sub(start + 1);
+    if hashes == 0 || bytes.get(quote) != Some(&b'"') {
+        return None;
+    }
+    let value_start = quote + 1;
+    let mut close = value_start;
+    while close < bytes.len() {
+        if bytes[close] == b'"'
+            && bytes
+                .get(close + 1..close + 1 + hashes)
+                .is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'))
+        {
+            let end = close + 1 + hashes;
+            return Some((
+                StaticLiteral {
+                    value: String::from_utf8_lossy(&bytes[value_start..close]).into_owned(),
+                    start,
+                    end,
+                },
+                end,
+            ));
+        }
+        close += 1;
+    }
+    None
+}
+
+fn static_literal_prefix_start(
+    quote: u8,
+    prefix: &[u8],
+    prefix_start: usize,
+    literal_start: usize,
+) -> Option<usize> {
+    if prefix.is_empty() {
+        return Some(literal_start);
+    }
+    (quote != b'`' && matches!(prefix, b"r" | b"R" | b"@")).then_some(prefix_start)
 }
 
 fn contains_interpolation_marker(value: &str) -> bool {
@@ -1714,7 +1772,10 @@ fn strip_comments(source: &str) -> String {
     let mut output = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes.get(index..index + 2) == Some(b"//") {
+        if let Some((_, next)) = rust_raw_literal_at(bytes, index) {
+            output.extend_from_slice(&bytes[index..next]);
+            index = next;
+        } else if bytes.get(index..index + 2) == Some(b"//") {
             while index < bytes.len() && bytes[index] != b'\n' {
                 output.push(b' ');
                 index += 1;
@@ -1950,6 +2011,10 @@ mod tests {
                 QueryOperation::Select,
             ),
             (
+                r#"return connection.QuerySingleAsync<Order>(@"SELECT id, status FROM orders WHERE id = @id");"#,
+                QueryOperation::Select,
+            ),
+            (
                 r#"context.Database.ExecuteSqlRaw("UPDATE orders SET status = ? WHERE id = ?");"#,
                 QueryOperation::Update,
             ),
@@ -1959,6 +2024,10 @@ mod tests {
             ),
             (
                 r#"session.execute(text("SELECT id FROM orders WHERE id = :id"), params)"#,
+                QueryOperation::Select,
+            ),
+            (
+                r##"sqlx::query!(r#"SELECT "id", status FROM orders WHERE status = 'ready'"#);"##,
                 QueryOperation::Select,
             ),
         ] {
@@ -1982,6 +2051,7 @@ mod tests {
             r#"session.execute(text(prefix + "SELECT id FROM orders"))"#,
             r#"session.execute(text("SELECT id FROM orders" + suffix))"#,
             r#"session.execute(render("SELECT id FROM orders"))"#,
+            r#"const query = sql`SELECT id FROM orders`; db.query(query);"#,
         ] {
             assert!(
                 analyze_source(source, "orders", None, &["id"], false).is_empty(),
