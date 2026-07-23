@@ -48,7 +48,7 @@ pub(crate) fn index_code_repository(
 
     if run.ok {
         let project = code_project_from_index_stdout(&run.stdout, &requested_project);
-        match code_inventory_from_adapter(&adapter, project.clone()) {
+        match code_inventory_from_adapter(&adapter, project.clone(), &workspace.repo_path) {
             Ok(indexed_inventory) => {
                 workspace.code_project = Some(project.clone());
                 workspace.updated_at = timestamp();
@@ -96,12 +96,13 @@ pub(crate) fn code_inventory(
         .clone()
         .unwrap_or_else(|| workspace.name.clone());
     let adapter = CodebaseMemoryAdapter::new(registry, code_cache_path)?;
-    code_inventory_from_adapter(&adapter, project)
+    code_inventory_from_adapter(&adapter, project, &workspace.repo_path)
 }
 
 fn code_inventory_from_adapter(
     adapter: &CodebaseMemoryAdapter<'_>,
     project: String,
+    repo_path: &str,
 ) -> Result<CodeInventory, String> {
     let result: CodebaseMemoryInventory = adapter.inventory(&project)?;
     let (routes, services, files) = split_inventory_nodes(&result.nodes)?;
@@ -114,6 +115,7 @@ fn code_inventory_from_adapter(
     )?;
     inventory.calls = extract_code_calls(&result.calls, &inventory);
     attach_code_handles(&result.handles, &mut inventory);
+    super::fastapi_routes::enrich_fastapi_route_paths(repo_path, &mut inventory);
     downgrade_unverified_routes(&mut inventory);
     Ok(inventory)
 }

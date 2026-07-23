@@ -260,7 +260,7 @@ fn removing_db_snapshot_preserves_code_and_scrubs_backups() {
 
 #[test]
 fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
-    let route = code_test_item(
+    let mut route = code_test_item(
         "shop.routes.create_order",
         "Route",
         "POST /orders",
@@ -268,6 +268,9 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
         12,
         12,
     );
+    route.detail["routePathSource"] = serde_json::json!("fastapi-static-mount");
+    route.detail["localRoutePath"] = serde_json::json!("/orders");
+    route.detail["mountedRoutePath"] = serde_json::json!("/api/v1/orders");
     let handler = code_test_item(
         "shop.handlers.create_order",
         "Function",
@@ -380,6 +383,11 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
         .evidence
         .iter()
         .any(|evidence| evidence.text.contains("handler→route")));
+    assert!(handles.evidence.iter().any(|evidence| {
+        evidence.kind == "route-mount"
+            && evidence.text.contains("/orders")
+            && evidence.text.contains("/api/v1/orders")
+    }));
     assert_eq!(trusted_call.truth_class, "confirmed");
     assert_eq!(weak_call.truth_class, "unknown");
     assert!(weak_call
@@ -512,7 +520,42 @@ fn snapshot_with_metadata_records_code_source() {
     assert_eq!(code.source_path.as_deref(), Some(r"D:\repo\shop-api"));
     assert_eq!(code.source_type, "local-folder");
     assert_eq!(code.engine_version.as_deref(), Some("0.9.0"));
+    assert_eq!(code.adapter_version.as_deref(), Some("2"));
     assert!(snapshot.stale_reasons.is_empty());
+}
+
+#[test]
+fn snapshot_marks_an_old_code_adapter_result_stale() {
+    let workspace = test_workspace(r"D:\repo\shop-api");
+    let mut snapshot = snapshot_with_metadata(
+        InventorySnapshot {
+            schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+            workspace_id: workspace.id.clone(),
+            saved_at: "1".to_string(),
+            metadata: Default::default(),
+            stale_reasons: Vec::new(),
+            links: Vec::new(),
+            items: vec![item(
+                "code:file:main",
+                "file",
+                "main.rs",
+                "code",
+                "code",
+                None,
+                Some("src/main.rs"),
+            )],
+        },
+        &workspace,
+        &test_registry(),
+    );
+    snapshot.metadata.code.as_mut().unwrap().adapter_version = None;
+
+    let stale = mark_snapshot_staleness(snapshot, &workspace, &test_registry());
+
+    assert!(stale
+        .stale_reasons
+        .iter()
+        .any(|reason| reason.contains("코드 분석 규칙")));
 }
 
 #[test]
@@ -3171,6 +3214,35 @@ fn api_flow_keeps_http_method_separate_from_the_route_path() {
 }
 
 #[test]
+fn api_flow_exposes_static_route_mount_evidence_on_the_route_step() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot
+        .links
+        .iter_mut()
+        .find(|link| link.kind == "code_handle")
+        .unwrap()
+        .evidence
+        .push(super::model::Evidence {
+            kind: "route-mount".to_string(),
+            text: "FastAPI 정적 마운트로 /api/v1/orders를 확인했습니다.".to_string(),
+        });
+
+    let answer = visual_map(
+        &snapshot,
+        Some("code:route:orders:create".to_string()),
+        "api-flow".to_string(),
+    )
+    .api_reading
+    .unwrap();
+
+    assert!(answer.steps[0]
+        .item
+        .evidence
+        .iter()
+        .any(|evidence| evidence.kind == "route-mount"));
+}
+
+#[test]
 fn stale_api_flow_remains_browsable_and_marks_freshness_unknown() {
     let mut snapshot = fixture_inventory("workspace-1".to_string());
     snapshot
@@ -3349,6 +3421,7 @@ fn api_flow_surfaces_snapshot_coverage_risks_and_reindex_action() {
         engine_id: Some("database-memory".to_string()),
         engine_version: Some("1".to_string()),
         engine_checksum: None,
+        adapter_version: None,
         contract_version: Some("1".to_string()),
         snapshot_key: Some("test".to_string()),
         limit_requested: Some(10_000),
@@ -3407,6 +3480,7 @@ fn api_flow_treats_db_capability_as_fixed_scope_not_a_reindex_failure() {
         engine_id: Some("database-memory".to_string()),
         engine_version: Some("1".to_string()),
         engine_checksum: None,
+        adapter_version: None,
         contract_version: Some("1".to_string()),
         snapshot_key: Some("ddl:test".to_string()),
         limit_requested: Some(1000),

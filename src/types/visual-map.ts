@@ -197,6 +197,7 @@ type SnapshotSourceMetadata = {
   engineId?: string | null;
   engineVersion?: string | null;
   engineChecksum?: string | null;
+  adapterVersion?: string | null;
   contractVersion?: string | null;
   snapshotKey?: string | null;
   limitRequested?: number | null;

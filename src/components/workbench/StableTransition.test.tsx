@@ -494,7 +494,8 @@ describe("stable mode transitions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /HANDLES.*loadSession/ }));
     expect(selectEdge).toHaveBeenCalledWith(currentMap.edges[0]);
-    expect(screen.getByText(/route-source: 라우트 소스 위치를 확인했습니다/)).toBeInTheDocument();
+    expect(screen.getByText(/소스 근거: 라우트 소스 위치를 확인했습니다/)).toBeInTheDocument();
+    expect(screen.getByText(/경로 근거: 정적 prefix를 합성해 전체 경로를 확인했습니다/)).toBeInTheDocument();
   });
 });
 
@@ -573,7 +574,10 @@ function apiMap(): VisualMap {
         detail: "src/routes.ts:12",
         truthClass: "confirmed",
         rank: 0,
-        evidence: [{ kind: "route-source", text: "라우트 소스 위치를 확인했습니다." }],
+        evidence: [
+          { kind: "route-source", text: "라우트 소스 위치를 확인했습니다." },
+          { kind: "route-mount", text: "정적 prefix를 합성해 전체 경로를 확인했습니다." },
+        ],
         depth: 0,
         lane: "route",
         laneBasis: "engine-node",

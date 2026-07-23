@@ -2,6 +2,7 @@ mod code;
 mod codebase_memory;
 mod database_memory;
 mod db;
+mod fastapi_routes;
 mod model;
 mod store;
 
