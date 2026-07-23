@@ -157,12 +157,7 @@ export function TargetNavigator({
                 title={`${item.title} · ${item.meta}`}
                 onClick={() => {
                   onSelectTarget();
-                  const focusedNode = active
-                    ? visualMapControls.currentMap?.nodes.find((node) => node.id === item.focusId) ?? null
-                    : null;
-                  if (focusedNode) {
-                    visualMapControls.selectNode(focusedNode);
-                  } else {
+                  if (!active) {
                     visualMapControls.showMode(item.mode, item.focusId);
                   }
                 }}
