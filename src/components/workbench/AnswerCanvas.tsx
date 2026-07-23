@@ -431,8 +431,8 @@ function CodeAnswer({
       {candidates.length > 0 ? (
         <details className="answer-candidates">
           <summary>
-            <span><TriangleAlert size={16} /><strong>확인할 후보</strong><small>직접 근거가 아닌 연결</small></span>
-            <em>{candidates.length}</em>
+            <span className="answer-candidates-copy"><TriangleAlert size={16} /><strong>확인할 후보</strong><small>직접 근거가 아닌 연결</small></span>
+            <span className="answer-candidates-meta"><em>{candidates.length}</em><ChevronDown size={15} /></span>
           </summary>
           <EdgeItems edges={candidates} focusId={focusId} map={map} visualMapControls={visualMapControls} />
         </details>

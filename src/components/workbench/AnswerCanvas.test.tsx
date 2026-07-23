@@ -67,6 +67,27 @@ describe("AnswerCanvas", () => {
     expect(screen.getByText("확정 연결은 없으며 구조 근거 1개를 찾았습니다.")).toBeInTheDocument();
   });
 
+  it("keeps the disclosure affordance on code candidates", () => {
+    const map = codeMap();
+    map.nodes.push({ id: "db:table:orders", kind: "table", title: "orders", layer: "database", source: "database" });
+    map.edges.push({
+      id: "candidate-orders",
+      from: "code:function-load-orders",
+      to: "db:table:orders",
+      kind: "candidate_table",
+      confidence: "medium",
+      evidence: [],
+    });
+
+    const { container } = renderAnswer(map, "code:function-load-orders");
+    const details = container.querySelector("details.answer-candidates");
+
+    expect(details).not.toHaveAttribute("open");
+    expect(details?.querySelector(".answer-candidates-copy")).toHaveTextContent("확인할 후보");
+    expect(details?.querySelector(".answer-candidates-meta")).toHaveTextContent("1");
+    expect(details?.querySelector(".answer-candidates-meta svg")).toBeInTheDocument();
+  });
+
   it("separates structural facts and discloses engine-truncated evidence", () => {
     const { container } = renderAnswer(tableMap(), "db:table:public.orders");
 
