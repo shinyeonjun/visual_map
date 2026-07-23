@@ -47,6 +47,8 @@ pub(crate) struct SnapshotSourceMetadata {
     #[serde(default)]
     pub engine_checksum: Option<String>,
     #[serde(default)]
+    pub adapter_version: Option<String>,
+    #[serde(default)]
     pub contract_version: Option<String>,
     #[serde(default)]
     pub snapshot_key: Option<String>,

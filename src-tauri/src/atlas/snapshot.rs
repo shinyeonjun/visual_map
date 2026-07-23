@@ -38,6 +38,7 @@ const BACKUP_REINDEX_NOTE: &str =
     "주 스냅샷 대신 이전 백업을 복구했습니다. 다시 읽어 최신 상태를 확인하세요.";
 const BACKUP_CODE_REINDEX_NOTE: &str = "백업에서 복구한 코드 목록은 다시 읽어야 합니다.";
 const BACKUP_DB_REINDEX_NOTE: &str = "백업에서 복구한 DB 구조는 다시 읽어야 합니다.";
+const CODE_ADAPTER_VERSION: &str = "2";
 const CONFIRMED_CODE_CALL_CONFIDENCE: u8 = 85;
 const CANDIDATE_CODE_CALL_CONFIDENCE: u8 = 70;
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
@@ -93,6 +94,7 @@ pub(crate) fn build_inventory_snapshot(
             engine_id: Some("codebase-memory".to_string()),
             engine_version: None,
             engine_checksum: None,
+            adapter_version: Some(CODE_ADAPTER_VERSION.to_string()),
             contract_version: None,
             snapshot_key: None,
             limit_requested: None,
@@ -160,6 +162,11 @@ pub(crate) fn build_inventory_snapshot(
                 .map(|entry| code_item(entry, "file", "code", &code.project)),
         );
         snapshot.links.extend(code.calls.iter().map(code_call_link));
+        let routes = code
+            .routes
+            .iter()
+            .map(|route| (route.id.as_str(), route))
+            .collect::<HashMap<_, _>>();
         snapshot.links.extend(code.handles.iter().map(|handle| {
             let mut link = confirmed_link(
                 format!("code-handle:{}->{}", handle.route, handle.handler),
@@ -170,6 +177,26 @@ pub(crate) fn build_inventory_snapshot(
                 "codebase-memory HANDLES: upstream handler→route was normalized to product route→handler",
             );
             link.direction = "outbound".to_string();
+            if let Some(route) = routes.get(handle.route.as_str()).filter(|route| {
+                detail_string(&route.detail, &["routePathSource"]).as_deref()
+                    == Some("fastapi-static-mount")
+            }) {
+                let local = route
+                    .detail
+                    .get("localRoutePath")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| route.name.clone());
+                let mounted = detail_string(&route.detail, &["mountedRoutePath"])
+                    .unwrap_or_else(|| route.name.clone());
+                let local_display = if local.is_empty() { "\"\"" } else { &local };
+                link.evidence.push(Evidence {
+                    kind: "route-mount".to_string(),
+                    text: format!(
+                        "FastAPI 정적 마운트: decorator 경로 `{local_display}`와 APIRouter/include_router prefix를 합성해 `{mounted}`를 확인했습니다."
+                    ),
+                });
+            }
             link
         }));
     }
@@ -180,6 +207,7 @@ pub(crate) fn build_inventory_snapshot(
             engine_id: Some("database-memory".to_string()),
             engine_version: None,
             engine_checksum: None,
+            adapter_version: None,
             contract_version: db.contract_version.clone(),
             snapshot_key: db.snapshot_key.clone(),
             limit_requested: db.limit_requested,
@@ -536,6 +564,7 @@ pub(crate) fn snapshot_with_metadata(
         engine_id: Some("codebase-memory".to_string()),
         engine_version: engine_version(registry, "codebase-memory"),
         engine_checksum: engine_checksum(registry, "codebase-memory"),
+        adapter_version: Some(CODE_ADAPTER_VERSION.to_string()),
         contract_version: engine_contract_version(registry, "codebase-memory"),
         snapshot_key: None,
         limit_requested: None,
@@ -562,6 +591,9 @@ pub(crate) fn snapshot_with_metadata(
         engine_id: Some("database-memory".to_string()),
         engine_version: engine_version(registry, "database-memory"),
         engine_checksum: engine_checksum(registry, "database-memory"),
+        adapter_version: previous_db_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.adapter_version.clone()),
         contract_version: db_contract_version
             .or_else(|| engine_contract_version(registry, "database-memory")),
         snapshot_key: db_snapshot_key,
@@ -681,6 +713,9 @@ pub(crate) fn snapshot_staleness_reasons(
                         "코드 변경 상태를 확인할 수 없습니다",
                         &mut reasons,
                     );
+                }
+                if code.adapter_version.as_deref() != Some(CODE_ADAPTER_VERSION) {
+                    push_unique(&mut reasons, "코드 분석 규칙이 바뀌어 다시 읽어야 합니다");
                 }
                 mark_engine_staleness(code, registry, "codebase-memory", "코드", &mut reasons);
             }

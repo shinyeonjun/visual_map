@@ -447,7 +447,22 @@ fn api_reading_answer(
         hidden_candidates,
         candidate_cap_reached: candidate_linker_cap_reached,
     } = db_projection;
-    let mut steps = vec![api_reading_step(route, None, 0, 1, item_by_id)];
+    let route_mount_evidence = traversal
+        .links
+        .iter()
+        .filter(|link| link.from == route.id && link.kind == "code_handle")
+        .flat_map(|link| link.evidence.iter())
+        .filter(|evidence| evidence.kind == "route-mount")
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut steps = vec![api_reading_step(
+        route,
+        None,
+        0,
+        1,
+        item_by_id,
+        &route_mount_evidence,
+    )];
     for node_id in &traversal.node_order {
         let Some(item) = item_by_id.get(node_id.as_str()).copied() else {
             continue;
@@ -460,6 +475,7 @@ fn api_reading_answer(
             depth,
             steps.len() + 1,
             item_by_id,
+            &[],
         ));
     }
 
@@ -954,12 +970,13 @@ fn api_reading_step(
     depth: usize,
     rank: usize,
     item_by_id: &HashMap<&str, &InventoryItem>,
+    supplemental_evidence: &[Evidence],
 ) -> ApiReadingStep {
     let (lane, lane_basis) = api_reading_lane(item, incoming);
     let incoming_evidence = incoming
         .map(|link| confirmed_link_edge(link, item_by_id).evidence)
         .unwrap_or_default();
-    let evidence = if incoming_evidence.is_empty() {
+    let mut evidence = if incoming_evidence.is_empty() {
         vec![Evidence {
             kind: "engine-node".to_string(),
             text: "코드 엔진 inventory에서 Route 항목을 읽었습니다.".to_string(),
@@ -967,6 +984,7 @@ fn api_reading_step(
     } else {
         incoming_evidence.clone()
     };
+    evidence.extend(safe_evidence(supplemental_evidence));
     ApiReadingStep {
         item: ImpactReviewItem {
             id: format!("api-step:{}", item.id),
