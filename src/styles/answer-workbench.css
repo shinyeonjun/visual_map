@@ -617,7 +617,7 @@
 }
 
 @media (max-width: 1020px) {
-  .product-shell[data-surface="answers"] .product-workspace,
+  .product-shell[data-surface="answers"] .product-workspace:not(.is-onboarding),
   .product-shell[data-surface="answers"] .product-workspace.has-inspector {
     grid-template-columns: 220px minmax(0, 1fr) 276px;
   }
@@ -628,7 +628,7 @@
 }
 
 @media (max-width: 820px) {
-  .product-shell[data-surface="answers"] .product-workspace,
+  .product-shell[data-surface="answers"] .product-workspace:not(.is-onboarding),
   .product-shell[data-surface="answers"] .product-workspace.has-inspector {
     grid-template-columns: 204px minmax(0, 1fr);
   }

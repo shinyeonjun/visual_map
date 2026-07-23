@@ -145,8 +145,8 @@ export function WorkbenchView({
         dbProfileControls={dbProfileControls}
         visualMapControls={visualMapControls}
       />
-      <div className={`workspace product-workspace ${showInspector ? "has-inspector" : ""} ${inspectorVisible ? "inspector-visible" : ""}`}>
-        <aside className="product-navigation" aria-label="주요 탐색">
+      <div className={`workspace product-workspace ${hasWorkspace ? "" : "is-onboarding"} ${showInspector ? "has-inspector" : ""} ${inspectorVisible ? "inspector-visible" : ""}`}>
+        {hasWorkspace ? <aside className="product-navigation" aria-label="주요 탐색">
           {surface === "advanced" ? (
             <ModePanel
               workspaceControls={workspaceControls}
@@ -168,7 +168,7 @@ export function WorkbenchView({
               onOpenRelations={() => showAdvanced("composition")}
             />
           )}
-        </aside>
+        </aside> : null}
         {!workspaceControls.initialized ? (
           <main className="workspace-initializing" aria-busy="true" aria-live="polite">
             <LoaderCircle className="spin" size={22} />

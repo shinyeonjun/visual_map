@@ -31,6 +31,39 @@ const showMode = vi.fn();
 describe("WorkbenchView surface transitions", () => {
   beforeEach(() => showMode.mockClear());
 
+  it("keeps empty target navigation out of the first-run setup", () => {
+    const { container } = render(
+      <WorkbenchView
+        sourceManagerOpen={false}
+        setSourceManagerOpen={vi.fn()}
+        workspaceControls={{
+          initialized: true,
+          currentWorkspace: null,
+          operationStatus: { phase: "idle", label: "준비", message: "준비됨" },
+        } as unknown as WorkspaceControls}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={{
+          currentMap: null,
+          mode: "atlas",
+          focusId: null,
+          loading: false,
+          snapshotStaleReasons: [],
+          selectedNode: null,
+          selectedEdge: null,
+          clearSelection: vi.fn(),
+          showMode: vi.fn(),
+        } as unknown as VisualMapControls}
+        engineRegistry={null}
+        engineError={null}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "프로젝트를 연결하세요" })).toBeInTheDocument();
+    expect(screen.queryByTestId("answer-navigation")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("advanced-navigation")).not.toBeInTheDocument();
+    expect(container.querySelector(".product-workspace")).toHaveClass("is-onboarding");
+  });
+
   it("keeps the committed layout until the requested map commits", async () => {
     render(<Harness />);
 
