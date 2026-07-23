@@ -13,7 +13,7 @@ import {
 
 export type TargetKind = "api" | "code" | "table" | "column";
 
-export type TargetItem = {
+type TargetItem = {
   id: string;
   kind: TargetKind;
   badge: string;
@@ -24,7 +24,7 @@ export type TargetItem = {
   mode: "api-flow" | "search-focus" | "table-usage" | "column-impact";
 };
 
-export type TargetCatalog = Record<TargetKind, TargetItem[]>;
+type TargetCatalog = Record<TargetKind, TargetItem[]>;
 
 const CODE_TARGET_RANK: Record<string, number> = {
   handler: 0,

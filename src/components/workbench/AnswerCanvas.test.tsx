@@ -70,6 +70,8 @@ describe("AnswerCanvas", () => {
 
     expect(screen.getByRole("heading", { name: "Orders" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /대상 검색/ })).toBeInTheDocument();
+    expect(screen.queryByText("빠른 시작")).not.toBeInTheDocument();
+    expect(screen.queryByText("loadOrders")).not.toBeInTheDocument();
     expect(screen.queryByText("전체 구조")).not.toBeInTheDocument();
   });
 });
