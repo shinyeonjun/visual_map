@@ -6,8 +6,20 @@ import type { VisualMap } from "../../types/visual-map";
 import { WorkbenchView } from "./WorkbenchView";
 
 vi.mock("../atlas/AtlasCanvas", () => ({ AtlasCanvas: () => <main data-testid="advanced-surface" /> }));
-vi.mock("./AnswerCanvas", () => ({ AnswerCanvas: () => <main data-testid="answer-surface" /> }));
-vi.mock("./InspectorPanel", () => ({ InspectorPanel: () => <div /> }));
+vi.mock("./AnswerCanvas", () => ({
+  AnswerCanvas: ({ onOpenEvidence }: { onOpenEvidence: () => void }) => (
+    <main data-testid="answer-surface">
+      <button type="button" onClick={onOpenEvidence}>근거 요청</button>
+    </main>
+  ),
+}));
+vi.mock("./InspectorPanel", () => ({
+  InspectorPanel: ({ onClose }: { onClose?: () => void }) => (
+    <div>
+      <button type="button" onClick={onClose}>근거 닫기</button>
+    </div>
+  ),
+}));
 vi.mock("./ModePanel", () => ({ ModePanel: () => <nav data-testid="advanced-navigation" /> }));
 vi.mock("./TargetNavigator", () => ({ TargetNavigator: () => <nav data-testid="answer-navigation" /> }));
 vi.mock("./WorkbenchLeftPanel", () => ({ WorkbenchLeftPanel: () => <div /> }));
@@ -125,6 +137,43 @@ describe("WorkbenchView surface transitions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "답 커밋" }));
     await waitFor(() => expect(screen.getByTestId("answer-surface")).toBeInTheDocument());
+  });
+
+  it("opens the evidence drawer without selecting the focused node", () => {
+    const answerMap = map("table-usage", "db:table:public.orders");
+    const clearSelection = vi.fn();
+    const { container } = render(
+      <WorkbenchView
+        sourceManagerOpen={false}
+        setSourceManagerOpen={vi.fn()}
+        workspaceControls={workspaceControls()}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={{
+          currentMap: answerMap,
+          mode: answerMap.mode,
+          focusId: answerMap.focus,
+          loading: false,
+          snapshotStaleReasons: [],
+          selectedNode: null,
+          selectedEdge: null,
+          clearSelection,
+          showMode,
+        } as unknown as VisualMapControls}
+        engineRegistry={null}
+        engineError={null}
+      />,
+    );
+
+    const workspace = container.querySelector(".product-workspace");
+    expect(workspace).not.toHaveClass("inspector-visible");
+
+    fireEvent.click(screen.getByRole("button", { name: "근거 요청" }));
+    expect(workspace).toHaveClass("inspector-visible");
+    expect(clearSelection).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "근거 닫기" }));
+    expect(workspace).not.toHaveClass("inspector-visible");
+    expect(clearSelection).toHaveBeenCalledOnce();
   });
 });
 

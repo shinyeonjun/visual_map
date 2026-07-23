@@ -22,18 +22,21 @@ describe("AnswerCanvas", () => {
   it("opens target evidence from the answer header", () => {
     const map = apiMap();
     const visualMapControls = controls(map, map.mode, map.focus);
+    const openEvidence = vi.fn();
     render(
       <AnswerCanvas
         workspaceControls={workspaceControls()}
         dbProfileControls={{ inventory: null } as DbProfileControls}
         visualMapControls={visualMapControls}
         onOpenSources={vi.fn()}
+        onOpenEvidence={openEvidence}
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "근거 패널 열기" }));
 
-    expect(visualMapControls.selectNode).toHaveBeenCalledWith(map.nodes[0]);
+    expect(openEvidence).toHaveBeenCalledOnce();
+    expect(visualMapControls.selectNode).not.toHaveBeenCalled();
   });
 
   it("states that a code target has no confirmed relationship without inventing one", () => {
@@ -102,6 +105,7 @@ describe("AnswerCanvas", () => {
         dbProfileControls={{ inventory: null } as DbProfileControls}
         visualMapControls={controls(null, "atlas", null)}
         onOpenSources={vi.fn()}
+        onOpenEvidence={vi.fn()}
       />,
     );
 
@@ -120,6 +124,7 @@ function renderAnswer(map: VisualMap, focusId: string) {
       dbProfileControls={{ inventory: null } as DbProfileControls}
       visualMapControls={controls(map, map.mode, focusId)}
       onOpenSources={vi.fn()}
+      onOpenEvidence={vi.fn()}
     />,
   );
 }

@@ -143,14 +143,19 @@ fn impact_direct_items(
     for link in snapshot.links.iter().filter(|link| {
         link.kind == "db_fk" && impact_link_touches_focus(link, table, column, item_by_id)
     }) {
-        let from = item_by_id
-            .get(link.from.as_str())
-            .map(|item| item.name.as_str())
-            .unwrap_or(link.from.as_str());
-        let to = item_by_id
-            .get(link.to.as_str())
-            .map(|item| item.name.as_str())
-            .unwrap_or(link.to.as_str());
+        let detail = foreign_key_detail(link, item_by_id);
+        let object_key = evidence_value(&link.evidence, "db-object-key");
+        if let Some(existing) = object_key.and_then(|key| {
+            items
+                .iter_mut()
+                .find(|item| evidence_value(&item.evidence, "db-object-key") == Some(key))
+        }) {
+            let mut evidence = existing.evidence.clone();
+            evidence.extend(link.evidence.iter().cloned());
+            existing.detail = detail;
+            existing.evidence = safe_evidence(&evidence);
+            continue;
+        }
         items.push(ImpactReviewItem {
             id: format!("direct:{}", link.id),
             node_id: related_fk_node_id(link, table, item_by_id),
@@ -159,7 +164,7 @@ fn impact_direct_items(
                 .label
                 .clone()
                 .unwrap_or_else(|| "Foreign key reference".to_string()),
-            detail: safe_text(&format!("{from} → {to}")),
+            detail,
             truth_class: review_truth_class(&link.truth_class),
             confidence: None,
             rank: 0,
@@ -238,6 +243,38 @@ fn impact_direct_items(
     let mut seen = HashSet::new();
     items.retain(|item| seen.insert(item.id.clone()));
     items
+}
+
+fn evidence_value<'a>(evidence: &'a [Evidence], kind: &str) -> Option<&'a str> {
+    evidence
+        .iter()
+        .find(|entry| entry.kind == kind)
+        .map(|entry| entry.text.as_str())
+}
+
+fn foreign_key_detail(link: &SnapshotLink, item_by_id: &HashMap<&str, &InventoryItem>) -> String {
+    let endpoint = |id: &str| {
+        let Some(item) = item_by_id.get(id).copied() else {
+            return id.to_string();
+        };
+        let Some(table) = item
+            .parent_id
+            .as_deref()
+            .and_then(|parent_id| item_by_id.get(parent_id).copied())
+        else {
+            return item.name.clone();
+        };
+        let table_name = table.group_id.as_deref().map_or_else(
+            || table.name.clone(),
+            |schema| format!("{schema}.{}", table.name),
+        );
+        format!("{table_name}.{}", item.name)
+    };
+    safe_text(&format!(
+        "FK · {} → {}",
+        endpoint(&link.from),
+        endpoint(&link.to)
+    ))
 }
 
 fn semantic_link_touches_focus(

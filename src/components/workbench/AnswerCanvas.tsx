@@ -41,11 +41,13 @@ export function AnswerCanvas({
   dbProfileControls,
   visualMapControls,
   onOpenSources,
+  onOpenEvidence,
 }: {
   workspaceControls: WorkspaceControls;
   dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
   onOpenSources: () => void;
+  onOpenEvidence: () => void;
 }) {
   const visibleMode = visualMapControls.loading && visualMapControls.currentMap
     ? visualMapControls.currentMap.mode
@@ -88,15 +90,16 @@ export function AnswerCanvas({
         onOpenSources={onOpenSources}
       />
       {visibleMode === "api-flow" && map?.apiReading ? (
-        <ApiAnswer map={map} visualMapControls={visualMapControls} />
+        <ApiAnswer map={map} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
       ) : (visibleMode === "table-usage" || visibleMode === "column-impact") && map?.reviewBoard ? (
-        <ImpactAnswer map={map} visualMapControls={visualMapControls} />
+        <ImpactAnswer map={map} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
       ) : (
         <CodeAnswer
           focusId={committedFocus!}
           map={map}
           workspaceControls={workspaceControls}
           visualMapControls={visualMapControls}
+          onOpenEvidence={onOpenEvidence}
         />
       )}
     </main>
@@ -156,7 +159,15 @@ function AnswerHome({
   );
 }
 
-function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapControls: VisualMapControls }) {
+function ApiAnswer({
+  map,
+  visualMapControls,
+  onOpenEvidence,
+}: {
+  map: VisualMap;
+  visualMapControls: VisualMapControls;
+  onOpenEvidence: () => void;
+}) {
   const answer = map.apiReading!;
   const method = answer.method ?? routeMethodFromIdentity(map.focus);
   const subject = routeDisplayName(answer.subject, method);
@@ -184,7 +195,7 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
         structural={structuralCount}
         candidates={candidateCount}
         unknowns={unknownCount}
-        onOpenEvidence={() => selectReviewNode(map.focus, map, visualMapControls)}
+        onOpenEvidence={onOpenEvidence}
       />
 
       <AnswerSection title="처리 흐름" count={knownSteps.length} description="호출 깊이로 정렬한 확정 근거와 구조 관계">
@@ -243,7 +254,15 @@ function ApiAnswer({ map, visualMapControls }: { map: VisualMap; visualMapContro
   );
 }
 
-function ImpactAnswer({ map, visualMapControls }: { map: VisualMap; visualMapControls: VisualMapControls }) {
+function ImpactAnswer({
+  map,
+  visualMapControls,
+  onOpenEvidence,
+}: {
+  map: VisualMap;
+  visualMapControls: VisualMapControls;
+  onOpenEvidence: () => void;
+}) {
   const board = map.reviewBoard!;
   const tableUsage = board.scope === "table";
   const direct = board.lanes.find((lane) => lane.id === "direct") ?? board.lanes[0];
@@ -280,7 +299,7 @@ function ImpactAnswer({ map, visualMapControls }: { map: VisualMap; visualMapCon
         structural={structuralCount}
         candidates={candidateCount}
         unknowns={unknownCount}
-        onOpenEvidence={() => selectReviewNode(map.focus, map, visualMapControls)}
+        onOpenEvidence={onOpenEvidence}
       />
       {!tableUsage ? (
         <ChangeIntentBar intent={board.changeIntent ?? visualMapControls.changeIntent} onChange={visualMapControls.setChangeIntent} />
@@ -351,11 +370,13 @@ function CodeAnswer({
   map,
   workspaceControls,
   visualMapControls,
+  onOpenEvidence,
 }: {
   focusId: string;
   map: VisualMap | null;
   workspaceControls: WorkspaceControls;
   visualMapControls: VisualMapControls;
+  onOpenEvidence: () => void;
 }) {
   const node = map?.nodes.find((item) => item.id === focusId) ?? null;
   const itemId = focusId.replace(/^code:/, "");
@@ -386,7 +407,7 @@ function CodeAnswer({
         confirmed={confirmed.length}
         structural={structural.length}
         candidates={candidates.length}
-        onOpenEvidence={map ? () => selectReviewNode(focusId, map, visualMapControls) : undefined}
+        onOpenEvidence={map ? onOpenEvidence : undefined}
       />
       <AnswerSection title="바로 연결" count={known.length} description="한 단계 이내의 확정 근거와 구조 관계">
         {known.length > 0 ? (
