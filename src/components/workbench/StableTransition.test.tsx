@@ -275,6 +275,42 @@ describe("stable mode transitions", () => {
     expect(onToggleSourceManager).toHaveBeenCalledOnce();
   });
 
+  it("does not activate background search while source management is open", () => {
+    const openSearchPopover = vi.fn();
+    render(
+      <WorkbenchTopBar
+        sourceManagerOpen
+        onToggleSourceManager={vi.fn()}
+        workspaceControls={{
+          ...workspaceControls(),
+          initialized: true,
+          busy: false,
+          workspaces: [{ id: "workspace-1", name: "backend" }],
+          operationStatus: { phase: "idle", label: "작업 없음", message: "실행 중인 작업 없음" },
+          openWorkspace: vi.fn(),
+        } as unknown as WorkspaceControls}
+        dbProfileControls={{ inventory: null } as unknown as DbProfileControls}
+        visualMapControls={{
+          searchQuery: "",
+          searchGroups: [],
+          snapshotStaleReasons: [],
+          setSearchQuery: vi.fn(),
+          openSearchPopover,
+          closeSearchPopover: vi.fn(),
+          runSearch: vi.fn(),
+          selectSearchResult: vi.fn(),
+        } as unknown as VisualMapControls}
+      />,
+    );
+    const sourceManagerButton = screen.getByRole("button", { name: "소스 관리" });
+    sourceManagerButton.focus();
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+
+    expect(openSearchPopover).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(sourceManagerButton);
+  });
+
   it("lists each project once in the project switcher", () => {
     const openWorkspace = vi.fn();
     render(
