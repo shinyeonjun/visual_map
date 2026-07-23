@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import type { CodeInventory } from "../../types/workspace";
@@ -17,6 +17,23 @@ describe("AnswerCanvas", () => {
     expect(screen.getByText("loadOrders")).toBeInTheDocument();
     expect(container.querySelector(".answer-candidates")).not.toHaveAttribute("open");
     expect(screen.getByText("orders 테이블 후보")).toBeInTheDocument();
+  });
+
+  it("opens target evidence from the answer header", () => {
+    const map = apiMap();
+    const visualMapControls = controls(map, map.mode, map.focus);
+    render(
+      <AnswerCanvas
+        workspaceControls={workspaceControls()}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={visualMapControls}
+        onOpenSources={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "근거 패널 열기" }));
+
+    expect(visualMapControls.selectNode).toHaveBeenCalledWith(map.nodes[0]);
   });
 
   it("states that a code target has no confirmed relationship without inventing one", () => {
