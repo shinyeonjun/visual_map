@@ -191,6 +191,27 @@ try {
     if ([int]$handles.total -ge 100000) {
       throw "$($entry.Name) HANDLES reached the adapter safety limit."
     }
+    $validHandleRows = @($handles.rows | Where-Object {
+      $_.Count -eq 2 -and $_[0] -and $_[1]
+    })
+    $handleTargets = [System.Collections.Generic.HashSet[string]]::new(
+      [StringComparer]::Ordinal
+    )
+    foreach ($row in $validHandleRows) {
+      [void]$handleTargets.Add([string]$row[1])
+    }
+    $usableEngineRoutes = @($nodeRows | Where-Object {
+      [string]$_[0] -match '"Route"' -and
+      [string]$_[1] -notmatch '://' -and
+      (
+        ($_[3] -and [int]$_[4] -gt 0) -or
+        $handleTargets.Contains([string]$_[2])
+      )
+    }).Count
+    if ($entry.Name -ne "clean-architecture" -and
+        ($usableEngineRoutes -eq 0 -or $validHandleRows.Count -eq 0)) {
+      throw "$($entry.Name) produced no source-backed API route/HANDLES path."
+    }
 
     $results.Add([pscustomobject][ordered]@{
       repository = $entry.Name
@@ -201,8 +222,11 @@ try {
       functions = $counts.Function
       methods = $counts.Method
       classes = $counts.Class
-      routes = $counts.Route
-      handles = @($handles.rows).Count
+      rawRoutes = $counts.Route
+      usableEngineRoutes = $usableEngineRoutes
+      productAdapterRoutes = 0
+      engineHandles = $validHandleRows.Count
+      productAdapterHandles = 0
       calls = $validCallRows.Count
       confirmedCalls = $confirmedCalls
       candidateCalls = $candidateCalls
@@ -210,12 +234,51 @@ try {
       located = $located
     })
   }
+
+  $csharpRepo = Join-Path $matrixRoot "clean-architecture"
+  $manifestPath = Join-Path $repoRoot "src-tauri\Cargo.toml"
+  $env:BACKEND_MAP_TEST_CODE_REPO = $csharpRepo
+  $env:BACKEND_MAP_TEST_CODE_ENGINE = $EnginePath
+  $previousErrorAction = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $productTestOutput = @(
+      & cargo test --locked --manifest-path $manifestPath code_field_fastendpoints_adapter_proves_real_routes_and_handlers -- --ignored --nocapture 2>&1
+    )
+    $productTestExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorAction
+  }
+  $productTestOutput | ForEach-Object { Write-Output ([string]$_) }
+  if ($productTestExitCode -ne 0) {
+    throw "The product FastEndpoints adapter field test failed."
+  }
+  $productRouteCount = $null
+  $productHandleCount = $null
+  foreach ($line in $productTestOutput) {
+    if ([string]$line -match 'product FastEndpoints routes=(\d+) handles=(\d+)') {
+      $productRouteCount = [int]$Matches[1]
+      $productHandleCount = [int]$Matches[2]
+      break
+    }
+  }
+  if ($null -eq $productRouteCount -or $null -eq $productHandleCount) {
+    throw "The product FastEndpoints adapter returned no count receipt."
+  }
+  $csharpResult = $results |
+    Where-Object { $_.repository -eq "clean-architecture" } |
+    Select-Object -First 1
+  $csharpResult.productAdapterRoutes = $productRouteCount
+  $csharpResult.productAdapterHandles = $productHandleCount
+
   $results | Format-Table -AutoSize | Out-String | Write-Output
   $results | ConvertTo-Json -Depth 4 | Write-Output
   Write-Output "PASS: pinned multi-language code field matrix completed."
 } finally {
   Remove-Item Env:CBM_CACHE_DIR -ErrorAction SilentlyContinue
   Remove-Item Env:CBM_ALLOWED_ROOT -ErrorAction SilentlyContinue
+  Remove-Item Env:BACKEND_MAP_TEST_CODE_REPO -ErrorAction SilentlyContinue
+  Remove-Item Env:BACKEND_MAP_TEST_CODE_ENGINE -ErrorAction SilentlyContinue
   if ($ownsRoot -and -not $Keep) {
     $resolvedRoot = [IO.Path]::GetFullPath($matrixRoot)
     if ($resolvedRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
