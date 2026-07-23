@@ -1,4 +1,4 @@
-/* Sentry-inspired target -> answer -> evidence reading surface. */
+/* Sentry Issue Detail reference: target -> answer -> evidence. */
 .product-view-switch {
   height: 34px;
   flex: 0 0 auto;
@@ -22,7 +22,7 @@
   border-radius: 4px;
   background: transparent;
   color: var(--ink-3);
-  font: 720 10.5px/1 inherit;
+  font: 720 11px/1 inherit;
 }
 
 .product-view-switch button:hover { color: var(--ink); }
@@ -49,8 +49,8 @@
 }
 
 .target-navigator-header > span { min-width: 0; display: grid; gap: 2px; }
-.target-navigator-header strong { color: var(--ink); font-size: 13px; }
-.target-navigator-header small { color: var(--ink-4); font-size: 10px; }
+.target-navigator-header strong { color: var(--ink); font-size: 13.5px; }
+.target-navigator-header small { color: var(--ink-4); font-size: 11px; }
 
 .target-kind-tabs {
   display: grid;
@@ -80,8 +80,8 @@
   background: var(--accent-soft);
   color: var(--blue-ink);
 }
-.target-kind-tabs button span { overflow: hidden; font-size: 10.5px; font-weight: 760; text-overflow: ellipsis; }
-.target-kind-tabs button em { color: var(--ink-4); font: 700 9px/1 var(--mono); font-style: normal; }
+.target-kind-tabs button span { overflow: hidden; font-size: 11px; font-weight: 760; text-overflow: ellipsis; }
+.target-kind-tabs button em { color: var(--ink-4); font: 700 9.5px/1 var(--mono); font-style: normal; }
 .target-kind-tabs button.active em { color: var(--blue-ink); }
 
 .target-filter {
@@ -98,7 +98,7 @@
   color: var(--ink-4);
 }
 .target-filter:focus-within { border-color: color-mix(in srgb, var(--blue) 50%, var(--line)); background: #fff; }
-.target-filter input { min-width: 0; height: 30px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 10.5px; }
+.target-filter input { min-width: 0; height: 30px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 11px; }
 
 .target-list {
   min-height: 0;
@@ -110,7 +110,7 @@
 .target-list > h3 {
   margin: 10px 7px 4px;
   color: var(--ink-4);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 780;
 }
 
@@ -145,14 +145,14 @@
   border-radius: 3px;
   background: var(--bg-inset);
   color: var(--blue-ink);
-  font: 780 8.5px/1 var(--mono);
+  font: 780 9px/1 var(--mono);
   text-align: center;
 }
 .target-list > button > strong,
 .target-list > button > small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.target-list > button > strong { font-size: 11px; }
-.target-list > button > small { grid-column: 1 / -1; color: var(--ink-4); font: 9.5px/1.35 var(--mono); }
-.target-list > button > em { color: var(--blue-ink); font-size: 9px; font-style: normal; font-weight: 800; }
+.target-list > button > strong { font-size: 11.5px; }
+.target-list > button > small { grid-column: 1 / -1; color: var(--ink-4); font: 10.5px/1.35 var(--mono); }
+.target-list > button > em { color: var(--blue-ink); font-size: 9.5px; font-style: normal; font-weight: 800; }
 .target-list-empty { display: grid; gap: 9px; margin: 8px; color: var(--ink-4); font-size: 10.5px; line-height: 1.5; }
 .target-list-empty p { margin: 0; }
 .target-list-empty button {
@@ -177,7 +177,7 @@
   padding: 9px 10px 10px;
   border-top: 1px solid var(--line);
 }
-.target-navigator-footer > small { color: var(--ink-4); font-size: 9.5px; }
+.target-navigator-footer > small { color: var(--ink-4); font-size: 10.5px; }
 .target-navigator-footer > button {
   min-width: 0;
   height: 32px;
@@ -190,7 +190,7 @@
   border-radius: 4px;
   background: #fff;
   color: var(--ink-3);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 730;
 }
 .target-navigator-footer > button:hover { border-color: var(--line-2); background: var(--bg-panel); color: var(--ink); }
@@ -258,15 +258,15 @@
   color: var(--blue-ink);
 }
 .answer-header-copy { min-width: 0; display: grid; gap: 5px; }
-.answer-header-copy > span { color: var(--ink-4); font-size: 9.5px; font-weight: 800; }
+.answer-header-copy > span { color: var(--ink-4); font-size: 10.5px; font-weight: 800; }
 .answer-header h1 { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--ink); font: 730 20px/1.3 var(--mono); letter-spacing: 0; }
 .answer-header-context {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--ink-4);
-  font: 9.5px/1.4 var(--mono);
+  font: 10.5px/1.4 var(--mono);
 }
-.answer-header p { margin: 2px 0 0; color: var(--ink-2); font-size: 12px; line-height: 1.45; }
+.answer-header p { margin: 2px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.45; }
 .answer-verdicts {
   min-height: 44px;
   display: flex;
@@ -283,7 +283,7 @@
   margin-right: 14px;
   padding-right: 14px;
   border-right: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 760;
   white-space: nowrap;
 }
@@ -307,8 +307,8 @@
   margin-bottom: 12px;
 }
 .answer-section > header > span { min-width: 0; display: grid; gap: 2px; }
-.answer-section > header h2 { margin: 0; color: var(--ink); font-size: 13px; }
-.answer-section > header small { color: var(--ink-4); font-size: 10px; }
+.answer-section > header h2 { margin: 0; color: var(--ink); font-size: 13.5px; }
+.answer-section > header small { color: var(--ink-4); font-size: 10.5px; }
 .answer-section > header em,
 .answer-candidates > summary > em {
   min-width: 24px;
@@ -318,7 +318,7 @@
   border-radius: 4px;
   background: var(--bg-inset);
   color: var(--ink-3);
-  font: 740 9px/1 var(--mono);
+  font: 740 9.5px/1 var(--mono);
   font-style: normal;
 }
 
@@ -364,16 +364,16 @@
   font: 760 9px/1 var(--mono);
 }
 .answer-flow-copy { min-width: 0; display: grid; gap: 2px; }
-.answer-flow-copy small { color: var(--ink-4); font-size: 9px; font-weight: 780; }
-.answer-flow-copy strong { min-width: 0; overflow: hidden; color: var(--ink); font: 710 12px/1.3 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.answer-flow-copy em { min-width: 0; overflow: hidden; color: var(--ink-4); font: 9.5px/1.35 var(--mono); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.answer-flow-copy small { color: var(--ink-4); font-size: 10px; font-weight: 780; }
+.answer-flow-copy strong { min-width: 0; overflow: hidden; color: var(--ink); font: 710 12.5px/1.3 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.answer-flow-copy em { min-width: 0; overflow: hidden; color: var(--ink-4); font: 10.5px/1.35 var(--mono); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
 .answer-truth {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   color: var(--ink-4);
-  font-size: 9px;
+  font-size: 9.5px;
   font-weight: 770;
   white-space: nowrap;
 }
@@ -403,11 +403,11 @@
 .answer-review-items > button > span:nth-child(2),
 .answer-edge-items > button > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
 .answer-review-items strong,
-.answer-edge-items strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.answer-edge-items strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
 .answer-review-items small,
-.answer-edge-items small { color: var(--ink-4); font-size: 9px; font-weight: 760; }
+.answer-edge-items small { color: var(--ink-4); font-size: 10px; font-weight: 760; }
 .answer-review-items code,
-.answer-edge-items em { min-width: 0; overflow: hidden; color: var(--ink-4); font: 9.5px/1.35 var(--mono); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.answer-edge-items em { min-width: 0; overflow: hidden; color: var(--ink-4); font: 10.5px/1.35 var(--mono); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .answer-edge-direction { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 4px; background: var(--bg-inset); color: var(--blue-ink); }
 .answer-edge-direction.inbound svg { transform: rotate(180deg); }
 
@@ -428,8 +428,8 @@
 .answer-candidates > summary::-webkit-details-marker { display: none; }
 .answer-candidates > summary > span { min-width: 0; display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 2px 7px; align-items: center; }
 .answer-candidates > summary svg { grid-row: 1 / 3; color: var(--orange); }
-.answer-candidates > summary strong { font-size: 12px; }
-.answer-candidates > summary small { color: var(--ink-4); font-size: 9.5px; }
+.answer-candidates > summary strong { font-size: 12.5px; }
+.answer-candidates > summary small { color: var(--ink-4); font-size: 10.5px; }
 .answer-candidates[open] { padding-bottom: 16px; }
 
 .answer-more { margin-top: 8px; }
@@ -451,8 +451,8 @@
   color: var(--ink-4);
 }
 .answer-empty > span { display: grid; gap: 3px; }
-.answer-empty strong { color: var(--ink-2); font-size: 11px; }
-.answer-empty small { font-size: 9.5px; }
+.answer-empty strong { color: var(--ink-2); font-size: 11.5px; }
+.answer-empty small { font-size: 10.5px; }
 
 .answer-coverage {
   min-height: 38px;
@@ -618,8 +618,6 @@
 }
 
 @media (max-width: 1240px) {
-  .product-view-switch button { min-width: 34px; }
-  .product-view-switch button span { display: none; }
   .answer-canvas { padding-inline: 22px; }
 }
 
@@ -629,8 +627,6 @@
     grid-template-columns: 220px minmax(0, 1fr) 276px;
   }
   .product-shell[data-surface="answers"] .target-navigator { display: grid; }
-  .product-topbar .product-view-switch { grid-template-columns: 32px 32px; }
-  .product-view-switch button { width: 32px; min-width: 32px; padding: 0; }
   .answer-verdicts { justify-content: flex-start; }
 }
 
