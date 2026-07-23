@@ -96,6 +96,10 @@ export function TargetNavigator({
   const committedFocus = visualMapControls.loading && visualMapControls.currentMap
     ? visualMapControls.currentMap.focus
     : visualMapControls.focusId ?? visualMapControls.currentMap?.focus ?? null;
+  const activeItemIndex = items.findIndex(
+    (item) => committedFocus === item.focusId && visibleMode === item.mode,
+  );
+  const targetTabStopIndex = activeItemIndex >= 0 ? activeItemIndex : 0;
 
   return (
     <section className="target-navigator" aria-label="분석 대상 탐색">
@@ -168,7 +172,9 @@ export function TargetNavigator({
                 data-target-id={item.focusId}
                 aria-current={active ? "true" : undefined}
                 aria-busy={pending || undefined}
+                tabIndex={index === targetTabStopIndex ? 0 : -1}
                 title={`${item.title} · ${item.meta}`}
+                onKeyDown={moveTargetItem}
                 onClick={() => {
                   onSelectTarget();
                   if (!active) {
@@ -242,6 +248,28 @@ function moveTargetKind(event: KeyboardEvent<HTMLButtonElement>) {
   event.preventDefault();
   tabs[nextIndex]?.focus();
   tabs[nextIndex]?.click();
+}
+
+function moveTargetItem(event: KeyboardEvent<HTMLButtonElement>) {
+  const items = Array.from(
+    event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button[data-target-id]") ?? [],
+  );
+  const currentIndex = items.indexOf(event.currentTarget);
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? items.length - 1
+      : event.key === "ArrowDown"
+        ? Math.min(currentIndex + 1, items.length - 1)
+        : event.key === "ArrowUp"
+          ? Math.max(currentIndex - 1, 0)
+          : -1;
+  if (currentIndex < 0 || nextIndex < 0 || nextIndex === currentIndex) return;
+  event.preventDefault();
+  items.forEach((item, index) => {
+    item.tabIndex = index === nextIndex ? 0 : -1;
+  });
+  items[nextIndex]?.focus();
 }
 
 function visibleTargetItems(items: ReturnType<typeof buildTargetCatalog>[TargetKind], kind: TargetKind, hasQuery: boolean) {

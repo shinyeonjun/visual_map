@@ -110,6 +110,39 @@ describe("TargetNavigator", () => {
     expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "target-kind-api");
   });
 
+  it("keeps one target in the tab order and moves focus without opening an answer", () => {
+    const workspace = workspaceControls();
+    workspace.codeInventory!.functions = codeItems("function", 3);
+    const showMode = vi.fn();
+    const { container } = render(
+      <TargetNavigator
+        workspaceControls={workspace}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={visualControls(showMode, "search-focus")}
+        onSelectTarget={vi.fn()}
+        onOpenDatabase={vi.fn()}
+        onOpenRelations={vi.fn()}
+      />,
+    );
+
+    const targets = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".target-list button[data-target-id]"),
+    );
+    expect(targets).toHaveLength(3);
+    expect(targets.filter((target) => target.tabIndex === 0)).toEqual([targets[0]]);
+
+    targets[0]?.focus();
+    fireEvent.keyDown(targets[0]!, { key: "ArrowDown" });
+    expect(targets[1]).toHaveFocus();
+    expect(targets.filter((target) => target.tabIndex === 0)).toEqual([targets[1]]);
+
+    fireEvent.keyDown(targets[1]!, { key: "End" });
+    expect(targets[2]).toHaveFocus();
+    fireEvent.keyDown(targets[2]!, { key: "Home" });
+    expect(targets[0]).toHaveFocus();
+    expect(showMode).not.toHaveBeenCalled();
+  });
+
   it("bounds each code role by default but searches the full inventory", () => {
     const workspace = workspaceControls();
     workspace.codeInventory!.handlers = codeItems("handler", 20);
