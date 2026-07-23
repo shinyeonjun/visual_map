@@ -58,8 +58,10 @@ created only when all of these are true:
 Recognized method calls must use a bounded DB receiver name such as
 `connection`, `cursor`, `jdbcTemplate`, `entityManager`, `session`, `client`,
 `pool`, `sequelize`, `prisma`, `knex`, or `sql`. MyBatis SQL annotations and
-`sqlx::query` are handled as explicit framework forms. Generic receivers such
-as `logger.raw` never become confirmed evidence.
+`sqlx::query` are handled as explicit framework forms. Common explicit-SQL
+forms include Dapper query/execute methods, EF Core raw-SQL methods, Spring
+`JdbcTemplate`, and SQLAlchemy `session.execute(text("..."))`. Generic
+receivers such as `logger.raw` never become confirmed evidence.
 
 Composite statements separate their targets: `INSERT ... SELECT`,
 `UPDATE ... FROM`, `DELETE ... USING`, and `MERGE ... USING` write the target
