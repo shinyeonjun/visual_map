@@ -2536,6 +2536,22 @@ fn db_contract_facts_round_trip_as_nodes_relationships_evidence_and_gaps() {
         .iter()
         .all(|link| node_ids.contains(link.from.as_str()) && node_ids.contains(link.to.as_str())));
 
+    let table_map = visual_map(
+        &snapshot,
+        Some("db:table:public.orders".to_string()),
+        "table-usage".to_string(),
+    );
+    let foreign_keys = review_lane(table_map.review_board.as_ref().unwrap(), "direct")
+        .items
+        .iter()
+        .filter(|item| item.title == "orders_customer_id_fkey")
+        .collect::<Vec<_>>();
+    assert_eq!(foreign_keys.len(), 1);
+    assert_eq!(
+        foreign_keys[0].detail,
+        "FK · public.orders.customer_id → public.customers.id"
+    );
+
     let json = serde_json::to_string(&snapshot).unwrap();
     let restored: InventorySnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, snapshot);

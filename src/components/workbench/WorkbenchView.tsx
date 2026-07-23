@@ -36,6 +36,7 @@ export function WorkbenchView({
 }) {
   const [surface, setSurface] = useState<"answers" | "advanced">("answers");
   const [pendingSurface, setPendingSurface] = useState<"answers" | "advanced" | null>(null);
+  const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false);
   const hasAnswerSource =
     codeInventoryItemCount(workspaceControls.codeInventory) > 0 || Boolean(dbProfileControls.inventory?.tables.length);
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
@@ -49,7 +50,7 @@ export function WorkbenchView({
   // Keep the evidence column mounted once a project exists so mode changes do not
   // resize the canvas. Its contents can change; the workspace geometry cannot.
   const showInspector = workspaceReady;
-  const inspectorVisible = Boolean(visualMapControls.selectedNode || visualMapControls.selectedEdge);
+  const inspectorVisible = evidenceDrawerOpen || Boolean(visualMapControls.selectedNode || visualMapControls.selectedEdge);
   const drawerOpen = sourceManagerOpen && workspaceReady;
   const sourceManagerRef = useRef<HTMLElement | null>(null);
   const lastAnswerRef = useRef<{ workspaceId: string; mode: string; focusId: string } | null>(null);
@@ -64,6 +65,7 @@ export function WorkbenchView({
     lastAnswerRef.current = null;
     setPendingSurface(null);
     setSurface("answers");
+    setEvidenceDrawerOpen(false);
   }, [workspaceId]);
 
   useLayoutEffect(() => {
@@ -116,8 +118,14 @@ export function WorkbenchView({
     if (workspaceId && focusId && targetKindForMode(visibleMode)) {
       lastAnswerRef.current = { workspaceId, mode: visibleMode, focusId };
     }
+    setEvidenceDrawerOpen(false);
     setPendingSurface("advanced");
     visualMapControls.showMode(mode, null);
+  }
+
+  function closeInspector() {
+    setEvidenceDrawerOpen(false);
+    visualMapControls.clearSelection();
   }
 
   useEffect(() => {
@@ -199,6 +207,7 @@ export function WorkbenchView({
             dbProfileControls={dbProfileControls}
             visualMapControls={visualMapControls}
             onOpenSources={() => setSourceManagerOpen(true)}
+            onOpenEvidence={() => setEvidenceDrawerOpen(true)}
           />
         ) : (
           <main className="source-onboarding-main">
@@ -224,7 +233,7 @@ export function WorkbenchView({
           <aside className="side side-right evidence-panel">
             {surface === "advanced" || answerHasTarget ? (
               <InspectorPanel
-                onClose={visualMapControls.clearSelection}
+                onClose={closeInspector}
                 title={surface === "answers" ? "근거" : "선택한 대상"}
                 variant={surface === "answers" ? "answer" : "full"}
                 workspaceControls={workspaceControls}
