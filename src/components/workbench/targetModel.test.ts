@@ -73,6 +73,19 @@ describe("targetModel", () => {
     expect(buildTargetCatalog(inventory, null).code.map((item) => item.title)).toEqual(["loadOrders"]);
     expect(inventory.functions.map((item) => item.name)).toContain("len");
   });
+
+  it("keeps the source root visible for duplicate routes in different trees", () => {
+    const inventory = codeInventory();
+    inventory.routes = [
+      { ...inventory.routes[0], id: "legacy-route", filePath: "legacy/backend/app/api/routes/events.py", line: 198 },
+      { ...inventory.routes[0], id: "current-route", filePath: "server/app/api/routes/events/query.py", line: 116 },
+    ];
+
+    expect(buildTargetCatalog(inventory, null).api.map((item) => item.meta)).toEqual([
+      "legacy/…/routes/events.py:198",
+      "server/…/events/query.py:116",
+    ]);
+  });
 });
 
 function codeInventory(): CodeInventory {
