@@ -13,8 +13,9 @@ use super::model::{
     FocusedCodeSearch, IndexCodeRequest,
 };
 use super::store::{
-    engine_json_value, object_string, read_workspace_by_id, timestamp, validate_workspace_id,
-    value_items, workspace_code_cache_path, workspace_db_cache_dir, write_workspace,
+    engine_json_value, object_bool, object_string, read_workspace_by_id, timestamp,
+    validate_workspace_id, value_items, workspace_code_cache_path, workspace_db_cache_dir,
+    write_workspace,
 };
 
 static NEXT_CODE_PROJECT_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -241,7 +242,7 @@ pub(crate) fn extract_code_calls(
     calls_json: &serde_json::Value,
     inventory: &CodeInventory,
 ) -> Vec<CodeCall> {
-    let known_ids = inventory
+    let known_items = inventory
         .routes
         .iter()
         .chain(inventory.handlers.iter())
@@ -252,6 +253,11 @@ pub(crate) fn extract_code_calls(
         .chain(inventory.modules.iter())
         .chain(inventory.unknown.iter())
         .chain(inventory.files.iter())
+        .map(|item| (item.id.as_str(), item))
+        .collect::<HashMap<_, _>>();
+    let test_ids = known_items
+        .values()
+        .filter(|item| code_item_is_test(item))
         .map(|item| item.id.as_str())
         .collect::<HashSet<_>>();
     let mut calls_by_pair = HashMap::<(String, String), CodeCall>::new();
@@ -259,7 +265,9 @@ pub(crate) fn extract_code_calls(
         .into_iter()
         .filter_map(code_call)
         .filter(|call| {
-            known_ids.contains(call.from.as_str()) && known_ids.contains(call.to.as_str())
+            known_items.contains_key(call.from.as_str())
+                && known_items.contains_key(call.to.as_str())
+                && (test_ids.contains(call.from.as_str()) || !test_ids.contains(call.to.as_str()))
         })
     {
         let key = (call.from.clone(), call.to.clone());
@@ -278,6 +286,19 @@ pub(crate) fn extract_code_calls(
     let mut calls = calls_by_pair.into_values().collect::<Vec<_>>();
     calls.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
     calls
+}
+
+fn code_item_is_test(item: &CodeInventoryItem) -> bool {
+    object_bool(&item.detail, &["is_test", "isTest"])
+        || item.file_path.as_deref().is_some_and(|path| {
+            path.split(['/', '\\']).any(|segment| {
+                let segment = segment.to_ascii_lowercase();
+                matches!(segment.as_str(), "test" | "tests" | "__tests__")
+                    || segment.ends_with(".tests")
+                    || segment.ends_with(".unittests")
+                    || segment.ends_with(".integrationtests")
+            })
+        })
 }
 
 pub(crate) fn extract_code_handles(

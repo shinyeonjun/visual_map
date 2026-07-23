@@ -37,6 +37,8 @@ Dynamic, ambiguous, and non-endpoint `Configure` methods fail closed.
 - `HANDLES` and `CALLS` keep the confidence emitted by the code engine.
 - CALLS at 85% or above may enter a confirmed path; 70-84% stays candidate;
   lower or unscored output stays unknown.
+- A CALLS edge from production source into a test-only path is discarded even
+  when the engine score is high; test code calling production code is retained.
 - A stale source snapshot must be read again before it can answer a focused
   request.
 - Files outside the registered repository are never inspected.

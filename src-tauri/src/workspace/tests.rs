@@ -1499,6 +1499,56 @@ fn code_inventory_extracts_calls_between_known_inventory_items_only() {
 }
 
 #[test]
+fn code_inventory_rejects_only_production_calls_into_test_code() {
+    let empty = serde_json::json!({ "results": [] });
+    let code = serde_json::json!({
+        "results": [
+            {
+                "name": "ExecuteAsync",
+                "qualified_name": "src.Create.ExecuteAsync",
+                "label": "Method",
+                "file_path": "src/Web/Create.cs",
+                "is_test": false
+            },
+            {
+                "name": "Send",
+                "qualified_name": "tests.NoOpMediator.Send",
+                "label": "Method",
+                "file_path": "tests/UnitTests/NoOpMediator.cs",
+                "is_test": false
+            }
+        ]
+    });
+    let calls = serde_json::json!({
+        "rows": [
+            {
+                "from": "src.Create.ExecuteAsync",
+                "to": "tests.NoOpMediator.Send",
+                "confidence": "0.85"
+            },
+            {
+                "from": "tests.NoOpMediator.Send",
+                "to": "src.Create.ExecuteAsync",
+                "confidence": "0.85"
+            }
+        ]
+    });
+    let inventory =
+        extract_code_inventory("shop-api".to_string(), None, &empty, &code, &empty).unwrap();
+
+    assert_eq!(
+        extract_code_calls(&calls, &inventory),
+        vec![CodeCall {
+            from: "tests.NoOpMediator.Send".to_string(),
+            to: "src.Create.ExecuteAsync".to_string(),
+            confidence: Some(85),
+            strategy: None,
+            expression: None,
+        }]
+    );
+}
+
+#[test]
 fn code_inventory_rejects_bucket_misclassification_and_conflicting_labels() {
     let false_route = serde_json::json!({
         "results": [
@@ -1862,6 +1912,12 @@ fn code_field_fastendpoints_adapter_proves_real_routes_and_handlers() {
         .iter()
         .any(|handle| handle.route == create_route.id));
     assert_eq!(derived_handles, derived.len());
+    let create_handler = create_route.detail["handlerQualifiedName"]
+        .as_str()
+        .expect("derived route handler");
+    assert!(!inventory.calls.iter().any(|call| {
+        call.from == create_handler && call.to.contains("tests.Clean.Architecture.UnitTests")
+    }));
     assert!(derived
         .iter()
         .all(|route| !route.name.contains("nameof") && !route.name.contains("://")));
