@@ -1,5 +1,7 @@
 import type { VisualEdge, VisualMap } from "../types/visual-map";
 
+export type VisualEdgeTruthClass = "confirmed" | "structural" | "candidate" | "inferred";
+
 export function visualMapModeLabel(mode: VisualMap["mode"]): string {
   if (mode === "api-flow") return "API가 닿는 코드";
   if (mode === "table-usage") return "테이블 연결";
@@ -39,4 +41,13 @@ export function visualEdgeKindLabel(edge: VisualEdge): string {
   if (edge.kind === "code_handle" || edge.kind.endsWith("_code_handle")) return "라우트 처리";
   if (edge.kind === "code_flow") return "이름 단서";
   return "관계";
+}
+
+export function visualEdgeTruthClass(edge: VisualEdge): VisualEdgeTruthClass {
+  if (edge.kind.startsWith("candidate")) return "candidate";
+  if (edge.kind === "code_flow") return "inferred";
+  if (edge.kind === "contains" || edge.kind === "group_contains" || edge.kind.startsWith("structural_")) {
+    return "structural";
+  }
+  return edge.evidence.length > 0 ? "confirmed" : "structural";
 }

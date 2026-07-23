@@ -1180,9 +1180,9 @@ function RelationLedger({
   const hint = selectedEdgeId
     ? "근거와 양끝 항목 확인"
     : hasSelectedTarget
-      ? "직접/구조 우선 · 후보 검증"
-      : "직접/구조 우선 · 후보/이름 단서 검증";
-  const hintTitle = "직접=읽은 근거, 구조=DB/FK/호출 구조, 후보/이름 단서=검증 필요";
+      ? "확정/구조 우선 · 후보 검증"
+      : "확정/구조 우선 · 후보/이름 단서 검증";
+  const hintTitle = "확정=읽은 근거, 구조=DB/FK/호출 구조, 후보/이름 단서=검증 필요";
   const emptyText = emptyReason ?? (hasSelectedTarget ? "이 대상과 연결된 관계가 없습니다." : "아직 표시할 관계가 없습니다.");
   const emptyNext = relationEmptyNextStep(emptyReason, hasSelectedTarget);
   const hidden = Math.max(0, total - rows.length);

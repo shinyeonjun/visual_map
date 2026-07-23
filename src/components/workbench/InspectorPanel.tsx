@@ -16,6 +16,7 @@ import type { CodeInventory, CodeInventoryItem } from "../../types/workspace";
 import type { VisualEdge, VisualMap, VisualNode } from "../../types/visual-map";
 import {
   visualEdgeKindLabel as edgeKindLabel,
+  visualEdgeTruthClass,
   visualNodeKindLabel as nodeKindLabel,
 } from "../../visual/labels";
 import { columnRefFromNodeId, tableKeyFromDbNodeId } from "../../visual/nodeIds";
@@ -251,8 +252,8 @@ export function InspectorPanel({
         .filter((node): node is VisualNode => Boolean(node))
     : [];
   const hasCandidateRelation = selectedEdge
-    ? isApiCandidateEdge(selectedEdge)
-    : directEdges.some(isApiCandidateEdge);
+    ? requiresReview(selectedEdge)
+    : directEdges.some(requiresReview);
   const nextCheckText = answer.steps[1] ?? null;
   const selectionKey = selectedEdge?.id
     ?? selectedNode?.id
@@ -462,7 +463,7 @@ export function InspectorPanel({
         </InspectorSection>
 
         {hasSelection ? <>
-        {variant === "full" ? <InspectorSection title="직접 연결" count={selectedEdge ? selectedEdgeNodes.length : directEdges.length}>
+        {variant === "full" ? <InspectorSection title="바로 연결" count={selectedEdge ? selectedEdgeNodes.length : directEdges.length}>
         {selectedEdge ? (
           selectedEdgeNodes.length > 0 ? (
             <div className="inspector-edge-endpoints">
@@ -483,7 +484,7 @@ export function InspectorPanel({
               const otherId = outbound ? edge.to : edge.from;
               return (
                 <button
-                  className={isApiCandidateEdge(edge) ? "candidate" : "confirmed"}
+                  className={edgeEvidenceTone(edge)}
                   type="button"
                   onClick={() => visualMapControls.selectEdge(edge)}
                   key={edge.id}
@@ -501,7 +502,7 @@ export function InspectorPanel({
           </div>
         ) : (
           <InspectorEmptyRow>
-            {hasSelection ? "이 대상에 직접 연결된 관계가 없습니다." : "대상을 선택하면 직접 연결만 표시합니다."}
+            {hasSelection ? "이 대상에 바로 연결된 관계가 없습니다." : "대상을 선택하면 한 단계 관계만 표시합니다."}
           </InspectorEmptyRow>
         )}
         </InspectorSection> : null}
@@ -623,7 +624,7 @@ function InspectorTransitionState({ mode, onClose, title }: { mode: string; onCl
         </div>
         {[
           ["요약", 2],
-          ["직접 연결", 3],
+          ["바로 연결", 3],
           ["근거", 2],
           ["소스", 2],
           ["다음 확인", 1],
@@ -664,12 +665,13 @@ function inspectorTransitionSubject(mode: string): string {
 function apiEdgeLabel(edge: VisualEdge): string {
   if (edge.kind === "code_handle") return "HANDLES";
   if (edge.kind === "code_call") return "CALLS";
-  if (isApiCandidateEdge(edge)) return "DB 후보";
+  if (visualEdgeTruthClass(edge) === "candidate") return "DB 후보";
   return edgeKindLabel(edge);
 }
 
-function isApiCandidateEdge(edge: VisualEdge): boolean {
-  return edge.kind.startsWith("candidate");
+function requiresReview(edge: VisualEdge): boolean {
+  const truthClass = visualEdgeTruthClass(edge);
+  return truthClass === "candidate" || truthClass === "inferred";
 }
 
 function uniqueInspectorEvidence<T extends { key: string; text: string }>(items: T[]): T[] {
@@ -730,7 +732,7 @@ function AnswerSummary({ answer }: { answer: InspectorAnswer }) {
 
 function answerVerdict(answer: InspectorAnswer): string {
   if (answer.tone === "confirmed") {
-    return "직접";
+    return "확정";
   }
   if (answer.tone === "candidate") {
     if (answer.metrics.some((metric) => metric.label === "컬럼" && metric.value === "0")) {

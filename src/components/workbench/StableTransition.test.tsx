@@ -36,7 +36,7 @@ describe("stable mode transitions", () => {
 
     expect(screen.getByText("선택한 대상")).toBeInTheDocument();
     expect(screen.getByText("컬럼 변경 영향")).toBeInTheDocument();
-    expect(screen.getByText("직접 연결")).toBeInTheDocument();
+    expect(screen.getByText("바로 연결")).toBeInTheDocument();
     expect(screen.getByText("근거")).toBeInTheDocument();
   });
 
@@ -206,7 +206,7 @@ describe("stable mode transitions", () => {
 
     expect(screen.getAllByText("oldFunction").length).toBeGreaterThan(0);
     expect(Array.from(container.querySelectorAll(".inspector-section > header > strong")).map((node) => node.textContent))
-      .toEqual(["요약", "직접 연결", "근거", "소스", "다음 확인"]);
+      .toEqual(["요약", "바로 연결", "근거", "소스", "다음 확인"]);
   });
 
   it("keeps source actions for a map node omitted from the bounded inventory", () => {
@@ -395,7 +395,7 @@ describe("stable mode transitions", () => {
 
     const headings = Array.from(container.querySelectorAll(".inspector-section > header > strong"))
       .map((node) => node.textContent);
-    expect(headings).toEqual(["요약", "직접 연결", "근거", "소스", "다음 확인"]);
+    expect(headings).toEqual(["요약", "바로 연결", "근거", "소스", "다음 확인"]);
   });
 
   it("collapses repeated empty evidence sections until an analysis target is chosen", () => {

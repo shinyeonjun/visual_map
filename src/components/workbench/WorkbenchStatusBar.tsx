@@ -12,7 +12,7 @@ import {
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import type { CodeInventory } from "../../types/workspace";
 import type { AnalysisCoverage, VisualMap } from "../../types/visual-map";
-import { visualMapModeLabel as modeLabel } from "../../visual/labels";
+import { visualEdgeTruthClass, visualMapModeLabel as modeLabel } from "../../visual/labels";
 import { EngineStatus } from "../common/EngineStatus";
 import { DiagnosticsExport } from "../common/DiagnosticsExport";
 
@@ -199,19 +199,19 @@ function evidenceStatusSummary(
       ? { text: "답 기준 선택", title: `항목 ${map.nodes.length}개 · 카드를 선택하면 파일/컬럼 근거가 표시됩니다.`, tone: "empty" }
       : { text: "대상 대기", title: "코드 또는 DB 항목을 읽으면 선택할 대상이 표시됩니다.", tone: "empty" };
   }
-  const confirmed = edges.filter((edge) => !edge.kind.startsWith("candidate") && edge.kind !== "code_flow" && edge.evidence.length > 0).length;
-  const candidate = edges.filter((edge) => edge.kind.startsWith("candidate")).length;
-  const inferred = edges.filter((edge) => edge.kind === "code_flow").length;
-  const typed = edges.length - confirmed - candidate - inferred;
+  const confirmed = edges.filter((edge) => visualEdgeTruthClass(edge) === "confirmed").length;
+  const typed = edges.filter((edge) => visualEdgeTruthClass(edge) === "structural").length;
+  const candidate = edges.filter((edge) => visualEdgeTruthClass(edge) === "candidate").length;
+  const inferred = edges.filter((edge) => visualEdgeTruthClass(edge) === "inferred").length;
   const text = [
-    confirmed > 0 ? `직접 ${confirmed}` : null,
+    confirmed > 0 ? `확정 ${confirmed}` : null,
     typed > 0 ? `구조 ${typed}` : null,
     candidate > 0 ? `후보 ${candidate}` : null,
     inferred > 0 ? `이름 단서 ${inferred}` : null,
   ].filter(Boolean).join(" · ");
   return {
     text,
-    title: `직접 근거 ${confirmed}개 · 구조 ${typed}개 · 후보 ${candidate}개 · 이름 단서 ${inferred}개 · 직접/구조 우선`,
+    title: `확정 근거 ${confirmed}개 · 구조 ${typed}개 · 후보 ${candidate}개 · 이름 단서 ${inferred}개 · 확정/구조 우선`,
     tone: candidate > 0 || inferred > 0 ? "candidate" : confirmed > 0 || typed > 0 ? "ready" : "empty",
   };
 }
