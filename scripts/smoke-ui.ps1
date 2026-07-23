@@ -488,6 +488,12 @@ __UI_HELPERS__
   const sourceTrigger = await waitFor('.source-manager-trigger');
   sourceTrigger.click();
   const sourceManager = await waitFor('.source-manager');
+  await waitUntil(() => sourceManager.contains(document.activeElement), 'Source manager did not receive focus', 2000);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+  await sleep(80);
+  if (!sourceManager.contains(document.activeElement) || document.activeElement?.id === 'global-inventory-search') {
+    throw new Error('Ctrl+K moved focus behind the source manager');
+  }
   sourceManager.querySelector('.source-manager-header .tool')?.click();
   await waitUntil(() => !document.querySelector('.source-manager'), 'Source manager did not close', 2000);
   assertNoOverflow();

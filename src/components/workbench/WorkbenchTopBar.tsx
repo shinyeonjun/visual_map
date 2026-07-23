@@ -41,7 +41,7 @@ export function WorkbenchTopBar({
     Boolean(dbProfileControls.inventory?.tables.length);
   const searchScope = searchScopeText(workspaceControls.codeInventory, dbProfileControls.inventory);
   const { searchInputRef, queueSearch, flushSearch } = useSearchHotkey(
-    visualMapControls.openSearchPopover,
+    sourceManagerOpen ? undefined : visualMapControls.openSearchPopover,
     visualMapControls.searchQuery,
     visualMapControls.setSearchQuery,
   );

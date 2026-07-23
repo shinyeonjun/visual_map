@@ -17,11 +17,12 @@ export function useSearchHotkey(
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
-        if (!searchInputRef.current) {
+        const open = openSearchRef.current;
+        if (!open || !searchInputRef.current) {
           return;
         }
         event.preventDefault();
-        openSearchRef.current?.();
+        open();
         window.requestAnimationFrame(() => {
           searchInputRef.current?.focus();
           searchInputRef.current?.select();
