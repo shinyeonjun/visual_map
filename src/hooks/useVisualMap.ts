@@ -329,6 +329,7 @@ export function useVisualMap({
     setMapMode(mode);
     clearVisualSelection();
     if (!preserveSearch) {
+      searchRequestRef.current += 1;
       setSearchQueryValue("");
       setSearchPopoverOpen(false);
       setSearchSummary(null);
@@ -470,7 +471,11 @@ export function useVisualMap({
     refreshSearchResults(query, activeContext);
   }
 
-  function refreshSearchResults(query: string, context: SearchContext | null) {
+  function refreshSearchResults(
+    query: string,
+    context: SearchContext | null,
+    onResolved?: (collection: SearchCollection) => void,
+  ) {
     if (!context) {
       setSearchSummary(null);
       setSearchGroups([]);
@@ -489,6 +494,7 @@ export function useVisualMap({
       !currentWorkspaceIdRef.current ||
       !hasTauriRuntime()
     ) {
+      onResolved?.(collection);
       return;
     }
 
@@ -497,11 +503,16 @@ export function useVisualMap({
     void invoke<InventorySearchResult>("search_inventory", { workspaceId, query })
       .then((result) => {
         if (searchRequestRef.current === requestId && currentWorkspaceIdRef.current === workspaceId) {
-          presentSearchCollection(searchCollectionFromInventoryResult(result));
+          const resolved = searchCollectionFromInventoryResult(result);
+          presentSearchCollection(resolved);
+          onResolved?.(resolved);
         }
       })
       .catch(() => {
         // The bounded local index remains usable when a background full search fails.
+        if (searchRequestRef.current === requestId && currentWorkspaceIdRef.current === workspaceId) {
+          onResolved?.(collection);
+        }
       });
   }
 
@@ -514,10 +525,14 @@ export function useVisualMap({
     setSearchGroups(groupSearchResults(collection.results));
   }
 
-  function runSearch({ codeInventory, dbInventory, selectCodeItem, selectDbTable }: SearchContext) {
+  function runSearch(
+    { codeInventory, dbInventory, selectCodeItem, selectDbTable }: SearchContext,
+    submittedValue = searchQuery,
+  ) {
     searchContextRef.current = { codeInventory, dbInventory, selectCodeItem, selectDbTable };
+    setSearchQueryValue(submittedValue);
     setSearchPopoverOpen(true);
-    const query = searchQuery.trim().toLowerCase();
+    const query = submittedValue.trim().toLowerCase();
     if (!query) {
       setSearchSummary(`검색어를 입력하면 ${searchScopeText(codeInventory, dbInventory)}을 함께 찾습니다.`);
       setSearchGroups([]);
@@ -529,7 +544,12 @@ export function useVisualMap({
     }
 
     if ((codeInventory?.partial || dbInventory?.partial) && currentWorkspaceIdRef.current && hasTauriRuntime()) {
-      refreshSearchResults(query, searchContextRef.current);
+      refreshSearchResults(query, searchContextRef.current, (collection) => {
+        const firstResult = groupSearchResults(collection.results)[0]?.results[0] ?? null;
+        if (firstResult) {
+          selectSearchResult(firstResult);
+        }
+      });
       if (mapMode !== "composition") {
         showMapMode("search-focus", null, true);
       }
@@ -575,6 +595,8 @@ export function useVisualMap({
   }
 
   function selectSearchResult(result: SearchResult) {
+    const input = document.querySelector<HTMLInputElement>("#global-inventory-search");
+    if (input) input.value = "";
     if (mapMode === "composition" && compositionSearchResultIsSupported(result)) {
       setSearchQueryValue("");
       setSearchPopoverOpen(false);
@@ -614,6 +636,7 @@ export function useVisualMap({
   }
 
   function closeSearchPopover() {
+    searchRequestRef.current += 1;
     setSearchPopoverOpen(false);
   }
 

@@ -40,7 +40,7 @@ export function WorkbenchTopBar({
     codeInventoryItemCount(workspaceControls.codeInventory) > 0 ||
     Boolean(dbProfileControls.inventory?.tables.length);
   const searchScope = searchScopeText(workspaceControls.codeInventory, dbProfileControls.inventory);
-  const { searchInputRef, queueSearch, flushSearch } = useSearchHotkey(
+  const { searchInputRef, queueSearch, cancelQueuedSearch, flushSearch } = useSearchHotkey(
     sourceManagerOpen ? undefined : visualMapControls.openSearchPopover,
     visualMapControls.searchQuery,
     visualMapControls.setSearchQuery,
@@ -113,7 +113,9 @@ export function WorkbenchTopBar({
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 if (event.currentTarget.value !== visualMapControls.searchQuery) {
-                  flushSearch(event.currentTarget.value);
+                  const value = event.currentTarget.value;
+                  cancelQueuedSearch();
+                  visualMapControls.runSearch(value);
                   return;
                 }
                 const firstResult = visualMapControls.searchGroups[0]?.results[0];
