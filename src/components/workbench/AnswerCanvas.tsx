@@ -29,6 +29,7 @@ import {
   codeInventoryCodeItems,
   codeInventoryItemCount,
   dbInventoryTableCount,
+  dbProfileSourceLabel,
   routeDisplayName,
   routeMethodFromIdentity,
 } from "../../types/workspace";
@@ -55,6 +56,7 @@ export function AnswerCanvas({
     : visualMapControls.mode;
   const committedFocus = answerFocusId(visualMapControls);
   const hasTarget = ANSWER_MODES.has(visibleMode) && Boolean(committedFocus);
+  const analysisBasis = dbAnalysisBasis(dbProfileControls);
 
   if (visualMapControls.loading && !visualMapControls.currentMap && visualMapControls.focusId) {
     return <AnswerLoading mode={visualMapControls.mode} />;
@@ -91,11 +93,12 @@ export function AnswerCanvas({
         onOpenSources={onOpenSources}
       />
       {visibleMode === "api-flow" && map?.apiReading ? (
-        <ApiAnswer map={map} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
+        <ApiAnswer analysisBasis={analysisBasis} map={map} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
       ) : (visibleMode === "table-usage" || visibleMode === "column-impact") && map?.reviewBoard ? (
-        <ImpactAnswer map={map} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
+        <ImpactAnswer analysisBasis={analysisBasis} map={map} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
       ) : (
         <CodeAnswer
+          analysisBasis={analysisBasis}
           focusId={committedFocus!}
           map={map}
           workspaceControls={workspaceControls}
@@ -161,10 +164,12 @@ function AnswerHome({
 }
 
 function ApiAnswer({
+  analysisBasis,
   map,
   visualMapControls,
   onOpenEvidence,
 }: {
+  analysisBasis: string;
   map: VisualMap;
   visualMapControls: VisualMapControls;
   onOpenEvidence: () => void;
@@ -193,6 +198,7 @@ function ApiAnswer({
         kicker="API 처리 흐름"
         title={subject}
         context={routeDefinition ? `라우트 정의 · ${routeDefinition}` : null}
+        analysisBasis={analysisBasis}
         conclusion={conclusion}
         confirmed={confirmedCount}
         structural={structuralCount}
@@ -258,10 +264,12 @@ function ApiAnswer({
 }
 
 function ImpactAnswer({
+  analysisBasis,
   map,
   visualMapControls,
   onOpenEvidence,
 }: {
+  analysisBasis: string;
   map: VisualMap;
   visualMapControls: VisualMapControls;
   onOpenEvidence: () => void;
@@ -297,6 +305,7 @@ function ImpactAnswer({
         icon={tableUsage ? <Table2 size={18} /> : <Database size={18} />}
         kicker={tableUsage ? "테이블 연결과 사용 위치" : "컬럼 변경 영향"}
         title={subject}
+        analysisBasis={analysisBasis}
         conclusion={conclusion}
         confirmed={confirmedCount}
         structural={structuralCount}
@@ -369,12 +378,14 @@ function ImpactAnswer({
 }
 
 function CodeAnswer({
+  analysisBasis,
   focusId,
   map,
   workspaceControls,
   visualMapControls,
   onOpenEvidence,
 }: {
+  analysisBasis: string;
   focusId: string;
   map: VisualMap | null;
   workspaceControls: WorkspaceControls;
@@ -406,6 +417,7 @@ function CodeAnswer({
         icon={<Code2 size={18} />}
         kicker="코드 호출 경로"
         title={title}
+        analysisBasis={analysisBasis}
         conclusion={conclusion}
         confirmed={confirmed.length}
         structural={structural.length}
@@ -447,6 +459,7 @@ function AnswerHeader({
   kicker,
   title,
   context,
+  analysisBasis,
   conclusion,
   confirmed,
   confirmedLabel = "확정",
@@ -459,6 +472,7 @@ function AnswerHeader({
   kicker: string;
   title: string;
   context?: string | null;
+  analysisBasis: string;
   conclusion: string;
   confirmed: number;
   confirmedLabel?: string;
@@ -475,6 +489,7 @@ function AnswerHeader({
           <span>{kicker}</span>
           <h1>{title}</h1>
           {context ? <code className="answer-header-context">{context}</code> : null}
+          <small className="answer-header-basis">{analysisBasis}</small>
           <p>{conclusion}</p>
         </div>
       </div>
@@ -757,6 +772,18 @@ function answerFocusId(controls: VisualMapControls): string | null {
 
 function validAnswerFocus(value: string | null | undefined): value is string {
   return Boolean(value && value !== "narrow-focus" && value !== "overview" && !value.startsWith("group:"));
+}
+
+function dbAnalysisBasis(controls: DbProfileControls): string {
+  const profile = controls.activeProfile;
+  if (controls.inventory) {
+    return profile
+      ? `DB 기준 · ${profile.name} · ${dbProfileSourceLabel(profile.source)}`
+      : "DB 기준 · 저장된 구조";
+  }
+  return profile
+    ? `DB 기준 · ${profile.name} · ${dbProfileSourceLabel(profile.source)} · 읽기 전`
+    : "DB 기준 · 미연결";
 }
 
 function selectReviewNode(nodeId: string | null | undefined, map: VisualMap, controls: VisualMapControls) {
