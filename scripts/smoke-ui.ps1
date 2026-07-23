@@ -482,6 +482,11 @@ __UI_HELPERS__
   if (!restoredTarget || restoredTarget.getAttribute('aria-current') !== 'true') {
     throw new Error('Restored target is not marked current');
   }
+  const answerStatus = await waitFor('.workbench-answer-status');
+  await waitUntil(
+    () => answerStatus.getAttribute('data-state') === 'ready' && Boolean(answerStatus.textContent?.trim()),
+    'Committed answer was not announced',
+  );
   const switcherAfter = switcher.getBoundingClientRect();
   const switcherShift = Math.max(
     Math.abs(switcherBefore.left - switcherAfter.left),
@@ -541,6 +546,10 @@ __UI_HELPERS__
     3000,
   );
   await waitForIdle();
+  await waitUntil(
+    () => answerStatus.getAttribute('data-state') === 'ready' && Boolean(answerStatus.textContent?.trim()),
+    'Search result answer was not announced',
+  );
 
   const sourceTrigger = await waitFor('.source-manager-trigger');
   sourceTrigger.click();
@@ -554,7 +563,7 @@ __UI_HELPERS__
   sourceManager.querySelector('.source-manager-header .tool')?.click();
   await waitUntil(() => !document.querySelector('.source-manager'), 'Source manager did not close', 2000);
   assertNoOverflow();
-  return { ok: true, labels: ['surfaces:2', 'advanced-modes:2', 'tabs:keyboard', 'targets:roving', 'target:restored', 'switcher:fixed', 'evidence:stable', 'search:single-enter'] };
+  return { ok: true, labels: ['surfaces:2', 'advanced-modes:2', 'tabs:keyboard', 'targets:roving', 'target:restored', 'switcher:fixed', 'evidence:stable', 'search:single-enter', 'answer:announced'] };
 })()
 '@
 

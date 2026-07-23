@@ -13,6 +13,19 @@ select:focus-visible {
 h2, h3 { margin: 0; }
 code, pre { font-family: var(--mono); }
 
+.workbench-answer-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

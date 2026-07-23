@@ -120,12 +120,16 @@ describe("WorkbenchView surface transitions", () => {
     render(<Harness />);
 
     expect(screen.getByTestId("answer-surface")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("답 준비 완료: GET /orders");
+    expect(screen.getByRole("status")).toHaveAttribute("data-state", "ready");
     fireEvent.click(screen.getByRole("button", { name: "전체 구조 요청" }));
 
     expect(showMode).toHaveBeenLastCalledWith("atlas", null);
     expect(screen.getByTestId("requested-surface")).toHaveTextContent("advanced");
     expect(screen.getByTestId("answer-surface")).toBeInTheDocument();
     expect(screen.queryByTestId("advanced-surface")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+    expect(screen.getByRole("status")).toHaveAttribute("data-state", "idle");
 
     fireEvent.click(screen.getByRole("button", { name: "전체 구조 커밋" }));
     await waitFor(() => expect(screen.getByTestId("advanced-surface")).toBeInTheDocument());
@@ -134,9 +138,13 @@ describe("WorkbenchView surface transitions", () => {
     expect(showMode).toHaveBeenLastCalledWith("api-flow", "code:route-orders");
     expect(screen.getByTestId("requested-surface")).toHaveTextContent("answers");
     expect(screen.getByTestId("advanced-surface")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("선택한 대상 분석 중");
+    expect(screen.getByRole("status")).toHaveAttribute("data-state", "loading");
 
     fireEvent.click(screen.getByRole("button", { name: "답 커밋" }));
     await waitFor(() => expect(screen.getByTestId("answer-surface")).toBeInTheDocument());
+    expect(screen.getByRole("status")).toHaveTextContent("답 준비 완료: GET /orders");
+    expect(screen.getByRole("status")).toHaveAttribute("data-state", "ready");
   });
 
   it("opens the evidence drawer without selecting the focused node", () => {
@@ -235,7 +243,13 @@ function map(mode: string, focus: string): VisualMap {
     workspaceId: "workspace-1",
     mode,
     focus,
-    nodes: [],
+    nodes: [{
+      id: focus,
+      kind: mode === "api-flow" ? "api" : "target",
+      title: focus === "code:route-orders" ? "GET /orders" : focus,
+      layer: "code",
+      source: "test",
+    }],
     edges: [],
     warnings: [],
   };
