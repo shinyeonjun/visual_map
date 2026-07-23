@@ -272,7 +272,7 @@ export function InspectorPanel({
       </div>
       {visualMapControls.loading ? <InspectorUpdating /> : null}
       <div className="inspector-scroll-body">
-        <InspectorSection title="요약">
+        <InspectorSection title={variant === "answer" ? "선택" : "요약"}>
         <AnswerSummary answer={answer} />
         {hasSelection && (
           <details className="inspector-details" key={selectionKey}>
