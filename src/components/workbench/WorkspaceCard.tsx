@@ -119,7 +119,7 @@ export function WorkspaceCard({ workspaceControls }: { workspaceControls: Worksp
       )}
     </>
   );
-  const showWorkspaceList = hasSavedWorkspaces && (!currentWorkspaceMatchesForm || workspaceControls.workspaces.length > 1);
+  const showWorkspaceList = hasSavedWorkspaces && (!workspaceControls.currentWorkspace || workspaceControls.workspaces.length > 1);
 
   useEffect(() => {
     if (workspaceControls.error) {
@@ -130,7 +130,7 @@ export function WorkspaceCard({ workspaceControls }: { workspaceControls: Worksp
   return (
     <section className="side-card workspace-source">
       <PanelHeader icon={<Folder size={16} />} title="프로젝트" />
-      {currentWorkspaceMatchesForm ? (
+      {workspaceControls.currentWorkspace ? (
         <>
           <div className="source-next workspace-ready">
             <span>
@@ -175,7 +175,16 @@ export function WorkspaceCard({ workspaceControls }: { workspaceControls: Worksp
               <small>로컬 변경이 없을 때만 최신 커밋을 받고 코드를 다시 읽습니다.</small>
             </div>
           )}
-          <details className="source-advanced">
+          <details
+            className="source-advanced"
+            key={`${workspaceControls.currentWorkspace.id}:new`}
+            onToggle={(event) => {
+              if (!event.currentTarget.open || !currentWorkspaceMatchesForm) return;
+              workspaceControls.setRepoSourceMode("local");
+              workspaceControls.setRepoPath("");
+              workspaceControls.setWorkspaceName("");
+            }}
+          >
             <summary>다른 프로젝트 열기</summary>
             {setupFields}
           </details>
