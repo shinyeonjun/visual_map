@@ -34,6 +34,7 @@ export type WorkspaceControls = {
   refreshing: boolean;
   deleting: boolean;
   codeIndexing: boolean;
+  restoringSnapshot: boolean;
   canIndexCode: boolean;
   codeIndexBlockedReason: string | null;
   canCreateWorkspace: boolean;

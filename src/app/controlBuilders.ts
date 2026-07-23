@@ -80,6 +80,7 @@ export function buildWorkspaceControls({
     refreshing: busyAction === "workspace-refresh",
     deleting: busyAction === "workspace-delete",
     codeIndexing: busyAction === "code-index",
+    restoringSnapshot: busyAction === "snapshot-restore",
     canIndexCode: !codeIndexBlockedReason,
     codeIndexBlockedReason,
     canCreateWorkspace: Boolean(
