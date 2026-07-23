@@ -88,6 +88,12 @@ const INSPECTOR_STRATEGY_LABELS: Record<string, string> = {
   unique_name: "고유 이름 일치",
 };
 
+const INSPECTOR_ENGINE_EDGE_LABELS: Record<string, string> = {
+  "codebase-memory CALLS": "코드 엔진에서 호출 관계를 확인했습니다.",
+  "codebase-memory HANDLES: upstream handler→route was normalized to product route→handler":
+    "코드 엔진의 핸들러→라우트 관계를 제품의 라우트→핸들러 읽기 방향으로 정규화했습니다.",
+};
+
 export function InspectorPanel({
   onClose,
   title = "선택한 대상",
@@ -551,11 +557,23 @@ export function InspectorPanel({
 
         <InspectorSection title="근거" count={evidenceItems.length > 6 ? `6/${evidenceItems.length}` : evidenceItems.length}>
         {evidenceItems.length > 0 ? (
-          <div className="inspector-evidence-list">
-            {evidenceItems.slice(0, 6).map((item) => (
-              <span className={item.tone} key={item.key}>{item.text}</span>
-            ))}
-          </div>
+          <>
+            <div className="inspector-evidence-list">
+              {evidenceItems.slice(0, 6).map((item) => (
+                <span className={item.tone} key={item.key}>{item.text}</span>
+              ))}
+            </div>
+            {evidenceItems.length > 6 ? (
+              <details className="inspector-details" key={`${selectionKey}:evidence`}>
+                <summary>{evidenceItems.length - 6}개 더 보기</summary>
+                <div className="inspector-evidence-list">
+                  {evidenceItems.slice(6).map((item) => (
+                    <span className={item.tone} key={item.key}>{item.text}</span>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+          </>
         ) : (
           <InspectorEmptyRow>
             {hasSelection ? "이 대상에 저장된 직접 근거가 없습니다." : "대상을 선택하면 근거와 판정 수준을 표시합니다."}
@@ -731,8 +749,8 @@ function inspectorEvidenceText(kind: string, text: string): string {
     ? INSPECTOR_CONFIDENCE_LABELS[text] ?? text
     : kind === "engine-strategy"
       ? INSPECTOR_STRATEGY_LABELS[text] ?? text
-      : kind === "engine-edge" && text === "codebase-memory CALLS"
-        ? "코드 엔진에서 호출 관계를 확인했습니다."
+      : kind === "engine-edge"
+        ? INSPECTOR_ENGINE_EDGE_LABELS[text] ?? text
         : text;
   return `${INSPECTOR_EVIDENCE_LABELS[kind] ?? "근거"}: ${value}`;
 }

@@ -507,6 +507,10 @@ describe("stable mode transitions", () => {
       { kind: "engine-confidence-score", text: "95%" },
       { kind: "engine-edge", text: "codebase-memory CALLS" },
       { kind: "engine-strategy", text: "lsp_direct" },
+      {
+        kind: "engine-edge",
+        text: "codebase-memory HANDLES: upstream handler→route was normalized to product route→handler",
+      },
     ];
 
     render(
@@ -523,7 +527,14 @@ describe("stable mode transitions", () => {
     expect(screen.getByText("신뢰 점수: 95%")).toBeInTheDocument();
     expect(screen.getByText("관계 근거: 코드 엔진에서 호출 관계를 확인했습니다.")).toBeInTheDocument();
     expect(screen.getByText("분석 방식: LSP 직접 확인")).toBeInTheDocument();
-    expect(screen.queryByText(/lsp_direct|codebase-memory CALLS|근거: high/)).not.toBeInTheDocument();
+    const moreEvidence = screen.getByText("1개 더 보기").closest("details");
+    expect(moreEvidence).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("1개 더 보기"));
+    expect(moreEvidence).toHaveAttribute("open");
+    expect(screen.getByText(
+      "관계 근거: 코드 엔진의 핸들러→라우트 관계를 제품의 라우트→핸들러 읽기 방향으로 정규화했습니다.",
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/lsp_direct|codebase-memory (CALLS|HANDLES)|근거: high/)).not.toBeInTheDocument();
   });
 });
 
