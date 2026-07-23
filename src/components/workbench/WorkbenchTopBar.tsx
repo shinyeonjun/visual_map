@@ -80,22 +80,15 @@ export function WorkbenchTopBar({
         <ChevronDown size={13} />
       </label>
 
-      <button
+      <span
         className={`source-freshness ${freshness.tone}`}
-        type="button"
-        title={`${freshness.detail} · 소스 관리 열기`}
-        disabled={!workspaceControls.initialized}
-        onClick={() => {
-          if (hasWorkspace) {
-            onToggleSourceManager();
-          } else {
-            document.querySelector<HTMLInputElement>("#workspace-repo-input")?.focus();
-          }
-        }}
+        role="status"
+        aria-label={`${freshness.label}: ${freshness.detail}`}
+        title={freshness.detail}
       >
         <FreshnessIcon size={14} className={freshness.spin ? "spin" : undefined} />
         <span>{freshness.label}</span>
-      </button>
+      </span>
 
       <div
         className={`search-shell product-search ${hasInventory ? "" : "disabled"}`}

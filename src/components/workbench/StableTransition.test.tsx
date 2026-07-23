@@ -235,7 +235,7 @@ describe("stable mode transitions", () => {
     expect(screen.getByRole("button", { name: "Cursor" })).toBeInTheDocument();
   });
 
-  it("opens source management from the stale source status", () => {
+  it("keeps source status informational and source management explicit", () => {
     const onToggleSourceManager = vi.fn();
     render(
       <WorkbenchTopBar
@@ -264,7 +264,13 @@ describe("stable mode transitions", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "다시 읽기 필요" }));
+    expect(screen.getByRole("status", { name: /다시 읽기 필요/ })).toHaveAttribute(
+      "title",
+      "코드 파일이 마지막 읽기 이후 바뀌었습니다",
+    );
+    expect(screen.queryByRole("button", { name: "다시 읽기 필요" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "소스 관리" }));
 
     expect(onToggleSourceManager).toHaveBeenCalledOnce();
   });
