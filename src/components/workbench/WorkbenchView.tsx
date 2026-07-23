@@ -58,8 +58,25 @@ export function WorkbenchView({
   const visibleMode = visualMapControls.loading && visualMapControls.currentMap
     ? visualMapControls.currentMap.mode
     : visualMapControls.mode;
+  const committedAnswerFocus = answerFocusId(visualMapControls);
   const answerHasTarget = ["api-flow", "search-focus", "table-usage", "column-impact"].includes(visibleMode)
-    && Boolean(answerFocusId(visualMapControls));
+    && Boolean(committedAnswerFocus);
+  const answerSurfaceRequested = workspaceReady && (pendingSurface ?? surface) === "answers";
+  const answerLoading =
+    answerSurfaceRequested &&
+    visualMapControls.loading &&
+    Boolean(targetKindForMode(visualMapControls.mode)) &&
+    Boolean(validAnswerFocus(visualMapControls.focusId));
+  const answerReady =
+    answerSurfaceRequested &&
+    !visualMapControls.loading &&
+    answerHasTarget &&
+    Boolean(committedAnswerFocus);
+  const answerStatus = answerLoading
+    ? "선택한 대상 분석 중"
+    : answerReady && committedAnswerFocus
+      ? `답 준비 완료: ${answerTargetTitle(visualMapControls, committedAnswerFocus)}`
+      : "";
 
   useLayoutEffect(() => {
     lastAnswerRef.current = null;
@@ -156,6 +173,15 @@ export function WorkbenchView({
         dbProfileControls={dbProfileControls}
         visualMapControls={visualMapControls}
       />
+      <p
+        className="workbench-answer-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-state={answerLoading ? "loading" : answerReady ? "ready" : "idle"}
+      >
+        {answerStatus}
+      </p>
       <div className={`workspace product-workspace ${workspaceReady ? "" : "is-single-column"} ${showInspector ? "has-inspector" : ""} ${inspectorVisible ? "inspector-visible" : ""}`}>
         {workspaceReady ? <aside className="product-navigation" aria-label="주요 탐색">
           {surface === "advanced" ? (
@@ -334,6 +360,14 @@ function answerFocusId(visualMapControls: VisualMapControls): string | null {
 
 function validAnswerFocus(value: string | null | undefined): string | null {
   return value && value !== "narrow-focus" && value !== "overview" && !value.startsWith("group:") ? value : null;
+}
+
+function answerTargetTitle(visualMapControls: VisualMapControls, focusId: string): string {
+  const map = visualMapControls.currentMap;
+  return map?.nodes.find((node) => node.id === focusId)?.title
+    ?? map?.apiReading?.subject
+    ?? map?.reviewBoard?.subject
+    ?? focusId.replace(/^(?:code|db):/, "");
 }
 
 function surfaceForMode(mode: string): "answers" | "advanced" | null {
