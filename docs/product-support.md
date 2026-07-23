@@ -62,6 +62,8 @@ Recognized method calls must use a bounded DB receiver name such as
 forms include Dapper query/execute methods, EF Core raw-SQL methods, Spring
 `JdbcTemplate`, and SQLAlchemy `session.execute(text("..."))`. Generic
 receivers such as `logger.raw` never become confirmed evidence.
+C# verbatim strings and Rust raw strings count as static literals; interpolated
+or tagged strings do not.
 
 Composite statements separate their targets: `INSERT ... SELECT`,
 `UPDATE ... FROM`, `DELETE ... USING`, and `MERGE ... USING` write the target
