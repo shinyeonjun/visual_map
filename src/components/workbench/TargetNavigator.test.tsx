@@ -77,6 +77,39 @@ describe("TargetNavigator", () => {
     expect(onOpenRelations).toHaveBeenCalledOnce();
   });
 
+  it("moves target kinds with the tab keyboard convention", () => {
+    render(
+      <TargetNavigator
+        workspaceControls={workspaceControls()}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={visualControls(vi.fn())}
+        onSelectTarget={vi.fn()}
+        onOpenDatabase={vi.fn()}
+        onOpenRelations={vi.fn()}
+      />,
+    );
+
+    const api = screen.getByRole("tab", { name: /API/ });
+    const code = screen.getByRole("tab", { name: /코드/ });
+    const column = screen.getByRole("tab", { name: /컬럼/ });
+    Object.defineProperty(screen.getByRole("tabpanel"), "scrollTo", { value: vi.fn() });
+    api.focus();
+
+    fireEvent.keyDown(api, { key: "ArrowRight" });
+    expect(code).toHaveFocus();
+    expect(code).toHaveAttribute("aria-selected", "true");
+    expect(code).toHaveAttribute("tabindex", "0");
+
+    fireEvent.keyDown(code, { key: "End" });
+    expect(column).toHaveFocus();
+    expect(column).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(column, { key: "Home" });
+    expect(api).toHaveFocus();
+    expect(api).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "target-kind-api");
+  });
+
   it("bounds each code role by default but searches the full inventory", () => {
     const workspace = workspaceControls();
     workspace.codeInventory!.handlers = codeItems("handler", 20);

@@ -398,6 +398,19 @@ $stableNavigationExpression = Add-UiHelpers @'
 __UI_HELPERS__
   assertSurfaceControls();
   const selected = await selectTarget('code', ['load_order', 'loadOrder']);
+  const codeTab = await waitFor('button[data-target-kind="code"]');
+  const tableTab = await waitFor('button[data-target-kind="table"]');
+  codeTab.focus();
+  codeTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  await waitUntil(
+    () => tableTab.getAttribute('aria-selected') === 'true' && document.activeElement === tableTab,
+    'Target tabs did not move right with the keyboard',
+  );
+  tableTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+  await waitUntil(
+    () => codeTab.getAttribute('aria-selected') === 'true' && document.activeElement === codeTab,
+    'Target tabs did not move left with the keyboard',
+  );
   const switcher = await waitFor('.product-view-switch');
   const switcherBefore = switcher.getBoundingClientRect();
   const workspace = await waitFor('.product-workspace');
@@ -497,7 +510,7 @@ __UI_HELPERS__
   sourceManager.querySelector('.source-manager-header .tool')?.click();
   await waitUntil(() => !document.querySelector('.source-manager'), 'Source manager did not close', 2000);
   assertNoOverflow();
-  return { ok: true, labels: ['surfaces:2', 'advanced-modes:2', 'target:restored', 'switcher:fixed', 'evidence:stable'] };
+  return { ok: true, labels: ['surfaces:2', 'advanced-modes:2', 'tabs:keyboard', 'target:restored', 'switcher:fixed', 'evidence:stable'] };
 })()
 '@
 

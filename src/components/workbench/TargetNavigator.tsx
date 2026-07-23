@@ -7,7 +7,7 @@ import {
   Search,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { ComponentType } from "react";
+import type { ComponentType, KeyboardEvent } from "react";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import { codeInventoryCodeItems } from "../../types/workspace";
 import {
@@ -112,9 +112,13 @@ export function TargetNavigator({
             className={kind === targetKind ? "active" : ""}
             type="button"
             role="tab"
+            id={`target-kind-${targetKind}`}
             data-target-kind={targetKind}
             aria-selected={kind === targetKind}
+            aria-controls="target-list-panel"
+            tabIndex={kind === targetKind ? 0 : -1}
             title={`${label}: ${description}`}
+            onKeyDown={moveTargetKind}
             onClick={() => {
               kindChosenRef.current = true;
               setKind(targetKind);
@@ -144,7 +148,13 @@ export function TargetNavigator({
         />
       </label>
 
-      <div className="target-list" ref={listRef} role="tabpanel">
+      <div
+        className="target-list"
+        id="target-list-panel"
+        ref={listRef}
+        role="tabpanel"
+        aria-labelledby={`target-kind-${kind}`}
+      >
         {items.map((item, index) => {
           const active = committedFocus === item.focusId && visibleMode === item.mode;
           const pending = visualMapControls.loading && visualMapControls.focusId === item.focusId && !active;
@@ -212,6 +222,26 @@ export function TargetNavigator({
       </footer>
     </section>
   );
+}
+
+function moveTargetKind(event: KeyboardEvent<HTMLButtonElement>) {
+  const tabs = Array.from(
+    event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [],
+  );
+  const currentIndex = tabs.indexOf(event.currentTarget);
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? tabs.length - 1
+      : event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? (currentIndex + 1) % tabs.length
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? (currentIndex - 1 + tabs.length) % tabs.length
+          : -1;
+  if (currentIndex < 0 || nextIndex < 0) return;
+  event.preventDefault();
+  tabs[nextIndex]?.focus();
+  tabs[nextIndex]?.click();
 }
 
 function visibleTargetItems(items: ReturnType<typeof buildTargetCatalog>[TargetKind], kind: TargetKind, hasQuery: boolean) {
