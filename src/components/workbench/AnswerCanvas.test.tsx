@@ -13,6 +13,7 @@ describe("AnswerCanvas", () => {
     expect(container.querySelector(".answer-canvas")).toHaveAttribute("data-answer-mode", "api-flow");
     expect(container.querySelector(".answer-canvas")).toHaveAttribute("data-answer-focus", "code:route-orders");
     expect(screen.getByRole("heading", { name: "DELETE /api/orders" })).toBeInTheDocument();
+    expect(screen.getByText("라우트 정의 · src/routes.ts:12")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 2, name: "처리 흐름" })).toBeInTheDocument();
     expect(screen.getByText("loadOrders")).toBeInTheDocument();
     expect(container.querySelector(".answer-candidates")).not.toHaveAttribute("open");
