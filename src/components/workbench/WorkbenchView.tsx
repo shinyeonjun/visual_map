@@ -228,8 +228,8 @@ export function WorkbenchView({
                 </div>
                 <div>
                   <FileSearch size={21} />
-                  <strong>대상을 선택하세요</strong>
-                  <span>확정 근거, 확인할 후보, 파일 위치가 여기에 표시됩니다.</span>
+                  <strong>선택 전</strong>
+                  <span>대상을 고르면 확정 근거, 후보, 파일 위치가 표시됩니다.</span>
                 </div>
               </section>
             )}

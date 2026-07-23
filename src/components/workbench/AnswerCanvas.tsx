@@ -14,7 +14,7 @@ import {
   Table2,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import type {
@@ -33,7 +33,6 @@ import {
 } from "../../types/workspace";
 import { visualEdgeKindLabel } from "../../visual/labels";
 import { columnRefFromNodeId, dbTableIdentityLabel, tableKeyFromDbNodeId } from "../../visual/nodeIds";
-import { buildTargetCatalog, type TargetItem } from "./targetModel";
 
 const ANSWER_MODES = new Set(["api-flow", "search-focus", "table-usage", "column-impact"]);
 
@@ -115,11 +114,6 @@ function AnswerHome({
   visualMapControls: VisualMapControls;
   onOpenSources: () => void;
 }) {
-  const catalog = useMemo(
-    () => buildTargetCatalog(workspaceControls.codeInventory, dbProfileControls.inventory),
-    [workspaceControls.codeInventory, dbProfileControls.inventory],
-  );
-  const suggestions = balancedSuggestions(catalog);
   const hasInventory = codeInventoryItemCount(workspaceControls.codeInventory) > 0 || dbInventoryTableCount(dbProfileControls.inventory) > 0;
 
   return (
@@ -148,33 +142,7 @@ function AnswerHome({
         </button>
       </section>
 
-      {suggestions.length > 0 ? (
-        <section className="answer-home-section" aria-labelledby="answer-suggestions-title">
-          <header>
-            <span>
-              <strong id="answer-suggestions-title">빠른 시작</strong>
-              <small>대상 종류별로 하나씩 바로 열어보기</small>
-            </span>
-          </header>
-          <div className="answer-suggestions">
-            {suggestions.map((item) => (
-              <button
-                type="button"
-                onClick={() => visualMapControls.showMode(item.mode, item.focusId)}
-                key={item.id}
-              >
-                <TargetIcon kind={item.kind} />
-                <span>
-                  <small>{targetAnswerLabel(item)}</small>
-                  <strong>{item.title}</strong>
-                  <em>{item.meta}</em>
-                </span>
-                <ChevronRight size={16} />
-              </button>
-            ))}
-          </div>
-        </section>
-      ) : (
+      {!hasInventory ? (
         <section className="answer-empty-source">
           <FileSearch size={22} />
           <span>
@@ -183,7 +151,7 @@ function AnswerHome({
           </span>
           <button type="button" onClick={onOpenSources}>소스 연결</button>
         </section>
-      )}
+      ) : null}
     </main>
   );
 }
@@ -744,36 +712,6 @@ function answerFocusId(controls: VisualMapControls): string | null {
 
 function validAnswerFocus(value: string | null | undefined): value is string {
   return Boolean(value && value !== "narrow-focus" && value !== "overview" && !value.startsWith("group:"));
-}
-
-function balancedSuggestions(catalog: ReturnType<typeof buildTargetCatalog>): TargetItem[] {
-  const groups = [catalog.api, catalog.table, catalog.code, catalog.column];
-  const result: TargetItem[] = [];
-  for (let round = 0; result.length < 4; round += 1) {
-    let added = false;
-    for (const group of groups) {
-      if (group[round] && result.length < 4) {
-        result.push(group[round]);
-        added = true;
-      }
-    }
-    if (!added) break;
-  }
-  return result;
-}
-
-function TargetIcon({ kind }: { kind: TargetItem["kind"] }) {
-  if (kind === "api") return <Braces size={17} />;
-  if (kind === "table") return <Database size={17} />;
-  if (kind === "column") return <Table2 size={17} />;
-  return <Code2 size={17} />;
-}
-
-function targetAnswerLabel(item: TargetItem): string {
-  if (item.kind === "api") return "처리 흐름";
-  if (item.kind === "table") return "사용 위치";
-  if (item.kind === "column") return "변경 영향";
-  return "호출 경로";
 }
 
 function selectReviewNode(nodeId: string | null | undefined, map: VisualMap, controls: VisualMapControls) {
