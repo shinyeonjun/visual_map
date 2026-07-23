@@ -107,10 +107,6 @@ function App() {
           return;
         }
         const { snapshot, summary } = bootstrap;
-        if (snapshot.staleReasons?.length) {
-          visual.noteSnapshotLoaded(snapshot);
-          return;
-        }
         visual.noteSnapshotLoaded(snapshot);
 
         const restoredCode = codeInventoryFromSnapshot(snapshot, workspace.codeProject ?? workspace.name, summary);

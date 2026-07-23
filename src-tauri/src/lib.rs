@@ -13,6 +13,7 @@ use engine::{EngineRegistry, EngineRuntimeMode};
 use paths::{base_paths, ensure_base_dirs, migrate_roaming_data_to_local, AppPaths};
 use source::{OpenSourceLocationRequest, RevealSourceLocationRequest, SourceActionResult};
 use std::{
+    borrow::Cow,
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
@@ -254,18 +255,8 @@ fn search_inventory(
     query: String,
 ) -> CommandResult<atlas::InventorySearchResult> {
     let app_data_dir = app_data_dir(&app)?;
-    let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
-    let registry = get_engine_availability(app)?;
     let snapshot = atlas::load_inventory_snapshot_cached(&app_data_dir, &workspace_id)
         .map_err(|error| format!("검색하려면 먼저 코드/DB 읽기 결과가 필요합니다: {error}"))?;
-    let stale_reasons = atlas::snapshot_staleness_reasons_cached(&snapshot, &workspace, &registry);
-    if !stale_reasons.is_empty() {
-        return Err(format!(
-            "코드/DB 읽기 결과가 최신이 아닙니다: {}",
-            stale_reasons.join(", ")
-        )
-        .into());
-    }
     Ok(atlas::search_inventory(&snapshot, &query))
 }
 
@@ -301,13 +292,15 @@ fn get_visual_map(
     let snapshot = atlas::load_inventory_snapshot_cached(&app_data_dir, &workspace_id)
         .map_err(|error| format!("캔버스를 보려면 먼저 코드/DB 읽기 결과가 필요합니다: {error}"))?;
     let stale_reasons = atlas::snapshot_staleness_reasons_cached(&snapshot, &workspace, &registry);
-    if !stale_reasons.is_empty() {
-        return Err(format!(
-            "코드/DB 읽기 결과가 최신이 아닙니다: {}",
-            stale_reasons.join(", ")
-        )
-        .into());
-    }
+    let snapshot_is_stale = !stale_reasons.is_empty();
+    let snapshot = if snapshot_is_stale {
+        let mut stale_snapshot = (*snapshot).clone();
+        stale_snapshot.stale_reasons = stale_reasons;
+        Cow::Owned(stale_snapshot)
+    } else {
+        Cow::Borrowed(snapshot.as_ref())
+    };
+    let allow_live_evidence = enrich_code_evidence.unwrap_or(false) && !snapshot_is_stale;
     let change_intent = normalized_change_intent(change_intent)?;
 
     if mode == "composition" {
@@ -317,7 +310,7 @@ fn get_visual_map(
             .relation_view
             .unwrap_or_else(|| "connections".to_string());
         atlas::validate_composition_request(&snapshot, &focus_ids, &relation_view)?;
-        if enrich_code_evidence.unwrap_or(false) && relation_view != "calls" {
+        if allow_live_evidence && relation_view != "calls" {
             let mut enriched_snapshot = (*snapshot).clone();
             enrich_composition_code_evidence(
                 &app_data_dir,
@@ -331,7 +324,7 @@ fn get_visual_map(
         return atlas::composition_map(&snapshot, focus_ids, &relation_view).map_err(Into::into);
     }
 
-    if enrich_code_evidence.unwrap_or(false)
+    if allow_live_evidence
         && matches!(mode.as_str(), "api-flow" | "table-usage" | "column-impact")
         && focus_id.is_some()
     {

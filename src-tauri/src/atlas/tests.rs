@@ -3017,6 +3017,28 @@ fn api_flow_keeps_http_method_separate_from_the_route_path() {
 }
 
 #[test]
+fn stale_api_flow_remains_browsable_and_marks_freshness_unknown() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot
+        .stale_reasons
+        .push("코드 파일이 마지막 읽기 이후 바뀌었습니다".to_string());
+
+    let answer = visual_map(
+        &snapshot,
+        Some("code:route:orders:create".to_string()),
+        "api-flow".to_string(),
+    )
+    .api_reading
+    .unwrap();
+
+    assert!(!answer.steps.is_empty());
+    assert!(answer
+        .unknowns
+        .iter()
+        .any(|item| item.kind == "stale" && item.detail.contains("마지막 읽기 이후")));
+}
+
+#[test]
 fn api_flow_prefers_confirmed_static_sql_over_a_db_candidate() {
     let mut snapshot = fixture_inventory("workspace-1".to_string());
     snapshot.links.push(confirmed_api_link(
