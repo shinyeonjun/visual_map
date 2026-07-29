@@ -10,10 +10,7 @@ mod workspace;
 use atlas::{ChangeIntent, InventorySnapshot, VisualMap};
 use command_error::CommandResult;
 use engine::{EngineRegistry, EngineRuntimeMode};
-use paths::{
-    base_paths, ensure_base_dirs, migrate_legacy_app_data_to_named_dir,
-    migrate_roaming_data_to_local, AppPaths,
-};
+use paths::{base_paths, ensure_base_dirs, AppPaths};
 use source::{OpenSourceLocationRequest, RevealSourceLocationRequest, SourceActionResult};
 use std::{
     borrow::Cow,
@@ -85,26 +82,10 @@ fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .path()
         .app_local_data_dir()
         .map_err(|error| format!("로컬 앱 데이터 디렉터리를 찾지 못했습니다: {error}"))?;
-    let runtime_roaming = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("기존 앱 데이터 디렉터리를 찾지 못했습니다: {error}"))?;
-
-    let named_local = runtime_local
+    Ok(runtime_local
         .parent()
-        .map(|parent| parent.join("Backend-Visual"))
-        .unwrap_or_else(|| runtime_local.clone());
-    let parent = named_local.parent().unwrap_or_else(|| Path::new("."));
-    let legacy_local = parent.join("com.backendvisualmap.app");
-    let legacy_roaming = runtime_roaming
-        .parent()
-        .map(|parent| parent.join("com.backendvisualmap.app"))
-        .unwrap_or_else(|| runtime_roaming.clone());
-    let local = migrate_legacy_app_data_to_named_dir(named_local, legacy_local, legacy_roaming)
-        .map_err(|error| format!("제품 데이터 디렉터리 이전 실패: {error}"))?;
-
-    migrate_roaming_data_to_local(local, runtime_roaming)
-        .map_err(|error| format!("앱 데이터 디렉터리 이전 실패: {error}"))
+        .map(|parent| parent.join("VisualMap"))
+        .unwrap_or(runtime_local))
 }
 
 #[tauri::command]
