@@ -485,6 +485,17 @@ pub(crate) fn merge_language_analyses(
         languages.push(language);
     }
     documents.sort_by(|left, right| left.path.cmp(&right.path));
+    merge_duplicate_documents(&mut documents);
+    let mut unique_relations = HashSet::new();
+    relations.retain(|relation| {
+        unique_relations.insert((
+            relation.from.clone(),
+            relation.to.clone(),
+            relation.kind.clone(),
+            relation.path.clone(),
+            relation.range.clone(),
+        ))
+    });
     relations.sort_by(|left, right| {
         (&left.path, &left.range, &left.from, &left.to, &left.kind).cmp(&(
             &right.path,
@@ -495,6 +506,49 @@ pub(crate) fn merge_language_analyses(
         ))
     });
     (languages, documents, relations, diagnostics)
+}
+
+fn merge_duplicate_documents(documents: &mut Vec<DocumentOutput>) {
+    let mut merged = Vec::with_capacity(documents.len());
+    let mut positions = HashMap::with_capacity(documents.len());
+    for document in documents.drain(..) {
+        let path = document.path.clone();
+        let Some(index) = positions.get(&path).copied() else {
+            positions.insert(path, merged.len());
+            merged.push(document);
+            continue;
+        };
+        let existing = &mut merged[index];
+        // C++ clangd usually has the richer interpretation of a shared C/C++
+        // header. Keep one path while retaining facts returned by either pass.
+        if document.language == "cpp" && existing.language == "c" {
+            existing.language = document.language.clone();
+        }
+        for symbol in document.symbols {
+            if !existing.symbols.iter().any(|item| {
+                item.symbol == symbol.symbol
+                    && item.kind == symbol.kind
+                    && item.signature == symbol.signature
+                    && item.enclosing_symbol == symbol.enclosing_symbol
+            }) {
+                existing.symbols.push(symbol);
+            }
+        }
+        for occurrence in document.occurrences {
+            if !existing.occurrences.iter().any(|item| {
+                item.symbol == occurrence.symbol
+                    && item.range == occurrence.range
+                    && item.definition == occurrence.definition
+                    && item.import == occurrence.import
+                    && item.read == occurrence.read
+                    && item.write == occurrence.write
+            }) {
+                existing.occurrences.push(occurrence);
+            }
+        }
+    }
+    merged.sort_by(|left, right| left.path.cmp(&right.path));
+    *documents = merged;
 }
 
 fn merge_language_status(left: &'static str, right: &'static str) -> &'static str {

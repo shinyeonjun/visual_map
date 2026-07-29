@@ -80,7 +80,10 @@ pub(crate) fn architecture_cache_key(
     project_config_digest: u64,
 ) -> String {
     let mut hash = 0xcbf29ce484222325u64;
-    checksum_update(&mut hash, b"code-memory-architecture-cache.v16");
+    // Bump this whenever architecture projection behavior changes. The
+    // serialized language index can stay identical while the Visual Map
+    // projection changes (for example, preserving an unresolved route node).
+    checksum_update(&mut hash, b"code-memory-architecture-cache.v17");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, pack_root.to_string_lossy().as_bytes());
     for document in &output.documents {
@@ -166,7 +169,7 @@ pub(crate) fn framework_cache_key(
     project_config_digest: u64,
 ) -> String {
     let mut hash = 0xcbf29ce484222325u64;
-    checksum_update(&mut hash, b"code-memory-framework-cache.v4");
+    checksum_update(&mut hash, b"code-memory-framework-cache.v5");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     for document in documents {
         checksum_update(&mut hash, document.path.as_bytes());
@@ -533,7 +536,9 @@ pub(crate) fn language_cache_key(
     source_snapshot: &SourceSnapshot,
 ) -> String {
     let mut hash = 0xcbf29ce484222325u64;
-    checksum_update(&mut hash, b"code-memory-language-cache.v130");
+    // Provider-to-VisualMap normalization changes must not reuse a previous
+    // provider result with the same source checksum.
+    checksum_update(&mut hash, b"code-memory-language-cache.v131");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, lang.id.as_bytes());
     let provider_program = find_tool(lang.tool, providers_root).or_else(|| {

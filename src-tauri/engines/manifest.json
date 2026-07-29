@@ -10,12 +10,12 @@
       "archive": {
         "fileName": "code-memory-language-windows-amd64.zip",
         "url": "",
-        "sha256": "2CF215DE4399B52214B90845F9C4962C0D6EB88F1F788612D0330CE6993D6F29",
+        "sha256": "0478C15480BEA0E572F4A340B4600DDB664FE6D69B69F2A54D00970869356A3F",
         "entry": "code-memory-language.exe"
       },
       "executable": {
         "fileName": "code-memory-language.exe",
-        "sha256": "2CF215DE4399B52214B90845F9C4962C0D6EB88F1F788612D0330CE6993D6F29"
+        "sha256": "0478C15480BEA0E572F4A340B4600DDB664FE6D69B69F2A54D00970869356A3F"
       },
       "licenseId": "Apache-2.0",
       "contractVersion": "1",

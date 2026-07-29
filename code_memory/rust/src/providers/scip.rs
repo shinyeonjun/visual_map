@@ -225,7 +225,11 @@ pub(crate) fn read_scip(
         let mut symbols = Vec::new();
         for info in document.symbols {
             for relationship in &info.relationships {
-                if relationship.symbol.is_empty() {
+                if relationship.symbol.is_empty()
+                    || is_non_visual_symbol(&info.symbol)
+                    || is_non_visual_symbol(&relationship.symbol)
+                    || info.symbol == relationship.symbol
+                {
                     continue;
                 }
                 let kind = if relationship.is_implementation {
@@ -340,7 +344,11 @@ pub(crate) fn read_scip(
                     } else {
                         Some(owner)
                     };
-                    if let Some(relation_from) = relation_from {
+                    if let Some(relation_from) = relation_from.filter(|from| {
+                        !is_non_visual_symbol(from)
+                            && !is_non_visual_symbol(&occurrence.symbol)
+                            && (kind == "CALLS" || from != &occurrence.symbol)
+                    }) {
                         relations.push(RelationOutput {
                             from: relation_from,
                             to: occurrence.symbol.clone(),
@@ -399,6 +407,10 @@ fn is_type_symbol_kind(
             | Kind::TypeAlias
             | Kind::TypeParameter)
     )
+}
+
+fn is_non_visual_symbol(symbol: &str) -> bool {
+    symbol.starts_with("local ") || symbol.is_empty()
 }
 
 fn read_scoped_scip_documents(

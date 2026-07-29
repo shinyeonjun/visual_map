@@ -67,6 +67,46 @@ fn strict_gate_still_fails_provider_missing_files() {
 }
 
 #[test]
+fn mixed_c_family_headers_merge_to_one_document() {
+    let document = |language: &str| DocumentOutput {
+        language: language.to_string(),
+        path: "include/types.h".to_string(),
+        symbols: vec![SymbolOutput {
+            symbol: "types#Value".to_string(),
+            kind: "class".to_string(),
+            documentation: Vec::new(),
+            signature: None,
+            enclosing_symbol: None,
+        }],
+        occurrences: Vec::new(),
+    };
+    let analysis = |language: &str, document: DocumentOutput| LanguageAnalysis {
+        language: LanguageOutput {
+            id: language.to_string(),
+            name: language.to_string(),
+            provider: "native-lsp",
+            files_found: 1,
+            files_indexed: 1,
+            files_excluded: 0,
+            files_missing: 0,
+            status: "indexed",
+        },
+        documents: vec![document],
+        relations: Vec::new(),
+        diagnostics: Vec::new(),
+        project_excluded_files: 0,
+    };
+    let (_, documents, _, _) = merge_language_analyses(vec![
+        analysis("c", document("c")),
+        analysis("cpp", document("cpp")),
+    ]);
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0].path, "include/types.h");
+    assert_eq!(documents[0].language, "cpp");
+    assert_eq!(documents[0].symbols.len(), 1);
+}
+
+#[test]
 fn every_language_has_a_provider() {
     assert!(LANGUAGES
         .iter()

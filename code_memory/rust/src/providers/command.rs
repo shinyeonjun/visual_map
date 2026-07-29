@@ -458,10 +458,7 @@ fn resolve_compile_entry_path(database: &Path, entry: &Value, value: &str) -> Pa
         let directory = if directory.is_absolute() {
             directory
         } else {
-            database
-                .parent()
-                .unwrap_or(database)
-                .join(directory)
+            database.parent().unwrap_or(database).join(directory)
         };
         directory.join(path)
     };

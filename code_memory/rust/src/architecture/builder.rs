@@ -779,16 +779,21 @@ impl ArchitectureBuilder {
                 ) else {
                     continue;
                 };
-                let Some(target) = fact
+                let target = fact
                     .symbol
                     .as_ref()
-                    .and_then(|symbol| self.symbol_modules.get(symbol).cloned())
-                else {
-                    continue;
-                };
+                    .and_then(|symbol| self.symbol_modules.get(symbol).cloned());
                 let id = format!("entrypoint:{}:{}", framework.id, fact.id);
                 let mut properties = fact.properties.clone();
                 properties.insert("framework".to_string(), framework.id.clone());
+                properties.insert(
+                    "handler_resolution".to_string(),
+                    if target.is_some() {
+                        "resolved".to_string()
+                    } else {
+                        "unresolved".to_string()
+                    },
+                );
                 self.node(
                     id.clone(),
                     kind,
@@ -800,18 +805,20 @@ impl ArchitectureBuilder {
                     false,
                     properties,
                 );
-                self.edge(
-                    &id,
-                    &target,
-                    "ENTRYPOINT_TO",
-                    "summary",
-                    BTreeMap::from([(String::from("framework"), framework.id.clone())]),
-                    ArchitectureEvidence {
-                        path: fact.source_file.clone(),
-                        range: fact.source_range.clone(),
-                        note: fact.evidence.first().cloned(),
-                    },
-                );
+                if let Some(target) = target {
+                    self.edge(
+                        &id,
+                        &target,
+                        "ENTRYPOINT_TO",
+                        "summary",
+                        BTreeMap::from([(String::from("framework"), framework.id.clone())]),
+                        ArchitectureEvidence {
+                            path: fact.source_file.clone(),
+                            range: fact.source_range.clone(),
+                            note: fact.evidence.first().cloned(),
+                        },
+                    );
+                }
                 self.entrypoints.push((id, kind.to_string(), label));
             }
         }

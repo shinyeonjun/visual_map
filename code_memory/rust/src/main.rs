@@ -915,6 +915,9 @@ fn enforce_quality_gate(output: &IndexOutput) -> Result<(), String> {
         .filter(|language| {
             language.files_missing > 0
                 || !matches!(language.status, "indexed" | "indexed-partial" | "excluded")
+                || ((language.files_found > 0)
+                    && language.files_indexed == 0
+                    && language.files_excluded == 0)
         })
         .map(|language| format!("{}={}", language.id, language.status))
         .collect();

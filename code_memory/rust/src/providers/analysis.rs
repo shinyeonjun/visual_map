@@ -201,14 +201,6 @@ pub(crate) fn analyze_language(
             "Dart semantic analysis skipped because resolved package metadata is unavailable; local structure remains available and packages remain external",
         );
     }
-    if lang.id == "ruby" && root.join(".ruby-lsp").join("install_error").is_file() {
-        return language_excluded(
-            lang,
-            "native-lsp",
-            files,
-            "Ruby semantic analysis skipped because the project Ruby LSP bundle is unavailable; local structure remains available and gems remain external",
-        );
-    }
     let use_clangd_fallback =
         matches!(lang.id, "c" | "cpp") && find_tool(lang.tool, providers_root).is_none();
     if use_clangd_fallback && !has_compile_context_for_files(root, files) {
@@ -254,6 +246,19 @@ pub(crate) fn analyze_language(
             "all files in this provider unit are excluded by source policy",
         );
     }
+    let ruby_bundle_warning = (lang.id == "ruby")
+        .then(|| root.join(".ruby-lsp").join("install_error"))
+        .filter(|path| path.is_file())
+        .map(|path| Diagnostic {
+            language: lang.id.to_string(),
+            level: "warning",
+            message: format!(
+                "Ruby LSP previously reported a bundle setup problem at {}; provider results are retained, but project gem resolution may be incomplete",
+                path.display()
+            ),
+            path: Some(".ruby-lsp/install_error".to_string()),
+            line: None,
+        });
     // Each project unit can run concurrently. Include its content cache key so
     // providers never write to the same SCIP file.
     let scip_path = work.join(format!("{}_{}.scip", lang.id, cache_key));
@@ -316,6 +321,9 @@ pub(crate) fn analyze_language(
                             lang, provider, root, files, documents, relations,
                         )
                     };
+                    if let Some(warning) = ruby_bundle_warning.clone() {
+                        analysis.diagnostics.push(warning);
+                    }
                     analysis.diagnostics.extend(provider_diagnostics);
                     write_language_cache(
                         root,

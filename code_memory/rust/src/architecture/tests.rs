@@ -3,6 +3,7 @@ use crate::{
     DocumentOutput, FileRelationOutput, IndexOutput, LanguageOutput, OccurrenceOutput,
     RelationOutput, SymbolOutput,
 };
+use std::collections::BTreeMap;
 use std::fs;
 
 fn sample_output() -> IndexOutput {
@@ -49,6 +50,59 @@ fn sample_output() -> IndexOutput {
         timings: Vec::new(),
         analysis_units: Vec::new(),
     }
+}
+
+#[test]
+fn unresolved_framework_route_is_kept_as_an_endpoint() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-architecture-unresolved-route-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("app")).unwrap();
+    fs::write(
+        root.join("app/routes.py"),
+        "@app.get(\"/health\")\ndef health():\n    return {}\n",
+    )
+    .unwrap();
+
+    let mut output = sample_output();
+    output.frameworks.push(crate::frameworks::FrameworkOutput {
+        id: "fastapi".to_string(),
+        language: "python".to_string(),
+        name: "FastAPI".to_string(),
+        kind: "web".to_string(),
+        adapter: "registration-routing".to_string(),
+        status: "detected".to_string(),
+        matched_signals: vec!["app.get".to_string()],
+        files: vec!["app/routes.py".to_string()],
+        facts: vec![crate::frameworks::FrameworkFact {
+            id: "route:fastapi:app/routes.py:1:/health".to_string(),
+            kind: "HTTP_ROUTE".to_string(),
+            framework: "fastapi".to_string(),
+            symbol: None,
+            method: Some("GET".to_string()),
+            path: Some("/health".to_string()),
+            source_file: "app/routes.py".to_string(),
+            source_line: 1,
+            source_end_line: 1,
+            source_range: vec![0, 0, 0, 24],
+            evidence: vec!["test".to_string()],
+            properties: BTreeMap::new(),
+        }],
+    });
+
+    let result = build(&root, &output);
+    assert!(result.nodes.iter().any(|node| {
+        node.kind == "ENDPOINT"
+            && node
+                .properties
+                .get("handler_resolution")
+                .map(String::as_str)
+                == Some("unresolved")
+    }));
+    assert!(!result.edges.iter().any(|edge| edge.kind == "ENTRYPOINT_TO"));
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

@@ -149,8 +149,9 @@ pub(crate) fn collect_files_recursive(dir: &Path, extensions: &[&str], files: &m
 }
 
 pub(crate) fn is_excluded_source_dir(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
     matches!(
-        name,
+        name.as_str(),
         ".git"
             | ".github"
             | ".dart_tool"

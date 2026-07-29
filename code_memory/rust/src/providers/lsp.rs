@@ -443,7 +443,10 @@ pub(crate) fn run_native_lsp_with_server(
                 }
             }
             if !skip_large_workspace_type_enrichment
-                && matches!(lang.id, "java" | "csharp" | "dart" | "python" | "c" | "cpp")
+                && matches!(
+                    lang.id,
+                    "java" | "csharp" | "dart" | "python" | "c" | "cpp" | "go" | "rust"
+                )
                 && is_type_hierarchy_kind(symbol.kind)
             {
                 for target in
@@ -1155,6 +1158,7 @@ pub(crate) struct LspConnection {
     workspace_settings: Value,
     fatal_error: Option<String>,
     provider_diagnostics: Vec<ProviderDiagnostic>,
+    type_hierarchy_supported: bool,
 }
 
 struct ProviderDiagnostic {
@@ -1238,6 +1242,7 @@ impl LspConnection {
             workspace_settings: Value::Object(serde_json::Map::new()),
             fatal_error: None,
             provider_diagnostics: Vec::new(),
+            type_hierarchy_supported: false,
         })
     }
 
@@ -1471,7 +1476,7 @@ impl LspConnection {
         } else {
             serde_json::json!({"workspaceFolders": true})
         };
-        self.request(
+        let response = self.request(
             "initialize",
             serde_json::json!({
             "processId": std::process::id(),
@@ -1491,6 +1496,10 @@ impl LspConnection {
                 "workspaceFolders": [{"uri": root_uri, "name": "code_memory"}]
             }),
         )?;
+        self.type_hierarchy_supported = response
+            .get("capabilities")
+            .and_then(|capabilities| capabilities.get("typeHierarchyProvider"))
+            .is_some_and(|provider| provider.as_bool().unwrap_or(provider.is_object()));
         Ok(())
     }
 
@@ -1590,6 +1599,9 @@ impl LspConnection {
     }
 
     fn supertypes(&mut self, uri: &str, line: u32, character: u32) -> Vec<Value> {
+        if !self.type_hierarchy_supported {
+            return Vec::new();
+        }
         let items = self
             .optional_request(
                 "textDocument/prepareTypeHierarchy",
