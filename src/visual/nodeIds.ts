@@ -10,7 +10,7 @@ const DB_COLUMN_PREFIX = "db:column:";
 
 export { dbColumnNodeId, dbTableIdentityLabel, dbTableNodeId };
 
-export type DbColumnNodeRef = {
+type DbColumnNodeRef = {
   tableKey: string;
   columnName: string;
 };

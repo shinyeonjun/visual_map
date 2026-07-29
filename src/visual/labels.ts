@@ -1,6 +1,6 @@
 import type { VisualEdge, VisualMap } from "../types/visual-map";
 
-export type VisualEdgeTruthClass = "confirmed" | "structural" | "candidate" | "inferred";
+type VisualEdgeTruthClass = "confirmed" | "structural" | "candidate" | "inferred";
 
 export function visualMapModeLabel(mode: VisualMap["mode"]): string {
   if (mode === "api-flow") return "API가 닿는 코드";

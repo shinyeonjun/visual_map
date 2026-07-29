@@ -1,4 +1,4 @@
-export type LinkConfidence = "high" | "medium" | "low";
+type LinkConfidence = "high" | "medium" | "low";
 
 const CONFIDENCE_LABELS: Record<LinkConfidence, string> = {
   high: "단서 강함",

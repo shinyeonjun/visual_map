@@ -8,7 +8,7 @@ const MODES = new Set([
   "search-focus",
 ]);
 
-export type MapContext = {
+type MapContext = {
   mode: string;
   focusId: string | null;
 };

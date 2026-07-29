@@ -1,10 +1,10 @@
-export type CanvasGuide = {
+type CanvasGuide = {
   question: string;
   action: string;
   basis: string;
 };
 
-export type AtlasInventoryCounts = {
+type AtlasInventoryCounts = {
   routes: number;
   code: number;
   files: number;

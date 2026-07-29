@@ -12,7 +12,7 @@ type DiagramItem = {
   node: VisualNode;
 };
 
-export type ApiConnectionModel = {
+type ApiConnectionModel = {
   primaryPath: DiagramItem[];
   primaryEdges: VisualEdge[];
   primaryDatabase: (DiagramItem & { edge: VisualEdge }) | null;
