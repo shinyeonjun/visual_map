@@ -21,13 +21,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - name: Check out pinned database engine source
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          repository: shinyeonjun/rdb-memory-mcp
-          ref: 35ed83de33e51eef74a5276c625cb03b24e020c4
-          path: database-engine
-
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -65,14 +58,14 @@ jobs:
         shell: pwsh
         run: .\scripts\generate-dependency-inventory.ps1 -VerifyOnly
 
-      - name: Build pinned database engine candidate
-        run: cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path database-engine/Cargo.toml
+      - name: Build integrated database engine candidate
+        run: cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path db_memory/Cargo.toml
 
       - name: Stage pinned database engine candidate
         shell: pwsh
         run: |
           $target = ".\src-tauri\engines\database-memory.exe"
-          Copy-Item -LiteralPath ".\database-engine\target\release\database-memory.exe" -Destination $target -Force
+          Copy-Item -LiteralPath ".\db_memory\target\release\database-memory.exe" -Destination $target -Force
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash
           $manifestPath = ".\src-tauri\engines\manifest.json"
           $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
