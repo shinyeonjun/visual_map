@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "php",
+  "id": "slim",
+  "name": "Slim",
+  "kind": "web",
+  "signals": [
+    "Slim\\",
+    "$app->get",
+    "RouteCollector"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

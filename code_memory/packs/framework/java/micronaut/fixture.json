@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "java",
+  "framework": "micronaut",
+  "files": [
+    {
+      "path": "src/fixture.java",
+      "source": "@Controller('/api') @Get('/fixture') void handler() {}\n@Autowired UserService service;"
+    },
+    {
+      "path": "pom.xml",
+      "source": "<project><dependencies>\n<!-- signal: io.micronaut | signal: @Controller | signal: @Singleton -->\n</dependencies></project>\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "DEPENDENCY"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

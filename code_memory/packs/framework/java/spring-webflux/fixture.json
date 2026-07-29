@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "java",
+  "framework": "spring-webflux",
+  "files": [
+    {
+      "path": "src/fixture.java",
+      "source": "RouterFunctions.route(RequestPredicates.GET('/fixture'), handler)\ntokio::spawn(task);"
+    },
+    {
+      "path": "pom.xml",
+      "source": "<project><dependencies>\n<!-- signal: org.springframework.web.reactive | signal: RouterFunction | signal: @RestController -->\n</dependencies></project>\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "ASYNC_CALLS"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

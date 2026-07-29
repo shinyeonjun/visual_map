@@ -8,11 +8,20 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($EnginePath)) {
-    $EnginePath = Join-Path $repoRoot "src-tauri\engines\codebase-memory-mcp.exe"
+    $EnginePath = Join-Path $repoRoot "src-tauri\engines\code-memory-language.exe"
 }
 $EnginePath = [IO.Path]::GetFullPath($EnginePath)
 if (-not (Test-Path -LiteralPath $EnginePath -PathType Leaf)) {
     throw "Code engine not found: $EnginePath"
+}
+$engineRoot = Split-Path -Parent $EnginePath
+$bundledPacks = Join-Path $engineRoot "packs"
+if (Test-Path -LiteralPath (Join-Path $bundledPacks "framework") -PathType Container) {
+    $env:CODE_MEMORY_PACKS_ROOT = $bundledPacks
+}
+$bundledProviders = Join-Path $engineRoot "providers"
+if (Test-Path -LiteralPath $bundledProviders -PathType Container) {
+    $env:CODE_MEMORY_PROVIDERS_ROOT = $bundledProviders
 }
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

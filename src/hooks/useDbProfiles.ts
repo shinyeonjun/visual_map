@@ -287,9 +287,13 @@ export function useDbProfiles({
     setSelectedDbTableKey(null);
   }
 
-  function restoreDbInventory(inventory: DbInventory, selectedTableKey: string | null) {
+  function restoreDbInventory(
+    inventory: DbInventory,
+    selectedTableKey: string | null,
+    workspaceId = currentWorkspace?.id ?? null,
+  ) {
     setDbInventory(inventory);
-    setInventoryWorkspaceId(currentWorkspace?.id ?? null);
+    setInventoryWorkspaceId(workspaceId);
     setSelectedDbTableKey(selectedTableKey);
     setDbStatus(dbInventoryStatus(inventory, "불러옴"));
     setDbError(null);

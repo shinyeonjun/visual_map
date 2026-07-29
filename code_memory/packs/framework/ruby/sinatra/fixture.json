@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "ruby",
+  "framework": "sinatra",
+  "files": [
+    {
+      "path": "src/fixture.rb",
+      "source": "get '/fixture', handler\napp.use(authMiddleware);"
+    },
+    {
+      "path": "Gemfile",
+      "source": "source \"https://rubygems.org\"\ngem \"sinatra\"\ngem \"get \"\ngem \":Base\"\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

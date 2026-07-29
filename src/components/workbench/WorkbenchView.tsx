@@ -14,6 +14,7 @@ import { WorkbenchLeftPanel } from "./WorkbenchLeftPanel";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
 import { WorkbenchTopBar } from "./WorkbenchTopBar";
 import { targetKindForMode } from "./targetModel";
+import { ProjectAnalysisSetupModal, type AnalysisSetupChoice } from "./ProjectAnalysisSetupModal";
 
 export function WorkbenchView({
   sourceManagerOpen,
@@ -24,6 +25,15 @@ export function WorkbenchView({
   engineRegistry,
   engineError,
   devSlot,
+  analysisSetupWorkspace,
+  analysisInitializing = false,
+  analysisError = null,
+  onStartAnalysis = () => undefined,
+  onCancelAnalysis = () => undefined,
+  onOpenAnalysis = () => undefined,
+  onSaveDbConnection = async () => false,
+  dbConnectionError = null,
+  onOpenDbConnection = () => undefined,
 }: {
   sourceManagerOpen: boolean;
   setSourceManagerOpen: (open: boolean) => void;
@@ -33,20 +43,31 @@ export function WorkbenchView({
   engineRegistry: EngineRegistry | null;
   engineError: string | null;
   devSlot?: ReactNode;
+  analysisSetupWorkspace?: import("../../types/workspace").Workspace | null;
+  analysisInitializing?: boolean;
+  analysisError?: string | null;
+  onStartAnalysis?: (choice: AnalysisSetupChoice) => void;
+  onCancelAnalysis?: () => void;
+  onOpenAnalysis?: () => void;
+  onSaveDbConnection?: () => Promise<boolean>;
+  dbConnectionError?: string | null;
+  onOpenDbConnection?: () => void;
 }) {
   const [surface, setSurface] = useState<"answers" | "advanced">("answers");
   const [pendingSurface, setPendingSurface] = useState<"answers" | "advanced" | null>(null);
   const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false);
+  const [dbConnectionModalOpen, setDbConnectionModalOpen] = useState(false);
   const hasAnswerSource =
     codeInventoryItemCount(workspaceControls.codeInventory) > 0 || Boolean(dbProfileControls.inventory?.tables.length);
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
   const workspaceTransitioning = workspaceControls.opening || workspaceControls.restoringSnapshot;
-  const workspaceReady =
-    workspaceControls.initialized && hasWorkspace && !workspaceTransitioning;
+  const analysisSetupOpen = Boolean(analysisSetupWorkspace);
   const hasSnapshotState =
     hasAnswerSource ||
     visualMapControls.snapshotStaleReasons.length > 0 ||
     Boolean(visualMapControls.snapshotSavedAt);
+  const workspaceReady =
+    workspaceControls.initialized && hasWorkspace && hasSnapshotState && !workspaceTransitioning && !analysisSetupOpen && !analysisInitializing;
   // Keep the evidence column mounted once a project exists so mode changes do not
   // resize the canvas. Its contents can change; the workspace geometry cannot.
   const showInspector = workspaceReady;
@@ -145,6 +166,18 @@ export function WorkbenchView({
     visualMapControls.clearSelection();
   }
 
+  function openDbConnectionModal() {
+    onOpenDbConnection();
+    setSourceManagerOpen(false);
+    setDbConnectionModalOpen(true);
+  }
+
+  async function saveDbConnection() {
+    if (await onSaveDbConnection()) {
+      setDbConnectionModalOpen(false);
+    }
+  }
+
   useEffect(() => {
     if (!hasWorkspace && sourceManagerOpen) {
       setSourceManagerOpen(false);
@@ -206,19 +239,34 @@ export function WorkbenchView({
             />
           )}
         </aside> : null}
-        {!workspaceControls.initialized || workspaceTransitioning ? (
+        {!workspaceControls.initialized || workspaceTransitioning || analysisInitializing ? (
           <main className="workspace-initializing" aria-busy="true" aria-live="polite">
             <LoaderCircle className="spin" size={22} />
             <strong>
-              {workspaceTransitioning
+              {analysisInitializing
+                ? "코드와 DB 구조를 분석하고 있습니다"
+                : workspaceTransitioning
                 ? "프로젝트 분석을 불러오고 있습니다"
                 : "프로젝트를 확인하고 있습니다"}
             </strong>
             <span>
-              {workspaceTransitioning
+              {analysisInitializing
+                ? "두 그래프 캐시를 만든 뒤 통합 스냅샷을 저장합니다."
+                : workspaceTransitioning
                 ? "대상과 마지막 답을 준비합니다."
                 : "마지막으로 열었던 작업 공간을 준비합니다."}
             </span>
+          </main>
+        ) : analysisSetupOpen ? (
+          <main className="workspace-initializing" aria-live="polite">
+            <strong>분석 범위를 정하면 화면을 엽니다</strong>
+            <span>분석이 끝나기 전에는 프로젝트 데이터를 표시하지 않습니다.</span>
+          </main>
+        ) : hasWorkspace && !hasSnapshotState ? (
+          <main className="workspace-initializing" aria-live="polite">
+            <strong>프로젝트 분석이 필요합니다</strong>
+            <span>코드와 DB 구조를 읽어야 시각화를 표시할 수 있습니다.</span>
+            <button className="outline-action compact" type="button" onClick={onOpenAnalysis}>분석 설정 열기</button>
           </main>
         ) : hasWorkspace && surface === "advanced" ? (
           <AtlasCanvas
@@ -252,6 +300,7 @@ export function WorkbenchView({
               workspaceControls={workspaceControls}
               dbProfileControls={dbProfileControls}
               visualMapControls={visualMapControls}
+              onEditDbConnection={openDbConnectionModal}
             />
           </main>
         )}
@@ -317,9 +366,31 @@ export function WorkbenchView({
               workspaceControls={workspaceControls}
               dbProfileControls={dbProfileControls}
               visualMapControls={visualMapControls}
+              onEditDbConnection={openDbConnectionModal}
             />
           </section>
         </div>
+      )}
+      {analysisSetupWorkspace && (
+        <ProjectAnalysisSetupModal
+          workspace={analysisSetupWorkspace}
+          dbProfileControls={dbProfileControls}
+          busy={analysisInitializing}
+          error={analysisError}
+          onStart={onStartAnalysis}
+          onCancel={onCancelAnalysis}
+        />
+      )}
+      {dbConnectionModalOpen && workspaceControls.currentWorkspace && (
+        <ProjectAnalysisSetupModal
+          variant="connection"
+          workspace={workspaceControls.currentWorkspace}
+          dbProfileControls={dbProfileControls}
+          busy={dbProfileControls.saving}
+          error={dbConnectionError}
+          onSave={saveDbConnection}
+          onCancel={() => setDbConnectionModalOpen(false)}
+        />
       )}
     </div>
   );

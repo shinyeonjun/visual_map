@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "cpp",
+  "framework": "drogon",
+  "files": [
+    {
+      "path": "src/fixture.cpp",
+      "source": "ADD_METHOD_TO(handler, '/fixture', Get);\napp.use(authMiddleware);"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "source": "cmake_minimum_required(VERSION 3.20)\nproject(code_memory_framework_fixture)\n# signal: drogon/\n# signal: ADD_METHOD_TO\n# signal: HttpController\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

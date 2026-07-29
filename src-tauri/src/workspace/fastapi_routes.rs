@@ -1211,6 +1211,7 @@ mod tests {
                 handler: handler_id,
                 route: route_id,
             }],
+            relation_gaps: Vec::new(),
             partial: false,
         }
     }

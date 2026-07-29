@@ -1,0 +1,38 @@
+{
+  "schema": "code-memory.framework-pack-catalog.v1",
+  "language": "java",
+  "packs": [
+    {
+      "id": "spring",
+      "path": "spring/pack.json"
+    },
+    {
+      "id": "spring-boot",
+      "path": "spring-boot/pack.json"
+    },
+    {
+      "id": "spring-mvc",
+      "path": "spring-mvc/pack.json"
+    },
+    {
+      "id": "spring-webflux",
+      "path": "spring-webflux/pack.json"
+    },
+    {
+      "id": "jakarta-ee",
+      "path": "jakarta-ee/pack.json"
+    },
+    {
+      "id": "quarkus",
+      "path": "quarkus/pack.json"
+    },
+    {
+      "id": "micronaut",
+      "path": "micronaut/pack.json"
+    },
+    {
+      "id": "play",
+      "path": "play/pack.json"
+    }
+  ]
+}

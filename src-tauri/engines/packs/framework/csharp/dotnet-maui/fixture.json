@@ -1,0 +1,23 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "csharp",
+  "framework": "dotnet-maui",
+  "files": [
+    {
+      "path": "src/fixture.cs",
+      "source": "class MainPage : ContentPage { void OnClicked() {} }\n@Component class App extends Component {}\nreturn <Widget />;\nbus.on('created', handler);"
+    },
+    {
+      "path": "fixture.csproj",
+      "source": "<Project><ItemGroup>\n<!-- signal: Microsoft.Maui | signal: ContentPage | signal: Shell -->\n</ItemGroup></Project>\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "COMPONENT",
+      "RENDERS",
+      "EVENT_HANDLER"
+    ],
+    "relations": []
+  }
+}

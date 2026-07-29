@@ -1219,7 +1219,7 @@ fn code_cache_path_is_workspace_scoped() {
         root.join("workspace-1")
             .join("engines")
             .join("codebase-memory")
-            .join("0.9.0")
+            .join("0.1.0")
             .join("contract-1")
             .join("cache")
     );
@@ -1549,6 +1549,30 @@ fn code_inventory_rejects_only_production_calls_into_test_code() {
 }
 
 #[test]
+fn code_inventory_records_known_callers_with_unresolved_callees() {
+    let empty = serde_json::json!({ "results": [] });
+    let code = serde_json::json!({
+        "results": [
+            { "name": "list_orders", "qualified_name": "routes.list_orders", "label": "Function" }
+        ]
+    });
+    let calls = serde_json::json!({
+        "rows": [
+            { "from": "routes.list_orders", "to": "missing.Repository.find", "confidence": "0.42" },
+            { "from": "stdlib.print", "to": "routes.list_orders", "confidence": "0.99" }
+        ]
+    });
+    let inventory =
+        extract_code_inventory("shop-api".to_string(), None, &empty, &code, &empty).unwrap();
+    let (calls, gaps) = super::code::extract_code_calls_with_gaps(&calls, &inventory);
+
+    assert!(calls.is_empty());
+    assert_eq!(gaps.len(), 1);
+    assert_eq!(gaps[0].from, "routes.list_orders");
+    assert_eq!(gaps[0].to, "missing.Repository.find");
+}
+
+#[test]
 fn code_inventory_rejects_bucket_misclassification_and_conflicting_labels() {
     let false_route = serde_json::json!({
         "results": [
@@ -1823,7 +1847,7 @@ fn pinned_code_field_inventory(label: &str) -> (PathBuf, CodeInventory) {
     let repo_path = std::env::var("BACKEND_MAP_TEST_CODE_REPO")
         .expect("BACKEND_MAP_TEST_CODE_REPO must point to the pinned field repository");
     let engine_path = std::env::var("BACKEND_MAP_TEST_CODE_ENGINE")
-        .expect("BACKEND_MAP_TEST_CODE_ENGINE must point to codebase-memory-mcp");
+        .expect("BACKEND_MAP_TEST_CODE_ENGINE must point to code-memory-language");
     let root = temp_root(label);
     fs::create_dir_all(&root).unwrap();
     let workspace = create_workspace(
@@ -1845,8 +1869,8 @@ fn pinned_code_field_inventory(label: &str) -> (PathBuf, CodeInventory) {
             id: "codebase-memory".to_string(),
             label: "codebase-memory".to_string(),
             role: "code".to_string(),
-            executable: "codebase-memory-mcp.exe".to_string(),
-            expected_version: "0.9.0".to_string(),
+            executable: "code-memory-language.exe".to_string(),
+            expected_version: "0.1.0".to_string(),
             contract_version: "1".to_string(),
             path: engine_path,
             available: true,
@@ -1996,7 +2020,7 @@ fn code_engine_queries_use_one_bounded_node_contract_and_safe_aliases() {
 #[test]
 fn bundled_code_engine_fixture_preserves_route_handler_call_and_location() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "fixtures/codebase-memory-contract-v0.9.0.json"
+        "fixtures/code-memory-language-contract-v0.1.0.json"
     ))
     .unwrap();
     let project = fixture["project"].as_str().unwrap().to_string();
@@ -2012,7 +2036,7 @@ fn bundled_code_engine_fixture_preserves_route_handler_call_and_location() {
     inventory.calls = extract_code_calls(&fixture["calls"], &inventory);
     attach_code_handles(&fixture["handles"], &mut inventory);
 
-    assert_eq!(fixture["engineVersion"], "0.9.0");
+    assert_eq!(fixture["engineVersion"], "0.1.0");
     assert_eq!(inventory.routes.len(), 2);
     assert_eq!(inventory.handlers.len(), 1);
     assert_eq!(inventory.handlers[0].name, "processCreationForm");

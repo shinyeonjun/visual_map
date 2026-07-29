@@ -1,0 +1,26 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "java",
+  "framework": "spring",
+  "files": [
+    {
+      "path": "src/fixture.java",
+      "source": "@RequestMapping('/api') @GetMapping('/fixture') void handler() {}\n@Service class UserService {}\napp.use(authMiddleware);\n@Autowired UserService service;"
+    },
+    {
+      "path": "pom.xml",
+      "source": "<project><dependencies>\n<!-- signal: org.springframework | signal: @Controller | signal: @Service -->\n</dependencies></project>\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "SERVICE",
+      "MIDDLEWARE",
+      "DEPENDENCY"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

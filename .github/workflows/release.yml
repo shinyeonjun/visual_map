@@ -43,19 +43,12 @@ jobs:
       - name: Check out product source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - name: Check out pinned database engine source
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          repository: shinyeonjun/rdb-memory-mcp
-          ref: 35ed83de33e51eef74a5276c625cb03b24e020c4
-          path: database-engine
-
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: rustup toolchain install 1.96.1 --profile minimal
 
-      - name: Build pinned database CLI
-        run: cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path database-engine/Cargo.toml
+      - name: Build integrated database CLI
+        run: cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path db_memory/Cargo.toml
 
       - name: Seed required database evidence
         shell: pwsh
@@ -82,7 +75,7 @@ jobs:
         env:
           BACKEND_MAP_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/backend_map_smoke
           BACKEND_MAP_TEST_MYSQL_URL: mysql://root:mysql@127.0.0.1:3306/backend_map_smoke
-        run: ./scripts/smoke-rdb-productization.ps1 -DatabaseMemory ./database-engine/target/release/database-memory -RequireReleaseMatrix
+        run: ./scripts/smoke-rdb-productization.ps1 -DatabaseMemory ./db_memory/target/release/database-memory -RequireReleaseMatrix
 
   windows:
     needs: database-matrix

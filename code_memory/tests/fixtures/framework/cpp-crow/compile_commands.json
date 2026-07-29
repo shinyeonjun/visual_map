@@ -1,0 +1,12 @@
+[
+  {
+    "directory": ".",
+    "command": "clang++ -std=c++20 -I. -c main.cpp -o main.o",
+    "file": "main.cpp"
+  },
+  {
+    "directory": ".",
+    "command": "clang++ -std=c++20 -I. -c handlers.cpp -o handlers.o",
+    "file": "handlers.cpp"
+  }
+]

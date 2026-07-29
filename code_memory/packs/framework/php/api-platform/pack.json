@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "php",
+  "id": "api-platform",
+  "name": "API Platform",
+  "kind": "web",
+  "signals": [
+    "ApiPlatform\\",
+    "#[ApiResource",
+    "#[Get"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "SCHEMA"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "SCHEMA"
+  ]
+}

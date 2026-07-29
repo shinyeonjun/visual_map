@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "typescript",
+  "id": "fastify",
+  "name": "Fastify",
+  "kind": "web",
+  "signals": [
+    "import:fastify",
+    "fastify.get",
+    "fastify.register"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

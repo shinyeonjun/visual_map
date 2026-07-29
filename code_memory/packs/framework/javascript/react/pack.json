@@ -1,0 +1,22 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "javascript",
+  "id": "react",
+  "name": "React",
+  "kind": "ui",
+  "signals": [
+    "import:react",
+    "jsx",
+    "component"
+  ],
+  "outputs": [
+    "COMPONENT",
+    "RENDERS",
+    "EVENT_HANDLER"
+  ],
+  "rule_sets": [
+    "COMPONENT",
+    "RENDERS",
+    "EVENT_HANDLER"
+  ]
+}

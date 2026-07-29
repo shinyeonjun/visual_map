@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "java",
+  "id": "spring-webflux",
+  "name": "Spring WebFlux",
+  "kind": "web",
+  "signals": [
+    "import:org.springframework.web.reactive",
+    "RouterFunction",
+    "@RestController"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "ASYNC_CALLS"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "ASYNC_CALLS"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "cpp",
+  "framework": "poco",
+  "files": [
+    {
+      "path": "src/fixture.cpp",
+      "source": "Route('/fixture', handler);\napp.use(authMiddleware);"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "source": "cmake_minimum_required(VERSION 3.20)\nproject(code_memory_framework_fixture)\n# signal: Poco/\n# signal: HTTPServer\n# signal: HTTPRequestHandler\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

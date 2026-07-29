@@ -215,6 +215,30 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.db-connection-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-inset);
+}
+
+.db-connection-summary > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.db-connection-summary b { color: var(--ink-2); font-size: 10.5px; }
+.db-connection-summary small { overflow: hidden; color: var(--ink-4); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.db-connection-summary .outline-action { flex: 0 0 auto; min-width: 44px; padding: 0 10px; white-space: nowrap; }
+.db-connection-summary.connected { border-color: color-mix(in srgb, var(--green) 35%, var(--line)); }
+.db-connection-summary.connected b { color: var(--green-ink, #047857); }
 .side-card.locked .source-next {
   border-color: var(--line-2);
   background: var(--bg-inset);

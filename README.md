@@ -2,8 +2,6 @@
 
 백엔드 코드와 관계형 데이터베이스 메타데이터의 관계를 **근거와 함께** 탐색하는 Windows 우선 Tauri + React 데스크톱 앱입니다.
 
-![Backend Visual Map workbench](docs/reports/screenshots/ui-light-default/workbench.png)
-
 ## Why it exists
 
 큰 백엔드 저장소에서 "이 API가 어떤 테이블과 컬럼에 영향을 주는가?"를 코드·스키마를 오가며 추적하는 비용을 줄입니다. raw dependency graph를 그대로 던지지 않고, Workbench와 Atlas에서 API Flow, Table Usage, Column Impact를 focused view로 보여줍니다.
@@ -18,7 +16,7 @@
 - API·코드·파일·테이블·컬럼 중 2~8개를 골라 전체 연결, 호출, 데이터, 영향 관계만 조합해 보기
 - 실행 호출에 직접 연결된 정적 SQL을 근거로 `READS`, `WRITES`, `USES_COLUMN` 관계 확인
 - 확정 근거, 후보, 미확인 영역과 분석 범위를 구분해 표시
-- codebase-memory `0.9.0`과 database-memory `0.2.0 / contract 2`를 bundled sidecar로 실행
+- code-memory-language `0.1.0 / contract 1`과 database-memory `0.2.0 / contract 2`를 bundled sidecar로 실행
 
 ## Quick start
 
@@ -26,13 +24,21 @@
 
 ```powershell
 npm ci
-cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path ..\db_mcp\Cargo.toml
-Copy-Item ..\db_mcp\target\release\database-memory.exe .\src-tauri\engines\database-memory.exe -Force
+cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path .\db_memory\Cargo.toml
+Copy-Item .\db_memory\target\release\database-memory.exe .\src-tauri\engines\database-memory.exe -Force
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-engines.ps1 -AllowDevelopmentArtifact
 npm run tauri dev
 ```
 
-DB 엔진 `0.2.0` 공개 바이너리는 아직 배포하지 않았으므로, 위 명령은 함께 checkout한 `db_mcp` 소스의 고정 commit `35ed83de33e51eef74a5276c625cb03b24e020c4`를 빌드합니다.
+DB 엔진 `0.2.0` 공개 바이너리는 아직 배포하지 않았으므로, 위 명령은 이 저장소의 `db_memory` 소스를 빌드합니다.
+
+## Repository layout
+
+```text
+visual_map/   Visual Map desktop application
+code_memory/  static code analysis engine and framework contracts
+db_memory/    metadata-only relational database analysis engine
+```
 
 앱에서는 다음 순서로 연결합니다.
 
@@ -62,7 +68,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 
 내부/릴리스 빌드는 엔진을 `src-tauri/engines`에서 Tauri resource로 포함합니다.
 
-- `src-tauri/engines/codebase-memory-mcp.exe`
+- `src-tauri/engines/code-memory-language.exe`
 - `src-tauri/engines/database-memory.exe`
 
 설치 후 앱은 설치 디렉터리의 bundled resource를 우선 사용하므로 사용자가 PATH를 설정할 필요가 없습니다.
@@ -118,12 +124,10 @@ powershell -File scripts/release-smoke.ps1
 
 ## 문서
 
-- [리서치](docs/research/backend-visual-map.md)
-- [완성 제품 기준](docs/plans/backend-visual-map-final-product.md)
-- [현재 제품 완성 기록](docs/plans/backend-visual-map-production-completion.md)
-- [신뢰성과 UX 검증](docs/plans/product-trust-ux-completion.md)
 - [제품 지원 범위와 확정 근거 규칙](docs/product-support.md)
-- [백엔드 개발자 사용성 테스트 절차](docs/usability-test-protocol.md)
+- [Visual Map 코드 지능 계약](docs/contracts/visual-map-code-intelligence-contract.md)
+- [코드·DB 엔진 인덱스 데이터 계약](docs/contracts/engine-index-data-contract.md)
+- [공식 지원 스택](docs/contracts/visual-map-supported-stack-contract.md)
 - [3분 데모](docs/demo/backend-visual-map.demo.md)
 - [문제 해결](docs/troubleshooting.md)
-- [리포트 규칙](docs/reports/README.md)
+- [보안·개인정보 경계](docs/security-privacy.md)

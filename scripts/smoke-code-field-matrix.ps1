@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($EnginePath)) {
-  $EnginePath = Join-Path $repoRoot "src-tauri\engines\codebase-memory-mcp.exe"
+  $EnginePath = Join-Path $repoRoot "src-tauri\engines\code-memory-language.exe"
 }
 $EnginePath = [IO.Path]::GetFullPath($EnginePath)
 if (-not (Test-Path -LiteralPath $EnginePath -PathType Leaf)) {

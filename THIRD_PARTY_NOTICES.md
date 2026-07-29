@@ -4,11 +4,22 @@ Backend Visual Map uses the following local sidecar programs. They run only as
 internal metadata-analysis tools. The application does not automatically
 register either program with an MCP client.
 
-## codebase-memory-mcp
+## code-memory-language
+
+- Project: `shinyeonjun/visual_map/code_memory`
+- Source: https://github.com/shinyeonjun/visual_map/tree/main/code_memory
+- Bundled program: `code-memory-language.exe`
+- License: Apache-2.0 for the Visual Map bridge; the vendored C extraction
+  components retain their upstream MIT notice below.
+
+The bridge is the Visual Map-owned executable. It includes selected source
+components from `DeusData/codebase-memory-mcp`; it does not bundle or execute
+the upstream MCP server.
+
+### Vendored extraction components
 
 - Project: `DeusData/codebase-memory-mcp`
 - Source: https://github.com/DeusData/codebase-memory-mcp
-- Bundled program: `codebase-memory-mcp.exe`
 - License: MIT
 - Copyright (c) 2025 DeusData
 

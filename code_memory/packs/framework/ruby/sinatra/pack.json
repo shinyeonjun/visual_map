@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "ruby",
+  "id": "sinatra",
+  "name": "Sinatra",
+  "kind": "web",
+  "signals": [
+    "require:sinatra",
+    "get ",
+    "Sinatra::Base"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

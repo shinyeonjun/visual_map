@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "dart",
+  "id": "dart-frog",
+  "name": "Dart Frog",
+  "kind": "web",
+  "signals": [
+    "package:dart_frog/",
+    "onRequest",
+    "routes/"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

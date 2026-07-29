@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "cpp",
+  "id": "drogon",
+  "name": "Drogon",
+  "kind": "web",
+  "signals": [
+    "drogon/",
+    "ADD_METHOD_TO",
+    "HttpController"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "php",
+  "id": "laravel",
+  "name": "Laravel",
+  "kind": "web",
+  "signals": [
+    "Illuminate\\",
+    "Route::"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE",
+    "SERVICE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE",
+    "SERVICE"
+  ]
+}

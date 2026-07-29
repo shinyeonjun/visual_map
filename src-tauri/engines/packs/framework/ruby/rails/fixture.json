@@ -1,0 +1,25 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "ruby",
+  "framework": "rails",
+  "files": [
+    {
+      "path": "src/fixture.rb",
+      "source": "get '/fixture', to: 'handler'\napp.use(authMiddleware);\n@Service class UserService {}"
+    },
+    {
+      "path": "Gemfile",
+      "source": "source \"https://rubygems.org\"\ngem \"rails\"\ngem \"routes.rb\"\ngem \"ApplicationController\"\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE",
+      "SERVICE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

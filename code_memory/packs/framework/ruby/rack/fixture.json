@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "ruby",
+  "framework": "rack",
+  "files": [
+    {
+      "path": "src/fixture.rb",
+      "source": "map '/fixture', handler\napp.use(authMiddleware);"
+    },
+    {
+      "path": "Gemfile",
+      "source": "source \"https://rubygems.org\"\ngem \"rack\"\ngem \":Builder\"\ngem \"run \"\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

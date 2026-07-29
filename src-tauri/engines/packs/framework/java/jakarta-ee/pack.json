@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "java",
+  "id": "jakarta-ee",
+  "name": "Jakarta EE",
+  "kind": "web",
+  "signals": [
+    "import:jakarta.",
+    "@Path",
+    "@GET"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "DEPENDENCY"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "DEPENDENCY"
+  ]
+}

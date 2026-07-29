@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "go",
+  "id": "gin",
+  "name": "Gin",
+  "kind": "web",
+  "signals": [
+    "github.com/gin-gonic/gin",
+    "gin.Default",
+    "router.GET"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

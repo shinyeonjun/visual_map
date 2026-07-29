@@ -8,8 +8,14 @@ mod model;
 mod store;
 
 pub(crate) use code::focused_code_search;
-pub(crate) use code::{code_inventory, index_code_repository, route_binding_id};
-pub(crate) use db::{db_inventory, delete_db_profile, index_db_profile, save_db_profile};
+pub(crate) use code::{
+    code_inventory, index_code_repository, index_code_repository_without_persisting,
+    route_binding_id,
+};
+pub(crate) use db::{
+    db_inventory, delete_db_profile, index_db_profile, index_db_profile_without_persisting,
+    save_db_profile,
+};
 pub(crate) use model::{
     CodeCall, CodeIndexResult, CodeInventory, CreateWorkspaceRequest, DbConstraint,
     DbDependentObject, DbForeignKey, DbIndex, DbIndexResult, DbInventory, IndexCodeRequest,
@@ -20,7 +26,7 @@ pub(crate) use model::{FocusedCodeSearch, FocusedCodeSearchMatch};
 pub(crate) use store::{
     create_workspace, delete_workspace, list_workspaces, open_workspace, refresh_github_workspace,
     repair_workspace_from_backup, validate_workspace_id, workspace_recovery_warnings,
-    WorkspaceRecoveryWarning,
+    write_workspace, WorkspaceRecoveryWarning,
 };
 
 #[cfg(test)]

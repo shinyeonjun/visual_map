@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "dart",
+  "framework": "dart-frog",
+  "files": [
+    {
+      "path": "routes/fixture.dart",
+      "source": "Future<Response> onRequest(Request request) async => Response.ok('ok');\napp.use(authMiddleware);"
+    },
+    {
+      "path": "pubspec.yaml",
+      "source": "name: code_memory_framework_fixture\n\ndependencies:\n  \"dart_frog/\": ^1.0.0\n  \"onRequest\": ^1.0.0\n  \"routes/\": ^1.0.0\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

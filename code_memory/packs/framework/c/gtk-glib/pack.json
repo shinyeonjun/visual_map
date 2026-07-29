@@ -1,0 +1,20 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "c",
+  "id": "gtk-glib",
+  "name": "GTK/GLib",
+  "kind": "ui",
+  "signals": [
+    "#include:<gtk/",
+    "gtk_",
+    "g_signal_connect"
+  ],
+  "outputs": [
+    "COMPONENT",
+    "EVENT_HANDLER"
+  ],
+  "rule_sets": [
+    "COMPONENT",
+    "EVENT_HANDLER"
+  ]
+}

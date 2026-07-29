@@ -1,0 +1,20 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "cpp",
+  "id": "boost-asio",
+  "name": "Boost.Asio",
+  "kind": "async",
+  "signals": [
+    "boost::asio",
+    "io_context",
+    "async_"
+  ],
+  "outputs": [
+    "ASYNC_CALLS",
+    "EVENT_HANDLER"
+  ],
+  "rule_sets": [
+    "ASYNC_CALLS",
+    "EVENT_HANDLER"
+  ]
+}

@@ -117,6 +117,32 @@ export type IndexCodeRequest = {
   workspaceId: string;
 };
 
+export type InitializeWorkspaceAnalysisRequest = {
+  workspaceId: string;
+  analysisMode?: "code-only" | "db-only" | "code-and-db";
+  dbProfileId?: string | null;
+  connectionString?: string | null;
+};
+
+export type WorkspaceAnalysisResult = {
+  workspace: Workspace;
+  code: {
+    workspace: Workspace;
+    run: { ok: boolean; stderr: string; stdout?: string };
+    inventory?: CodeInventory | null;
+    inventoryError?: string | null;
+  } | null;
+  db: {
+    workspace: Workspace;
+    run: { ok: boolean; stderr: string; stdout?: string };
+    inventory?: DbInventory | null;
+    inventoryError?: string | null;
+  } | null;
+  codeError?: string | null;
+  dbError?: string | null;
+  snapshotSaved: boolean;
+};
+
 export type DbInventoryColumn = {
   key?: string | null;
   tableKey?: string | null;

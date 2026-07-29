@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "dart",
+  "framework": "shelf",
+  "files": [
+    {
+      "path": "src/fixture.dart",
+      "source": "router.get('/fixture', handler);\napp.use(authMiddleware);"
+    },
+    {
+      "path": "pubspec.yaml",
+      "source": "name: code_memory_framework_fixture\n\ndependencies:\n  \"shelf/\": ^1.0.0\n  \"Pipeline\": ^1.0.0\n  \"Router\": ^1.0.0\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

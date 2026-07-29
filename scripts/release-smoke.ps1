@@ -123,7 +123,7 @@ if ($ExerciseInstall) {
     }
     $app = Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter "backend-visual-map.exe" -File -Recurse | Select-Object -First 1
     if (-not $app) { throw "Installed application executable was not found." }
-    foreach ($engine in "codebase-memory-mcp.exe", "database-memory.exe") {
+    foreach ($engine in "code-memory-language.exe", "database-memory.exe") {
       if (-not (Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter $engine -File -Recurse | Select-Object -First 1)) {
         throw "Installed resource is missing: $engine"
       }

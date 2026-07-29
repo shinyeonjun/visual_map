@@ -1,0 +1,23 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "javascript",
+  "id": "nextjs",
+  "name": "Next.js",
+  "kind": "web",
+  "signals": [
+    "import:next",
+    "app/router",
+    "pages"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "COMPONENT",
+    "SERVER_ACTION"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "COMPONENT",
+    "SERVER_ACTION"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "java",
+  "framework": "jakarta-ee",
+  "files": [
+    {
+      "path": "src/fixture.java",
+      "source": "@Path('/fixture') @GET public void handler() {}\n@Autowired UserService service;"
+    },
+    {
+      "path": "pom.xml",
+      "source": "<project><dependencies>\n<!-- signal: jakarta. | signal: @Path | signal: @GET -->\n</dependencies></project>\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "DEPENDENCY"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

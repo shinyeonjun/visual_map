@@ -1,0 +1,25 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "java",
+  "framework": "spring-boot",
+  "files": [
+    {
+      "path": "src/fixture.java",
+      "source": "@SpringBootApplication @RestController @GetMapping('/fixture') void handler() {}\n@Service class UserService {}\n@Autowired UserService service;"
+    },
+    {
+      "path": "pom.xml",
+      "source": "<project><dependencies>\n<!-- signal: org.springframework.boot | signal: @SpringBootApplication | signal: @RestController -->\n</dependencies></project>\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "SERVICE",
+      "DEPENDENCY"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "dart",
+  "framework": "flutter",
+  "files": [
+    {
+      "path": "src/fixture.dart",
+      "source": "class Home extends StatelessWidget { Widget build(BuildContext context) { return GestureDetector(onTap: handleTap); } }"
+    },
+    {
+      "path": "pubspec.yaml",
+      "source": "name: code_memory_framework_fixture\n\ndependencies:\n  \"flutter/\": ^1.0.0\n  \"StatelessWidget\": ^1.0.0\n  \"StatefulWidget\": ^1.0.0\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "COMPONENT",
+      "RENDERS",
+      "EVENT_HANDLER"
+    ],
+    "relations": []
+  }
+}

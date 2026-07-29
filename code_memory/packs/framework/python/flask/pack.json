@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "python",
+  "id": "flask",
+  "name": "Flask",
+  "kind": "web",
+  "signals": [
+    "import:flask",
+    "@app.route",
+    "Blueprint"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

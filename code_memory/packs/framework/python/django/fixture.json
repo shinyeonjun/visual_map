@@ -1,0 +1,25 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "python",
+  "framework": "django",
+  "files": [
+    {
+      "path": "src/fixture.py",
+      "source": "from django.urls import path; urlpatterns = [path('/fixture', handler)]\napp.use(authMiddleware);\n@Service class UserService {}"
+    },
+    {
+      "path": "pyproject.toml",
+      "source": "[project]\nname = \"code-memory-framework-fixture\"\ndependencies = [\"django\", \"urlpatterns\", \"path(\"]\n# signal: django\n# signal: urlpatterns\n# signal: path(\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE",
+      "SERVICE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

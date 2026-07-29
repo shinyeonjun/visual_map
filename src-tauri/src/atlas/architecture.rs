@@ -280,14 +280,26 @@ fn architecture_member(item: &InventoryItem) -> bool {
 }
 
 fn architecture_package_names(snapshot: &InventorySnapshot) -> HashMap<String, String> {
-    snapshot
-        .metadata
-        .architecture
-        .as_ref()
+    let architecture = snapshot.metadata.architecture.as_ref();
+    let legacy_packages = architecture
         .and_then(|architecture| architecture.get("packages"))
         .and_then(serde_json::Value::as_array)
         .into_iter()
+        .flatten();
+    let indexed_packages = architecture
+        .and_then(|architecture| architecture.get("nodes"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
         .flatten()
+        .filter(|node| {
+            node.get("kind")
+                .or_else(|| node.get("label"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("package"))
+        });
+
+    legacy_packages
+        .chain(indexed_packages)
         .filter_map(|package| {
             package
                 .as_str()
