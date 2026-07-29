@@ -5,6 +5,7 @@ import { DB_PROFILE_SOURCE_OPTIONS, dbProfileSourceUsesPath } from "../../types/
 import type { Workspace } from "../../types/workspace";
 
 export type AnalysisSetupChoice = "code-only" | "db-only" | "code-and-db";
+export type AnalysisProgress = { percent: number; label: string };
 type ModalVariant = "analysis" | "connection";
 
 export function ProjectAnalysisSetupModal({
@@ -15,6 +16,7 @@ export function ProjectAnalysisSetupModal({
   onStart,
   onSave,
   onCancel,
+  progress,
   variant = "analysis",
 }: {
   workspace: Workspace;
@@ -24,6 +26,7 @@ export function ProjectAnalysisSetupModal({
   onStart?: (choice: AnalysisSetupChoice) => void;
   onSave?: () => void;
   onCancel: () => void;
+  progress?: AnalysisProgress;
   variant?: ModalVariant;
 }) {
   const [choice, setChoice] = useState<AnalysisSetupChoice>("code-only");
@@ -110,11 +113,31 @@ export function ProjectAnalysisSetupModal({
             </div>
           )}
 
+          {busy && !connectionOnly && progress && (
+            <div className="analysis-progress" role="status" aria-live="polite">
+              <div className="analysis-progress-heading">
+                <span>{progress.label}</span>
+                <strong>{progress.percent}%</strong>
+              </div>
+              <div
+                className="analysis-progress-track"
+                role="progressbar"
+                aria-label="프로젝트 분석 진행률"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progress.percent}
+              >
+                <span style={{ width: `${progress.percent}%` }} />
+              </div>
+              <small>분석 단계 기준 진행률입니다. 프로젝트 크기에 따라 단계별 시간이 달라질 수 있습니다.</small>
+            </div>
+          )}
+
           {error && <p className="analysis-setup-error" role="alert">{error}</p>}
         </div>
 
         <footer className="analysis-setup-footer">
-          <span className="analysis-setup-status">{busy ? <><LoaderCircle size={14} className="spin" /> {connectionOnly ? "연결 저장 중" : "선택한 분석 결과 생성 중"}</> : connectionOnly ? "연결 문자열은 저장하지 않습니다." : "선택한 범위만 분석합니다."}</span>
+          <span className="analysis-setup-status">{busy ? <><LoaderCircle size={14} className="spin" /> {connectionOnly ? "연결 저장 중" : `${progress?.percent ?? 0}% · ${progress?.label ?? "분석 준비 중"}`}</> : connectionOnly ? "연결 문자열은 저장하지 않습니다." : "선택한 범위만 분석합니다."}</span>
           <div>
             <button className="outline-action" type="button" onClick={onCancel} disabled={busy}>{connectionOnly ? "취소" : "나중에"}</button>
             <button className="primary-action" type="button" onClick={() => connectionOnly ? onSave?.() : onStart?.(choice)} disabled={busy}>{busy ? (connectionOnly ? "저장 중..." : "분석 중...") : connectionOnly ? "연결 저장" : "분석 시작"}</button>

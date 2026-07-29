@@ -22,7 +22,7 @@ import type {
 } from "./types/workspace";
 import type { InventoryBootstrap } from "./types/visual-map";
 import { prepareSearchIndex } from "./visual/search";
-import type { AnalysisSetupChoice } from "./components/workbench/ProjectAnalysisSetupModal";
+import type { AnalysisProgress, AnalysisSetupChoice } from "./components/workbench/ProjectAnalysisSetupModal";
 
 function App() {
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
@@ -34,9 +34,20 @@ function App() {
   const [snapshotRecoveryNotice, setSnapshotRecoveryNotice] = useState<string | null>(null);
   const [analysisSetupWorkspace, setAnalysisSetupWorkspace] = useState<import("./types/workspace").Workspace | null>(null);
   const [analysisInitializing, setAnalysisInitializing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ percent: 0, label: "분석 준비 중" });
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [dbConnectionError, setDbConnectionError] = useState<string | null>(null);
   const busyActionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!analysisInitializing) return;
+    const timer = window.setInterval(() => {
+      setAnalysisProgress((current) => current.percent >= 78
+        ? current
+        : { ...current, percent: Math.min(78, current.percent + 1) });
+    }, 1200);
+    return () => window.clearInterval(timer);
+  }, [analysisInitializing]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || !hasTauriRuntime()) {
@@ -233,6 +244,7 @@ function App() {
     }
 
     setAnalysisError(null);
+    setAnalysisProgress({ percent: 5, label: "분석 준비 중" });
     setAnalysisInitializing(true);
     setSourceManagerOpen(false);
     await withBusy("workspace-initialize", async () => {
@@ -248,7 +260,10 @@ function App() {
           configuredWorkspace = await invoke<import("./types/workspace").Workspace>("save_db_profile", { request: saveRequest });
           workspaces.setCurrentWorkspace(configuredWorkspace);
           await workspaces.refreshWorkspaces(configuredWorkspace.id);
+          setAnalysisProgress({ percent: 20, label: "DB 연결 준비 완료" });
         }
+
+        setAnalysisProgress({ percent: connectDb ? 30 : 20, label: "코드·DB 구조 분석 중" });
 
         const request: InitializeWorkspaceAnalysisRequest = {
           workspaceId: configuredWorkspace.id,
@@ -257,6 +272,7 @@ function App() {
           connectionString: connectDb && !sourceUsesPath ? dbProfileControls.connectionString.trim() : null,
         };
         const result = await invoke<WorkspaceAnalysisResult>("initialize_workspace_analysis", { request });
+        setAnalysisProgress({ percent: 86, label: "분석 결과 정리 중" });
         workspaces.setCurrentWorkspace(result.workspace);
         if (result.code?.inventory) {
           code.restoreCodeInventory(result.code.inventory, result.workspace.id);
@@ -276,8 +292,10 @@ function App() {
           return;
         }
 
+        setAnalysisProgress({ percent: 94, label: "시각화 준비 중" });
         setAnalysisSetupWorkspace(null);
         await refreshInventorySnapshot(result.workspace.id);
+        setAnalysisProgress({ percent: 100, label: "시각화 준비 완료" });
       } catch (error) {
         const uiError = toUserError(error, "프로젝트 분석을 시작하지 못했습니다");
         setAnalysisError(uiError.message);
@@ -363,12 +381,14 @@ function App() {
       devSlot={devSlot}
       analysisSetupWorkspace={analysisSetupWorkspace}
       analysisInitializing={analysisInitializing}
+      analysisProgress={analysisProgress}
       analysisError={analysisError}
       onStartAnalysis={startWorkspaceAnalysis}
       onCancelAnalysis={() => setAnalysisSetupWorkspace(null)}
       onOpenAnalysis={() => {
         if (workspaces.currentWorkspace) {
           setAnalysisError(null);
+          setAnalysisProgress({ percent: 0, label: "분석 준비 중" });
           setAnalysisSetupWorkspace(workspaces.currentWorkspace);
         }
       }}

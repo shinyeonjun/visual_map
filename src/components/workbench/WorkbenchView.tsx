@@ -14,7 +14,7 @@ import { WorkbenchLeftPanel } from "./WorkbenchLeftPanel";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
 import { WorkbenchTopBar } from "./WorkbenchTopBar";
 import { targetKindForMode } from "./targetModel";
-import { ProjectAnalysisSetupModal, type AnalysisSetupChoice } from "./ProjectAnalysisSetupModal";
+import { ProjectAnalysisSetupModal, type AnalysisProgress, type AnalysisSetupChoice } from "./ProjectAnalysisSetupModal";
 
 export function WorkbenchView({
   sourceManagerOpen,
@@ -27,6 +27,7 @@ export function WorkbenchView({
   devSlot,
   analysisSetupWorkspace,
   analysisInitializing = false,
+  analysisProgress,
   analysisError = null,
   onStartAnalysis = () => undefined,
   onCancelAnalysis = () => undefined,
@@ -45,6 +46,7 @@ export function WorkbenchView({
   devSlot?: ReactNode;
   analysisSetupWorkspace?: import("../../types/workspace").Workspace | null;
   analysisInitializing?: boolean;
+  analysisProgress?: AnalysisProgress;
   analysisError?: string | null;
   onStartAnalysis?: (choice: AnalysisSetupChoice) => void;
   onCancelAnalysis?: () => void;
@@ -376,6 +378,7 @@ export function WorkbenchView({
           workspace={analysisSetupWorkspace}
           dbProfileControls={dbProfileControls}
           busy={analysisInitializing}
+          progress={analysisProgress}
           error={analysisError}
           onStart={onStartAnalysis}
           onCancel={onCancelAnalysis}
