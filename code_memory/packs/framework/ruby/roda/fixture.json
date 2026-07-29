@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "ruby",
+  "framework": "roda",
+  "files": [
+    {
+      "path": "src/fixture.rb",
+      "source": "r.on '/fixture', handler\napp.use(authMiddleware);"
+    },
+    {
+      "path": "Gemfile",
+      "source": "source \"https://rubygems.org\"\ngem \"roda\"\ngem \"class App < Roda\"\ngem \"r.on\"\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

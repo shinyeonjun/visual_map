@@ -60,6 +60,7 @@ describe("WorkbenchView surface transitions", () => {
           focusId: null,
           loading: false,
           snapshotStaleReasons: [],
+          snapshotSavedAt: "test",
           selectedNode: null,
           selectedEdge: null,
           clearSelection: vi.fn(),
@@ -162,6 +163,7 @@ describe("WorkbenchView surface transitions", () => {
           focusId: answerMap.focus,
           loading: false,
           snapshotStaleReasons: [],
+          snapshotSavedAt: "test",
           selectedNode: null,
           selectedEdge: null,
           clearSelection,
@@ -197,7 +199,7 @@ function Harness() {
   const controls = {
     ...visual,
     snapshotStaleReasons: [],
-    snapshotSavedAt: null,
+    snapshotSavedAt: "test",
     selectedNode: null,
     selectedEdge: null,
     showMode: (mode: string, focusId?: string | null) => {

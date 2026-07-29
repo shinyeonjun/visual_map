@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "rust",
+  "id": "poem",
+  "name": "Poem",
+  "kind": "web",
+  "signals": [
+    "use poem",
+    "#[handler]",
+    "Route::new"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "cpp",
+  "id": "crow",
+  "name": "Crow",
+  "kind": "web",
+  "signals": [
+    "crow.h",
+    "CROW_ROUTE",
+    "crow::SimpleApp"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

@@ -61,10 +61,73 @@ pub(crate) fn migrate_roaming_data_to_local(
     }
     match fs::rename(&roaming, &local) {
         Ok(()) => Ok(local),
-        // A locked cache or a cross-volume policy must not make an existing workspace disappear.
-        // Continue from RoamingAppData and retry migration on a later launch.
-        Err(_) => Ok(roaming),
+        Err(_) => {
+            copy_user_state(&roaming, &local)?;
+            Ok(local)
+        }
     }
+}
+
+/// Prefer the user-facing product directory while preserving data from the
+/// identifier-based directories used by older builds.
+pub(crate) fn migrate_legacy_app_data_to_named_dir(
+    named: PathBuf,
+    legacy_local: PathBuf,
+    legacy_roaming: PathBuf,
+) -> std::io::Result<PathBuf> {
+    if named.exists() {
+        if !has_user_state(&named) {
+            for legacy in [&legacy_local, &legacy_roaming] {
+                if has_user_state(legacy) {
+                    merge_user_state(legacy, &named)?;
+                    break;
+                }
+            }
+        }
+        return Ok(named);
+    }
+
+    if let Some(parent) = named.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    for legacy in [legacy_local, legacy_roaming] {
+        if !legacy.exists() {
+            continue;
+        }
+        match fs::rename(&legacy, &named) {
+            Ok(()) => return Ok(named),
+            Err(_) => {
+                copy_user_state(&legacy, &named)?;
+                return Ok(named);
+            }
+        }
+    }
+
+    Ok(named)
+}
+
+fn merge_user_state(source: &Path, target: &Path) -> std::io::Result<()> {
+    for name in ["app-state.sqlite", "workspaces"] {
+        let source_path = source.join(name);
+        if !source_path.exists() {
+            continue;
+        }
+
+        let target_path = target.join(name);
+        if target_path.exists() {
+            if name == "workspaces" && !directory_has_entries(&target_path) {
+                fs::remove_dir(&target_path)?;
+            } else {
+                continue;
+            }
+        }
+        if fs::rename(&source_path, &target_path).is_err() {
+            copy_user_state(&source_path, &target_path)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn has_user_state(root: &Path) -> bool {
@@ -92,7 +155,7 @@ fn move_roaming_user_state_into_empty_local(
             fs::remove_dir(&local_workspaces)?;
         }
         if fs::rename(&roaming_workspaces, &local_workspaces).is_err() {
-            return Ok(roaming);
+            copy_user_state(&roaming_workspaces, &local_workspaces)?;
         }
     }
 
@@ -101,9 +164,32 @@ fn move_roaming_user_state_into_empty_local(
     if roaming_state.is_file() && !local_state.exists() {
         // Workspace records are already moved above. A state-file failure only leaves optional
         // UI preferences behind; it never causes the recovered workspace to be hidden again.
-        let _ = fs::rename(roaming_state, local_state);
+        if fs::rename(&roaming_state, &local_state).is_err() {
+            let _ = fs::copy(roaming_state, local_state);
+        }
     }
     Ok(local)
+}
+
+fn copy_user_state(source: &Path, target: &Path) -> std::io::Result<()> {
+    if source.is_dir() {
+        fs::create_dir_all(target)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let source_path = entry.path();
+            let target_path = target.join(entry.file_name());
+            copy_user_state(&source_path, &target_path)?;
+        }
+        return Ok(());
+    }
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if !target.exists() {
+        fs::copy(source, target)?;
+    }
+    Ok(())
 }
 
 impl From<BasePaths> for AppPaths {
@@ -232,6 +318,67 @@ mod tests {
         );
         assert!(local.join("EBWebView").is_dir());
         assert!(!roaming.join("workspaces").exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migrates_identifier_directory_to_named_product_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "backend-visual-map-named-path-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            fs::remove_dir_all(&root).unwrap();
+        }
+
+        let named = root.join("Backend-Visual");
+        let legacy_local = root.join("com.backendvisualmap.app");
+        let legacy_roaming = root.join("roaming");
+        fs::create_dir_all(legacy_local.join("workspaces")).unwrap();
+        fs::write(legacy_local.join("app-state.sqlite"), b"state").unwrap();
+
+        assert_eq!(
+            migrate_legacy_app_data_to_named_dir(named.clone(), legacy_local, legacy_roaming,)
+                .unwrap(),
+            named.clone()
+        );
+        assert!(named.join("app-state.sqlite").is_file());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn merges_legacy_workspaces_when_named_directory_already_exists() {
+        let root = std::env::temp_dir().join(format!(
+            "backend-visual-map-named-merge-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            fs::remove_dir_all(&root).unwrap();
+        }
+
+        let named = root.join("Backend-Visual");
+        let legacy_local = root.join("com.backendvisualmap.app");
+        let legacy_roaming = root.join("roaming");
+        fs::create_dir_all(named.join("workspaces")).unwrap();
+        fs::create_dir_all(legacy_local.join("workspaces").join("project-1")).unwrap();
+        fs::write(
+            legacy_local
+                .join("workspaces")
+                .join("project-1")
+                .join("workspace.json"),
+            b"{}",
+        )
+        .unwrap();
+
+        migrate_legacy_app_data_to_named_dir(named.clone(), legacy_local, legacy_roaming).unwrap();
+
+        assert!(named
+            .join("workspaces")
+            .join("project-1")
+            .join("workspace.json")
+            .is_file());
 
         fs::remove_dir_all(root).unwrap();
     }

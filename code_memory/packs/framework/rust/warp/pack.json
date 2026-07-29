@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "rust",
+  "id": "warp",
+  "name": "Warp",
+  "kind": "web",
+  "signals": [
+    "use warp",
+    "warp::path",
+    "warp::Filter"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

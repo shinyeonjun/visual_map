@@ -191,11 +191,36 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         let request_path = request.path().display().to_string();
         let args =
             engine::sidecar_args(["cli", tool.as_str(), "--args-file", request_path.as_str()])?;
-        let cache_dir = self.cache_dir.display().to_string();
-        let mut envs = vec![("CBM_CACHE_DIR", cache_dir.as_str())];
-        if let Some(allowed_root) = allowed_root {
-            envs.push(("CBM_ALLOWED_ROOT", allowed_root));
+        let mut env_values = vec![(
+            "CBM_CACHE_DIR".to_string(),
+            self.cache_dir.display().to_string(),
+        )];
+        let engine_dir = Path::new(&self.engine.path).parent();
+        if let Some(path) = engine_dir
+            .map(|directory| directory.join("packs"))
+            .filter(|path| path.is_dir())
+        {
+            env_values.push((
+                "CODE_MEMORY_PACKS_ROOT".to_string(),
+                path.display().to_string(),
+            ));
         }
+        if let Some(path) = engine_dir
+            .map(|directory| directory.join("providers"))
+            .filter(|path| path.is_dir())
+        {
+            env_values.push((
+                "CODE_MEMORY_PROVIDERS_ROOT".to_string(),
+                path.display().to_string(),
+            ));
+        }
+        if let Some(allowed_root) = allowed_root {
+            env_values.push(("CBM_ALLOWED_ROOT".to_string(), allowed_root.to_string()));
+        }
+        let envs = env_values
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
 
         engine::run_engine_command_with_env(self.engine, &args, timeout, &envs)
     }

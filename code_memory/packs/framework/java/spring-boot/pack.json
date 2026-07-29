@@ -1,0 +1,23 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "java",
+  "id": "spring-boot",
+  "name": "Spring Boot",
+  "kind": "web",
+  "signals": [
+    "import:org.springframework.boot",
+    "@SpringBootApplication",
+    "@RestController"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "SERVICE",
+    "DEPENDENCY"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "SERVICE",
+    "DEPENDENCY"
+  ]
+}

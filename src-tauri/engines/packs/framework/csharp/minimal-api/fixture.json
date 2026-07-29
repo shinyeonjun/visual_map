@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "csharp",
+  "framework": "minimal-api",
+  "files": [
+    {
+      "path": "src/fixture.cs",
+      "source": "var app = WebApplication.Create(); app.MapGet('/fixture', handler); app.Use(auth);\napp.use(authMiddleware);"
+    },
+    {
+      "path": "fixture.csproj",
+      "source": "<Project><ItemGroup>\n<!-- signal: WebApplication.CreateBuilder | signal: app.MapGet | signal: app.MapPost -->\n</ItemGroup></Project>\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

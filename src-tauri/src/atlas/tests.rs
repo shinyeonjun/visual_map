@@ -326,6 +326,7 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
             handler: "shop.handlers.create_order".to_string(),
             route: "shop.routes.create_order".to_string(),
         }],
+        relation_gaps: Vec::new(),
         partial: false,
     };
     let code_json = serde_json::to_value(code).unwrap();
@@ -461,6 +462,7 @@ fn canonical_builder_splits_legacy_collapsed_route_bindings() {
                 route: "__route__GET__/".to_string(),
             },
         ],
+        relation_gaps: Vec::new(),
         partial: false,
     };
 
@@ -519,7 +521,7 @@ fn snapshot_with_metadata_records_code_source() {
     let code = snapshot.metadata.code.unwrap();
     assert_eq!(code.source_path.as_deref(), Some(r"D:\repo\shop-api"));
     assert_eq!(code.source_type, "local-folder");
-    assert_eq!(code.engine_version.as_deref(), Some("0.9.0"));
+    assert_eq!(code.engine_version.as_deref(), Some("0.1.0"));
     assert_eq!(code.adapter_version.as_deref(), Some("3"));
     assert!(snapshot.stale_reasons.is_empty());
 }
@@ -585,6 +587,7 @@ fn empty_inventories_keep_source_provenance() {
         architecture: None,
         calls: Vec::new(),
         handles: Vec::new(),
+        relation_gaps: Vec::new(),
         partial: false,
     };
     let db = DbInventory {
@@ -4189,6 +4192,34 @@ fn atlas_prefers_engine_packages_and_db_schemas_over_name_groups() {
 }
 
 #[test]
+fn atlas_reads_packages_from_architecture_index_nodes() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot.metadata.architecture = Some(serde_json::json!({
+        "schema": "code-memory.architecture-index.v1",
+        "nodes": [
+            { "kind": "PROJECT", "name": "project" },
+            { "kind": "PACKAGE", "name": "app" }
+        ],
+        "edges": []
+    }));
+    for code in snapshot
+        .items
+        .iter_mut()
+        .filter(|item| item.source == "code")
+    {
+        code.group_id = Some("app.orders".to_string());
+    }
+
+    let map = visual_map(&snapshot, None, "atlas".to_string());
+
+    assert!(map.nodes.iter().any(|node| node.id == "group:package:app"));
+    assert!(!map
+        .nodes
+        .iter()
+        .any(|node| node.id.starts_with("group:domain:")));
+}
+
+#[test]
 fn atlas_overview_uses_primary_code_symbols_only() {
     let mut function = item(
         "code:function:process-order",
@@ -5311,10 +5342,10 @@ fn test_registry() -> EngineRegistry {
                 id: "codebase-memory".to_string(),
                 label: "codebase-memory".to_string(),
                 role: "code".to_string(),
-                executable: "codebase-memory-mcp.exe".to_string(),
-                expected_version: "0.9.0".to_string(),
+                executable: "code-memory-language.exe".to_string(),
+                expected_version: "0.1.0".to_string(),
                 contract_version: "1".to_string(),
-                path: r"D:\engines\codebase-memory-mcp.exe".to_string(),
+                path: r"D:\engines\code-memory-language.exe".to_string(),
                 available: false,
                 releasable: false,
                 integrity: "missing".to_string(),

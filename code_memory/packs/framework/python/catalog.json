@@ -1,0 +1,26 @@
+{
+  "schema": "code-memory.framework-pack-catalog.v1",
+  "language": "python",
+  "packs": [
+    {
+      "id": "django",
+      "path": "django/pack.json"
+    },
+    {
+      "id": "flask",
+      "path": "flask/pack.json"
+    },
+    {
+      "id": "fastapi",
+      "path": "fastapi/pack.json"
+    },
+    {
+      "id": "starlette",
+      "path": "starlette/pack.json"
+    },
+    {
+      "id": "sanic",
+      "path": "sanic/pack.json"
+    }
+  ]
+}

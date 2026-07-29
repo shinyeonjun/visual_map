@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "dart",
+  "id": "shelf",
+  "name": "Shelf",
+  "kind": "web",
+  "signals": [
+    "package:shelf/",
+    "Pipeline",
+    "Router"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

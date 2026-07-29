@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "python",
+  "id": "sanic",
+  "name": "Sanic",
+  "kind": "web",
+  "signals": [
+    "import:sanic",
+    "@app.get",
+    "Sanic("
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

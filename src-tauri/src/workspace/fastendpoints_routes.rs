@@ -546,6 +546,7 @@ mod tests {
             architecture: None,
             calls: Vec::new(),
             handles: Vec::new(),
+            relation_gaps: Vec::new(),
             partial: false,
         }
     }

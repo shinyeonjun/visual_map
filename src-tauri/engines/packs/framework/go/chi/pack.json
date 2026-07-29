@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "go",
+  "id": "chi",
+  "name": "Chi",
+  "kind": "web",
+  "signals": [
+    "github.com/go-chi/chi",
+    "chi.NewRouter",
+    "r.Get"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

@@ -254,7 +254,10 @@ fn apply_explicit_query_evidence_for_code_uncached(
                 .iter()
                 .filter_map(|access| {
                     let resolved = resolve_table(&access.token, &tables);
-                    (resolved.len() == 1).then_some((access, resolved[0]))
+                    match resolved.as_slice() {
+                        [table] => Some((access, *table)),
+                        _ => None,
+                    }
                 })
                 .collect::<Vec<_>>();
             for (access, table) in &resolved_accesses {
@@ -1953,6 +1956,56 @@ mod tests {
                 .count(),
             2
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ignores_static_sql_when_snapshot_has_no_matching_table() {
+        let root = std::env::temp_dir().join(format!(
+            "backend-map-semantic-empty-table-{}",
+            std::process::id()
+        ));
+        let source_dir = root.join("src");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            source_dir.join("repository.ts"),
+            "function load() { return db.query(\"SELECT id FROM missing_orders\"); }\n",
+        )
+        .unwrap();
+
+        let mut snapshot = InventorySnapshot {
+            schema_version: 2,
+            workspace_id: "workspace-empty-table".to_string(),
+            saved_at: "1".to_string(),
+            metadata: Default::default(),
+            stale_reasons: Vec::new(),
+            links: Vec::new(),
+            items: vec![inventory_item(
+                "code:load",
+                "function",
+                "load",
+                "code",
+                None,
+                Some("src/repository.ts"),
+                None,
+            )],
+        };
+        snapshot.items[0].location = Some(super::super::model::SourceLocation {
+            path: "src/repository.ts".to_string(),
+            line: Some(1),
+            column: None,
+            end_line: Some(1),
+            end_column: None,
+        });
+
+        let count = apply_explicit_query_evidence_for_code(
+            &mut snapshot,
+            root.to_str().unwrap(),
+            &["code:load".to_string()],
+        );
+
+        assert_eq!(count, 0);
+        assert!(snapshot.links.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 

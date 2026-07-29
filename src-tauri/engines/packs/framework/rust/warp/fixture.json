@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "rust",
+  "framework": "warp",
+  "files": [
+    {
+      "path": "src/fixture.rs",
+      "source": "warp::path('/fixture').and(get(handler))\napp.use(authMiddleware);"
+    },
+    {
+      "path": "Cargo.toml",
+      "source": "[package]\nname = \"code-memory-framework-fixture\"\nversion = \"1.0.0\"\n\n[dependencies]\n# signal: use warp\n# signal: :path\n# signal: :Filter\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

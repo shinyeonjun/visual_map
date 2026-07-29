@@ -9,8 +9,8 @@ use std::{
 
 use super::codebase_memory::{CodebaseMemoryAdapter, CodebaseMemoryInventory, CODE_NODE_LABELS};
 use super::model::{
-    CodeCall, CodeHandle, CodeIndexResult, CodeInventory, CodeInventoryItem, CodeInventorySummary,
-    FocusedCodeSearch, IndexCodeRequest,
+    CodeCall, CodeHandle, CodeIndexResult, CodeInventory, CodeInventoryGap, CodeInventoryItem,
+    CodeInventorySummary, FocusedCodeSearch, IndexCodeRequest,
 };
 use super::store::{
     engine_json_value, object_bool, object_string, read_workspace_by_id, timestamp,
@@ -24,6 +24,23 @@ pub(crate) fn index_code_repository(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
     request: IndexCodeRequest,
+) -> Result<CodeIndexResult, String> {
+    index_code_repository_with_persistence(app_data_dir, registry, request, true)
+}
+
+pub(crate) fn index_code_repository_without_persisting(
+    app_data_dir: impl AsRef<Path>,
+    registry: &EngineRegistry,
+    request: IndexCodeRequest,
+) -> Result<CodeIndexResult, String> {
+    index_code_repository_with_persistence(app_data_dir, registry, request, false)
+}
+
+fn index_code_repository_with_persistence(
+    app_data_dir: impl AsRef<Path>,
+    registry: &EngineRegistry,
+    request: IndexCodeRequest,
+    persist_workspace: bool,
 ) -> Result<CodeIndexResult, String> {
     validate_workspace_id(&request.workspace_id)?;
 
@@ -53,9 +70,11 @@ pub(crate) fn index_code_repository(
             Ok(indexed_inventory) => {
                 workspace.code_project = Some(project.clone());
                 workspace.updated_at = timestamp();
-                if let Err(error) = write_workspace(&paths.workspaces_dir, &workspace) {
-                    let _ = adapter.delete_project(&project);
-                    return Err(error);
+                if persist_workspace {
+                    if let Err(error) = write_workspace(&paths.workspaces_dir, &workspace) {
+                        let _ = adapter.delete_project(&project);
+                        return Err(error);
+                    }
                 }
                 if previous_project != project {
                     let _ = adapter.delete_project(&previous_project);
@@ -114,12 +133,50 @@ fn code_inventory_from_adapter(
         &services,
         &files,
     )?;
-    inventory.calls = extract_code_calls(&result.calls, &inventory);
+    inventory.relation_gaps.extend(architecture_diagnostics(
+        inventory.architecture.as_ref(),
+        &inventory.project,
+    ));
+    let (calls, call_gaps) = extract_code_calls_with_gaps(&result.calls, &inventory);
+    inventory.calls = calls;
+    inventory.relation_gaps.extend(call_gaps);
     attach_code_handles(&result.handles, &mut inventory);
     super::fastapi_routes::enrich_fastapi_evidence(repo_path, &mut inventory);
     super::fastendpoints_routes::enrich_fastendpoints_routes(repo_path, &mut inventory);
     downgrade_unverified_routes(&mut inventory);
+    inventory.partial = !inventory.relation_gaps.is_empty();
     Ok(inventory)
+}
+
+fn architecture_diagnostics(
+    architecture: Option<&serde_json::Value>,
+    project: &str,
+) -> Vec<CodeInventoryGap> {
+    architecture
+        .and_then(|value| value.get("diagnostics"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|diagnostic| {
+            let language = diagnostic
+                .get("language")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("project");
+            let message = diagnostic
+                .get("message")
+                .or_else(|| diagnostic.get("detail"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| diagnostic.to_string());
+            CodeInventoryGap {
+                kind: "code-provider-diagnostic".to_string(),
+                from: format!("provider:{language}"),
+                to: project.to_string(),
+                message,
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn next_code_project_generation() -> String {
@@ -234,14 +291,23 @@ pub(crate) fn extract_code_inventory(
         architecture,
         calls: Vec::new(),
         handles: Vec::new(),
+        relation_gaps: Vec::new(),
         partial: false,
     })
 }
 
+#[cfg(test)]
 pub(crate) fn extract_code_calls(
     calls_json: &serde_json::Value,
     inventory: &CodeInventory,
 ) -> Vec<CodeCall> {
+    extract_code_calls_with_gaps(calls_json, inventory).0
+}
+
+pub(super) fn extract_code_calls_with_gaps(
+    calls_json: &serde_json::Value,
+    inventory: &CodeInventory,
+) -> (Vec<CodeCall>, Vec<CodeInventoryGap>) {
     let known_items = inventory
         .routes
         .iter()
@@ -261,15 +327,28 @@ pub(crate) fn extract_code_calls(
         .map(|item| item.id.as_str())
         .collect::<HashSet<_>>();
     let mut calls_by_pair = HashMap::<(String, String), CodeCall>::new();
-    for call in graph_rows(calls_json)
-        .into_iter()
-        .filter_map(code_call)
-        .filter(|call| {
-            known_items.contains_key(call.from.as_str())
-                && known_items.contains_key(call.to.as_str())
-                && (test_ids.contains(call.from.as_str()) || !test_ids.contains(call.to.as_str()))
-        })
-    {
+    let mut gaps = Vec::new();
+    let mut seen_gaps = HashSet::new();
+    for call in graph_rows(calls_json).into_iter().filter_map(code_call) {
+        let known_from = known_items.contains_key(call.from.as_str());
+        let known_to = known_items.contains_key(call.to.as_str());
+        if !known_from || !known_to {
+            if known_from && !known_to {
+                let key = (call.from.clone(), call.to.clone());
+                if seen_gaps.insert(key) {
+                    gaps.push(CodeInventoryGap {
+                        kind: "unresolved-call".to_string(),
+                        from: call.from.clone(),
+                        to: call.to.clone(),
+                        message: "codebase-memory CALLS 관계의 한쪽 끝점을 제품 인벤토리에서 찾지 못했습니다.".to_string(),
+                    });
+                }
+            }
+            continue;
+        }
+        if !test_ids.contains(call.from.as_str()) && test_ids.contains(call.to.as_str()) {
+            continue;
+        }
         let key = (call.from.clone(), call.to.clone());
         match calls_by_pair.entry(key) {
             std::collections::hash_map::Entry::Vacant(entry) => {
@@ -285,7 +364,8 @@ pub(crate) fn extract_code_calls(
     }
     let mut calls = calls_by_pair.into_values().collect::<Vec<_>>();
     calls.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
-    calls
+    gaps.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
+    (calls, gaps)
 }
 
 fn code_item_is_test(item: &CodeInventoryItem) -> bool {
@@ -301,10 +381,18 @@ fn code_item_is_test(item: &CodeInventoryItem) -> bool {
         })
 }
 
+#[cfg(test)]
 pub(crate) fn extract_code_handles(
     handles_json: &serde_json::Value,
     inventory: &CodeInventory,
 ) -> Vec<CodeHandle> {
+    extract_code_handles_with_gaps(handles_json, inventory).0
+}
+
+fn extract_code_handles_with_gaps(
+    handles_json: &serde_json::Value,
+    inventory: &CodeInventory,
+) -> (Vec<CodeHandle>, Vec<CodeInventoryGap>) {
     let route_ids = inventory
         .routes
         .iter()
@@ -322,12 +410,28 @@ pub(crate) fn extract_code_handles(
         .map(|item| item.id.as_str())
         .collect::<HashSet<_>>();
     let mut seen = HashSet::new();
+    let mut gaps = Vec::new();
+    let mut seen_gaps = HashSet::new();
     let mut handles = graph_rows(handles_json)
         .into_iter()
         .filter_map(code_call)
         .filter_map(|edge| {
-            (handler_ids.contains(edge.from.as_str()) && route_ids.contains(edge.to.as_str()))
-                .then_some(CodeHandle {
+            if (handler_ids.contains(edge.from.as_str()) && !route_ids.contains(edge.to.as_str()))
+                || (!handler_ids.contains(edge.from.as_str())
+                    && route_ids.contains(edge.to.as_str()))
+            {
+                let key = (edge.from.clone(), edge.to.clone());
+                if seen_gaps.insert(key) {
+                    gaps.push(CodeInventoryGap {
+                        kind: "unresolved-handle".to_string(),
+                        from: edge.from,
+                        to: edge.to,
+                        message: "codebase-memory HANDLES 관계의 handler 또는 route를 제품 인벤토리에서 찾지 못했습니다.".to_string(),
+                    });
+                }
+                return None;
+            }
+            Some(CodeHandle {
                     handler: edge.from,
                     route: edge.to,
                 })
@@ -339,11 +443,13 @@ pub(crate) fn extract_code_handles(
             .cmp(&b.route)
             .then_with(|| a.handler.cmp(&b.handler))
     });
-    handles
+    gaps.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
+    (handles, gaps)
 }
 
 pub(crate) fn attach_code_handles(handles_json: &serde_json::Value, inventory: &mut CodeInventory) {
-    let handles = extract_code_handles(handles_json, inventory);
+    let (handles, gaps) = extract_code_handles_with_gaps(handles_json, inventory);
+    inventory.relation_gaps.extend(gaps);
     attach_route_handles(handles, inventory);
 }
 
@@ -799,4 +905,29 @@ pub(crate) fn code_project_from_index_stdout(stdout: &str, fallback: &str) -> St
         .and_then(|value| object_string(&value, &["project"]))
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| fallback.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::architecture_diagnostics;
+
+    #[test]
+    fn provider_diagnostics_become_visible_inventory_gaps() {
+        let gaps = architecture_diagnostics(
+            Some(&serde_json::json!({
+                "diagnostics": [{
+                    "language": "java",
+                    "status": "missing-tool",
+                    "message": "jdtls is not available"
+                }]
+            })),
+            "shop",
+        );
+
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].kind, "code-provider-diagnostic");
+        assert_eq!(gaps[0].from, "provider:java");
+        assert_eq!(gaps[0].to, "shop");
+        assert_eq!(gaps[0].message, "jdtls is not available");
+    }
 }

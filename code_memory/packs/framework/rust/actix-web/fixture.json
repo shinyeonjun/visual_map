@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "rust",
+  "framework": "actix-web",
+  "files": [
+    {
+      "path": "src/fixture.rs",
+      "source": "HttpServer::new(|| App::new().route('/fixture', web::get().to(handler)));\napp.use(authMiddleware);"
+    },
+    {
+      "path": "Cargo.toml",
+      "source": "[package]\nname = \"code-memory-framework-fixture\"\nversion = \"1.0.0\"\n\n[dependencies]\n# signal: use actix_web\n# signal: HttpServer\n# signal: .route(\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

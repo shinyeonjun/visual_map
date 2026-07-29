@@ -1,0 +1,23 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "php",
+  "id": "symfony",
+  "name": "Symfony",
+  "kind": "web",
+  "signals": [
+    "Symfony\\",
+    "#[Route",
+    "AbstractController"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE",
+    "SERVICE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE",
+    "SERVICE"
+  ]
+}

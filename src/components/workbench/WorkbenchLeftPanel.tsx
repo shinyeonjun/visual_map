@@ -13,10 +13,12 @@ export function WorkbenchLeftPanel({
   workspaceControls,
   dbProfileControls,
   visualMapControls,
+  onEditDbConnection,
 }: {
   workspaceControls: WorkspaceControls;
   dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
+  onEditDbConnection?: () => void;
 }) {
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
   const setupSteps = workbenchSetupSteps(workspaceControls, dbProfileControls, visualMapControls);
@@ -52,7 +54,7 @@ export function WorkbenchLeftPanel({
       {hasWorkspace && (
         <CodeSourceSection workspaceControls={workspaceControls} />
       )}
-      <DatabaseSourceSection dbProfileControls={dbProfileControls} />
+      <DatabaseSourceSection dbProfileControls={dbProfileControls} onEditDbConnection={onEditDbConnection} />
     </aside>
   );
 }

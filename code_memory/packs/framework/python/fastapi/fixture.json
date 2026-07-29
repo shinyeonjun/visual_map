@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "python",
+  "framework": "fastapi",
+  "files": [
+    {
+      "path": "src/fixture.py",
+      "source": "from fastapi import FastAPI; @app.get('/fixture') def handler(): pass\n@Autowired UserService service;"
+    },
+    {
+      "path": "pyproject.toml",
+      "source": "[project]\nname = \"code-memory-framework-fixture\"\ndependencies = [\"fastapi\", \"@app.get\", \"APIRouter\"]\n# signal: fastapi\n# signal: @app.get\n# signal: APIRouter\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "DEPENDENCY"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

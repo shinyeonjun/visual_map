@@ -2637,6 +2637,74 @@
   box-sizing: border-box;
   display: block;
 }
+
+/* Multi-target analysis uses the same fixed API -> code -> DB reading spine as the overview. */
+.at-map-surface.at-composition-surface {
+  min-width: min(100%, 760px);
+  padding: 14px 14px 180px;
+  box-sizing: border-box;
+  display: block;
+}
+.at-composition-map-scroll { min-width: 0; overflow-x: auto; padding-bottom: 3px; scrollbar-gutter: stable; }
+.at-composition-map {
+  position: relative;
+  width: 960px;
+  min-width: 960px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-raised) 95%, var(--bg-inset) 5%);
+}
+.at-composition-lane {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  width: 274px;
+  border-inline: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  background: color-mix(in srgb, var(--blue) 2.5%, transparent);
+  pointer-events: none;
+}
+.at-composition-lane.code { background: color-mix(in srgb, var(--ink-4) 2.5%, transparent); }
+.at-composition-lane.db { background: color-mix(in srgb, var(--green) 3.5%, transparent); }
+.at-composition-lane > span,
+.at-composition-lane > small { position: absolute; top: 14px; color: var(--ink-3); font-size: 10.5px; font-weight: 800; }
+.at-composition-lane > span { left: 11px; }
+.at-composition-lane > small { right: 11px; min-width: 19px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-raised); color: var(--ink-4); font-family: var(--mono); text-align: center; }
+.at-composition-connections { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
+.at-composition-node {
+  position: absolute;
+  z-index: 2;
+  width: 236px;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 1px solid var(--card-line);
+  border-left: 3px solid var(--blue);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  box-shadow: 0 2px 7px rgba(15, 23, 42, 0.08);
+  color: var(--ink-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.at-composition-node.code { border-left-color: var(--ink-4); }
+.at-composition-node.db { border-left-color: var(--green); }
+.at-composition-node:hover,
+.at-composition-node.selected { border-color: rgba(91, 157, 255, 0.62); background: color-mix(in srgb, var(--bg-raised) 90%, var(--blue) 10%); }
+.at-composition-node > svg { color: var(--blue-ink); }
+.at-composition-node.code > svg { color: var(--ink-3); }
+.at-composition-node.db > svg { color: var(--green); }
+.at-composition-node strong,
+.at-composition-node small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.at-composition-node strong { font-size: 11.5px; font-weight: 820; }
+.at-composition-node small { grid-column: 2 / -1; color: var(--ink-4); font-family: var(--mono); font-size: 10px; }
+.at-composition-node .at-relation-badge { grid-column: 3; grid-row: 1; }
+.at-composition-selection-badge { grid-column: 3; grid-row: 1; color: var(--blue-ink); font-size: 9px; font-weight: 850; }
 .at-architecture {
   width: 100%;
   display: grid;

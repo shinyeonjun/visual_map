@@ -1,0 +1,18 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "rust",
+  "id": "tauri",
+  "name": "Tauri",
+  "kind": "desktop-bridge",
+  "signals": [
+    "tauri::command",
+    "generate_handler!"
+  ],
+  "outputs": [
+    "RPC_ENDPOINT",
+    "HANDLES"
+  ],
+  "rule_sets": [
+    "RPC_ENDPOINT"
+  ]
+}

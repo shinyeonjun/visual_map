@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "rust",
+  "id": "tonic",
+  "name": "Tonic",
+  "kind": "rpc",
+  "signals": [
+    "use tonic",
+    "tonic::include_proto",
+    "Server::builder"
+  ],
+  "outputs": [
+    "RPC_ENDPOINT",
+    "HANDLES",
+    "ASYNC_CALLS"
+  ],
+  "rule_sets": [
+    "RPC_ENDPOINT",
+    "ASYNC_CALLS"
+  ]
+}

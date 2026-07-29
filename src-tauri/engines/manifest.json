@@ -3,23 +3,23 @@
   "engines": [
     {
       "id": "codebase-memory",
-      "version": "0.9.0",
-      "sourceRepository": "https://github.com/DeusData/codebase-memory-mcp",
-      "sourceCommit": "b637e3330c96cfe452da623db068c241aaa3ec01",
-      "releaseUrl": "https://github.com/DeusData/codebase-memory-mcp/releases/tag/v0.9.0",
+      "version": "0.1.0",
+      "sourceRepository": "https://github.com/shinyeonjun/visual_map/tree/main/code_memory",
+      "sourceCommit": "visual-map-code-memory",
+      "releaseUrl": "",
       "archive": {
-        "fileName": "codebase-memory-mcp-windows-amd64.zip",
-        "url": "https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.9.0/codebase-memory-mcp-windows-amd64.zip",
-        "sha256": "92F96896F952E539F0D6CB34D7892A25064B677CCBF808B8F8310AD897E86F2C",
-        "entry": "codebase-memory-mcp.exe"
+        "fileName": "code-memory-language-windows-amd64.zip",
+        "url": "",
+        "sha256": "2CF215DE4399B52214B90845F9C4962C0D6EB88F1F788612D0330CE6993D6F29",
+        "entry": "code-memory-language.exe"
       },
       "executable": {
-        "fileName": "codebase-memory-mcp.exe",
-        "sha256": "9A205FA5AE759FBC866BFE1554F0C05A303BE9AE6E0A00F94D875DC0C25E0680"
+        "fileName": "code-memory-language.exe",
+        "sha256": "2CF215DE4399B52214B90845F9C4962C0D6EB88F1F788612D0330CE6993D6F29"
       },
-      "licenseId": "MIT",
+      "licenseId": "Apache-2.0",
       "contractVersion": "1",
-      "releaseReady": true,
+      "releaseReady": false,
       "developmentArtifacts": []
     },
     {

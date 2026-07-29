@@ -38,4 +38,41 @@ coverage/
 *.ntvs*
 *.njsproj
 *.sln
+!/code_memory/tests/fixtures/**/*.sln
+!/code_memory/tests/fixtures/**/*.slnx
 *.sw?
+*.scip
+
+# Integrated code-memory engine: keep source, ignore local toolchains and outputs.
+/code_memory/build/
+/code_memory/providers/
+/code_memory/rust/target/
+/code_memory/target/
+/code_memory/artifacts/
+/code_memory/.cache/
+/code_memory/.codex/
+/code_memory/tests/fixtures/**/target/
+/code_memory/tests/fixtures/**/bin/
+/code_memory/tests/fixtures/**/obj/
+/code_memory/tests/fixtures/**/.cache/
+/code_memory/tests/fixtures/**/.code_memory/
+/code_memory/tests/fixtures/**/.ruby-lsp/
+
+# Integrated database-memory engine: keep source and examples, ignore local builds/caches.
+/db_memory/target/
+/db_memory/target-*/
+/db_memory/dist/
+/db_memory/.database-memory/
+/db_memory/*.sqlite
+/db_memory/*.sqlite3
+/db_memory/*.db
+/db_memory/*.db-shm
+/db_memory/*.db-wal
+/db_memory/.codex-*.log
+/db_memory/codex-logs/
+
+# Local engine test outputs and temporary integration artifacts.
+/target/
+/e2e_runs/
+/release-artifacts/
+/_cleanup_pending/

@@ -1,0 +1,17 @@
+# Build output
+/build/
+/build-*/
+/rust/target/
+/rust/target-*/
+
+# Test output and provider workspaces
+/artifacts/
+/tests/fixtures/**/target/
+/tests/fixtures/**/bin/
+/tests/fixtures/**/obj/
+/tests/fixtures/**/.cache/
+/tests/fixtures/**/.code_memory/
+/tests/fixtures/**/.ruby-lsp/
+
+# Generated validation files
+/_validation_provider_warning.*

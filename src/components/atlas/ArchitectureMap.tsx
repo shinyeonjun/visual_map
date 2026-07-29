@@ -136,6 +136,180 @@ export function ArchitectureMap({
   );
 }
 
+const COMPOSITION_LANES: ArchitectureLane[] = ["api", "code", "db"];
+const COMPOSITION_LANE_X: Record<ArchitectureLane, number> = { api: 18, code: 342, db: 666 };
+const COMPOSITION_LANE_LABEL: Record<ArchitectureLane, string> = {
+  api: "API 경계",
+  code: "코드 영역",
+  db: "DB 스키마",
+};
+const COMPOSITION_CARD_WIDTH = 236;
+const COMPOSITION_ROW_STEP = 92;
+const COMPOSITION_CARD_TOP = 54;
+const COMPOSITION_NODE_LIMIT = 10;
+
+export function CompositionMap({
+  map,
+  selectedIds,
+  selectedNodeId,
+  selectedEdgeId,
+  onSelectNode,
+  onSelectEdge,
+}: {
+  map: VisualMap;
+  selectedIds: string[];
+  selectedNodeId: string | null;
+  selectedEdgeId: string | null;
+  onSelectNode: (node: VisualNode) => void;
+  onSelectEdge: (edge: VisualEdge) => void;
+}) {
+  const selected = new Set(selectedIds);
+  const nodesByLane = new Map<ArchitectureLane, VisualNode[]>(COMPOSITION_LANES.map((lane) => [lane, []]));
+  map.nodes.forEach((node) => {
+    const lane = compositionLane(node);
+    nodesByLane.get(lane)?.push(node);
+  });
+  const visibleNodes = COMPOSITION_LANES.flatMap((lane) => {
+    const nodes = nodesByLane.get(lane) ?? [];
+    return nodes
+      .sort((left, right) => Number(selected.has(right.id)) - Number(selected.has(left.id)) || left.title.localeCompare(right.title))
+      .slice(0, COMPOSITION_NODE_LIMIT);
+  });
+  const positions = new Map<string, { lane: ArchitectureLane; x: number; y: number }>();
+  COMPOSITION_LANES.forEach((lane) => {
+    const laneNodes = visibleNodes.filter((node) => compositionLane(node) === lane);
+    laneNodes.forEach((node, index) => positions.set(node.id, { lane, x: COMPOSITION_LANE_X[lane], y: COMPOSITION_CARD_TOP + index * COMPOSITION_ROW_STEP }));
+  });
+  const rows = Math.max(1, ...COMPOSITION_LANES.map((lane) => visibleNodes.filter((node) => compositionLane(node) === lane).length));
+  const mapHeight = COMPOSITION_CARD_TOP + rows * COMPOSITION_ROW_STEP + 26;
+  const visibleEdges = map.edges
+    .filter((edge) => {
+      const from = positions.get(edge.from);
+      const to = positions.get(edge.to);
+      return from && to && from.lane !== to.lane;
+    })
+    .sort((left, right) => Number(edgeTouchesSelection(right, selected)) - Number(edgeTouchesSelection(left, selected)))
+    .slice(0, 48);
+
+  return (
+    <section className="at-architecture at-composition" aria-label="선택 대상 연결 지도">
+      <div className="at-architecture-overview-head">
+        <div>
+          <Network size={16} aria-hidden="true" />
+          <strong>선택 대상 연결 지도</strong>
+          <span>{selectedIds.length}개 선택 · 관계 {map.edges.length.toLocaleString("ko-KR")}개</span>
+        </div>
+        <div className="at-architecture-legend" aria-label="관계 판단 범례">
+          <span className="confirmed">확정</span>
+          <span className="typed">구조</span>
+          <span className="candidate">후보</span>
+        </div>
+      </div>
+      {map.warnings.length > 0 && (
+        <div className="at-architecture-notes" aria-label="관계 분석 안내">
+          {map.warnings.map((warning) => <span key={warning}>{warning}</span>)}
+        </div>
+      )}
+      <div className="at-composition-map-scroll">
+        <div className="at-composition-map" style={{ height: mapHeight }}>
+          {COMPOSITION_LANES.map((lane) => {
+            const count = (nodesByLane.get(lane) ?? []).length;
+            const visibleCount = visibleNodes.filter((node) => compositionLane(node) === lane).length;
+            return (
+              <div className={`at-composition-lane ${lane}`} key={lane} style={{ left: COMPOSITION_LANE_X[lane] - 10 }} aria-hidden="true">
+                <span>{COMPOSITION_LANE_LABEL[lane]}</span>
+                <small>{count > visibleCount ? `${visibleCount}+` : count}</small>
+              </div>
+            );
+          })}
+          <svg className="at-composition-connections" width="960" height={mapHeight} viewBox={`0 0 960 ${mapHeight}`} aria-label={`선택 대상 관계 ${visibleEdges.length}개`}>
+            <defs>
+              {(["confirmed", "typed", "candidate", "inferred"] as const).map((tone) => (
+                <marker className={`at-architecture-marker ${tone}`} id={`composition-arrow-${tone}`} key={tone} markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto" markerUnits="strokeWidth">
+                  <path d="M 0 0 L 7 3.5 L 0 7 z" />
+                </marker>
+              ))}
+            </defs>
+            {visibleEdges.map((edge) => {
+              const from = positions.get(edge.from)!;
+              const to = positions.get(edge.to)!;
+              const fromRight = from.x < to.x;
+              const x1 = from.x + (fromRight ? COMPOSITION_CARD_WIDTH : 0);
+              const x2 = to.x + (fromRight ? 0 : COMPOSITION_CARD_WIDTH);
+              const y1 = from.y + 34;
+              const y2 = to.y + 34;
+              const midX = (x1 + x2) / 2;
+              const tone = architectureEdgeTone(edge);
+              const selectedEdge = edge.id === selectedEdgeId;
+              return (
+                <g
+                  className={`at-architecture-edge ${tone} ${selectedEdge ? "selected" : ""}`}
+                  data-architecture-edge={edge.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${edge.from}에서 ${edge.to} 관계`}
+                  key={edge.id}
+                  onClick={() => onSelectEdge(edge)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectEdge(edge);
+                    }
+                  }}
+                >
+                  <path className="at-architecture-edge-hit" d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`} />
+                  <path className="at-architecture-edge-line" d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`} markerEnd={`url(#composition-arrow-${tone})`} />
+                </g>
+              );
+            })}
+          </svg>
+          {visibleNodes.map((node) => {
+            const position = positions.get(node.id)!;
+            const lane = position.lane;
+            const isTarget = selected.has(node.id);
+            return (
+              <button
+                className={`at-card at-composition-node ${lane === "db" ? "table" : lane === "api" ? "route" : "code"} ${isTarget ? "target" : ""} ${selectedNodeId === node.id ? "selected" : ""}`}
+                style={{ left: position.x, top: position.y }}
+                type="button"
+                aria-pressed={selectedNodeId === node.id}
+                aria-label={`${node.title} ${nodeKindLabel(node.kind, node.source)} 선택`}
+                title={`${node.title} · ${node.subtitle ?? nodeKindLabel(node.kind, node.source)}`}
+                key={node.id}
+                onClick={() => onSelectNode(node)}
+              >
+                {node.source === "db" ? <Table2 size={14} /> : node.kind === "file" ? <FileText size={14} /> : <Cog size={14} />}
+                <strong>{node.title}</strong>
+                {isTarget ? <span className="at-composition-selection-badge">선택</span> : <RelationBadge summary={relationCountsForNode(map, node.id)} />}
+                <small>{compactPath(node.subtitle) ?? nodeKindLabel(node.kind, node.source)}</small>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function compositionLane(node: VisualNode): ArchitectureLane {
+  if (node.layer === "api") return "api";
+  return node.source === "db" ? "db" : "code";
+}
+
+function edgeTouchesSelection(edge: VisualEdge, selected: Set<string>): boolean {
+  return selected.has(edge.from) || selected.has(edge.to);
+}
+
+function relationCountsForNode(map: VisualMap, nodeId: string): RelationSummary | undefined {
+  const summary = { confirmed: 0, typed: 0, inferred: 0, candidate: 0 };
+  map.edges.forEach((edge) => {
+    if (edge.from !== nodeId && edge.to !== nodeId) return;
+    const tone = architectureEdgeTone(edge);
+    summary[tone] += 1;
+  });
+  return summary.confirmed + summary.typed + summary.inferred + summary.candidate > 0 ? summary : undefined;
+}
+
 function ArchitectureOverviewMap({
   map,
   nodes,

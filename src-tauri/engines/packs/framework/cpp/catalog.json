@@ -1,0 +1,38 @@
+{
+  "schema": "code-memory.framework-pack-catalog.v1",
+  "language": "cpp",
+  "packs": [
+    {
+      "id": "qt",
+      "path": "qt/pack.json"
+    },
+    {
+      "id": "mfc",
+      "path": "mfc/pack.json"
+    },
+    {
+      "id": "boost-asio",
+      "path": "boost-asio/pack.json"
+    },
+    {
+      "id": "poco",
+      "path": "poco/pack.json"
+    },
+    {
+      "id": "unreal-engine",
+      "path": "unreal-engine/pack.json"
+    },
+    {
+      "id": "drogon",
+      "path": "drogon/pack.json"
+    },
+    {
+      "id": "crow",
+      "path": "crow/pack.json"
+    },
+    {
+      "id": "grpc",
+      "path": "grpc/pack.json"
+    }
+  ]
+}

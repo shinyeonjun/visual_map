@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "java",
+  "framework": "spring-mvc",
+  "files": [
+    {
+      "path": "src/fixture.java",
+      "source": "@RequestMapping('/api') @GetMapping('/fixture') void handler() {}\napp.use(authMiddleware);"
+    },
+    {
+      "path": "pom.xml",
+      "source": "<project><dependencies>\n<!-- signal: org.springframework.web | signal: @RequestMapping | signal: @GetMapping -->\n</dependencies></project>\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

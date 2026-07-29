@@ -103,9 +103,9 @@ export function useCodeInventory({
     setSelectedCodeItem(null);
   }
 
-  function restoreCodeInventory(inventory: CodeInventory) {
+  function restoreCodeInventory(inventory: CodeInventory, workspaceId = currentWorkspace?.id ?? null) {
     setCodeInventory(inventory);
-    setInventoryWorkspaceId(currentWorkspace?.id ?? null);
+    setInventoryWorkspaceId(workspaceId);
     setSelectedCodeItem(firstCodeInventoryItem(inventory));
     setCodeStatus(codeInventoryStatus(inventory, "불러옴"));
     setCodeError(null);

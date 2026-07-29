@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "ruby",
+  "id": "grape",
+  "name": "Grape",
+  "kind": "web",
+  "signals": [
+    "require:grape",
+    "Grape::API",
+    "resource /"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

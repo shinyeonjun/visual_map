@@ -1,24 +1,17 @@
-import { CheckCircle2, Database, File, Folder, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Database, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useRef } from "react";
-import {
-  DB_PROFILE_SOURCE_OPTIONS,
-  dbInventoryTableCount,
-  dbProfileSourceLabel,
-  dbProfileSourceUsesPath,
-} from "../../types/workspace";
-import type { DbProfileSource } from "../../types/workspace";
+import { dbInventoryTableCount, dbProfileSourceLabel } from "../../types/workspace";
 import type { DbProfileControls } from "../../types/controls";
-import { focusDbProfileSetup as focusDbProfileInput } from "../common/focusSourceSetup";
 import { PanelHeader } from "../common/PanelHeader";
 
 export function DatabaseSourceSection({
   dbProfileControls,
+  onEditDbConnection,
 }: {
   dbProfileControls: DbProfileControls;
+  onEditDbConnection?: () => void;
 }) {
   const operationMessageRef = useRef<HTMLSpanElement>(null);
-  const sourceUsesPath = dbProfileSourceUsesPath(dbProfileControls.profileSource);
-  const sourceCopy = dbSourceCopy[dbProfileControls.profileSource];
   const hasWorkspace = dbProfileControls.hasWorkspace;
   const allTables = dbProfileControls.inventory?.tables ?? [];
   const hasProfile = Boolean(dbProfileControls.activeProfile);
@@ -32,97 +25,12 @@ export function DatabaseSourceSection({
     (sum, table) => sum + Math.max(table.foreignKeys?.length ?? 0, table.columns.filter((column) => column.isForeignKey).length),
     0,
   );
-  const isSnapshotInventory = hasInventory && !hasProfile;
-  const profileMatchesForm = dbProfileMatchesForm(dbProfileControls, sourceUsesPath);
-  const saveProfileLabel = dbProfileControls.canSaveProfile
-    ? "DB 연결 저장"
-    : profileMatchesForm
-      ? "현재 DB 연결 저장됨"
-      : "연결 정보 대기";
-  const snapshotProfileHint = !isSnapshotInventory
-    ? null
-    : dbProfileControls.canSaveProfile
-      ? "DB 연결을 저장하면 새로고침과 다시 읽기를 사용할 수 있습니다."
-      : "저장하려면 연결 이름과 DB 정보를 입력하세요.";
-  const requirementCopy = isSnapshotInventory
-    ? "저장된 DB 구조를 복구했습니다. 다시 읽으려면 DB 연결을 저장하세요."
-    : dbRequirementCopy(sourceCopy.required, hasInventory, hasTables, hasColumns, sourceUsesPath);
   const nextAction = dbNextAction(dbProfileControls, hasProfile, hasInventory, hasTables, hasColumns, missingColumnTables);
-  const compactReady = hasInventory && (profileMatchesForm || isSnapshotInventory);
   const showDbOperationMessage = Boolean(
     dbProfileControls.error ||
       dbProfileControls.saving ||
       dbProfileControls.indexing ||
       (!hasInventory && dbProfileControls.status),
-  );
-  const sourceSettings = (
-    <>
-      <div className="meta-row">
-        <label htmlFor="db-profile-source-select">연결 유형</label>
-        <select
-          id="db-profile-source-select"
-          className="inline-select"
-          value={dbProfileControls.profileSource}
-          onChange={(event) => dbProfileControls.setProfileSource(event.currentTarget.value as DbProfileSource)}
-        >
-          {DB_PROFILE_SOURCE_OPTIONS.map((source) => (
-            <option key={source.value} value={source.value}>
-              {source.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      <span className="secret-note">{sourceCopy.help}</span>
-      <span className="secret-note">행 데이터는 조회하지 않고 구조 정보만 읽습니다.</span>
-      <label className="field-label" htmlFor="db-profile-target-input">
-        {sourceCopy.label}
-      </label>
-      {sourceUsesPath ? (
-        <div className="path-row">
-          <input
-            id="db-profile-target-input"
-            className="workspace-input mono"
-            value={dbProfileControls.profilePath}
-            onChange={(event) => dbProfileControls.setProfilePath(event.currentTarget.value)}
-            placeholder={sourceCopy.placeholder}
-          />
-          <button
-            className="square-button"
-            type="button"
-            onClick={() => dbProfileControls.pickPath(false)}
-            disabled={dbProfileControls.busy}
-            aria-label={dbProfileControls.profileSource === "ddl-sqlite" ? "DDL 파일 선택" : `${sourceCopy.label} 선택`}
-            title={dbProfileControls.profileSource === "ddl-sqlite" ? "DDL 파일 선택" : `${sourceCopy.label} 선택`}
-          >
-            <File size={14} />
-          </button>
-          {dbProfileControls.profileSource === "ddl-sqlite" ? (
-            <button
-              className="square-button"
-              type="button"
-              onClick={() => dbProfileControls.pickPath(true)}
-              disabled={dbProfileControls.busy}
-              aria-label="DDL 폴더 선택"
-              title="DDL 폴더 선택"
-            >
-              <Folder size={14} />
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <>
-          <input
-            id="db-profile-target-input"
-            className="workspace-input mono"
-            type="password"
-            value={dbProfileControls.connectionString}
-            onChange={(event) => dbProfileControls.setConnectionString(event.currentTarget.value)}
-            placeholder={sourceCopy.placeholder}
-          />
-          <span className="secret-note">세션에서만 사용하며 프로젝트 파일에 저장하지 않습니다.</span>
-        </>
-      )}
-    </>
   );
 
   useEffect(() => {
@@ -132,9 +40,9 @@ export function DatabaseSourceSection({
   }, [dbProfileControls.error]);
 
   return (
-    <section className={`side-card database-source ${hasWorkspace ? "" : "locked"} ${compactReady ? "ready" : ""}`}>
+    <section className={`side-card database-source ${hasWorkspace ? "" : "locked"} ${hasInventory ? "ready" : ""}`}>
       <PanelHeader icon={<Database size={16} />} title="데이터베이스" />
-      <div className={`source-next ${nextAction.tone === "ready" ? "source-ready" : ""}`}>
+      {hasWorkspace && hasProfile && <div className={`source-next ${nextAction.tone === "ready" ? "source-ready" : ""}`}>
         <span>
           <b>{nextAction.label}</b>
           <small>{nextAction.text}</small>
@@ -154,7 +62,20 @@ export function DatabaseSourceSection({
             <span>{nextAction.button}</span>
           </button>
         )}
-      </div>
+      </div>}
+      {hasWorkspace && (
+        <div className={`db-connection-summary ${hasProfile ? "connected" : "disconnected"}`}>
+          <span>
+            <b>{hasProfile ? "DB 연결됨" : "DB 연결 안 됨"}</b>
+            <small>{hasProfile ? `${dbProfileControls.activeProfile?.name} · ${dbProfileSourceLabel(dbProfileControls.activeProfile?.source ?? dbProfileControls.profileSource)}` : "코드만 분석하거나 DB 구조를 추가할 수 있습니다."}</small>
+          </span>
+          {onEditDbConnection && (
+            <button className="outline-action compact" type="button" onClick={onEditDbConnection} disabled={dbProfileControls.busy}>
+              {hasProfile ? "편집" : "연결"}
+            </button>
+          )}
+        </div>
+      )}
       {hasInventory && (
         <div className="source-stat-grid" aria-label="DB 구조 요약">
           <span className={hasTables ? "ready" : ""}>
@@ -173,164 +94,21 @@ export function DatabaseSourceSection({
       )}
       {!hasWorkspace ? null : (
         <>
-          {isSnapshotInventory ? (
+          {hasProfile && (
             <details className="source-advanced">
-              <summary>저장된 구조 연결 저장 / 설정</summary>
-              <label className="field-label" htmlFor="db-profile-name-input">
-                저장된 DB 구조
-              </label>
-              <div className="profile-line">
-                <div className="profile-row db-profile-name">
-                  <span className="ok-dot pending" />
-                  <input
-                    id="db-profile-name-input"
-                    className="inline-input"
-                    value={dbProfileControls.profileName}
-                    onChange={(event) => dbProfileControls.setProfileName(event.currentTarget.value)}
-                    placeholder="연결 이름"
-                  />
-                </div>
-                <button
-                  className="primary-action compact"
-                  type="button"
-                  onClick={dbProfileControls.saveProfile}
-                  disabled={!dbProfileControls.canSaveProfile || dbProfileControls.busy}
-                  aria-label={saveProfileLabel}
-                  title={saveProfileLabel}
-                >
-                  {dbProfileControls.saving ? "저장 중" : "연결 저장"}
-                </button>
-              </div>
-              {snapshotProfileHint && (
-                <span className={`secret-note ${dbProfileControls.canSaveProfile ? "ready-note" : ""}`}>
-                  {snapshotProfileHint}
-                </span>
-              )}
-              <span className="secret-note ready-note">현재 화면은 저장된 DB 구조를 읽고 있습니다.</span>
-              {sourceSettings}
-            </details>
-          ) : (
-            <>
-              {compactReady ? (
-                <details className="source-advanced">
-                  <summary>DB 연결</summary>
-                  <label className="field-label" htmlFor="db-profile-name-input">
-                    활성 DB 연결
-                  </label>
-                  <div className="profile-line">
-                    <div className="profile-row db-profile-name">
-                      <span className="ok-dot" />
-                      <input
-                        id="db-profile-name-input"
-                        className="inline-input"
-                        value={dbProfileControls.profileName}
-                        onChange={(event) => dbProfileControls.setProfileName(event.currentTarget.value)}
-                        placeholder="연결 이름"
-                      />
-                    </div>
-                    <button
-                      className="outline-action compact profile-save-action"
-                      type="button"
-                      onClick={dbProfileControls.saveProfile}
-                      disabled={!dbProfileControls.canSaveProfile || dbProfileControls.busy}
-                      aria-label={saveProfileLabel}
-                      title={saveProfileLabel}
-                    >
-                      {dbProfileControls.saving ? <RefreshCw size={14} className="spin" /> : <CheckCircle2 size={14} />}
-                      {dbProfileControls.saving ? "저장 중" : "저장됨"}
-                    </button>
-                  </div>
-                  {dbProfileControls.activeProfile && (
-                    <span className="secret-note">
-                      연결 방식: {dbProfileSourceLabel(dbProfileControls.activeProfile.source)}
-                    </span>
-                  )}
-                  <span className="secret-note ready-note">{requirementCopy}</span>
-                  {sourceSettings}
-                  {dbProfileControls.activeProfile && (
-                    <button
-                      className="outline-action compact danger-action source-delete-action"
-                      type="button"
-                      onClick={confirmDeleteProfile}
-                      disabled={dbProfileControls.busy}
-                      title="저장된 DB 연결과 로컬 구조 캐시 삭제"
-                    >
-                      <Trash2 size={13} />
-                      {dbProfileControls.deleting ? "삭제 중" : "DB 연결 삭제"}
-                    </button>
-                  )}
-                </details>
-              ) : (
-                <>
-                  <label className="field-label" htmlFor="db-profile-name-input">
-                    {hasProfile ? "활성 DB 연결" : "새 DB 연결"}
-                  </label>
-                  <div className="profile-line">
-                    <div className="profile-row db-profile-name">
-                      <span className={`ok-dot ${hasProfile ? "" : "pending"}`} />
-                      <input
-                        id="db-profile-name-input"
-                        className="inline-input"
-                        value={dbProfileControls.profileName}
-                        onChange={(event) => dbProfileControls.setProfileName(event.currentTarget.value)}
-                        placeholder="연결 이름"
-                      />
-                    </div>
-                    <button
-                      className="outline-action compact profile-save-action"
-                      type="button"
-                      onClick={dbProfileControls.saveProfile}
-                      disabled={!dbProfileControls.canSaveProfile || dbProfileControls.busy}
-                      aria-label={saveProfileLabel}
-                      title={saveProfileLabel}
-                    >
-                      {dbProfileControls.saving ? (
-                        <RefreshCw size={14} className="spin" />
-                      ) : profileMatchesForm ? (
-                        <CheckCircle2 size={14} />
-                      ) : (
-                        <Plus size={14} />
-                      )}
-                      {dbProfileControls.saving ? "저장 중" : profileMatchesForm ? "저장됨" : "저장"}
-                    </button>
-                  </div>
-                  {dbProfileControls.activeProfile && (
-                    <span className="secret-note">
-                      연결 방식: {dbProfileSourceLabel(dbProfileControls.activeProfile.source)}
-                    </span>
-                  )}
-                  <span className={`secret-note ${hasInventory ? "ready-note" : ""}`}>{requirementCopy}</span>
-                  {sourceSettings}
-                  {dbProfileControls.activeProfile && (
-                    <button
-                      className="outline-action compact danger-action source-delete-action"
-                      type="button"
-                      onClick={confirmDeleteProfile}
-                      disabled={dbProfileControls.busy}
-                      title="저장된 DB 연결과 로컬 구조 캐시 삭제"
-                    >
-                      <Trash2 size={13} />
-                      {dbProfileControls.deleting ? "삭제 중" : "DB 연결 삭제"}
-                    </button>
-                  )}
-                </>
-              )}
-            </>
-          )}
-          {hasInventory && !compactReady && !isSnapshotInventory && (
-            <div className="source-maintenance" aria-label="데이터베이스 구조 관리">
+              <summary>연결 관리</summary>
+              <span className="secret-note">연결 정보는 편집 버튼에서 변경합니다.</span>
               <button
-                className="outline-action compact"
+                className="outline-action compact danger-action source-delete-action"
                 type="button"
-                onClick={dbProfileControls.indexProfile}
-                disabled={!dbProfileControls.canIndexProfile || dbProfileControls.busy}
-                title={dbProfileControls.dbIndexBlockedReason ?? undefined}
-                data-source-action="db-index"
+                onClick={confirmDeleteProfile}
+                disabled={dbProfileControls.busy}
+                title="저장된 DB 연결과 로컬 구조 캐시 삭제"
               >
-                <RefreshCw size={13} className={dbProfileControls.indexing ? "spin" : undefined} />
-                {dbProfileControls.indexing ? "읽는 중" : "다시 읽기"}
+                <Trash2 size={13} />
+                {dbProfileControls.deleting ? "삭제 중" : "DB 연결 삭제"}
               </button>
-            </div>
+            </details>
           )}
           {showDbOperationMessage && (
             <span
@@ -383,7 +161,12 @@ function dbNextAction(
   disabled?: boolean;
   tone?: "ready";
 } {
-  const canSaveMissingProfile = !hasProfile && dbProfileControls.canSaveProfile;
+  if (!hasProfile) {
+    return {
+      label: "DB 연결 대기",
+      text: "DB 연결 버튼에서 연결 정보를 입력하세요.",
+    };
+  }
   if (hasInventory && hasTables) {
     const tableCount = dbInventoryTableCount(dbProfileControls.inventory);
     const columnCount = dbProfileControls.inventory?.tables.reduce((sum, table) => sum + table.columns.length, 0) ?? 0;
@@ -397,27 +180,20 @@ function dbNextAction(
       return {
         label: "컬럼 대기",
         text: `테이블 ${tableCount}개만 읽힘 · 컬럼을 읽으면 관계가 열립니다.`,
-        button: canSaveMissingProfile ? "연결 저장" : dbProfileControls.canIndexProfile ? "다시 읽기" : "DB 정보 입력",
-        run: canSaveMissingProfile
-          ? dbProfileControls.saveProfile
-          : dbProfileControls.canIndexProfile
-            ? dbProfileControls.indexProfile
-            : () => focusDbProfileInput(dbProfileControls),
-        primary: canSaveMissingProfile || dbProfileControls.canIndexProfile,
-        disabled: dbProfileControls.canIndexProfile ? false : undefined,
+        button: dbProfileControls.canIndexProfile ? "다시 읽기" : undefined,
+        run: dbProfileControls.canIndexProfile ? dbProfileControls.indexProfile : undefined,
+        primary: dbProfileControls.canIndexProfile,
+        disabled: !dbProfileControls.canIndexProfile,
       };
     }
     if (missingColumnTables > 0) {
       return {
         label: "컬럼 보강",
         text: `테이블 ${tableCount}개 중 ${missingColumnTables}개는 컬럼을 더 읽어야 합니다.`,
-        button: canSaveMissingProfile ? "연결 저장" : dbProfileControls.canIndexProfile ? "다시 읽기" : "DB 정보 입력",
-        run: canSaveMissingProfile
-          ? dbProfileControls.saveProfile
-          : dbProfileControls.canIndexProfile
-            ? dbProfileControls.indexProfile
-            : () => focusDbProfileInput(dbProfileControls),
-        primary: canSaveMissingProfile || dbProfileControls.canIndexProfile,
+        button: dbProfileControls.canIndexProfile ? "다시 읽기" : undefined,
+        run: dbProfileControls.canIndexProfile ? dbProfileControls.indexProfile : undefined,
+        primary: dbProfileControls.canIndexProfile,
+        disabled: !dbProfileControls.canIndexProfile,
       };
     }
     return {
@@ -444,28 +220,6 @@ function dbNextAction(
       disabled: !dbProfileControls.canIndexProfile,
     };
   }
-  if (!hasProfile) {
-    if (!dbProfileControls.hasWorkspace) {
-      return {
-        label: "프로젝트 열기",
-        text: "프로젝트를 열면 DB를 등록합니다.",
-      };
-    }
-    return dbProfileControls.canSaveProfile
-      ? {
-          label: "연결 저장",
-          text: "저장 후 DB 구조를 읽습니다.",
-          button: "연결 저장",
-          run: dbProfileControls.saveProfile,
-          primary: true,
-        }
-      : {
-          label: "DB 정보 입력",
-          text: "연결 정보를 입력합니다.",
-          button: "DB 정보 입력",
-          run: () => focusDbProfileInput(dbProfileControls),
-        };
-  }
   if (!hasInventory) {
     if (!dbProfileControls.canIndexProfile) {
       if (dbProfileControls.dbIndexBlockedReason) {
@@ -475,10 +229,8 @@ function dbNextAction(
         };
       }
       return {
-        label: "DB 정보 입력",
-        text: "연결 정보를 입력합니다.",
-        button: "DB 정보 입력",
-        run: () => focusDbProfileInput(dbProfileControls),
+        label: "DB 연결 확인",
+        text: "저장된 연결로 DB 구조를 읽을 수 없습니다.",
       };
     }
     return {
@@ -498,94 +250,3 @@ function dbNextAction(
     disabled: !dbProfileControls.canIndexProfile,
   };
 }
-
-function dbProfileMatchesForm(dbProfileControls: DbProfileControls, sourceUsesPath: boolean): boolean {
-  const activeProfile = dbProfileControls.activeProfile;
-  if (!activeProfile) {
-    return false;
-  }
-  return (
-    activeProfile.name === dbProfileControls.profileName.trim() &&
-    activeProfile.source === dbProfileControls.profileSource &&
-    (!sourceUsesPath || (activeProfile.path ?? "") === dbProfileControls.profilePath.trim())
-  );
-}
-
-function dbRequirementCopy(
-  required: string,
-  hasInventory: boolean,
-  hasTables: boolean,
-  hasColumns: boolean,
-  sourceUsesPath: boolean,
-): string {
-  if (!hasInventory) {
-    return required;
-  }
-  if (!hasTables) {
-    return sourceUsesPath
-      ? "DB 구조를 읽었지만 테이블이 없습니다. 경로와 스키마 내용을 확인하세요."
-      : "DB 구조를 읽었지만 테이블이 없습니다. 연결 정보와 DB 권한을 확인하세요.";
-  }
-  if (!hasColumns) {
-    return sourceUsesPath
-      ? "테이블 목록만 읽혔습니다. 컬럼 정의를 포함한 스키마로 다시 읽으세요."
-      : "테이블 목록만 읽혔습니다. 연결 정보와 컬럼 조회 권한을 확인한 뒤 다시 읽으세요.";
-  }
-  return sourceUsesPath
-    ? "DB 구조 읽힘. 경로를 바꾸면 다시 읽기로 갱신합니다."
-    : "DB 구조 읽힘. 다시 읽을 때만 연결 문자열을 사용합니다.";
-}
-
-const dbSourceCopy: Record<
-  DbProfileSource,
-  { label: string; placeholder: string; help: string; required: string }
-> = {
-  "ddl-sqlite": {
-    label: "DDL 파일/폴더",
-    placeholder: "D:\\path\\to\\schema.sql",
-    help: "SQL DDL 파일 또는 디렉터리의 스키마 정의를 읽습니다.",
-    required: "필수: 연결 이름, DDL 파일/디렉터리 위치",
-  },
-  sqlite: {
-    label: "SQLite DB 파일",
-    placeholder: "D:\\path\\to\\database.sqlite",
-    help: "SQLite 파일의 PRAGMA/catalog 구조를 읽습니다.",
-    required: "필수: 연결 이름, SQLite 파일 위치",
-  },
-  postgres: {
-    label: "PostgreSQL 연결 문자열",
-    placeholder: "postgres://user:password@localhost:5432/db",
-    help: "PostgreSQL catalog 구조를 읽습니다.",
-    required: "필수: 연결 저장 후 이번 세션의 연결 문자열",
-  },
-  yugabytedb: {
-    label: "YugabyteDB YSQL 연결 문자열",
-    placeholder: "postgres://user:password@localhost:5433/db",
-    help: "YugabyteDB의 PostgreSQL 호환 YSQL catalog 구조를 읽습니다. YCQL은 지원하지 않습니다.",
-    required: "필수: 연결 저장 후 이번 세션의 YSQL 연결 문자열",
-  },
-  mysql: {
-    label: "MySQL 연결 문자열",
-    placeholder: "mysql://user:password@localhost:3306/db",
-    help: "MySQL information_schema 구조를 읽습니다.",
-    required: "필수: 연결 저장 후 이번 세션의 연결 문자열",
-  },
-  mariadb: {
-    label: "MariaDB 연결 문자열",
-    placeholder: "mysql://user:password@localhost:3306/db",
-    help: "MariaDB information_schema 구조를 읽습니다.",
-    required: "필수: 연결 저장 후 이번 세션의 연결 문자열",
-  },
-  sqlserver: {
-    label: "SQL Server 연결 문자열",
-    placeholder: "Server=localhost;Database=db;User Id=user;Password=password;",
-    help: "SQL Server catalog 구조를 읽습니다.",
-    required: "필수: 연결 저장 후 이번 세션의 연결 문자열",
-  },
-  oracle: {
-    label: "Oracle 연결 문자열",
-    placeholder: "user/password@localhost:1521/FREEPDB1",
-    help: "Oracle Client가 설치된 환경에서 현재 사용자 스키마의 catalog 구조를 읽습니다.",
-    required: "필수: Oracle Client, 연결 저장 후 이번 세션의 연결 문자열",
-  },
-};

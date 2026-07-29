@@ -1,0 +1,22 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "typescript",
+  "id": "vue",
+  "name": "Vue",
+  "kind": "ui",
+  "signals": [
+    "import:vue",
+    "defineComponent",
+    "script setup"
+  ],
+  "outputs": [
+    "COMPONENT",
+    "RENDERS",
+    "EVENT_HANDLER"
+  ],
+  "rule_sets": [
+    "COMPONENT",
+    "RENDERS",
+    "EVENT_HANDLER"
+  ]
+}

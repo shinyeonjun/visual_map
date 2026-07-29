@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "go",
+  "framework": "chi",
+  "files": [
+    {
+      "path": "src/fixture.go",
+      "source": "r.Get('/fixture', handler)\napp.use(authMiddleware);"
+    },
+    {
+      "path": "go.mod",
+      "source": "module code-memory-framework-fixture\n\ngo 1.22\n// signal: github.com/go-chi/chi\n// signal: chi.NewRouter\n// signal: r.Get\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

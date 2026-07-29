@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "cpp",
+  "id": "poco",
+  "name": "POCO",
+  "kind": "web",
+  "signals": [
+    "Poco/",
+    "HTTPServer",
+    "HTTPRequestHandler"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

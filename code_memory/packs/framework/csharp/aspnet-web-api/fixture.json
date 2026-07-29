@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "csharp",
+  "framework": "aspnet-web-api",
+  "files": [
+    {
+      "path": "src/fixture.cs",
+      "source": "[Route('/api')] [HttpGet('/fixture')] public IHttpActionResult Handler() {}\napp.use(authMiddleware);"
+    },
+    {
+      "path": "fixture.csproj",
+      "source": "<Project><ItemGroup>\n<!-- signal: System.Web.Http | signal: ApiController | signal: [Route] -->\n</ItemGroup></Project>\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

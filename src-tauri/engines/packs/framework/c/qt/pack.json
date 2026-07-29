@@ -1,0 +1,22 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "c",
+  "id": "qt",
+  "name": "Qt",
+  "kind": "ui",
+  "signals": [
+    "#include:<Qt",
+    "QObject",
+    "signals/slots"
+  ],
+  "outputs": [
+    "COMPONENT",
+    "EVENT_HANDLER",
+    "ASYNC_CALLS"
+  ],
+  "rule_sets": [
+    "COMPONENT",
+    "EVENT_HANDLER",
+    "ASYNC_CALLS"
+  ]
+}

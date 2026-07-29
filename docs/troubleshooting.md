@@ -4,7 +4,7 @@
 
 상태 바에 `엔진 없음`이 표시되면 아래를 확인하세요.
 
-- 설치 앱: 설치 디렉터리 아래 `engines/codebase-memory-mcp.exe`, `engines/database-memory.exe`가 있어야 합니다.
+- 설치 앱: 설치 디렉터리 아래 `engines/code-memory-language.exe`, `engines/database-memory.exe`가 있어야 합니다.
 - 개발 앱: 기본 위치는 앱 데이터의 `engines` 디렉터리입니다.
 - 개발 앱에서 다른 엔진 폴더를 쓰려면 `BACKEND_VISUAL_MAP_ENGINE_DIR` 환경 변수를 지정하세요.
 - 엔진 installer/setup/MCP registration 명령은 실행하지 마세요. 앱은 엔진을 내부 sidecar로만 사용합니다.

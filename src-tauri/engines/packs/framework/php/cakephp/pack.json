@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "php",
+  "id": "cakephp",
+  "name": "CakePHP",
+  "kind": "web",
+  "signals": [
+    "Cake\\",
+    "Router::scope",
+    "Controller"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "python",
+  "id": "django",
+  "name": "Django",
+  "kind": "web",
+  "signals": [
+    "import:django",
+    "urlpatterns",
+    "path("
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE",
+    "SERVICE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE",
+    "SERVICE"
+  ]
+}

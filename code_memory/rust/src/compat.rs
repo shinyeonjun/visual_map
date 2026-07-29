@@ -1,0 +1,690 @@
+use crate::{index_project, is_excluded_source_dir};
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const COMPAT_TOOLS: &[&str] = &[
+    "index_repository",
+    "delete_project",
+    "get_architecture",
+    "query_graph",
+    "search_code",
+    "list_projects",
+];
+
+pub(crate) fn run_cli(args: &[String]) -> Result<(), String> {
+    let tool = args.first().map(String::as_str).unwrap_or_default();
+    if !COMPAT_TOOLS.contains(&tool) {
+        return Err(format!("unknown cli tool '{tool}'"));
+    }
+    let args_file = required_arg(args, "--args-file")?;
+    let payload: Value = serde_json::from_slice(
+        &fs::read(&args_file).map_err(|e| format!("cannot read {}: {e}", args_file.display()))?,
+    )
+    .map_err(|e| format!("invalid cli args: {e}"))?;
+
+    match tool {
+        "index_repository" => index_repository(&payload),
+        "delete_project" => delete_project(&payload),
+        "get_architecture" => print_json(&read_architecture(&payload)?),
+        "query_graph" => query_graph(&payload),
+        "search_code" => search_code(&payload),
+        "list_projects" => list_projects(),
+        _ => unreachable!(),
+    }
+}
+
+fn index_repository(payload: &Value) -> Result<(), String> {
+    let root = required_string(payload, "repo_path")?;
+    let project = payload
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            Path::new(root)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("project")
+        })
+        .to_string();
+    let (index_path, architecture_path) = project_paths(&project)?;
+    let pack_root = framework_pack_root();
+    let providers_root = optional_resource_root("CODE_MEMORY_PROVIDERS_ROOT", "providers");
+    index_project(
+        Path::new(root),
+        &index_path,
+        &architecture_path,
+        &pack_root,
+        providers_root.as_deref(),
+    )?;
+    print_json(&json!({ "project": project, "repo_path": root }))
+}
+
+fn delete_project(payload: &Value) -> Result<(), String> {
+    let project = required_string(payload, "project")?;
+    let (index_path, _) = project_paths(project)?;
+    if let Some(parent) = index_path.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+    print_json(&json!({ "deleted": project }))
+}
+
+fn read_index(payload: &Value) -> Result<Value, String> {
+    let project = required_string(payload, "project")?;
+    let (index_path, _) = project_paths(project)?;
+    let mut index: Value = serde_json::from_slice(
+        &fs::read(&index_path)
+            .map_err(|e| format!("cannot read project index {}: {e}", index_path.display()))?,
+    )
+    .map_err(|e| format!("invalid project index {}: {e}", index_path.display()))?;
+    let (_, architecture_path) = project_paths(project)?;
+    let architecture: Value =
+        serde_json::from_slice(&fs::read(&architecture_path).map_err(|e| {
+            format!(
+                "cannot read project architecture {}: {e}",
+                architecture_path.display()
+            )
+        })?)
+        .map_err(|e| {
+            format!(
+                "invalid project architecture {}: {e}",
+                architecture_path.display()
+            )
+        })?;
+    if let Some(object) = index.as_object_mut() {
+        object.insert(
+            "__architecture_nodes".to_string(),
+            architecture
+                .get("nodes")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+        object.insert(
+            "__architecture_edges".to_string(),
+            architecture
+                .get("edges")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+    }
+    Ok(index)
+}
+
+fn read_architecture(payload: &Value) -> Result<Value, String> {
+    let project = required_string(payload, "project")?;
+    let (_, architecture_path) = project_paths(project)?;
+    serde_json::from_slice(&fs::read(&architecture_path).map_err(|e| {
+        format!(
+            "cannot read project architecture {}: {e}",
+            architecture_path.display()
+        )
+    })?)
+    .map_err(|e| {
+        format!(
+            "invalid project architecture {}: {e}",
+            architecture_path.display()
+        )
+    })
+}
+
+fn query_graph(payload: &Value) -> Result<(), String> {
+    let query = required_string(payload, "query")?.to_ascii_uppercase();
+    let index = read_index(payload)?;
+    if query.contains("HANDLES") {
+        let rows = index
+            .get("framework_relations")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|relation| relation.get("kind").and_then(Value::as_str) == Some("HANDLES"))
+            .map(|relation| {
+                json!([
+                    relation.get("from").cloned().unwrap_or(Value::Null),
+                    relation.get("to").cloned().unwrap_or(Value::Null),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let total = rows.len();
+        return print_json(&json!({
+            "columns": ["source", "target"],
+            "rows": rows,
+            "total": total
+        }));
+    }
+    if query.contains("CALLS") {
+        let rows = index
+            .get("relations")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|relation| relation.get("kind").and_then(Value::as_str) == Some("CALLS"))
+            .map(|relation| {
+                json!([
+                    relation.get("from").cloned().unwrap_or(Value::Null),
+                    relation.get("to").cloned().unwrap_or(Value::Null),
+                    1.0,
+                    "semantic",
+                    "semantic-call",
+                ])
+            })
+            .collect::<Vec<_>>();
+        let total = rows.len();
+        return print_json(&json!({
+            "columns": ["source", "target", "confidence", "strategy", "call_expression"],
+            "rows": rows,
+            "total": total
+        }));
+    }
+
+    let rows = inventory_rows(&index);
+    let total = rows.len();
+    print_json(&json!({
+        "columns": inventory_columns(),
+        "rows": rows,
+        "total": total
+    }))
+}
+
+fn search_code(payload: &Value) -> Result<(), String> {
+    let index = read_index(payload)?;
+    let root = index
+        .get("project_root")
+        .and_then(Value::as_str)
+        .ok_or("project index has no project_root")?;
+    let identifier = extract_identifier(required_string(payload, "pattern")?);
+    let path_filter = payload.get("path_filter").and_then(Value::as_str);
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(32)
+        .clamp(1, 32) as usize;
+    let documents = document_symbol_names(&index);
+    let mut results = Vec::new();
+    let mut total_matches = 0usize;
+    for (path, source) in load_text_files(Path::new(root)) {
+        if path_filter.is_some_and(|filter| !path_matches_filter(&path, filter)) {
+            continue;
+        }
+        let lines = source
+            .lines()
+            .enumerate()
+            .filter_map(|(line, text)| text.contains(&identifier).then_some(line as u64 + 1))
+            .collect::<Vec<_>>();
+        if lines.is_empty() {
+            continue;
+        }
+        total_matches += lines.len();
+        if results.len() >= limit {
+            continue;
+        }
+        let qualified_name = documents
+            .get(&path)
+            .and_then(|names| names.iter().find(|name| name.contains(&identifier)))
+            .cloned()
+            .unwrap_or_else(|| format!("{path}::{identifier}"));
+        results.push(json!({
+            "qualified_name": qualified_name,
+            "label": "File",
+            "file": path,
+            "start_line": lines[0],
+            "end_line": *lines.last().unwrap_or(&lines[0]),
+            "match_lines": lines,
+        }));
+    }
+    let total_results = results.len();
+    print_json(&json!({
+        "results": results,
+        "total_grep_matches": total_matches,
+        "total_results": total_results,
+        "raw_match_count": 0,
+    }))
+}
+
+fn inventory_columns() -> [&'static str; 20] {
+    [
+        "labels",
+        "name",
+        "qualified_name",
+        "file_path",
+        "start_line",
+        "start_column",
+        "end_line",
+        "end_column",
+        "method",
+        "source",
+        "parent_qualified_name",
+        "parent_class",
+        "module",
+        "namespace",
+        "package",
+        "route_path",
+        "route_method",
+        "signature",
+        "return_type",
+        "is_test",
+    ]
+}
+
+fn inventory_rows(index: &Value) -> Vec<Value> {
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    let evidence = entrypoint_evidence(index);
+    if let Some(architecture_nodes) = index.get("__architecture_nodes").and_then(Value::as_array) {
+        add_architecture_nodes(architecture_nodes, &evidence, &mut nodes, &mut seen);
+    }
+    if let Some(documents) = index.get("documents").and_then(Value::as_array) {
+        add_document_symbols(documents, &mut nodes, &mut seen);
+    }
+    nodes.sort_by(|left, right| {
+        left.get(2)
+            .and_then(Value::as_str)
+            .cmp(&right.get(2).and_then(Value::as_str))
+    });
+    nodes
+}
+
+fn add_architecture_nodes(
+    architecture_nodes: &[Value],
+    evidence: &HashMap<String, (String, u64)>,
+    rows: &mut Vec<Value>,
+    seen: &mut HashSet<String>,
+) {
+    for node in architecture_nodes {
+        let Some(id) = node.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if !seen.insert(id.to_string()) {
+            continue;
+        }
+        let kind = node.get("kind").and_then(Value::as_str).unwrap_or("FILE");
+        let label = match kind {
+            "PROJECT" | "PACKAGE" => "Package",
+            "MODULE" => "Module",
+            "FILE" => "File",
+            "ENDPOINT" => "Route",
+            "EXTERNAL_LIBRARY" | "DYNAMIC_BOUNDARY" => "Resource",
+            _ => "Resource",
+        };
+        let (path, line) = evidence
+            .get(id)
+            .cloned()
+            .or_else(|| {
+                node.get("path")
+                    .and_then(Value::as_str)
+                    .map(|path| (path.to_string(), 0))
+            })
+            .unwrap_or_default();
+        let name = node.get("name").and_then(Value::as_str).unwrap_or(id);
+        let properties = node.get("properties").cloned().unwrap_or_else(|| json!({}));
+        rows.push(inventory_row(
+            label,
+            name,
+            id,
+            (!path.is_empty()).then_some(path),
+            line,
+            properties.get("method").and_then(Value::as_str),
+            properties.get("routePath").and_then(Value::as_str),
+            properties.get("routeMethod").and_then(Value::as_str),
+            properties.get("signature").and_then(Value::as_str),
+            properties.get("isTest").and_then(Value::as_bool),
+        ));
+    }
+}
+
+fn add_document_symbols(documents: &[Value], rows: &mut Vec<Value>, seen: &mut HashSet<String>) {
+    for document in documents {
+        let path = document
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let symbols = document
+            .get("symbols")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten();
+        let occurrences = document
+            .get("occurrences")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|occurrence| {
+                occurrence.get("definition").and_then(Value::as_bool) == Some(true)
+            })
+            .collect::<Vec<_>>();
+        for symbol in symbols {
+            let Some(id) = symbol.get("symbol").and_then(Value::as_str) else {
+                continue;
+            };
+            if !seen.insert(id.to_string()) {
+                continue;
+            }
+            let occurrence = occurrences
+                .iter()
+                .find(|occurrence| occurrence.get("symbol").and_then(Value::as_str) == Some(id));
+            let line = occurrence
+                .and_then(|occurrence| occurrence.get("range"))
+                .and_then(Value::as_array)
+                .and_then(|range| range.first())
+                .and_then(Value::as_i64)
+                .map(|line| line.max(0) as u64 + 1)
+                .unwrap_or_default();
+            let kind = symbol
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(normalize_symbol_kind)
+                .unwrap_or("Variable");
+            let name = symbol_name(id);
+            let signature = symbol.get("signature").and_then(Value::as_str);
+            rows.push(inventory_row(
+                kind,
+                &name,
+                id,
+                (!path.is_empty()).then_some(path.to_string()),
+                line,
+                None,
+                None,
+                None,
+                signature,
+                None,
+            ));
+        }
+    }
+}
+
+fn inventory_row(
+    label: &str,
+    name: &str,
+    qualified_name: &str,
+    file_path: Option<String>,
+    line: u64,
+    method: Option<&str>,
+    route_path: Option<&str>,
+    route_method: Option<&str>,
+    signature: Option<&str>,
+    is_test: Option<bool>,
+) -> Value {
+    json!([
+        [label],
+        name,
+        qualified_name,
+        file_path,
+        (line > 0).then_some(line),
+        Value::Null,
+        (line > 0).then_some(line),
+        Value::Null,
+        method,
+        Value::Null,
+        Value::Null,
+        Value::Null,
+        Value::Null,
+        Value::Null,
+        Value::Null,
+        route_path,
+        route_method,
+        signature,
+        Value::Null,
+        is_test,
+    ])
+}
+
+fn entrypoint_evidence(index: &Value) -> HashMap<String, (String, u64)> {
+    let mut result = HashMap::new();
+    let Some(architecture_nodes) = index.get("__architecture_edges").and_then(Value::as_array)
+    else {
+        return result;
+    };
+    for edge in architecture_nodes {
+        if edge.get("kind").and_then(Value::as_str) != Some("ENTRYPOINT_TO") {
+            continue;
+        }
+        let Some(from) = edge.get("from").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(evidence) = edge
+            .get("evidence")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+        else {
+            continue;
+        };
+        let path = evidence
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let line = evidence
+            .get("range")
+            .and_then(Value::as_array)
+            .and_then(|range| range.first())
+            .and_then(Value::as_i64)
+            .map(|line| line.max(0) as u64 + 1)
+            .unwrap_or_default();
+        result.insert(from.to_string(), (path.to_string(), line));
+    }
+    result
+}
+
+fn document_symbol_names(index: &Value) -> HashMap<String, Vec<String>> {
+    let mut result = HashMap::<String, Vec<String>>::new();
+    for document in index
+        .get("documents")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(path) = document.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        let names = document
+            .get("symbols")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|symbol| symbol.get("symbol").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        result.insert(path.to_string(), names);
+    }
+    result
+}
+
+fn normalize_symbol_kind(kind: &str) -> &'static str {
+    match kind.to_ascii_lowercase().as_str() {
+        "function" => "Function",
+        "method" => "Method",
+        "class" => "Class",
+        "struct" => "Struct",
+        "interface" => "Interface",
+        "trait" => "Trait",
+        "enum" => "Enum",
+        "constructor" => "Constructor",
+        "module" => "Module",
+        "namespace" => "Namespace",
+        "package" => "Package",
+        "field" => "Field",
+        "variable" => "Variable",
+        "type" => "Type",
+        _ => "Variable",
+    }
+}
+
+fn symbol_name(symbol: &str) -> String {
+    let value = symbol
+        .rsplit_once('#')
+        .map(|(_, value)| value)
+        .unwrap_or(symbol);
+    let value = value.split('@').next().unwrap_or(value);
+    value
+        .rsplit(['.', '/', ':'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(value)
+        .to_string()
+}
+
+fn extract_identifier(pattern: &str) -> String {
+    let mut value = pattern.trim();
+    value = value.strip_prefix("(^|[^A-Za-z0-9_])").unwrap_or(value);
+    value = value.strip_suffix("([^A-Za-z0-9_]|$)").unwrap_or(value);
+    let mut result = String::new();
+    let mut escaped = false;
+    for character in value.chars() {
+        if escaped {
+            result.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else {
+            result.push(character);
+        }
+    }
+    result
+}
+
+fn path_matches_filter(path: &str, filter: &str) -> bool {
+    let mut filter = filter.trim().trim_start_matches('^').trim_end_matches('$');
+    if filter.starts_with('(') && filter.ends_with(')') {
+        filter = &filter[1..filter.len() - 1];
+    }
+    filter
+        .split('|')
+        .map(|part| part.replace(r"\.", "."))
+        .any(|part| part == path || path.contains(&part))
+}
+
+fn load_text_files(root: &Path) -> Vec<(String, String)> {
+    let mut files = Vec::new();
+    collect_text_files(root, root, &mut files);
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files
+}
+
+fn collect_text_files(root: &Path, directory: &Path, files: &mut Vec<(String, String)>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if !is_excluded_source_dir(&entry.file_name().to_string_lossy()) {
+                collect_text_files(root, &path, files);
+            }
+            continue;
+        }
+        let Ok(metadata) = path.metadata() else {
+            continue;
+        };
+        if metadata.len() > 8 * 1024 * 1024 {
+            continue;
+        }
+        let Ok(source) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.push((relative, source));
+    }
+}
+
+fn list_projects() -> Result<(), String> {
+    let root = env::var_os("CBM_CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::temp_dir().join("visual-map-code-memory"))
+        .join("compat-projects");
+    let mut projects = fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().join("language-index.json").is_file())
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let index = fs::read(entry.path().join("language-index.json")).ok()?;
+            let value: Value = serde_json::from_slice(&index).ok()?;
+            Some(json!({
+                "name": name,
+                "project_root": value.get("project_root").cloned().unwrap_or(Value::Null)
+            }))
+        })
+        .collect::<Vec<_>>();
+    projects.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+    print_json(&json!({ "projects": projects }))
+}
+
+fn project_paths(project: &str) -> Result<(PathBuf, PathBuf), String> {
+    let safe = project
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if safe.is_empty() || safe == "." || safe == ".." {
+        return Err("invalid project name".to_string());
+    }
+    let root = env::var_os("CBM_CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::temp_dir().join("visual-map-code-memory"));
+    let directory = root.join("compat-projects").join(safe);
+    Ok((
+        directory.join("language-index.json"),
+        directory.join("architecture.json"),
+    ))
+}
+
+fn resource_root(variable: &str, name: &str) -> PathBuf {
+    optional_resource_root(variable, name)
+        .unwrap_or_else(|| env::current_dir().unwrap_or_default().join(name))
+}
+
+fn framework_pack_root() -> PathBuf {
+    let candidate = resource_root("CODE_MEMORY_PACKS_ROOT", "packs");
+    if candidate.join("packs").join("framework").is_dir() {
+        candidate
+    } else if candidate.join("framework").is_dir() {
+        candidate.parent().unwrap_or(&candidate).to_path_buf()
+    } else {
+        candidate
+    }
+}
+
+fn optional_resource_root(variable: &str, name: &str) -> Option<PathBuf> {
+    env::var_os(variable)
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .or_else(|| {
+            env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(|parent| parent.join(name)))
+                .filter(|path| path.is_dir())
+        })
+}
+
+fn required_arg(args: &[String], name: &str) -> Result<PathBuf, String> {
+    args.iter()
+        .position(|arg| arg == name)
+        .and_then(|index| args.get(index + 1))
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("missing {name} <path>"))
+}
+
+fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("missing {key}"))
+}
+
+fn print_json(value: &Value) -> Result<(), String> {
+    println!(
+        "{}",
+        serde_json::to_string(value).map_err(|e| format!("cannot serialize cli response: {e}"))?
+    );
+    Ok(())
+}

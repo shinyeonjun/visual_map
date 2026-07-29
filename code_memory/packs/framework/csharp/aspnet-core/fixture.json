@@ -1,0 +1,25 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "csharp",
+  "framework": "aspnet-core",
+  "files": [
+    {
+      "path": "src/fixture.cs",
+      "source": "var app = WebApplication.Create(); app.Use(auth); app.MapGet('/fixture', handler);\napp.use(authMiddleware);\n@Autowired UserService service;"
+    },
+    {
+      "path": "fixture.csproj",
+      "source": "<Project><ItemGroup>\n<!-- signal: Microsoft.AspNetCore | signal: MapGet | signal: ControllerBase -->\n</ItemGroup></Project>\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE",
+      "DEPENDENCY"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

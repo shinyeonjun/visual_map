@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "go",
+  "id": "beego",
+  "name": "Beego",
+  "kind": "web",
+  "signals": [
+    "github.com/beego/beego",
+    "beego.Router",
+    "Controller"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

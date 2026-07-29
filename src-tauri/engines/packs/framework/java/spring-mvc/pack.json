@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "java",
+  "id": "spring-mvc",
+  "name": "Spring MVC",
+  "kind": "web",
+  "signals": [
+    "import:org.springframework.web",
+    "@RequestMapping",
+    "@GetMapping"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

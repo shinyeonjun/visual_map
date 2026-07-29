@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "rust",
+  "framework": "poem",
+  "files": [
+    {
+      "path": "src/fixture.rs",
+      "source": "#[handler] async fn handler() {} Route::new().at('/fixture', get(handler));\napp.use(authMiddleware);"
+    },
+    {
+      "path": "Cargo.toml",
+      "source": "[package]\nname = \"code-memory-framework-fixture\"\nversion = \"1.0.0\"\n\n[dependencies]\n# signal: use poem\n# signal: #[handler]\n# signal: :new\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

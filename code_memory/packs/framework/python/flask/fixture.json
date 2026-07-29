@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "python",
+  "framework": "flask",
+  "files": [
+    {
+      "path": "src/fixture.py",
+      "source": "from flask import Flask; @app.route('/fixture') def handler(): pass\napp.use(authMiddleware);"
+    },
+    {
+      "path": "pyproject.toml",
+      "source": "[project]\nname = \"code-memory-framework-fixture\"\ndependencies = [\"flask\", \"@app.route\", \"Blueprint\"]\n# signal: flask\n# signal: @app.route\n# signal: Blueprint\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

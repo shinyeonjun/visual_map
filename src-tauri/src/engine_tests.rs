@@ -98,10 +98,10 @@ fn registry_requires_a_matching_manifest_checksum_without_running_engines() {
         fs::remove_dir_all(&root).unwrap();
     }
     fs::create_dir_all(&engine_dir).unwrap();
-    fs::write(engine_dir.join("codebase-memory-mcp.exe"), b"").unwrap();
+    fs::write(engine_dir.join("code-memory-language.exe"), b"").unwrap();
     write_test_manifest(
         &engine_dir,
-        &sha256_file(&engine_dir.join("codebase-memory-mcp.exe")).unwrap(),
+        &sha256_file(&engine_dir.join("code-memory-language.exe")).unwrap(),
         &"0".repeat(64),
         None,
     );
@@ -249,8 +249,8 @@ fn manifest_version_and_contract_must_match_the_adapter() {
         fs::remove_dir_all(&root).unwrap();
     }
     fs::create_dir_all(&engine_dir).unwrap();
-    fs::write(engine_dir.join("codebase-memory-mcp.exe"), b"release").unwrap();
-    let hash = sha256_file(&engine_dir.join("codebase-memory-mcp.exe")).unwrap();
+    fs::write(engine_dir.join("code-memory-language.exe"), b"release").unwrap();
+    let hash = sha256_file(&engine_dir.join("code-memory-language.exe")).unwrap();
     write_test_manifest(&engine_dir, &hash, &"0".repeat(64), None);
     let manifest_path = engine_dir.join("manifest.json");
     let manifest = fs::read_to_string(&manifest_path)
@@ -435,10 +435,10 @@ fn run_engine_command_rejects_missing_engine_before_spawn() {
         id: "codebase-memory".to_string(),
         label: "codebase-memory".to_string(),
         role: "code".to_string(),
-        executable: "codebase-memory-mcp.exe".to_string(),
-        expected_version: "0.9.0".to_string(),
+        executable: "code-memory-language.exe".to_string(),
+        expected_version: "0.1.0".to_string(),
         contract_version: "1".to_string(),
-        path: r"D:\missing\codebase-memory-mcp.exe".to_string(),
+        path: r"D:\missing\code-memory-language.exe".to_string(),
         available: false,
         releasable: false,
         integrity: "missing".to_string(),
@@ -449,7 +449,7 @@ fn run_engine_command_rejects_missing_engine_before_spawn() {
 
     assert_eq!(
         run_engine_command(&engine, &args, Duration::from_secs(1)).unwrap_err(),
-        "읽기 도구가 없습니다: codebase-memory-mcp.exe"
+        "읽기 도구가 없습니다: code-memory-language.exe"
     );
 }
 
@@ -467,11 +467,11 @@ fn write_test_manifest(
         "engines": [
             {
                 "id": "codebase-memory",
-                "version": "0.9.0",
+                "version": "0.1.0",
                 "contractVersion": "1",
                 "releaseReady": true,
                 "executable": {
-                    "fileName": "codebase-memory-mcp.exe",
+                    "fileName": "code-memory-language.exe",
                     "sha256": code_release_hash
                 },
                 "developmentArtifacts": []

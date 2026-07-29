@@ -39,7 +39,7 @@ pub(crate) struct EngineSpec {
     pub expected_contract_version: &'static str,
 }
 
-pub(crate) const CODEBASE_MEMORY_VERSION: &str = "0.9.0";
+pub(crate) const CODEBASE_MEMORY_VERSION: &str = "0.1.0";
 pub(crate) const CODEBASE_MEMORY_CONTRACT_VERSION: &str = "1";
 pub(crate) const DATABASE_MEMORY_VERSION: &str = "0.2.0";
 pub(crate) const DATABASE_MEMORY_CONTRACT_VERSION: &str = "2";
@@ -118,7 +118,7 @@ pub(crate) const ENGINE_SPECS: &[EngineSpec] = &[
         id: "codebase-memory",
         label: "codebase-memory",
         role: "code",
-        executable: "codebase-memory-mcp.exe",
+        executable: "code-memory-language.exe",
         expected_version: CODEBASE_MEMORY_VERSION,
         expected_contract_version: CODEBASE_MEMORY_CONTRACT_VERSION,
     },

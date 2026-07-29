@@ -1,0 +1,25 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "php",
+  "framework": "symfony",
+  "files": [
+    {
+      "path": "src/fixture.php",
+      "source": "#[Route('/fixture')] public function handler() {}\napp.use(authMiddleware);\n@Service class UserService {}"
+    },
+    {
+      "path": "composer.json",
+      "source": "{\n  \"name\": \"code-memory/framework-fixture\",\n  \"require\": {\n    \"Symfony\\\\\": \"1.0.0\",\n    \"#[Route\": \"1.0.0\",\n    \"AbstractController\": \"1.0.0\"\n  }\n}"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE",
+      "SERVICE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "go",
+  "framework": "net-http",
+  "files": [
+    {
+      "path": "src/fixture.go",
+      "source": "http.HandleFunc('/fixture', handler)\napp.use(authMiddleware);"
+    },
+    {
+      "path": "go.mod",
+      "source": "module code-memory-framework-fixture\n\ngo 1.22\n// signal: net/http\n// signal: http.HandleFunc\n// signal: http.ListenAndServe\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

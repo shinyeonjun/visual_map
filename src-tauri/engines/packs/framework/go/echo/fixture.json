@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "go",
+  "framework": "echo",
+  "files": [
+    {
+      "path": "src/fixture.go",
+      "source": "e.GET('/fixture', handler)\napp.use(authMiddleware);"
+    },
+    {
+      "path": "go.mod",
+      "source": "module code-memory-framework-fixture\n\ngo 1.22\n// signal: github.com/labstack/echo\n// signal: echo.New\n// signal: e.GET\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

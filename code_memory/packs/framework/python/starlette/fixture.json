@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "python",
+  "framework": "starlette",
+  "files": [
+    {
+      "path": "src/fixture.py",
+      "source": "from starlette.routing import Route; Route('/fixture', handler)\napp.use(authMiddleware);"
+    },
+    {
+      "path": "pyproject.toml",
+      "source": "[project]\nname = \"code-memory-framework-fixture\"\ndependencies = [\"starlette\", \"Route(\", \"Mount(\"]\n# signal: starlette\n# signal: Route(\n# signal: Mount(\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "MIDDLEWARE"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

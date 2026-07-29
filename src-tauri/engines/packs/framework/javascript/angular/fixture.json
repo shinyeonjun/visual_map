@@ -1,0 +1,25 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "javascript",
+  "framework": "angular",
+  "files": [
+    {
+      "path": "src/fixture.js",
+      "source": "@Component({ selector: 'app-root' }) class App {} const route = Route('/fixture', App);\n@Service class UserService {}\n@Component class App extends Component {}"
+    },
+    {
+      "path": "package.json",
+      "source": "{\n  \"name\": \"code-memory-framework-fixture\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": {\n    \"@angular\": \"1.0.0\",\n    \"@Component\": \"1.0.0\",\n    \"@Injectable\": \"1.0.0\"\n  }\n}"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "HTTP_ROUTE",
+      "SERVICE",
+      "COMPONENT"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

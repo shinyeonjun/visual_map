@@ -20,7 +20,7 @@ import {
 import { focusDbProfileSetup } from "../common/focusSourceSetup";
 import { ApiReadingHeader, ApiReadingPath } from "./ApiReadingPath";
 import type { ApiReadingView } from "./ApiReadingPath";
-import { ArchitectureMap, RelationBadge } from "./ArchitectureMap";
+import { ArchitectureMap, CompositionMap, RelationBadge } from "./ArchitectureMap";
 import { ImpactReviewBoard } from "./ImpactReviewBoard";
 import { SetupChecklist } from "./SetupChecklist";
 import {
@@ -598,8 +598,8 @@ export function AtlasCanvas({
         ) : (
           <>
             <div
-              className={`at-map-surface ${architectureMode ? "at-architecture-surface" : ""} ${impactBoard ? "at-impact-surface" : ""} ${apiReading ? "at-api-reading-surface" : ""} ${hasRelationFocus ? "has-relation-focus" : ""}`}
-              style={architectureMode || impactBoard || apiReading || showDisconnectedCodeFocus ? ({ zoom: atlasZoom } as CSSProperties) : mapStyle}
+              className={`at-map-surface ${architectureMode ? "at-architecture-surface" : ""} ${compositionMode ? "at-composition-surface" : ""} ${impactBoard ? "at-impact-surface" : ""} ${apiReading ? "at-api-reading-surface" : ""} ${hasRelationFocus ? "has-relation-focus" : ""}`}
+              style={architectureMode || compositionMode || impactBoard || apiReading || showDisconnectedCodeFocus ? ({ zoom: atlasZoom } as CSSProperties) : mapStyle}
             >
               {impactBoard && visualMapControls.currentMap ? (
                 <ImpactReviewBoard
@@ -618,6 +618,15 @@ export function AtlasCanvas({
                   onBack={() => visualMapControls.showMode("atlas", null)}
                   onOpenGroup={(node) => visualMapControls.showMode("atlas", node.id)}
                   onOpenMember={openArchitectureMember}
+                  onSelectEdge={visualMapControls.selectEdge}
+                />
+              ) : compositionMode && visualMapControls.currentMap ? (
+                <CompositionMap
+                  map={visualMapControls.currentMap}
+                  selectedIds={visualMapControls.compositionFocusIds}
+                  selectedNodeId={visualMapControls.selectedNode?.id ?? null}
+                  selectedEdgeId={visualMapControls.selectedEdge?.id ?? null}
+                  onSelectNode={visualMapControls.selectNode}
                   onSelectEdge={visualMapControls.selectEdge}
                 />
               ) : apiReading && visualMapControls.currentMap ? (

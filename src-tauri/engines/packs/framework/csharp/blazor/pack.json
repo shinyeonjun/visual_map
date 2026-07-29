@@ -1,0 +1,22 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "csharp",
+  "id": "blazor",
+  "name": "Blazor",
+  "kind": "ui",
+  "signals": [
+    "Microsoft.AspNetCore.Components",
+    "@page",
+    "ComponentBase"
+  ],
+  "outputs": [
+    "COMPONENT",
+    "RENDERS",
+    "EVENT_HANDLER"
+  ],
+  "rule_sets": [
+    "COMPONENT",
+    "RENDERS",
+    "EVENT_HANDLER"
+  ]
+}

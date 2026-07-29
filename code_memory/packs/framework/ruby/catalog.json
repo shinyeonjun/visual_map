@@ -1,0 +1,30 @@
+{
+  "schema": "code-memory.framework-pack-catalog.v1",
+  "language": "ruby",
+  "packs": [
+    {
+      "id": "rails",
+      "path": "rails/pack.json"
+    },
+    {
+      "id": "sinatra",
+      "path": "sinatra/pack.json"
+    },
+    {
+      "id": "hanami",
+      "path": "hanami/pack.json"
+    },
+    {
+      "id": "rack",
+      "path": "rack/pack.json"
+    },
+    {
+      "id": "grape",
+      "path": "grape/pack.json"
+    },
+    {
+      "id": "roda",
+      "path": "roda/pack.json"
+    }
+  ]
+}

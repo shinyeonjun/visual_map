@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "javascript",
+  "id": "sveltekit",
+  "name": "SvelteKit",
+  "kind": "web",
+  "signals": [
+    "import:@sveltejs/kit",
+    "+server",
+    "+page"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "COMPONENT"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "COMPONENT"
+  ]
+}

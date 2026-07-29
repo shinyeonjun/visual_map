@@ -1,0 +1,20 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "c",
+  "id": "libuv",
+  "name": "libuv",
+  "kind": "async",
+  "signals": [
+    "#include:<uv.h>",
+    "uv_run",
+    "uv_loop_t"
+  ],
+  "outputs": [
+    "ASYNC_CALLS",
+    "EVENT_HANDLER"
+  ],
+  "rule_sets": [
+    "ASYNC_CALLS",
+    "EVENT_HANDLER"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "javascript",
+  "id": "tauri",
+  "name": "Tauri",
+  "kind": "desktop-bridge",
+  "signals": [
+    "import:@tauri-apps",
+    "invoke("
+  ],
+  "outputs": [
+    "ASYNC_CALLS"
+  ],
+  "rule_sets": [
+    "ASYNC_CALLS"
+  ]
+}

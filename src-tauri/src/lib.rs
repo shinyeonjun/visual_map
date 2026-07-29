@@ -10,17 +10,21 @@ mod workspace;
 use atlas::{ChangeIntent, InventorySnapshot, VisualMap};
 use command_error::CommandResult;
 use engine::{EngineRegistry, EngineRuntimeMode};
-use paths::{base_paths, ensure_base_dirs, migrate_roaming_data_to_local, AppPaths};
+use paths::{
+    base_paths, ensure_base_dirs, migrate_legacy_app_data_to_named_dir,
+    migrate_roaming_data_to_local, AppPaths,
+};
 use source::{OpenSourceLocationRequest, RevealSourceLocationRequest, SourceActionResult};
 use std::{
     borrow::Cow,
     collections::BTreeSet,
     path::{Path, PathBuf},
+    thread,
 };
 use tauri::Manager;
 use workspace::{
-    CodeIndexResult, CodeInventory, CreateWorkspaceRequest, DbIndexResult, DbInventory,
-    IndexCodeRequest, IndexDbProfileRequest, SaveDbProfileRequest, Workspace,
+    validate_workspace_id, CodeIndexResult, CodeInventory, CreateWorkspaceRequest, DbIndexResult,
+    DbInventory, IndexCodeRequest, IndexDbProfileRequest, SaveDbProfileRequest, Workspace,
 };
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -30,6 +34,46 @@ struct CompositionMapRequest {
     relation_view: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeWorkspaceAnalysisRequest {
+    workspace_id: String,
+    #[serde(default)]
+    analysis_mode: AnalysisSourceMode,
+    db_profile_id: Option<String>,
+    connection_string: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum AnalysisSourceMode {
+    #[default]
+    CodeOnly,
+    DbOnly,
+    CodeAndDb,
+}
+
+impl AnalysisSourceMode {
+    fn includes_code(self) -> bool {
+        matches!(self, Self::CodeOnly | Self::CodeAndDb)
+    }
+
+    fn includes_db(self) -> bool {
+        matches!(self, Self::DbOnly | Self::CodeAndDb)
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeWorkspaceAnalysisResult {
+    workspace: Workspace,
+    code: Option<CodeIndexResult>,
+    db: Option<DbIndexResult>,
+    code_error: Option<String>,
+    db_error: Option<String>,
+    snapshot_saved: bool,
+}
+
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     #[cfg(any(debug_assertions, backend_visual_map_internal_build))]
     {
@@ -37,15 +81,29 @@ fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             return Ok(PathBuf::from(path));
         }
     }
-    let local = app
+    let runtime_local = app
         .path()
         .app_local_data_dir()
         .map_err(|error| format!("로컬 앱 데이터 디렉터리를 찾지 못했습니다: {error}"))?;
-    let roaming = app
+    let runtime_roaming = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("기존 앱 데이터 디렉터리를 찾지 못했습니다: {error}"))?;
-    migrate_roaming_data_to_local(local, roaming)
+
+    let named_local = runtime_local
+        .parent()
+        .map(|parent| parent.join("Backend-Visual"))
+        .unwrap_or_else(|| runtime_local.clone());
+    let parent = named_local.parent().unwrap_or_else(|| Path::new("."));
+    let legacy_local = parent.join("com.backendvisualmap.app");
+    let legacy_roaming = runtime_roaming
+        .parent()
+        .map(|parent| parent.join("com.backendvisualmap.app"))
+        .unwrap_or_else(|| runtime_roaming.clone());
+    let local = migrate_legacy_app_data_to_named_dir(named_local, legacy_local, legacy_roaming)
+        .map_err(|error| format!("제품 데이터 디렉터리 이전 실패: {error}"))?;
+
+    migrate_roaming_data_to_local(local, runtime_roaming)
         .map_err(|error| format!("앱 데이터 디렉터리 이전 실패: {error}"))
 }
 
@@ -156,6 +214,206 @@ fn index_code_repository(
 }
 
 #[tauri::command(async)]
+fn initialize_workspace_analysis(
+    app: tauri::AppHandle,
+    request: InitializeWorkspaceAnalysisRequest,
+) -> CommandResult<InitializeWorkspaceAnalysisResult> {
+    validate_workspace_id(&request.workspace_id)?;
+    if request.analysis_mode.includes_db() {
+        let Some(profile_id) = request.db_profile_id.as_deref() else {
+            return Err("DB 분석 모드에는 DB 프로필이 필요합니다".to_string().into());
+        };
+        validate_workspace_id(profile_id)?;
+    }
+
+    let app_data_dir = app_data_dir(&app)?;
+    let registry = get_engine_availability(app)?;
+    let workspace_id = request.workspace_id.clone();
+    let code_request = IndexCodeRequest {
+        workspace_id: workspace_id.clone(),
+    };
+    let db_request = request
+        .db_profile_id
+        .clone()
+        .map(|profile_id| IndexDbProfileRequest {
+            workspace_id: workspace_id.clone(),
+            profile_id,
+            connection_string: request.connection_string.clone(),
+        });
+
+    let code_app_data_dir = app_data_dir.clone();
+    let db_app_data_dir = app_data_dir.clone();
+    let code_registry = registry.clone();
+    let db_registry = registry.clone();
+    let (code_result, db_result) = thread::scope(|scope| {
+        let code_handle = request.analysis_mode.includes_code().then(|| {
+            scope.spawn(|| {
+                workspace::index_code_repository_without_persisting(
+                    &code_app_data_dir,
+                    &code_registry,
+                    code_request,
+                )
+            })
+        });
+        let db_handle = request.analysis_mode.includes_db().then(|| {
+            let db_request = db_request.expect("DB mode validated its profile");
+            scope.spawn(|| {
+                workspace::index_db_profile_without_persisting(
+                    &db_app_data_dir,
+                    &db_registry,
+                    db_request,
+                )
+            })
+        });
+        let code_result = code_handle.map(|handle| {
+            handle
+                .join()
+                .map_err(|_| "코드 분석 작업이 비정상 종료되었습니다".to_string())
+                .and_then(|result| result)
+        });
+        let db_result = db_handle.map(|handle| {
+            handle
+                .join()
+                .map_err(|_| "DB 분석 작업이 비정상 종료되었습니다".to_string())
+                .and_then(|result| result)
+        });
+        (code_result, db_result)
+    });
+
+    let mut code_error = code_result
+        .as_ref()
+        .and_then(|result| result.as_ref().err().cloned());
+    let mut db_error = db_result
+        .as_ref()
+        .and_then(|result| result.as_ref().err().cloned());
+    let code = code_result.and_then(Result::ok);
+    let mut db = db_result.and_then(Result::ok);
+    let mut workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
+    let mut code_inventory = None;
+    let mut db_inventory = None;
+
+    if let Some(result) = code.as_ref() {
+        if result.run.ok {
+            code_inventory = result.inventory.clone();
+            if code_inventory.is_none() {
+                code_inventory =
+                    workspace::code_inventory(&app_data_dir, &registry, &workspace_id).ok();
+            }
+            if code_inventory.is_none() {
+                code_error = Some(
+                    result
+                        .inventory_error
+                        .clone()
+                        .unwrap_or_else(|| "코드 inventory를 만들지 못했습니다".to_string()),
+                );
+            }
+            workspace.code_project = result.workspace.code_project.clone();
+            workspace.engine_cache.code_cache_path =
+                result.workspace.engine_cache.code_cache_path.clone();
+            workspace.engine_cache.db_cache_dir =
+                result.workspace.engine_cache.db_cache_dir.clone();
+            workspace.updated_at = result.workspace.updated_at.clone();
+        } else if code_error.is_none() {
+            code_error = Some(if result.run.stderr.trim().is_empty() {
+                "코드 분석에 실패했습니다".to_string()
+            } else {
+                result.run.stderr.clone()
+            });
+        }
+    }
+
+    if let Some(result) = db.as_ref() {
+        if result.run.ok {
+            let profile_id = request
+                .db_profile_id
+                .as_deref()
+                .ok_or_else(|| "DB 프로필이 필요합니다".to_string())?;
+            db_inventory =
+                workspace::db_inventory(&app_data_dir, &registry, &workspace_id, Some(profile_id))
+                    .ok();
+            if db_inventory.is_none() {
+                db_error = Some("DB inventory를 만들지 못했습니다".to_string());
+            }
+            if let Some(updated_profile) = result
+                .workspace
+                .db_profiles
+                .iter()
+                .find(|profile| profile.id == profile_id)
+                .cloned()
+            {
+                if let Some(profile) = workspace
+                    .db_profiles
+                    .iter_mut()
+                    .find(|profile| profile.id == profile_id)
+                {
+                    profile.last_indexed_at = updated_profile.last_indexed_at;
+                }
+            }
+            workspace.engine_cache.db_cache_dir =
+                result.workspace.engine_cache.db_cache_dir.clone();
+            workspace.updated_at = result.workspace.updated_at.clone();
+        } else if db_error.is_none() {
+            db_error = Some(if result.run.stderr.trim().is_empty() {
+                "DB 분석에 실패했습니다".to_string()
+            } else {
+                result.run.stderr.clone()
+            });
+        }
+    }
+
+    let has_successful_source = code_inventory.is_some() || db_inventory.is_some();
+    let mut snapshot_saved = false;
+    if has_successful_source {
+        workspace::write_workspace(&base_paths(&app_data_dir).workspaces_dir, &workspace)?;
+        let existing = atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace.id)?;
+        let mut merged = existing;
+        if let Some(inventory) = code_inventory.as_ref() {
+            let incoming = atlas::snapshot_with_metadata(
+                atlas::build_inventory_snapshot(workspace.id.clone(), Some(inventory), None),
+                &workspace,
+                &registry,
+            );
+            merged = Some(atlas::replace_inventory_source(merged, incoming, "code")?);
+        }
+        if let Some(inventory) = db_inventory.as_ref() {
+            let incoming = atlas::snapshot_with_metadata(
+                atlas::build_inventory_snapshot(workspace.id.clone(), None, Some(inventory)),
+                &workspace,
+                &registry,
+            );
+            merged = Some(atlas::replace_inventory_source(merged, incoming, "db")?);
+        }
+        if let Some(snapshot) = merged {
+            let mut snapshot = snapshot;
+            enrich_integrated_snapshot_code_evidence(&workspace, &mut snapshot);
+            atlas::save_inventory_snapshot(&app_data_dir, &snapshot)?;
+            snapshot_saved = true;
+        }
+    }
+
+    let mut code = code;
+    if let Some(result) = code.as_mut() {
+        if let Some(inventory) = result.inventory.take() {
+            result.inventory = Some(bounded_code_inventory(inventory));
+        }
+    }
+    if let Some(result) = db.as_mut() {
+        if let Some(inventory) = db_inventory {
+            result.inventory = Some(bounded_db_inventory(inventory));
+        }
+    }
+
+    Ok(InitializeWorkspaceAnalysisResult {
+        workspace,
+        code,
+        db,
+        code_error,
+        db_error,
+        snapshot_saved,
+    })
+}
+
+#[tauri::command(async)]
 fn load_inventory_bootstrap(
     app: tauri::AppHandle,
     workspace_id: String,
@@ -203,8 +461,38 @@ fn persist_inventory_source(
 ) -> Result<(), String> {
     let incoming = atlas::snapshot_with_metadata(snapshot, workspace, registry);
     let existing = atlas::load_inventory_snapshot_optional(app_data_dir, &workspace.id)?;
-    let merged = atlas::replace_inventory_source(existing, incoming, source)?;
+    let mut merged = atlas::replace_inventory_source(existing, incoming, source)?;
+    enrich_integrated_snapshot_code_evidence(workspace, &mut merged);
     atlas::save_inventory_snapshot(app_data_dir, &merged)
+}
+
+fn enrich_integrated_snapshot_code_evidence(
+    workspace: &Workspace,
+    snapshot: &mut InventorySnapshot,
+) {
+    if snapshot.metadata.code.is_none() || snapshot.metadata.db.is_none() {
+        return;
+    }
+
+    let code_ids = snapshot
+        .items
+        .iter()
+        .filter(|item| {
+            item.source == "code"
+                && item.kind != "file"
+                && item.kind != "module"
+                && (item.path.is_some() || item.location.is_some())
+        })
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
+
+    if !code_ids.is_empty() {
+        atlas::apply_explicit_query_evidence_for_code(
+            snapshot,
+            workspace.repo_path.as_str(),
+            &code_ids,
+        );
+    }
 }
 
 fn bounded_code_inventory(mut inventory: CodeInventory) -> CodeInventory {
@@ -756,9 +1044,38 @@ fn escape_regex(value: &str) -> String {
 }
 
 #[cfg(test)]
+mod analysis_source_mode_tests {
+    use super::AnalysisSourceMode;
+
+    #[test]
+    fn each_mode_selects_only_its_declared_sources() {
+        assert!(AnalysisSourceMode::CodeOnly.includes_code());
+        assert!(!AnalysisSourceMode::CodeOnly.includes_db());
+        assert!(!AnalysisSourceMode::DbOnly.includes_code());
+        assert!(AnalysisSourceMode::DbOnly.includes_db());
+        assert!(AnalysisSourceMode::CodeAndDb.includes_code());
+        assert!(AnalysisSourceMode::CodeAndDb.includes_db());
+    }
+
+    #[test]
+    fn missing_mode_keeps_code_only_compatibility_default() {
+        let request: super::InitializeWorkspaceAnalysisRequest =
+            serde_json::from_value(serde_json::json!({
+                "workspaceId": "workspace"
+            }))
+            .unwrap();
+
+        assert_eq!(request.analysis_mode, AnalysisSourceMode::CodeOnly);
+    }
+}
+
+#[cfg(test)]
 mod code_evidence_tests {
     use super::{api_code_evidence_target_ids, focused_code_path_filter, normalized_change_intent};
+    use super::{enrich_integrated_snapshot_code_evidence, Workspace};
     use crate::atlas::{ChangeIntent, InventorySnapshot};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn api_evidence_search_targets_only_reachable_db_candidates() {
@@ -824,6 +1141,90 @@ mod code_evidence_tests {
             value: Some("x".repeat(129)),
         }))
         .is_err());
+    }
+
+    #[test]
+    fn integrated_snapshot_runs_sql_evidence_when_both_sources_exist() {
+        let root = std::env::temp_dir().join(format!(
+            "backend-map-integrated-evidence-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("repo.py"),
+            "cursor.execute(\"SELECT id FROM users\")\n",
+        )
+        .unwrap();
+
+        let mut snapshot: InventorySnapshot = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 2,
+            "workspaceId": "shop",
+            "savedAt": "1",
+            "metadata": {
+                "code": { "savedAt": "1", "sourceType": "local" },
+                "db": { "savedAt": "1", "sourceType": "ddl-sqlite" }
+            },
+            "items": [
+                {
+                    "id": "code:query",
+                    "kind": "function",
+                    "name": "list_users",
+                    "layer": "code",
+                    "source": "code",
+                    "parentId": null,
+                    "path": "repo.py",
+                    "location": { "path": "repo.py", "line": 1, "endLine": 1 }
+                },
+                {
+                    "id": "db:table:users",
+                    "kind": "table",
+                    "name": "users",
+                    "layer": "db",
+                    "source": "db",
+                    "parentId": null,
+                    "path": null
+                },
+                {
+                    "id": "db:column:users:id",
+                    "kind": "column",
+                    "name": "id",
+                    "layer": "db",
+                    "source": "db",
+                    "parentId": "db:table:users",
+                    "path": null
+                }
+            ],
+            "links": []
+        }))
+        .unwrap();
+        let workspace = Workspace {
+            id: "shop".to_string(),
+            name: "shop".to_string(),
+            repo_path: root.display().to_string(),
+            repo_source: Default::default(),
+            repo_origin: None,
+            code_project: Some("shop".to_string()),
+            engine_cache: Default::default(),
+            db_profiles: Vec::new(),
+            active_db_profile_id: None,
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+        };
+
+        enrich_integrated_snapshot_code_evidence(&workspace, &mut snapshot);
+
+        assert!(snapshot.links.iter().any(|link| {
+            link.kind == "code_db_read" && link.from == "code:query" && link.to == "db:table:users"
+        }));
+        assert!(snapshot
+            .links
+            .iter()
+            .any(|link| { link.kind == "code_db_uses_column" && link.to == "db:column:users:id" }));
+        let _ = fs::remove_dir_all(root);
     }
 }
 
@@ -1020,6 +1421,7 @@ pub fn run() {
             save_db_profile,
             index_db_profile,
             index_code_repository,
+            initialize_workspace_analysis,
             load_inventory_bootstrap,
             search_inventory,
             refresh_snapshot_freshness,

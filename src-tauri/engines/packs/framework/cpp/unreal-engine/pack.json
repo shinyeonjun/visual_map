@@ -1,0 +1,20 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "cpp",
+  "id": "unreal-engine",
+  "name": "Unreal Engine",
+  "kind": "game",
+  "signals": [
+    "CoreMinimal.h",
+    "UCLASS",
+    "UFUNCTION"
+  ],
+  "outputs": [
+    "COMPONENT",
+    "EVENT_HANDLER"
+  ],
+  "rule_sets": [
+    "COMPONENT",
+    "EVENT_HANDLER"
+  ]
+}

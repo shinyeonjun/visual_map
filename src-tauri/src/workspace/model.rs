@@ -132,6 +132,8 @@ pub(crate) struct CodeInventory {
     #[serde(default)]
     pub handles: Vec<CodeHandle>,
     #[serde(default)]
+    pub relation_gaps: Vec<CodeInventoryGap>,
+    #[serde(default)]
     pub partial: bool,
 }
 
@@ -190,6 +192,15 @@ pub(crate) struct CodeCall {
 pub(crate) struct CodeHandle {
     pub handler: String,
     pub route: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodeInventoryGap {
+    pub kind: String,
+    pub from: String,
+    pub to: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

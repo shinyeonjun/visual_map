@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "go",
+  "id": "grpc",
+  "name": "gRPC",
+  "kind": "rpc",
+  "signals": [
+    "google.golang.org/grpc",
+    "grpc.NewServer",
+    "Register"
+  ],
+  "outputs": [
+    "RPC_ENDPOINT",
+    "HANDLES",
+    "ASYNC_CALLS"
+  ],
+  "rule_sets": [
+    "RPC_ENDPOINT",
+    "ASYNC_CALLS"
+  ]
+}

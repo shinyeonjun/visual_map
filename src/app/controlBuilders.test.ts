@@ -8,9 +8,9 @@ type BuildVisualArgs = Parameters<typeof buildVisualMapControls>[0];
 type BuildWorkspaceArgs = Parameters<typeof buildWorkspaceControls>[0];
 
 describe("buildWorkspaceControls", () => {
-  it("reads code immediately after creating a workspace", async () => {
+  it("does not start analysis before the setup flow", async () => {
     const createWorkspace = vi.fn().mockResolvedValueOnce(workspace).mockResolvedValueOnce(null);
-    const indexCodeRepository = vi.fn().mockResolvedValue(undefined);
+    const indexCodeRepository = vi.fn();
     const controls = buildWorkspaceControls({
       operationStatus: { phase: "idle", label: "준비", message: "준비됨" },
       repoPathError: null,
@@ -53,12 +53,12 @@ describe("buildWorkspaceControls", () => {
 
     controls.createWorkspace();
 
-    await waitFor(() => expect(indexCodeRepository).toHaveBeenCalledWith(workspace));
+    await waitFor(() => expect(createWorkspace).toHaveBeenCalledTimes(1));
+    expect(indexCodeRepository).not.toHaveBeenCalled();
 
     controls.createWorkspace();
     await waitFor(() => expect(createWorkspace).toHaveBeenCalledTimes(2));
-    await Promise.resolve();
-    expect(indexCodeRepository).toHaveBeenCalledTimes(1);
+    expect(indexCodeRepository).not.toHaveBeenCalled();
   });
 });
 

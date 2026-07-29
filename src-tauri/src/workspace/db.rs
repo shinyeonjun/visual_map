@@ -123,6 +123,23 @@ pub(crate) fn index_db_profile(
     registry: &EngineRegistry,
     request: IndexDbProfileRequest,
 ) -> Result<DbIndexResult, String> {
+    index_db_profile_with_persistence(app_data_dir, registry, request, true)
+}
+
+pub(crate) fn index_db_profile_without_persisting(
+    app_data_dir: impl AsRef<Path>,
+    registry: &EngineRegistry,
+    request: IndexDbProfileRequest,
+) -> Result<DbIndexResult, String> {
+    index_db_profile_with_persistence(app_data_dir, registry, request, false)
+}
+
+fn index_db_profile_with_persistence(
+    app_data_dir: impl AsRef<Path>,
+    registry: &EngineRegistry,
+    request: IndexDbProfileRequest,
+    persist_workspace: bool,
+) -> Result<DbIndexResult, String> {
     validate_workspace_id(&request.workspace_id)?;
     validate_workspace_id(&request.profile_id)?;
 
@@ -173,7 +190,9 @@ pub(crate) fn index_db_profile(
     if run.ok {
         workspace.db_profiles[profile_index].last_indexed_at = Some(timestamp());
         workspace.updated_at = timestamp();
-        write_workspace(&paths.workspaces_dir, &workspace)?;
+        if persist_workspace {
+            write_workspace(&paths.workspaces_dir, &workspace)?;
+        }
     }
 
     let index_json = engine_json_value(&run.stdout);

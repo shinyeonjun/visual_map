@@ -13,9 +13,10 @@ Backend Visual Map separates three different claims:
 
 ## Code Support
 
-The bundled code engine is pinned to `codebase-memory 0.9.0`. Its upstream
-parser covers many languages, but this product does not claim equal API,
-handler, and call-chain quality for every parser grammar.
+The bundled code engine is `code-memory-language 0.1.0`, with contract version
+`1`. Its supported language providers cover the product's fixed language set,
+but this product does not claim equal API, handler, and call-chain quality for
+every framework or project configuration.
 
 | Product validation set | Pinned fixture | Validated product fields |
 | --- | --- | --- |
@@ -149,7 +150,9 @@ two selected code components through the same unselected DB object.
 ## Distribution Status
 
 - Source and local/internal Windows builds are supported.
-- `codebase-memory 0.9.0` is release-ready in the engine manifest.
+- `code-memory-language 0.1.0` is the current code engine in the engine
+  manifest. Its local/internal Windows build is verified; public release
+  packaging remains gated by the manifest's `releaseReady` flag.
 - `database-memory 0.2.0` remains `releaseReady=false` until its public release
   artifact and checksum are published and reverified.
 - Therefore an official public installer is intentionally blocked. This does

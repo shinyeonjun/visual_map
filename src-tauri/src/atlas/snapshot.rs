@@ -199,6 +199,25 @@ pub(crate) fn build_inventory_snapshot(
             }
             link
         }));
+        snapshot
+            .metadata
+            .gaps
+            .extend(
+                code.relation_gaps
+                    .iter()
+                    .enumerate()
+                    .map(|(index, relation)| {
+                        gap(
+                            format!(
+                                "gap:code-relation:{}:{}->{}",
+                                index, relation.from, relation.to
+                            ),
+                            &relation.kind,
+                            &relation.message,
+                            vec![format!("code:{}", relation.from), relation.to.clone()],
+                        )
+                    }),
+            );
     }
 
     if let Some(db) = db {

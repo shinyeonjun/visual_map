@@ -1,7 +1,8 @@
 {
   "bundle": {
     "resources": [
-      "engines/codebase-memory-mcp.exe",
+      "engines/code-memory-language.exe",
+      "engines/packs",
       "engines/database-memory.exe"
     ]
   }

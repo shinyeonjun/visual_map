@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "php",
+  "id": "laminas",
+  "name": "Laminas",
+  "kind": "web",
+  "signals": [
+    "Laminas\\",
+    "router",
+    "addRoute"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES",
+    "MIDDLEWARE"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE",
+    "MIDDLEWARE"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "schema": "code-memory.framework-pack-catalog.v1",
+  "language": "dart",
+  "packs": [
+    {
+      "id": "flutter",
+      "path": "flutter/pack.json"
+    },
+    {
+      "id": "shelf",
+      "path": "shelf/pack.json"
+    },
+    {
+      "id": "serverpod",
+      "path": "serverpod/pack.json"
+    },
+    {
+      "id": "dart-frog",
+      "path": "dart-frog/pack.json"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "code-memory.framework-fixture.v1",
+  "language": "go",
+  "framework": "grpc",
+  "files": [
+    {
+      "path": "src/fixture.go",
+      "source": "class UserService final : public grpc::Service {}; server_builder.RegisterService(&service);"
+    },
+    {
+      "path": "go.mod",
+      "source": "module code-memory-framework-fixture\n\ngo 1.22\n// signal: google.golang.org/grpc\n// signal: grpc.NewServer\n// signal: Register\n"
+    }
+  ],
+  "expected": {
+    "facts": [
+      "RPC_ENDPOINT",
+      "ASYNC_CALLS"
+    ],
+    "relations": [
+      "HANDLES"
+    ]
+  }
+}

@@ -47,14 +47,6 @@ Show how Backend Visual Map turns a real backend repository plus DB metadata int
    - Table Usage: choose dependency/schema mode and point to `sessions`.
    - Column Impact: choose impact mode and point to `sessions.id`.
 
-## Screenshot References
-
-- Workbench loaded: `docs/reports/screenshots/phase-72/workbench-loaded.png`
-- Atlas overview: `docs/reports/screenshots/phase-72/atlas-grouped.png`
-- API Flow: `docs/reports/screenshots/phase-72/atlas-api-flow.png`
-- Table Usage: `docs/reports/screenshots/phase-72/atlas-table-usage.png`
-- Column Impact: `docs/reports/screenshots/phase-72/atlas-column-impact.png`
-
 ## Timing
 
 - 0:00-0:30: app purpose and local/privacy boundary.
