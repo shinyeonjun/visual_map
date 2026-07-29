@@ -58,20 +58,44 @@ jobs:
         shell: pwsh
         run: .\scripts\generate-dependency-inventory.ps1 -VerifyOnly
 
+      - name: Build integrated code engine candidate
+        run: cargo +1.96.1 build --locked --release --manifest-path code_memory/rust/Cargo.toml
+
       - name: Build integrated database engine candidate
         run: cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path db_memory/Cargo.toml
 
-      - name: Stage pinned database engine candidate
+      - name: Stage pinned engine candidates
         shell: pwsh
         run: |
-          $target = ".\src-tauri\engines\database-memory.exe"
-          Copy-Item -LiteralPath ".\db_memory\target\release\database-memory.exe" -Destination $target -Force
-          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash
           $manifestPath = ".\src-tauri\engines\manifest.json"
           $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-          $database = @($manifest.engines) | Where-Object id -eq "database-memory"
-          if ($hash -ne $database.executable.sha256) {
-            $database.developmentArtifacts = @([pscustomobject]@{ sha256 = $hash })
+
+          $candidates = @(
+            [pscustomobject]@{
+              Id = "codebase-memory"
+              Source = ".\code_memory\rust\target\release\code-memory-language.exe"
+              Target = ".\src-tauri\engines\code-memory-language.exe"
+            }
+            [pscustomobject]@{
+              Id = "database-memory"
+              Source = ".\db_memory\target\release\database-memory.exe"
+              Target = ".\src-tauri\engines\database-memory.exe"
+            }
+          )
+
+          foreach ($candidate in $candidates) {
+            Copy-Item -LiteralPath $candidate.Source -Destination $candidate.Target -Force
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $candidate.Target).Hash
+            $engine = @($manifest.engines) | Where-Object id -eq $candidate.Id
+            if ($null -eq $engine) {
+              throw "Engine '$($candidate.Id)' is missing from the manifest."
+            }
+            if ($hash -ne $engine.executable.sha256) {
+              $engine.developmentArtifacts = @([pscustomobject]@{ sha256 = $hash })
+            }
+          }
+
+          if ($candidates.Count -gt 0) {
             $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath -Encoding utf8
           }
 
