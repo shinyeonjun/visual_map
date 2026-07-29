@@ -30,6 +30,12 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
+      - name: Install contract-only Python provider
+        shell: pwsh
+        run: |
+          npm install --no-save --no-package-lock pyright@1.1.411
+          "$PWD\node_modules\.bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Verify product version
         shell: pwsh
         run: .\scripts\verify-product-version.ps1
