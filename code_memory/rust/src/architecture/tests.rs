@@ -666,3 +666,33 @@ fn case_insensitive_boundary_scan_does_not_allocate_uppercase_copy() {
         &["SELECT "]
     ));
 }
+
+#[test]
+fn database_boundary_ignores_comments_strings_and_dynamic_sql() {
+    assert_eq!(
+        static_database_operation("sql = \"SELECT id FROM orders\""),
+        Some("READ")
+    );
+    assert_eq!(static_database_operation("# SELECT id FROM orders"), None);
+    assert_eq!(
+        static_database_operation("COMMENT_SQL = \"SELECT id FROM orders\""),
+        None
+    );
+    assert_eq!(
+        static_database_operation("logger.info(\"SELECT id FROM orders\")"),
+        None
+    );
+    assert_eq!(
+        static_database_operation("logger.query(\"SELECT id FROM orders\")"),
+        None
+    );
+    assert_eq!(static_database_operation("table = \"orders\""), None);
+    assert_eq!(
+        static_database_operation("sql = \"SELECT id FROM \" + table"),
+        None
+    );
+    assert_eq!(
+        static_database_operation("cursor.execute(sql)"),
+        Some("DB_CALL")
+    );
+}

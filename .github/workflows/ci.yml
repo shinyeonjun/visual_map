@@ -115,6 +115,10 @@ jobs:
         shell: pwsh
         run: .\scripts\smoke-code-engine-contract.ps1
 
+      - name: Smoke code evidence golden and negative fixtures
+        shell: pwsh
+        run: .\scripts\smoke-code-evidence.ps1
+
       - name: Smoke database engine metadata contract
         shell: pwsh
         run: .\scripts\smoke-rdb-productization.ps1 -DatabaseMemory .\src-tauri\engines\database-memory.exe

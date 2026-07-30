@@ -87,6 +87,14 @@
 .engine-status.snapshot svg { color: var(--blue-ink); }
 .engine-status.missing svg { color: var(--orange); }
 .engine-status.error svg { color: var(--red); }
+.engine-status-detail {
+  min-width: 0;
+  max-width: 300px;
+  color: var(--red);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .operation-details {
   position: relative;

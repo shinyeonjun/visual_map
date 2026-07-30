@@ -1028,3 +1028,55 @@ pub(crate) fn contains_any_ascii_case_insensitive(value: &str, markers: &[&str])
                 .any(|window| window.eq_ignore_ascii_case(marker))
     })
 }
+
+pub(crate) fn static_database_operation(line: &str) -> Option<&'static str> {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty()
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("//")
+        || trimmed.starts_with("--")
+        || trimmed.contains('+')
+        || trimmed.contains("${")
+    {
+        return None;
+    }
+    let database_call = contains_any(
+        trimmed,
+        &[
+            ".execute(",
+            ".executemany(",
+            ".query(",
+            ".raw(",
+            "createQuery(",
+        ],
+    ) && !contains_any(
+        trimmed,
+        &["logger.query(", "logger.execute(", "logger.raw("],
+    );
+    let assigned_sql =
+        assignment_name(trimmed).is_some_and(|name| matches!(name, "sql" | "query" | "statement"));
+    if !database_call && !assigned_sql {
+        return None;
+    }
+    if contains_any_ascii_case_insensitive(trimmed, &["SELECT ", "SELECT\t"]) {
+        Some("READ")
+    } else if contains_any_ascii_case_insensitive(
+        trimmed,
+        &["INSERT ", "UPDATE ", "DELETE ", "UPSERT "],
+    ) {
+        Some("WRITE")
+    } else if database_call {
+        Some("DB_CALL")
+    } else {
+        None
+    }
+}
+
+fn assignment_name(line: &str) -> Option<&str> {
+    let left = line.split_once('=')?.0.trim();
+    let name = left
+        .split_whitespace()
+        .last()?
+        .trim_matches(|character: char| !character.is_ascii_alphanumeric() && character != '_');
+    (!name.is_empty()).then_some(name)
+}

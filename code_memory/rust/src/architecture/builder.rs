@@ -567,28 +567,7 @@ impl ArchitectureBuilder {
                     ));
                 }
 
-                let operation =
-                    if contains_any_ascii_case_insensitive(line, &["SELECT ", "SELECT\t"]) {
-                        Some("READ")
-                    } else if contains_any_ascii_case_insensitive(
-                        line,
-                        &["INSERT ", "UPDATE ", "DELETE ", "UPSERT "],
-                    ) {
-                        Some("WRITE")
-                    } else if contains_any(
-                        line,
-                        &[
-                            ".execute(",
-                            ".executemany(",
-                            ".query(",
-                            ".raw(",
-                            "createQuery(",
-                        ],
-                    ) {
-                        Some("DB_CALL")
-                    } else {
-                        None
-                    };
+                let operation = static_database_operation(line);
                 if let Some(operation) = operation {
                     database.push(EdgeDraft {
                         from: module.clone(),

@@ -67,6 +67,7 @@ export function EngineStatus({
   const engine = engineForRole(registry, role);
   const state = engineState(registry, engine, error);
   const displayState = state === "missing" && missingText ? "snapshot" : state;
+  const detail = error ?? engine?.error ?? null;
   const StatusIcon = state === "ok" ? CircleCheck : state === "pending" ? Clock3 : CircleAlert;
   const integrityLabel = engine?.integrity === "development"
     ? "개발용"
@@ -77,12 +78,18 @@ export function EngineStatus({
       : null;
 
   return (
-    <span className={`engine-status ${displayState}`} title={engineTitle(registry, engine, error, missingTitle)}>
+    <span
+      className={`engine-status ${displayState}`}
+      title={engineTitle(registry, engine, error, missingTitle)}
+      aria-label={`${label}: ${engineText(state, missingText)}${detail ? ` · ${detail}` : ""}`}
+      data-engine-error={detail ?? undefined}
+    >
       <StatusIcon size={12} />
       {label}
       <b className={displayState}>
         {integrityLabel ?? engineText(state, missingText)}
       </b>
+      {detail ? <span className="engine-status-detail" role="alert">{detail}</span> : null}
     </span>
   );
 }
