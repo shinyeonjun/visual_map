@@ -167,12 +167,10 @@ export function useVisualMap({
     setVisualMapEnriching(false);
     const isCurrentRequest = () =>
       visualMapRequestRef.current === requestId && currentWorkspaceIdRef.current === workspaceId;
-    const shouldEnrichCodeEvidence = Boolean(
-      (mode === "api-flow" && focusId) ||
-        (mode === "composition" && requestedRelationView !== "calls") ||
-        (mode === "table-usage" && focusId?.startsWith("db:table:")) ||
-        (mode === "column-impact" && focusId?.startsWith("db:column:")),
-    );
+    // Selecting a card is a snapshot projection, not a new code analysis.
+    // Live evidence is intentionally opt-in so every API click stays local and
+    // cannot start another provider/LSP process.
+    const shouldEnrichCodeEvidence = false;
     const cacheKey = visualMapCacheKey(
       shouldEnrichCodeEvidence ? "enriched" : "base",
       targetKey,

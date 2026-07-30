@@ -59,7 +59,7 @@ describe("useVisualMap transitions", () => {
 
     await waitFor(() => expect(requests).toHaveLength(2));
     expect(invokeMock).toHaveBeenNthCalledWith(2, "get_visual_map", expect.objectContaining({
-      enrichCodeEvidence: true,
+      enrichCodeEvidence: false,
     }));
     act(() => requests[1].resolve(visualMap("api-flow", "code:route-1")));
     await waitFor(() => expect(result.current.visualMap?.mode).toBe("api-flow"));
@@ -91,9 +91,9 @@ describe("useVisualMap transitions", () => {
 
     expect(result.current.visualMap?.mode).toBe("atlas");
     expect(result.current.visualMapLoading).toBe(true);
-    expect(result.current.visualMapEnriching).toBe(true);
+    expect(result.current.visualMapEnriching).toBe(false);
     expect(invokeMock).toHaveBeenNthCalledWith(2, "get_visual_map", expect.objectContaining({
-      enrichCodeEvidence: true,
+      enrichCodeEvidence: false,
     }));
 
     act(() => requests[1].resolve(visualMap("column-impact", "db:column:public.users:email")));
@@ -122,10 +122,10 @@ describe("useVisualMap transitions", () => {
       truncated: false,
     };
     expect(result.current.visualMap?.mode).toBe("atlas");
-    expect(result.current.visualMapEnriching).toBe(true);
+    expect(result.current.visualMapEnriching).toBe(false);
     expect(invokeMock).toHaveBeenNthCalledWith(2, "get_visual_map", expect.objectContaining({
       mode: "api-flow",
-      enrichCodeEvidence: true,
+      enrichCodeEvidence: false,
     }));
 
     act(() => requests[1].resolve(base));
@@ -199,7 +199,7 @@ describe("useVisualMap transitions", () => {
         focusIds: ["code:route-1", "db:table:public.sessions"],
         relationView: "data",
       },
-      enrichCodeEvidence: true,
+      enrichCodeEvidence: false,
     }));
 
     const composed = visualMap("composition", "code:route-1");
@@ -216,7 +216,7 @@ describe("useVisualMap transitions", () => {
       mode: "api-flow",
       focusId: "code:route-2",
       composition: null,
-      enrichCodeEvidence: true,
+      enrichCodeEvidence: false,
     }));
   });
 

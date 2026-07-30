@@ -91,7 +91,10 @@ pub(crate) fn provider_timeout() -> Duration {
 pub(crate) fn terminate_process_tree(child: &mut Child) {
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
+        let mut command = Command::new("taskkill");
+        use std::os::windows::process::CommandExt;
+        let _ = command
+            .creation_flags(0x08000000)
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .status();
     }

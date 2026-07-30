@@ -1801,7 +1801,10 @@ impl Drop for LspConnection {
         #[cfg(windows)]
         {
             if self.child.try_wait().ok().flatten().is_none() {
-                let _ = Command::new("taskkill")
+                use std::os::windows::process::CommandExt;
+                let mut command = Command::new("taskkill");
+                let _ = command
+                    .creation_flags(0x08000000)
                     .args(["/PID", &self.child.id().to_string(), "/T", "/F"])
                     .status();
             }

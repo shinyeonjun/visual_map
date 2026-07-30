@@ -177,8 +177,21 @@ pub(crate) fn tool_command(
         }
     }
     apply_offline_environment(&mut command);
+    hide_console_window(&mut command);
     Ok(command)
 }
+
+#[cfg(windows)]
+fn hide_console_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    // CREATE_NO_WINDOW: providers are background implementation details of the
+    // desktop app and must never create a visible console for each invocation.
+    command.creation_flags(0x08000000);
+}
+
+#[cfg(not(windows))]
+fn hide_console_window(_command: &mut Command) {}
 
 fn apply_offline_environment(command: &mut Command) {
     if env::var("CODE_MEMORY_ALLOW_NETWORK").as_deref() == Ok("1") {

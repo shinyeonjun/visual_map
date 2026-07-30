@@ -2367,12 +2367,13 @@ fn git_source_revision(root: &Path) -> Option<(String, String)> {
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .ok()?;
+    let mut command = Command::new("git");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command.arg("-C").arg(root).args(args).output().ok()?;
     output.status.success().then_some(output.stdout)
 }
 

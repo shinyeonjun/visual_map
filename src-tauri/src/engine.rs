@@ -611,12 +611,15 @@ pub(crate) fn run_command_with_env(
     {
         return Ok(cancelled_engine_run(started_at, Vec::new(), Vec::new()));
     }
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
         .envs(envs.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_console_window(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|error| format!("읽기 도구 실행 실패: {error}"))?;
     let stdout = child
@@ -690,6 +693,17 @@ pub(crate) fn run_command_with_env(
         thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[cfg(windows)]
+fn hide_console_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    // CREATE_NO_WINDOW keeps bundled console sidecars invisible in the GUI app.
+    command.creation_flags(0x08000000);
+}
+
+#[cfg(not(windows))]
+fn hide_console_window(_command: &mut Command) {}
 
 fn cancelled_engine_run(started_at: String, stdout: Vec<u8>, stderr: Vec<u8>) -> EngineRunResult {
     let stderr = String::from_utf8_lossy(&stderr);
