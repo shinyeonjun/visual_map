@@ -385,14 +385,17 @@ fn collect_project_config_files(dir: &Path, files: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             if !is_excluded_source_dir(&entry.file_name().to_string_lossy()) {
                 collect_project_config_files(&path, files);
             }
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        if is_project_config_name(&name) {
+        if file_type.is_file() && is_project_config_name(&name) {
             files.push(path);
         }
     }
@@ -497,6 +500,11 @@ pub(crate) fn typescript_project_model_cache_key(
     if let Some(providers_root) = providers_root {
         checksum_update(&mut hash, providers_root.to_string_lossy().as_bytes());
         if let Some(file_hash) = cached_file_checksum(&providers_root.join("manifest.json")) {
+            checksum_update(&mut hash, &file_hash.to_le_bytes());
+        }
+        if let Some(file_hash) =
+            cached_file_checksum(&providers_root.join("node").join("project-model.cjs"))
+        {
             checksum_update(&mut hash, &file_hash.to_le_bytes());
         }
     }

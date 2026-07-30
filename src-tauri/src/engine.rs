@@ -622,14 +622,20 @@ pub(crate) fn run_command_with_env(
     let mut child = command
         .spawn()
         .map_err(|error| format!("읽기 도구 실행 실패: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "읽기 도구 stdout을 열지 못했습니다".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "읽기 도구 stderr를 열지 못했습니다".to_string())?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_engine_process_tree(&mut child);
+            return Err("읽기 도구 stdout을 열지 못했습니다".to_string());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            terminate_engine_process_tree(&mut child);
+            return Err("읽기 도구 stderr를 열지 못했습니다".to_string());
+        }
+    };
     let stdout_reader = thread::spawn(move || read_process_stream(stdout));
     let stderr_reader = thread::spawn(move || read_process_stream(stderr));
 
@@ -637,8 +643,7 @@ pub(crate) fn run_command_with_env(
         let status = match child.try_wait() {
             Ok(status) => status,
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_engine_process_tree(&mut child);
                 let _ = collect_process_streams(stdout_reader, stderr_reader);
                 return Err(format!("읽기 도구 상태 확인 실패: {error}"));
             }
@@ -660,15 +665,13 @@ pub(crate) fn run_command_with_env(
             .as_ref()
             .is_some_and(|value| value.load(Ordering::Acquire))
         {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_engine_process_tree(&mut child);
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
             return Ok(cancelled_engine_run(started_at, stdout, stderr));
         }
 
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_engine_process_tree(&mut child);
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
             let stderr = String::from_utf8_lossy(&stderr);
             let stderr = if stderr.trim().is_empty() {
@@ -692,6 +695,23 @@ pub(crate) fn run_command_with_env(
 
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn terminate_engine_process_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        let _ = Command::new("taskkill")
+            .creation_flags(0x08000000)
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[cfg(windows)]

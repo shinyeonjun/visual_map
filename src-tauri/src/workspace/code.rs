@@ -20,6 +20,7 @@ use super::store::{
 
 static NEXT_CODE_PROJECT_GENERATION: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
 pub(crate) fn index_code_repository(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
@@ -80,7 +81,7 @@ fn index_code_repository_with_persistence(
                         return Err(error);
                     }
                 }
-                if previous_project != project {
+                if persist_workspace && previous_project != project {
                     let _ = adapter.delete_project(&previous_project);
                 }
                 inventory = Some(indexed_inventory);
@@ -102,7 +103,44 @@ fn index_code_repository_with_persistence(
         run,
         inventory,
         inventory_error,
+        previous_code_project: (!persist_workspace).then_some(previous_project),
     })
+}
+
+pub(crate) fn cleanup_previous_code_project(
+    app_data_dir: impl AsRef<Path>,
+    registry: &EngineRegistry,
+    workspace_id: &str,
+    previous_project: Option<&str>,
+    current_project: Option<&str>,
+) {
+    let Some(previous_project) = previous_project else {
+        return;
+    };
+    if current_project == Some(previous_project) {
+        return;
+    }
+    cleanup_code_project(app_data_dir, registry, workspace_id, Some(previous_project));
+}
+
+pub(crate) fn cleanup_code_project(
+    app_data_dir: impl AsRef<Path>,
+    registry: &EngineRegistry,
+    workspace_id: &str,
+    project: Option<&str>,
+) {
+    let Some(project) = project else {
+        return;
+    };
+    let paths = base_paths(app_data_dir);
+    let cache_path = workspace_code_cache_path(&paths.workspaces_dir, workspace_id);
+    if let Ok(adapter) = CodebaseMemoryAdapter::new_with_provider_cache(
+        registry,
+        cache_path,
+        paths.app_data_dir.join("providers"),
+    ) {
+        let _ = adapter.delete_project(project);
+    }
 }
 
 pub(crate) fn code_inventory(
@@ -348,16 +386,14 @@ pub(super) fn extract_code_calls_with_gaps(
         let known_from = known_items.contains_key(call.from.as_str());
         let known_to = known_items.contains_key(call.to.as_str());
         if !known_from || !known_to {
-            if known_from && !known_to {
-                let key = (call.from.clone(), call.to.clone());
-                if seen_gaps.insert(key) {
-                    gaps.push(CodeInventoryGap {
-                        kind: "unresolved-call".to_string(),
-                        from: call.from.clone(),
-                        to: call.to.clone(),
-                        message: "codebase-memory CALLS 관계의 한쪽 끝점을 제품 인벤토리에서 찾지 못했습니다.".to_string(),
-                    });
-                }
+            let key = (call.from.clone(), call.to.clone());
+            if seen_gaps.insert(key) {
+                gaps.push(CodeInventoryGap {
+                    kind: "unresolved-call".to_string(),
+                    from: call.from.clone(),
+                    to: call.to.clone(),
+                    message: "codebase-memory CALLS 관계의 한쪽 또는 양쪽 끝점을 제품 인벤토리에서 찾지 못했습니다.".to_string(),
+                });
             }
             continue;
         }
@@ -431,10 +467,9 @@ fn extract_code_handles_with_gaps(
         .into_iter()
         .filter_map(code_call)
         .filter_map(|edge| {
-            if (handler_ids.contains(edge.from.as_str()) && !route_ids.contains(edge.to.as_str()))
-                || (!handler_ids.contains(edge.from.as_str())
-                    && route_ids.contains(edge.to.as_str()))
-            {
+            let known_handler = handler_ids.contains(edge.from.as_str());
+            let known_route = route_ids.contains(edge.to.as_str());
+            if !known_handler || !known_route {
                 let key = (edge.from.clone(), edge.to.clone());
                 if seen_gaps.insert(key) {
                     gaps.push(CodeInventoryGap {
@@ -447,9 +482,9 @@ fn extract_code_handles_with_gaps(
                 return None;
             }
             Some(CodeHandle {
-                    handler: edge.from,
-                    route: edge.to,
-                })
+                handler: edge.from,
+                route: edge.to,
+            })
         })
         .filter(|handle| seen.insert((handle.route.clone(), handle.handler.clone())))
         .collect::<Vec<_>>();

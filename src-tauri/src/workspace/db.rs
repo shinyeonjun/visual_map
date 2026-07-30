@@ -104,10 +104,6 @@ pub(crate) fn delete_db_profile(
         .parent()
         .map(Path::to_path_buf);
 
-    if let Some(cache_dir) = cache_dir.filter(|path| path.is_dir()) {
-        fs::remove_dir_all(cache_dir)
-            .map_err(|error| format!("DB 연결 캐시를 삭제하지 못했습니다: {error}"))?;
-    }
     workspace.db_profiles.remove(profile_index);
     workspace.active_db_profile_id = workspace
         .db_profiles
@@ -115,9 +111,16 @@ pub(crate) fn delete_db_profile(
         .map(|profile| profile.id.clone());
     workspace.updated_at = timestamp();
     write_workspace(&paths.workspaces_dir, &workspace)?;
+    // Metadata is the source of truth. A stale cache is harmless and can be
+    // cleaned after the profile deletion is durable; deleting it earlier can
+    // leave a live profile without its cache when the metadata write fails.
+    if let Some(cache_dir) = cache_dir.filter(|path| path.is_dir()) {
+        let _ = fs::remove_dir_all(cache_dir);
+    }
     Ok(workspace)
 }
 
+#[cfg(test)]
 pub(crate) fn index_db_profile(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
@@ -183,7 +186,12 @@ fn index_db_profile_with_persistence(
             &[(env_name.as_str(), connection_string)],
             &snapshot_key,
         );
-        let _ = fs::remove_file(config_path);
+        let cleanup_result = fs::remove_file(&config_path);
+        if let Err(error) = cleanup_result {
+            return Err(format!(
+                "DB 분석 임시 설정 파일을 삭제하지 못했습니다: {error}"
+            ));
+        }
         result?
     };
 

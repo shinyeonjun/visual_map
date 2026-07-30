@@ -146,10 +146,7 @@ fn query_graph(payload: &Value) -> Result<(), String> {
                     .get("to")
                     .map(|value| normalize_endpoint(value, &endpoint_aliases))
                     .unwrap_or(Value::Null);
-                json!([
-                    from,
-                    to,
-                ])
+                json!([from, to,])
             })
             .collect::<Vec<_>>();
         let total = rows.len();
@@ -214,10 +211,7 @@ fn architecture_endpoint_aliases(index: &Value) -> HashMap<String, String> {
                 let route_suffix = route_suffix
                     .strip_prefix(&format!("{framework}:"))
                     .unwrap_or(route_suffix);
-                aliases.insert(
-                    format!("route:{framework}:{route_suffix}"),
-                    id.to_string(),
-                );
+                aliases.insert(format!("route:{framework}:{route_suffix}"), id.to_string());
             }
         }
     }
@@ -253,10 +247,7 @@ mod tests {
         let aliases = architecture_endpoint_aliases(&index);
 
         assert_eq!(
-            normalize_endpoint(
-                &json!("route:fastapi:src/routes.py:10:/items"),
-                &aliases
-            ),
+            normalize_endpoint(&json!("route:fastapi:src/routes.py:10:/items"), &aliases),
             json!("entrypoint:fastapi:route:fastapi:src/routes.py:10:/items")
         );
     }
@@ -652,13 +643,16 @@ fn collect_text_files(root: &Path, directory: &Path, files: &mut Vec<(String, St
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             if !is_excluded_source_dir(&entry.file_name().to_string_lossy()) {
                 collect_text_files(root, &path, files);
             }
             continue;
         }
-        let Ok(metadata) = path.metadata() else {
+        let Ok(metadata) = entry.metadata() else {
             continue;
         };
         if metadata.len() > 8 * 1024 * 1024 {

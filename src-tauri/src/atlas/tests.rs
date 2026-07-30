@@ -241,7 +241,11 @@ fn missing_inventory_snapshot_is_an_empty_state() {
 #[test]
 fn removing_db_snapshot_preserves_code_and_scrubs_backups() {
     let root = temp_root("remove-db-snapshot");
-    let snapshot = fixture_inventory("workspace-1".to_string());
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot.stale_reasons = vec![
+        "코드 파일이 마지막 읽기 이후 바뀌었습니다".to_string(),
+        "DB 파일이 마지막 읽기 이후 바뀌었습니다".to_string(),
+    ];
     save_inventory_snapshot(&root, &snapshot).unwrap();
 
     remove_db_inventory_snapshot(&root, "workspace-1").unwrap();
@@ -254,6 +258,14 @@ fn removing_db_snapshot_preserves_code_and_scrubs_backups() {
     assert!(restored.items.iter().all(|item| item.source != "db"));
     assert!(restored.items.iter().any(|item| item.source == "code"));
     assert!(restored.metadata.db.is_none());
+    assert!(restored
+        .stale_reasons
+        .iter()
+        .any(|reason| reason == "코드 파일이 마지막 읽기 이후 바뀌었습니다"));
+    assert!(!restored
+        .stale_reasons
+        .iter()
+        .any(|reason| reason == "DB 파일이 마지막 읽기 이후 바뀌었습니다"));
     assert_eq!(backup, restored);
     fs::remove_dir_all(root).unwrap();
 }

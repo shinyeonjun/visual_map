@@ -1,10 +1,19 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
+use std::process::Stdio;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::{project_cache_root, tool_command, Diagnostic, FileRelationOutput};
+use crate::{
+    project_cache_root, provider_timeout, terminate_process_tree, tool_command, Diagnostic,
+    FileRelationOutput,
+};
+
+const MAX_PROJECT_MODEL_STREAM_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Deserialize)]
 struct ProjectModelJson {
@@ -61,30 +70,16 @@ pub(crate) fn analyze_typescript_project(
         ));
     }
     let cache = project_cache_root(root).join(format!("tsjs-project-model-{cache_key}.json"));
-    let bytes = if let Ok(bytes) = fs::read(&cache) {
-        eprintln!("cached TypeScript/JavaScript project model");
-        bytes
-    } else {
-        let mut command = tool_command("node", Some(providers_root))?;
-        command.arg(&script).arg(root);
-        let output = command
-            .output()
-            .map_err(|error| format!("cannot run project model provider: {error}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "project model provider exited with {}: {}",
-                output.status,
-                stderr.trim()
-            ));
+    let bytes = match fs::read(&cache) {
+        Ok(bytes) if serde_json::from_slice::<ProjectModelJson>(&bytes).is_ok() => {
+            eprintln!("cached TypeScript/JavaScript project model");
+            bytes
         }
-        if let Some(parent) = cache.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("cannot create project model cache: {error}"))?;
+        Ok(_) => {
+            let _ = fs::remove_file(&cache);
+            load_project_model_from_provider(providers_root, &script, root, &cache)?
         }
-        fs::write(&cache, &output.stdout)
-            .map_err(|error| format!("cannot write project model cache: {error}"))?;
-        output.stdout
+        Err(_) => load_project_model_from_provider(providers_root, &script, root, &cache)?,
     };
     let model: ProjectModelJson = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid project model output: {error}"))?;
@@ -112,6 +107,105 @@ pub(crate) fn analyze_typescript_project(
     })
 }
 
+fn load_project_model_from_provider(
+    providers_root: &Path,
+    script: &Path,
+    root: &Path,
+    cache: &Path,
+) -> Result<Vec<u8>, String> {
+    let mut command = tool_command("node", Some(providers_root))?;
+    command.arg(script).arg(root);
+    let output = run_project_model_command(command)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "project model provider exited with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    if let Some(parent) = cache.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create project model cache: {error}"))?;
+    }
+    fs::write(cache, &output.stdout)
+        .map_err(|error| format!("cannot write project model cache: {error}"))?;
+    Ok(output.stdout)
+}
+
+fn run_project_model_command(
+    mut command: std::process::Command,
+) -> Result<std::process::Output, String> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("cannot run project model provider: {error}"))?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_process_tree(&mut child);
+            return Err("project model provider stdout unavailable".to_string());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            terminate_process_tree(&mut child);
+            return Err("project model provider stderr unavailable".to_string());
+        }
+    };
+    let stdout_reader = thread::spawn(move || read_stream(stdout));
+    let stderr_reader = thread::spawn(move || read_stream(stderr));
+    let deadline = Instant::now() + provider_timeout();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = stdout_reader
+                    .join()
+                    .map_err(|_| "project model stdout reader failed".to_string())?;
+                let stderr = stderr_reader
+                    .join()
+                    .map_err(|_| "project model stderr reader failed".to_string())?;
+                return Ok(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                terminate_process_tree(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(format!(
+                    "project model provider timeout after {} seconds",
+                    provider_timeout().as_secs()
+                ));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(error) => {
+                terminate_process_tree(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(format!("project model provider wait failed: {error}"));
+            }
+        }
+    }
+}
+
+fn read_stream(mut stream: impl Read) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let _ = stream
+        .by_ref()
+        .take((MAX_PROJECT_MODEL_STREAM_BYTES + 1) as u64)
+        .read_to_end(&mut bytes);
+    bytes.truncate(MAX_PROJECT_MODEL_STREAM_BYTES);
+    bytes
+}
+
 fn dedupe_relations(relations: Vec<FileRelationOutput>) -> Vec<FileRelationOutput> {
     let mut seen = std::collections::HashSet::new();
     relations
@@ -126,4 +220,16 @@ fn dedupe_relations(relations: Vec<FileRelationOutput>) -> Vec<FileRelationOutpu
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_stream, MAX_PROJECT_MODEL_STREAM_BYTES};
+
+    #[test]
+    fn project_model_stream_is_bounded() {
+        let input = vec![b'x'; MAX_PROJECT_MODEL_STREAM_BYTES + 1];
+        let output = read_stream(std::io::Cursor::new(input));
+        assert_eq!(output.len(), MAX_PROJECT_MODEL_STREAM_BYTES);
+    }
 }

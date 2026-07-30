@@ -1559,7 +1559,8 @@ fn code_inventory_records_known_callers_with_unresolved_callees() {
     let calls = serde_json::json!({
         "rows": [
             { "from": "routes.list_orders", "to": "missing.Repository.find", "confidence": "0.42" },
-            { "from": "stdlib.print", "to": "routes.list_orders", "confidence": "0.99" }
+            { "from": "stdlib.print", "to": "routes.list_orders", "confidence": "0.99" },
+            { "from": "missing.Service.run", "to": "missing.Repository.find", "confidence": "0.31" }
         ]
     });
     let inventory =
@@ -1567,9 +1568,16 @@ fn code_inventory_records_known_callers_with_unresolved_callees() {
     let (calls, gaps) = super::code::extract_code_calls_with_gaps(&calls, &inventory);
 
     assert!(calls.is_empty());
-    assert_eq!(gaps.len(), 1);
-    assert_eq!(gaps[0].from, "routes.list_orders");
-    assert_eq!(gaps[0].to, "missing.Repository.find");
+    assert_eq!(gaps.len(), 3);
+    assert!(gaps
+        .iter()
+        .any(|gap| { gap.from == "routes.list_orders" && gap.to == "missing.Repository.find" }));
+    assert!(gaps
+        .iter()
+        .any(|gap| { gap.from == "missing.Service.run" && gap.to == "missing.Repository.find" }));
+    assert!(gaps
+        .iter()
+        .any(|gap| { gap.from == "stdlib.print" && gap.to == "routes.list_orders" }));
 }
 
 #[test]
@@ -1721,7 +1729,8 @@ fn code_inventory_normalizes_handles_from_handler_to_route_rows() {
         "columns": ["source", "target"],
         "rows": [
             ["handlers.createOrder", "routes.orders.create"],
-            ["outside.graph", "routes.orders.create"]
+            ["outside.graph", "routes.orders.create"],
+            ["missing.handler", "missing.route"]
         ]
     });
     let mut inventory =
@@ -1741,6 +1750,11 @@ fn code_inventory_normalizes_handles_from_handler_to_route_rows() {
     assert!(inventory.functions.is_empty());
     assert_eq!(inventory.summary.handlers, 1);
     assert_eq!(inventory.summary.functions, 0);
+    assert!(inventory.relation_gaps.iter().any(|gap| {
+        gap.kind == "unresolved-handle"
+            && gap.from == "missing.handler"
+            && gap.to == "missing.route"
+    }));
 }
 
 #[test]

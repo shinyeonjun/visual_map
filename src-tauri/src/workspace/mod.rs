@@ -10,12 +10,11 @@ mod store;
 
 pub(crate) use code::focused_code_search_with_operation;
 pub(crate) use code::{
-    code_inventory, index_code_repository, index_code_repository_without_persisting,
-    route_binding_id,
+    cleanup_code_project, cleanup_previous_code_project, code_inventory,
+    index_code_repository_without_persisting, route_binding_id,
 };
 pub(crate) use db::{
-    db_inventory, delete_db_profile, index_db_profile, index_db_profile_without_persisting,
-    save_db_profile,
+    db_inventory, delete_db_profile, index_db_profile_without_persisting, save_db_profile,
 };
 pub(crate) use model::{
     CodeCall, CodeIndexResult, CodeInventory, CreateWorkspaceRequest, DbConstraint,
@@ -33,7 +32,8 @@ pub(crate) use store::{
 #[cfg(test)]
 pub(crate) use code::{
     attach_code_handles, code_project_from_index_stdout, downgrade_unverified_routes,
-    extract_code_calls, extract_code_handles, extract_code_inventory, next_code_project_generation,
+    extract_code_calls, extract_code_handles, extract_code_inventory, index_code_repository,
+    next_code_project_generation,
 };
 #[cfg(test)]
 pub(crate) use codebase_memory::{
@@ -44,7 +44,7 @@ pub(crate) use codebase_memory::{
 pub(crate) use db::{
     apply_inventory_description_metadata, apply_table_description, db_cache_path,
     db_connection_config_path, db_connection_env_var, db_index_args, extract_bulk_db_inventory,
-    extract_db_inventory, record_db_identity_gaps,
+    extract_db_inventory, index_db_profile, record_db_identity_gaps,
 };
 #[cfg(test)]
 pub(crate) use model::{

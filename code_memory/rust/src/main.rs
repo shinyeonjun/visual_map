@@ -397,10 +397,13 @@ pub(crate) fn index_project(
     let mut cached_analyses = Vec::new();
     let mut planned_units = Vec::new();
     let mut language_files = HashMap::new();
-    let all_extensions: HashSet<&str> = LANGUAGES
+    let mut all_extensions: HashSet<&str> = LANGUAGES
         .iter()
         .flat_map(|language| language.extensions.iter().copied())
         .collect();
+    // Vue SFCs are structural TypeScript/JavaScript sources. They are read by
+    // the project model, not sent to SCIP as a standalone language document.
+    all_extensions.insert("vue");
     let all_source_files =
         collect_files(&root, &all_extensions.iter().copied().collect::<Vec<_>>());
     let mut source_snapshot = load_source_snapshot_metadata_from_files(&root, &all_source_files);
@@ -436,13 +439,31 @@ pub(crate) fn index_project(
         );
     }
 
+    discovered_files.extend(
+        all_source_files
+            .iter()
+            .filter(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("vue"))
+            })
+            .cloned()
+            .map(|path| ("typescript".to_string(), path)),
+    );
+
     let project_model_started = Instant::now();
     let mut typescript_units = Vec::new();
     let mut typescript_call_ranges = Arc::new(HashMap::new());
-    if discovered_files
-        .iter()
-        .any(|(language, _)| matches!(language.as_str(), "typescript" | "javascript"))
-    {
+    if all_source_files.iter().any(|path| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" | "vue"
+                )
+            })
+    }) {
         let tsjs_files: Vec<PathBuf> = all_source_files
             .iter()
             .filter(|path| {

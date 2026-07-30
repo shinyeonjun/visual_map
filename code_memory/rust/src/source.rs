@@ -133,15 +133,19 @@ pub(crate) fn collect_files_recursive(dir: &Path, extensions: &[&str], files: &m
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             if !is_excluded_source_dir(&name) {
                 collect_files_recursive(&path, extensions, files);
             }
-        } else if path
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(|ext| ext.to_ascii_lowercase())
-            .is_some_and(|ext| extensions.iter().any(|candidate| *candidate == ext))
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|ext| ext.to_ascii_lowercase())
+                .is_some_and(|ext| extensions.iter().any(|candidate| *candidate == ext))
         {
             files.push(path);
         }

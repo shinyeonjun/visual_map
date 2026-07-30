@@ -88,6 +88,36 @@ describe("workspace deletion", () => {
     expect(window.localStorage.getItem("backend-visual-map:last-workspace")).toBe(workspace.id);
   });
 
+  it("does not let a stale workspace refresh overwrite a newer selection", async () => {
+    const initialList = deferred<Workspace[]>();
+    let listCalls = 0;
+    invokeMock.mockImplementation((command, args) => {
+      if (command === "list_workspaces") {
+        listCalls += 1;
+        return listCalls === 1 ? initialList.promise : Promise.resolve([secondWorkspace]);
+      }
+      if (command === "get_workspace_recovery_warnings") {
+        return Promise.resolve([]);
+      }
+      if (command === "open_workspace") {
+        return Promise.resolve((args as { workspaceId: string }).workspaceId === secondWorkspace.id ? secondWorkspace : workspace);
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const { result } = renderHook(() => useWorkspaces({ withBusy }));
+    await act(async () => {
+      await result.current.openWorkspace(secondWorkspace.id);
+    });
+    expect(result.current.currentWorkspace?.id).toBe(secondWorkspace.id);
+
+    await act(async () => {
+      initialList.resolve([workspace]);
+      await Promise.resolve();
+    });
+    expect(result.current.currentWorkspace?.id).toBe(secondWorkspace.id);
+  });
+
   it("reports a folder picker failure instead of leaving an unhandled rejection", async () => {
     openMock.mockRejectedValue(new Error("dialog unavailable"));
     invokeMock.mockImplementation((command) => {

@@ -506,6 +506,33 @@ fn source_snapshot_loads_contents_only_when_requested() {
 }
 
 #[test]
+fn source_discovery_does_not_follow_directory_symlinks() {
+    let base =
+        std::env::temp_dir().join(format!("code-memory-source-symlink-{}", std::process::id()));
+    let root = base.join("project");
+    let outside = base.join("outside");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&root).expect("create source discovery fixture");
+    fs::create_dir_all(&outside).expect("create outside fixture");
+    fs::write(outside.join("escaped.ts"), "export const escaped = true;\n")
+        .expect("write outside source fixture");
+
+    let link = root.join("linked");
+    #[cfg(windows)]
+    let link_result = std::os::windows::fs::symlink_dir(&outside, &link);
+    #[cfg(unix)]
+    let link_result = std::os::unix::fs::symlink(&outside, &link);
+    if link_result.is_err() {
+        let _ = fs::remove_dir_all(base);
+        return;
+    }
+
+    let files = collect_files(&root, &["ts"]);
+    assert!(files.iter().all(|path| !path.starts_with(&link)));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn cache_impact_includes_importers_of_changed_files() {
     let root =
         std::env::temp_dir().join(format!("code-memory-cache-impact-{}", std::process::id()));

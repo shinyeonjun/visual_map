@@ -133,8 +133,30 @@ fn save_db_profile(
     request: SaveDbProfileRequest,
 ) -> CommandResult<Workspace> {
     let app_data_dir = app_data_dir(&app)?;
+    let previous_workspace = workspace::open_workspace(&app_data_dir, &request.workspace_id)?;
+    let previous_snapshot =
+        atlas::load_inventory_snapshot_optional(&app_data_dir, &request.workspace_id)?;
 
-    Ok(workspace::save_db_profile(app_data_dir, request)?)
+    let workspace = workspace::save_db_profile(&app_data_dir, request)?;
+    // A saved profile may point to a different database/file than the one
+    // represented by the stored DB inventory. Keep code data, but discard the
+    // DB source before the next bootstrap can restore it as current.
+    if let Err(error) = atlas::remove_db_inventory_snapshot(&app_data_dir, &workspace.id) {
+        let mut rollback_errors = Vec::new();
+        if let Err(rollback) = workspace::write_workspace(
+            &base_paths(&app_data_dir).workspaces_dir,
+            &previous_workspace,
+        ) {
+            rollback_errors.push(format!("workspace 복구 실패: {rollback}"));
+        }
+        if let Err(rollback) =
+            restore_inventory_snapshot(&app_data_dir, &workspace.id, previous_snapshot.as_ref())
+        {
+            rollback_errors.push(format!("snapshot 복구 실패: {rollback}"));
+        }
+        return Err(format_with_rollback_error(error, rollback_errors).into());
+    }
+    Ok(workspace)
 }
 
 #[tauri::command(async)]
@@ -147,17 +169,54 @@ fn index_db_profile(
     let workspace_id = request.workspace_id.clone();
     let profile_id = request.profile_id.clone();
 
-    let mut result = workspace::index_db_profile(&app_data_dir, &registry, request)?;
+    let previous_workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
+    let previous_snapshot = atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace_id)?;
+    let mut result =
+        workspace::index_db_profile_without_persisting(&app_data_dir, &registry, request)?;
     if result.run.ok {
         match workspace::db_inventory(&app_data_dir, &registry, &workspace_id, Some(&profile_id)) {
             Ok(inventory) => {
                 match persist_db_inventory(&app_data_dir, &result.workspace, &registry, &inventory)
                 {
-                    Ok(()) => result.inventory = Some(bounded_db_inventory(inventory)),
-                    Err(error) => result.inventory_error = Some(error),
+                    Ok(()) => {
+                        if let Err(error) = workspace::write_workspace(
+                            &base_paths(&app_data_dir).workspaces_dir,
+                            &result.workspace,
+                        ) {
+                            let mut rollback_errors = Vec::new();
+                            if let Err(rollback) = restore_inventory_snapshot(
+                                &app_data_dir,
+                                &workspace_id,
+                                previous_snapshot.as_ref(),
+                            ) {
+                                rollback_errors.push(format!("snapshot 복구 실패: {rollback}"));
+                            }
+                            result.workspace = previous_workspace.clone();
+                            result.inventory_error =
+                                Some(format_with_rollback_error(error, rollback_errors));
+                        } else {
+                            result.inventory = Some(bounded_db_inventory(inventory));
+                        }
+                    }
+                    Err(error) => {
+                        let mut rollback_errors = Vec::new();
+                        if let Err(rollback) = restore_inventory_snapshot(
+                            &app_data_dir,
+                            &workspace_id,
+                            previous_snapshot.as_ref(),
+                        ) {
+                            rollback_errors.push(format!("snapshot 복구 실패: {rollback}"));
+                        }
+                        result.workspace = previous_workspace.clone();
+                        result.inventory_error =
+                            Some(format_with_rollback_error(error, rollback_errors));
+                    }
                 }
             }
-            Err(error) => result.inventory_error = Some(error),
+            Err(error) => {
+                result.workspace = previous_workspace.clone();
+                result.inventory_error = Some(error);
+            }
         }
     }
     Ok(result)
@@ -172,12 +231,15 @@ fn index_code_repository(
     let registry = get_engine_availability(app)?;
     let workspace_id = request.workspace_id.clone();
 
-    let mut result = workspace::index_code_repository(&app_data_dir, &registry, request)?;
+    let previous_workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
+    let previous_snapshot = atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace_id)?;
+    let mut result =
+        workspace::index_code_repository_without_persisting(&app_data_dir, &registry, request)?;
     if result.run.ok {
-        let inventory =
-            result.inventory.take().map(Ok).unwrap_or_else(|| {
-                workspace::code_inventory(&app_data_dir, &registry, &workspace_id)
-            });
+        let inventory = result
+            .inventory
+            .take()
+            .ok_or_else(|| "코드 분석 결과 inventory가 없습니다".to_string());
         match inventory {
             Ok(inventory) => match persist_code_inventory(
                 &app_data_dir,
@@ -185,10 +247,70 @@ fn index_code_repository(
                 &registry,
                 &inventory,
             ) {
-                Ok(()) => result.inventory = Some(bounded_code_inventory(inventory)),
-                Err(error) => result.inventory_error = Some(error),
+                Ok(()) => {
+                    if let Err(error) = workspace::write_workspace(
+                        &base_paths(&app_data_dir).workspaces_dir,
+                        &result.workspace,
+                    ) {
+                        let new_project = result.workspace.code_project.clone();
+                        let mut rollback_errors = Vec::new();
+                        if let Err(rollback) = restore_inventory_snapshot(
+                            &app_data_dir,
+                            &workspace_id,
+                            previous_snapshot.as_ref(),
+                        ) {
+                            rollback_errors.push(format!("snapshot 복구 실패: {rollback}"));
+                        }
+                        workspace::cleanup_code_project(
+                            &app_data_dir,
+                            &registry,
+                            &workspace_id,
+                            new_project.as_deref(),
+                        );
+                        result.workspace = previous_workspace.clone();
+                        result.inventory_error =
+                            Some(format_with_rollback_error(error, rollback_errors));
+                    } else {
+                        workspace::cleanup_previous_code_project(
+                            &app_data_dir,
+                            &registry,
+                            &workspace_id,
+                            result.previous_code_project.as_deref(),
+                            result.workspace.code_project.as_deref(),
+                        );
+                        result.inventory = Some(bounded_code_inventory(inventory));
+                    }
+                }
+                Err(error) => {
+                    workspace::cleanup_code_project(
+                        &app_data_dir,
+                        &registry,
+                        &workspace_id,
+                        result.workspace.code_project.as_deref(),
+                    );
+                    let mut rollback_errors = Vec::new();
+                    if let Err(rollback) = restore_inventory_snapshot(
+                        &app_data_dir,
+                        &workspace_id,
+                        previous_snapshot.as_ref(),
+                    ) {
+                        rollback_errors.push(format!("snapshot 복구 실패: {rollback}"));
+                    }
+                    result.workspace = previous_workspace.clone();
+                    result.inventory_error =
+                        Some(format_with_rollback_error(error, rollback_errors));
+                }
             },
-            Err(error) => result.inventory_error = Some(error),
+            Err(error) => {
+                workspace::cleanup_code_project(
+                    &app_data_dir,
+                    &registry,
+                    &workspace_id,
+                    result.workspace.code_project.as_deref(),
+                );
+                result.workspace = previous_workspace.clone();
+                result.inventory_error = Some(error);
+            }
         }
     }
     Ok(result)
@@ -345,16 +467,29 @@ fn initialize_workspace_analysis(
     let has_successful_source = code_inventory.is_some() || db_inventory.is_some();
     let mut snapshot_saved = false;
     if has_successful_source {
-        workspace::write_workspace(&base_paths(&app_data_dir).workspaces_dir, &workspace)?;
-        let existing = atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace.id)?;
-        let mut merged = existing;
+        let previous_snapshot =
+            atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace.id)?;
+        let mut merged = previous_snapshot.clone();
         if let Some(inventory) = code_inventory.as_ref() {
             let incoming = atlas::snapshot_with_metadata(
                 atlas::build_inventory_snapshot(workspace.id.clone(), Some(inventory), None),
                 &workspace,
                 &registry,
             );
-            merged = Some(atlas::replace_inventory_source(merged, incoming, "code")?);
+            merged = match atlas::replace_inventory_source(merged, incoming, "code") {
+                Ok(snapshot) => Some(snapshot),
+                Err(error) => {
+                    if let Some(result) = code.as_ref() {
+                        workspace::cleanup_code_project(
+                            &app_data_dir,
+                            &registry,
+                            &workspace_id,
+                            result.workspace.code_project.as_deref(),
+                        );
+                    }
+                    return Err(error.into());
+                }
+            };
         }
         if let Some(inventory) = db_inventory.as_ref() {
             let incoming = atlas::snapshot_with_metadata(
@@ -362,12 +497,68 @@ fn initialize_workspace_analysis(
                 &workspace,
                 &registry,
             );
-            merged = Some(atlas::replace_inventory_source(merged, incoming, "db")?);
+            merged = match atlas::replace_inventory_source(merged, incoming, "db") {
+                Ok(snapshot) => Some(snapshot),
+                Err(error) => {
+                    if let Some(result) = code.as_ref() {
+                        workspace::cleanup_code_project(
+                            &app_data_dir,
+                            &registry,
+                            &workspace_id,
+                            result.workspace.code_project.as_deref(),
+                        );
+                    }
+                    return Err(error.into());
+                }
+            };
         }
         if let Some(snapshot) = merged {
             let mut snapshot = snapshot;
             enrich_integrated_snapshot_code_evidence(&workspace, &mut snapshot);
-            atlas::save_inventory_snapshot(&app_data_dir, &snapshot)?;
+            if let Err(error) = atlas::save_inventory_snapshot(&app_data_dir, &snapshot) {
+                if let Some(result) = code.as_ref() {
+                    workspace::cleanup_code_project(
+                        &app_data_dir,
+                        &registry,
+                        &workspace_id,
+                        result.workspace.code_project.as_deref(),
+                    );
+                }
+                return Err(error.into());
+            }
+            // Commit workspace metadata only after the matching snapshot is
+            // durable. If snapshot persistence fails, the previous workspace
+            // still points at the previous readable result.
+            if let Err(error) =
+                workspace::write_workspace(&base_paths(&app_data_dir).workspaces_dir, &workspace)
+            {
+                let mut rollback_errors = Vec::new();
+                if let Err(rollback) = restore_inventory_snapshot(
+                    &app_data_dir,
+                    &workspace.id,
+                    previous_snapshot.as_ref(),
+                ) {
+                    rollback_errors.push(format!("snapshot 복구 실패: {rollback}"));
+                }
+                if let Some(result) = code.as_ref() {
+                    workspace::cleanup_code_project(
+                        &app_data_dir,
+                        &registry,
+                        &workspace_id,
+                        result.workspace.code_project.as_deref(),
+                    );
+                }
+                return Err(format_with_rollback_error(error, rollback_errors).into());
+            }
+            if let Some(result) = code.as_ref() {
+                workspace::cleanup_previous_code_project(
+                    &app_data_dir,
+                    &registry,
+                    &workspace_id,
+                    result.previous_code_project.as_deref(),
+                    result.workspace.code_project.as_deref(),
+                );
+            }
             snapshot_saved = true;
         }
     }
@@ -400,14 +591,16 @@ fn load_inventory_bootstrap(
     workspace_id: String,
 ) -> CommandResult<Option<atlas::InventoryBootstrap>> {
     let app_data_dir = app_data_dir(&app)?;
-    let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
-    let registry = get_engine_availability(app)?;
+    let _workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
     let Some(snapshot) =
         atlas::load_inventory_snapshot_optional_cached(&app_data_dir, &workspace_id)?
     else {
         return Ok(None);
     };
-    let stale_reasons = atlas::snapshot_staleness_reasons_cached(&snapshot, &workspace, &registry);
+    // Load the saved result first. Current source/engine freshness is checked by
+    // refresh_snapshot_freshness after the workspace is visible; hashing a large
+    // bundled engine must not block restoring an already-computed snapshot.
+    let stale_reasons = snapshot.stale_reasons.clone();
     let mut bootstrap = atlas::inventory_bootstrap(&snapshot);
     bootstrap.snapshot.stale_reasons = stale_reasons;
     Ok(Some(bootstrap))
@@ -431,6 +624,25 @@ fn persist_db_inventory(
 ) -> Result<(), String> {
     let snapshot = atlas::build_inventory_snapshot(workspace.id.clone(), None, Some(inventory));
     persist_inventory_source(app_data_dir, workspace, registry, snapshot, "db")
+}
+
+fn restore_inventory_snapshot(
+    app_data_dir: &Path,
+    workspace_id: &str,
+    previous: Option<&InventorySnapshot>,
+) -> Result<(), String> {
+    match previous {
+        Some(snapshot) => atlas::save_inventory_snapshot(app_data_dir, snapshot),
+        None => atlas::remove_inventory_snapshot(app_data_dir, workspace_id),
+    }
+}
+
+fn format_with_rollback_error(error: String, rollback_errors: Vec<String>) -> String {
+    if rollback_errors.is_empty() {
+        error
+    } else {
+        format!("{error} ({})", rollback_errors.join("; "))
+    }
 }
 
 fn persist_inventory_source(
@@ -567,10 +779,16 @@ fn get_visual_map(
         .transpose()?;
     let app_data_dir = app_data_dir(&app)?;
     let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
-    let registry = get_engine_availability(app)?;
     let snapshot = atlas::load_inventory_snapshot_cached(&app_data_dir, &workspace_id)
         .map_err(|error| format!("캔버스를 보려면 먼저 코드/DB 읽기 결과가 필요합니다: {error}"))?;
-    let stale_reasons = atlas::snapshot_staleness_reasons_cached(&snapshot, &workspace, &registry);
+    let requested_enrichment = enrich_code_evidence.unwrap_or(false);
+    let registry = requested_enrichment
+        .then(|| get_engine_availability(app.clone()))
+        .transpose()?;
+    let stale_reasons = registry
+        .as_ref()
+        .map(|registry| atlas::snapshot_staleness_reasons_cached(&snapshot, &workspace, registry))
+        .unwrap_or_else(|| snapshot.stale_reasons.clone());
     let snapshot_is_stale = !stale_reasons.is_empty();
     let snapshot = if snapshot_is_stale {
         let mut stale_snapshot = (*snapshot).clone();
@@ -607,10 +825,13 @@ fn get_visual_map(
         && matches!(mode.as_str(), "api-flow" | "table-usage" | "column-impact")
         && focus_id.is_some()
     {
+        let registry = registry
+            .as_ref()
+            .ok_or_else(|| "코드 근거 분석 도구 상태를 확인하지 못했습니다".to_string())?;
         let mut enriched_snapshot = (*snapshot).clone();
         enrich_snapshot_code_evidence(
             &app_data_dir,
-            &registry,
+            registry,
             &workspace_id,
             focus_id.as_deref(),
             &mode,
@@ -1323,12 +1544,39 @@ fn delete_db_profile(
     {
         return Err("삭제할 DB 연결을 찾을 수 없습니다".into());
     }
-    atlas::remove_db_inventory_snapshot(&app_data_dir, &workspace_id)?;
+    // Deleting an inactive profile must not discard the snapshot belonging to
+    // the active profile. If the active profile is deleted, the snapshot no
+    // longer has a valid source and must be re-read for the replacement.
+    if should_remove_db_snapshot(&workspace, &profile_id) {
+        let previous_snapshot =
+            atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace_id)?;
+        if let Err(error) = atlas::remove_db_inventory_snapshot(&app_data_dir, &workspace_id) {
+            return Err(error.into());
+        }
+        match workspace::delete_db_profile(&app_data_dir, &workspace_id, &profile_id) {
+            Ok(workspace) => return Ok(workspace),
+            Err(error) => {
+                let mut rollback_errors = Vec::new();
+                if let Err(rollback) = restore_inventory_snapshot(
+                    &app_data_dir,
+                    &workspace_id,
+                    previous_snapshot.as_ref(),
+                ) {
+                    rollback_errors.push(format!("snapshot 복구 실패: {rollback}"));
+                }
+                return Err(format_with_rollback_error(error, rollback_errors).into());
+            }
+        }
+    }
     Ok(workspace::delete_db_profile(
         app_data_dir,
         &workspace_id,
         &profile_id,
     )?)
+}
+
+fn should_remove_db_snapshot(workspace: &Workspace, profile_id: &str) -> bool {
+    workspace.active_db_profile_id.as_deref() == Some(profile_id)
 }
 
 #[tauri::command(async)]
@@ -1341,6 +1589,26 @@ fn list_workspaces(app: tauri::AppHandle) -> CommandResult<Vec<Workspace>> {
 #[cfg(test)]
 mod command_tests {
     use super::*;
+
+    #[test]
+    fn deleting_inactive_db_profile_keeps_active_snapshot() {
+        let workspace = Workspace {
+            id: "workspace".to_string(),
+            name: "workspace".to_string(),
+            repo_path: "D:/repo".to_string(),
+            repo_source: Default::default(),
+            repo_origin: None,
+            code_project: None,
+            engine_cache: Default::default(),
+            db_profiles: Vec::new(),
+            active_db_profile_id: Some("active".to_string()),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+        };
+
+        assert!(!should_remove_db_snapshot(&workspace, "inactive"));
+        assert!(should_remove_db_snapshot(&workspace, "active"));
+    }
 
     #[test]
     fn bounded_code_inventory_keeps_totals_and_drops_dangling_relationships() {

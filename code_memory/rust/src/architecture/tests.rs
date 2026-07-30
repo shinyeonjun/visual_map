@@ -656,6 +656,13 @@ fn short_symbol_removes_scip_suffix() {
 }
 
 #[test]
+fn language_for_path_accepts_case_variants() {
+    assert_eq!(language_for_path("src/App.TSX"), Some("typescript"));
+    assert_eq!(language_for_path("src/App.VUE"), Some("typescript"));
+    assert_eq!(language_for_path("src/Main.JAVA"), Some("java"));
+}
+
+#[test]
 fn case_insensitive_boundary_scan_does_not_allocate_uppercase_copy() {
     assert!(contains_any_ascii_case_insensitive(
         "  SeLeCt * from users",

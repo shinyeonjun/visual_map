@@ -532,8 +532,13 @@ fn compile_database_candidates(root: &Path) -> Vec<PathBuf> {
     if let Ok(entries) = fs::read_dir(&root) {
         let mut children: Vec<PathBuf> = entries
             .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
+            .filter_map(|entry| {
+                entry
+                    .file_type()
+                    .ok()
+                    .filter(|file_type| file_type.is_dir())
+                    .map(|_| entry.path())
+            })
             .collect();
         children.sort();
         for child in children {
@@ -543,8 +548,13 @@ fn compile_database_candidates(root: &Path) -> Vec<PathBuf> {
                 if let Ok(entries) = fs::read_dir(&child) {
                     let mut grandchildren: Vec<PathBuf> = entries
                         .flatten()
-                        .map(|entry| entry.path())
-                        .filter(|path| path.is_dir())
+                        .filter_map(|entry| {
+                            entry
+                                .file_type()
+                                .ok()
+                                .filter(|file_type| file_type.is_dir())
+                                .map(|_| entry.path())
+                        })
                         .collect();
                     grandchildren.sort();
                     candidates.extend(grandchildren);
@@ -562,8 +572,14 @@ fn compile_database_candidates(root: &Path) -> Vec<PathBuf> {
         if let Ok(entries) = fs::read_dir(path) {
             let mut build_children: Vec<PathBuf> = entries
                 .flatten()
-                .map(|entry| entry.path())
-                .filter(|candidate| candidate.is_dir() && is_build_directory(candidate))
+                .filter_map(|entry| {
+                    entry
+                        .file_type()
+                        .ok()
+                        .filter(|file_type| file_type.is_dir())
+                        .map(|_| entry.path())
+                })
+                .filter(|candidate| is_build_directory(candidate))
                 .collect();
             build_children.sort();
             for build_child in build_children {
@@ -571,8 +587,13 @@ fn compile_database_candidates(root: &Path) -> Vec<PathBuf> {
                 if let Ok(entries) = fs::read_dir(&build_child) {
                     let mut nested_build_children: Vec<PathBuf> = entries
                         .flatten()
-                        .map(|entry| entry.path())
-                        .filter(|candidate| candidate.is_dir())
+                        .filter_map(|entry| {
+                            entry
+                                .file_type()
+                                .ok()
+                                .filter(|file_type| file_type.is_dir())
+                                .map(|_| entry.path())
+                        })
                         .collect();
                     nested_build_children.sort();
                     candidates.extend(nested_build_children);

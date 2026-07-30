@@ -11,8 +11,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use crate::{
-    find_tool, prepare_clangd_compile_database, project_cache_root, provider_timeout, range_parts,
-    range_span, tool_command, Diagnostic, LanguageSpec,
+    find_tool, prepare_clangd_compile_database, project_cache_root, provider_timeout,
+    providers::scip::terminate_process_tree, range_parts, range_span, tool_command, Diagnostic,
+    LanguageSpec,
 };
 
 pub(crate) fn run_native_lsp(
@@ -130,10 +131,28 @@ pub(crate) fn run_native_lsp_with_server(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("{} native LSP could not start: {e}", lang.name))?;
-    let stderr = child.stderr.take().ok_or("native LSP stderr unavailable")?;
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            terminate_process_tree(&mut child);
+            return Err("native LSP stderr unavailable".to_string());
+        }
+    };
     forward_provider_stderr(server, stderr);
-    let stdin = child.stdin.take().ok_or("native LSP stdin unavailable")?;
-    let stdout = child.stdout.take().ok_or("native LSP stdout unavailable")?;
+    let stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            terminate_process_tree(&mut child);
+            return Err("native LSP stdin unavailable".to_string());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_process_tree(&mut child);
+            return Err("native LSP stdout unavailable".to_string());
+        }
+    };
     let mut connection = LspConnection::new(
         child,
         stdin,
@@ -1094,6 +1113,7 @@ fn dart_external_cascade(message: &str) -> bool {
 }
 
 static NEXT_LSP_ID: AtomicI64 = AtomicI64::new(1);
+const MAX_LSP_MESSAGE_BYTES: usize = 128 * 1024 * 1024;
 
 pub(crate) fn lsp_request_timeout() -> Duration {
     env::var("CODE_MEMORY_LSP_TIMEOUT_MS")
@@ -1217,6 +1237,9 @@ impl LspConnection {
                 let Some(length) = length else {
                     return;
                 };
+                if !lsp_message_length_allowed(length) {
+                    return;
+                }
                 let mut body = vec![0; length];
                 if stdout.read_exact(&mut body).is_err() {
                     return;
@@ -1806,6 +1829,9 @@ impl Drop for LspConnection {
                 let _ = command
                     .creation_flags(0x08000000)
                     .args(["/PID", &self.child.id().to_string(), "/T", "/F"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
                     .status();
             }
         }
@@ -2178,6 +2204,10 @@ pub(crate) fn is_cpp_header_fragment(path: &Path) -> bool {
     )
 }
 
+fn lsp_message_length_allowed(length: usize) -> bool {
+    length <= MAX_LSP_MESSAGE_BYTES
+}
+
 pub(crate) fn reachable_project_headers(root: &Path, files: &[&PathBuf]) -> HashSet<PathBuf> {
     let headers: Vec<PathBuf> = files
         .iter()
@@ -2336,4 +2366,16 @@ pub(crate) fn find_lsp_symbol_at_range<'a>(
                 symbol.range_end_character as i32,
             ])
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{lsp_message_length_allowed, MAX_LSP_MESSAGE_BYTES};
+
+    #[test]
+    fn lsp_message_size_is_bounded() {
+        assert!(lsp_message_length_allowed(0));
+        assert!(lsp_message_length_allowed(MAX_LSP_MESSAGE_BYTES));
+        assert!(!lsp_message_length_allowed(MAX_LSP_MESSAGE_BYTES + 1));
+    }
 }

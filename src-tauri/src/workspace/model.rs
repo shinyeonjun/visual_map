@@ -111,6 +111,8 @@ pub(crate) struct CodeIndexResult {
     pub run: engine::EngineRunResult,
     pub inventory: Option<CodeInventory>,
     pub inventory_error: Option<String>,
+    #[serde(skip)]
+    pub(crate) previous_code_project: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

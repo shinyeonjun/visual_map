@@ -227,7 +227,10 @@ fn collect_typescript_config_files(dir: &Path, files: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             if !is_excluded_config_dir(&entry.file_name().to_string_lossy()) {
                 collect_typescript_config_files(&path, files);
             }
@@ -303,8 +306,10 @@ fn collect_module_marker_roots(dir: &Path, markers: &[&str], roots: &mut HashSet
     let entries: Vec<_> = entries.flatten().collect();
     let mut has_marker = false;
     for entry in &entries {
-        let path = entry.path();
-        if path.is_file() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_file() {
             let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
             if markers.iter().any(|marker| {
                 let marker = marker.to_ascii_lowercase();
@@ -321,7 +326,10 @@ fn collect_module_marker_roots(dir: &Path, markers: &[&str], roots: &mut HashSet
     }
     for entry in &entries {
         let path = entry.path();
-        if path.is_dir() && !is_excluded_source_dir(&entry.file_name().to_string_lossy()) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() && !is_excluded_source_dir(&entry.file_name().to_string_lossy()) {
             collect_module_marker_roots(&path, markers, roots);
         }
     }
@@ -348,9 +356,10 @@ fn has_local_compile_context(root: &Path) -> bool {
     let Ok(entries) = fs::read_dir(root) else {
         return false;
     };
-    entries
-        .flatten()
-        .any(|entry| entry.path().is_dir() && entry.path().join("compile_commands.json").is_file())
+    entries.flatten().any(|entry| {
+        entry.file_type().is_ok_and(|file_type| file_type.is_dir())
+            && entry.path().join("compile_commands.json").is_file()
+    })
 }
 
 pub(crate) fn rebase_language_analysis(

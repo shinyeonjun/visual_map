@@ -96,6 +96,9 @@ pub(crate) fn terminate_process_tree(child: &mut Child) {
         let _ = command
             .creation_flags(0x08000000)
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status();
     }
     let _ = child.kill();

@@ -404,7 +404,10 @@ fn rust_build_requires_missing_tool(root: &Path, providers_root: Option<&Path>) 
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
                 let name = entry.file_name();
                 if !matches!(
                     name.to_string_lossy().as_ref(),
@@ -654,7 +657,13 @@ pub(crate) fn build_file_coverage(
                 && !dotnet_project_roots
                     .iter()
                     .any(|project_root| canonical.starts_with(project_root));
-            let status = if indexed.contains(path.as_str()) {
+            let modeled_vue = language == "typescript"
+                && file
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("vue"))
+                && project_model_files.contains(path.as_str());
+            let status = if indexed.contains(path.as_str()) || modeled_vue {
                 "indexed"
             } else if source_exclusion_reason(file).is_some() {
                 "excluded"

@@ -288,7 +288,10 @@ export function useDbProfiles({
     workspaceId = currentWorkspace?.id ?? null,
   ) {
     validateDbInventory(inventory);
-    setDbInventory(inventory);
+    setDbInventory({
+      ...inventory,
+      partial: Boolean(inventory.partial || dbInventoryTableCount(inventory) > inventory.tables.length),
+    });
     setInventoryWorkspaceId(workspaceId);
     setSelectedDbTableKey(selectedTableKey);
     setDbStatus(dbInventoryStatus(inventory, "불러옴"));

@@ -388,9 +388,10 @@ export function useVisualMap({
       if (!mapAnswersMode(map, context.mode)) {
         setMapMode("atlas");
         saveMapContext(workspaceId, "atlas", null);
-        await loadVisualMap(null, "atlas", workspaceId);
+        const fallbackMap = await loadVisualMap(null, "atlas", workspaceId);
+        return fallbackMap !== null;
       }
-      return true;
+      return map !== null;
     } catch (error) {
       if (currentWorkspaceIdRef.current !== workspaceId) {
         return false;
@@ -553,6 +554,7 @@ export function useVisualMap({
     context: SearchContext | null,
     onResolved?: (collection: SearchCollection) => void,
   ) {
+    const requestId = ++searchRequestRef.current;
     if (!context) {
       setSearchSummary(null);
       setSearchGroups([]);
@@ -575,7 +577,6 @@ export function useVisualMap({
       return;
     }
 
-    const requestId = ++searchRequestRef.current;
     const workspaceId = currentWorkspaceIdRef.current;
     void invoke<unknown>("search_inventory", { workspaceId, query })
       .then(validateInventorySearchResult)

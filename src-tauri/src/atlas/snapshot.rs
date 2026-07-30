@@ -1003,20 +1003,38 @@ pub(crate) fn remove_db_inventory_snapshot(
                 .iter()
                 .all(|id| retained_ids.contains(id.as_str()))
     });
-    snapshot.stale_reasons.clear();
+    // Removing the DB source must not hide an independent stale code source.
+    // DB freshness reasons are recomputed after the source is removed, while
+    // code and migration reasons still belong to the remaining snapshot.
+    snapshot.stale_reasons.retain(|reason| {
+        !reason.starts_with("DB ")
+            && !reason.starts_with("활성 DB")
+            && !reason.starts_with("읽은 DB")
+    });
 
     let path = snapshot_path(app_data_dir, workspace_id);
     if snapshot.items.is_empty() {
-        remove_file_if_exists(&path)?;
-        remove_file_if_exists(&snapshot_backup_path(&path))?;
-        invalidate_cached_snapshot(&path);
-        invalidate_snapshot_freshness(workspace_id);
+        remove_inventory_snapshot(app_data_dir, workspace_id)?;
         return Ok(());
     }
 
     save_inventory_snapshot(app_data_dir, &snapshot)?;
     fs::copy(&path, snapshot_backup_path(&path))
         .map_err(|error| format!("DB 구조 백업을 정리하지 못했습니다: {error}"))?;
+    Ok(())
+}
+
+pub(crate) fn remove_inventory_snapshot(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+) -> Result<(), String> {
+    validate_workspace_id(workspace_id)?;
+    let path = snapshot_path(app_data_dir, workspace_id);
+    remove_file_if_exists(&path)?;
+    remove_file_if_exists(&snapshot_backup_path(&path))?;
+    invalidate_cached_snapshot(&path);
+    invalidate_snapshot_freshness(workspace_id);
+    super::linker::invalidate_candidate_links(workspace_id);
     Ok(())
 }
 

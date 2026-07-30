@@ -24,6 +24,16 @@ struct ProviderArchive {
     sha256: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct ExtractedProviderManifest {
+    providers: Vec<ExtractedProvider>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ExtractedProvider {
+    path: String,
+}
+
 static EXTRACTION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub(crate) fn ensure_provider_root(
@@ -63,11 +73,7 @@ pub(crate) fn ensure_provider_root(
     let manifest_hash = sha256_bytes(&manifest_bytes);
     let destination = cache_dir.join("providers");
     let marker = destination.join(PROVIDER_CACHE_MARKER);
-    if destination.is_dir()
-        && fs::read_to_string(&marker)
-            .map(|value| value.trim() == manifest_hash)
-            .unwrap_or(false)
-    {
+    if cached_provider_root_is_usable(&destination, &marker, &manifest_hash) {
         return Ok(Some(destination));
     }
 
@@ -75,11 +81,7 @@ pub(crate) fn ensure_provider_root(
     let _lock = lock
         .lock()
         .map_err(|_| "provider 압축 해제 잠금이 손상됐습니다".to_string())?;
-    if destination.is_dir()
-        && fs::read_to_string(&marker)
-            .map(|value| value.trim() == manifest_hash)
-            .unwrap_or(false)
-    {
+    if cached_provider_root_is_usable(&destination, &marker, &manifest_hash) {
         return Ok(Some(destination));
     }
 
@@ -118,6 +120,59 @@ pub(crate) fn ensure_provider_root(
         return Err(error);
     }
     Ok(Some(destination))
+}
+
+fn cached_provider_root_is_usable(destination: &Path, marker: &Path, manifest_hash: &str) -> bool {
+    if !destination.is_dir()
+        || fs::read_to_string(marker)
+            .map(|value| value.trim() != manifest_hash)
+            .unwrap_or(true)
+    {
+        return false;
+    }
+
+    for relative in [
+        "manifest.json",
+        "checksums.json",
+        "node/project-model.cjs",
+        "node/runtime/node.exe",
+    ] {
+        if !is_real_file(&destination.join(relative)) {
+            return false;
+        }
+    }
+
+    let Ok(bytes) = fs::read(destination.join("manifest.json")) else {
+        return false;
+    };
+    let Ok(manifest) = serde_json::from_slice::<ExtractedProviderManifest>(&bytes) else {
+        return false;
+    };
+    !manifest.providers.is_empty()
+        && manifest.providers.iter().all(|provider| {
+            is_safe_relative_path(&provider.path) && is_real_file(&destination.join(&provider.path))
+        })
+}
+
+fn is_real_file(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
+}
+
+fn is_safe_relative_path(value: &str) -> bool {
+    let path = Path::new(value);
+    !value.is_empty()
+        && !path.is_absolute()
+        && !value.chars().any(char::is_control)
+        && path.components().all(|component| {
+            !matches!(
+                component,
+                std::path::Component::Prefix(_)
+                    | std::path::Component::RootDir
+                    | std::path::Component::ParentDir
+            )
+        })
 }
 
 fn extract_archives(
@@ -231,6 +286,18 @@ mod tests {
         zip.start_file("test/project-model.txt", SimpleFileOptions::default())
             .unwrap();
         zip.write_all(b"provider").unwrap();
+        for (path, contents) in [
+            (
+                "manifest.json",
+                &br#"{"providers":[{"path":"test/project-model.txt"}]}"#[..],
+            ),
+            ("checksums.json", &br#"{}"#[..]),
+            ("node/project-model.cjs", &b"model"[..]),
+            ("node/runtime/node.exe", &b"node"[..]),
+        ] {
+            zip.start_file(path, SimpleFileOptions::default()).unwrap();
+            zip.write_all(contents).unwrap();
+        }
         zip.finish().unwrap();
 
         let archive_hash = sha256_file(&archive_path).unwrap();
@@ -260,6 +327,12 @@ mod tests {
                 .unwrap(),
             provider_root
         );
+
+        fs::remove_file(provider_root.join("node/runtime/node.exe")).unwrap();
+        let restored = ensure_provider_root(&root.join("engines"), &cache_dir)
+            .unwrap()
+            .unwrap();
+        assert!(is_real_file(&restored.join("node/runtime/node.exe")));
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -47,7 +47,10 @@ pub(crate) fn collect_metadata_files(dir: &Path, files: &mut Vec<std::path::Path
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             if !matches!(
                 name.as_str(),
                 ".git"
@@ -68,7 +71,7 @@ pub(crate) fn collect_metadata_files(dir: &Path, files: &mut Vec<std::path::Path
             ) {
                 collect_metadata_files(&path, files);
             }
-        } else if is_metadata_file(&name) {
+        } else if file_type.is_file() && is_metadata_file(&name) {
             files.push(path);
         }
     }
@@ -978,14 +981,15 @@ pub(crate) fn ecosystem_for_language(language: &str) -> &'static str {
 }
 
 pub(crate) fn language_for_path(path: &str) -> Option<&'static str> {
-    if path.to_ascii_lowercase().ends_with(".vue") {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".vue") {
         return Some("typescript");
     }
     LANGUAGES.iter().find_map(|language| {
         language
             .extensions
             .iter()
-            .any(|extension| path.ends_with(&format!(".{extension}")))
+            .any(|extension| lower.ends_with(&format!(".{extension}")))
             .then_some(language.id)
     })
 }

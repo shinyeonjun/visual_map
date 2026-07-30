@@ -23,8 +23,8 @@ pub(crate) use semantic_links::{
 pub(crate) use snapshot::{
     build_inventory_snapshot, invalidate_snapshot_freshness, load_inventory_snapshot_cached,
     load_inventory_snapshot_optional, load_inventory_snapshot_optional_cached,
-    remove_db_inventory_snapshot, replace_inventory_source, save_inventory_snapshot,
-    snapshot_staleness_reasons_cached, snapshot_with_metadata,
+    remove_db_inventory_snapshot, remove_inventory_snapshot, replace_inventory_source,
+    save_inventory_snapshot, snapshot_staleness_reasons_cached, snapshot_with_metadata,
 };
 pub(crate) use visual_map::visual_map_with_change;
 

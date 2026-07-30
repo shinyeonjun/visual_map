@@ -173,13 +173,21 @@ function App() {
 
   useEffect(() => {
     const workspaceId = workspaces.currentWorkspace?.id;
-    if (!workspaceId || !hasTauriRuntime()) {
+    if (
+      !workspaceId ||
+      snapshotBootstrappedWorkspaceId !== workspaceId ||
+      !hasTauriRuntime()
+    ) {
       return;
     }
+    let cancelled = false;
 
     const refreshFreshness = () => {
       void invoke<string[]>("refresh_snapshot_freshness", { workspaceId })
         .then((reasons) => {
+          if (cancelled) {
+            return;
+          }
           visual.noteSnapshotFreshness(reasons);
           setSnapshotRecoveryNotice(null);
         })
@@ -189,8 +197,15 @@ function App() {
     };
 
     window.addEventListener("focus", refreshFreshness);
-    return () => window.removeEventListener("focus", refreshFreshness);
-  }, [workspaces.currentWorkspace?.id]);
+    // The app is normally already focused when a workspace is restored. Do
+    // not wait for a later focus transition to reveal changes made while it
+    // was closed.
+    refreshFreshness();
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshFreshness);
+    };
+  }, [snapshotBootstrappedWorkspaceId, workspaces.currentWorkspace?.id]);
 
   const activeBusyAction = busyAction ?? (analysisInitializing ? "workspace-initialize" : snapshotRestoring ? "snapshot-restore" : null);
   const busy = Boolean(activeBusyAction);

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { githubRepoName, repoPathErrorFor } from "../app/appState";
 import { toUserError } from "../app/operationStatus";
 import { validateWorkspace, validateWorkspaceList } from "../app/runtimeContracts";
@@ -28,13 +28,19 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
   const [repoPath, setRepoPath] = useState("");
   const [workspaceStatus, setWorkspaceStatus] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const refreshRequestRef = useRef(0);
 
   useEffect(() => {
     void refreshWorkspaces();
   }, []);
 
   async function refreshWorkspaces(preferredWorkspaceId?: string) {
+    const requestId = ++refreshRequestRef.current;
+    const isLatestRequest = () => refreshRequestRef.current === requestId;
     if (!hasTauriRuntime()) {
+      if (!isLatestRequest()) {
+        return;
+      }
       setWorkspaces([]);
       setRecoveryWarnings([]);
       selectWorkspace(null);
@@ -48,6 +54,9 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
         invoke<unknown>("list_workspaces"),
         invoke<WorkspaceRecoveryWarning[]>("get_workspace_recovery_warnings"),
       ]);
+      if (!isLatestRequest()) {
+        return;
+      }
       const items = validateWorkspaceList(itemsValue);
       setWorkspaces(items);
       setRecoveryWarnings(warnings);
@@ -61,9 +70,13 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       selectWorkspace(selected);
       setWorkspaceError(null);
     } catch (error) {
-      setWorkspaceError(toUserError(error, "프로젝트 목록을 불러오지 못했습니다").message);
+      if (isLatestRequest()) {
+        setWorkspaceError(toUserError(error, "프로젝트 목록을 불러오지 못했습니다").message);
+      }
     } finally {
-      setInitialized(true);
+      if (isLatestRequest()) {
+        setInitialized(true);
+      }
     }
   }
 
