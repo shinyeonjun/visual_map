@@ -202,6 +202,27 @@ fn annotation_and_macro_routes_find_the_following_handler() {
         Some("UserService".to_string())
     );
     assert_eq!(
+        route_method("@RequestMapping(method = RequestMethod.POST, path = \"/owners\")"),
+        Some("POST")
+    );
+    assert_eq!(
+        nearby_handler(
+            &[
+                "@PostMapping(\"/owners\")",
+                "// unrelated annotation",
+                "// another line",
+                "// another line",
+                "// another line",
+                "// another line",
+                "// another line",
+                "// another line",
+                "public Owner createOwner() {",
+            ],
+            0
+        ),
+        Some("createOwner".to_string())
+    );
+    assert_eq!(
         fact_target_name("MIDDLEWARE", "async def auth_middleware(request):"),
         None
     );
@@ -285,6 +306,126 @@ fn annotation_and_macro_routes_find_the_following_handler() {
 }
 
 #[test]
+fn java_annotations_bind_to_the_first_method_not_a_later_void_method() {
+    assert_eq!(
+        nearby_handler(
+            &[
+                "@GetMapping(\"/petTypes\")",
+                "public List<PetType> getPetTypes() {",
+                "    return service.findAll();",
+                "}",
+                "@PutMapping(\"/{id}\")",
+                "public void processUpdateForm() {}",
+            ],
+            0,
+        ),
+        Some("getPetTypes".to_string())
+    );
+}
+
+#[test]
+fn java_functional_route_uses_its_exact_registration_method() {
+    let lines = [
+        "@Bean",
+        "RouterFunction<?> routerFunction() {",
+        "    return RouterFunctions.resources(\"/**\", resource)",
+        "        .andRoute(RequestPredicates.GET(\"/\"), request -> response);",
+    ];
+    assert_eq!(
+        enclosing_java_method(&lines, 3),
+        Some("routerFunction".to_string())
+    );
+
+    let pack = FrameworkPack {
+        id: "spring-webflux".to_string(),
+        language: "java".to_string(),
+        name: "Spring WebFlux".to_string(),
+        kind: "web".to_string(),
+        signals: vec!["RouterFunction".to_string()],
+        outputs: vec!["HTTP_ROUTE".to_string(), "HANDLES".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let documents = vec![DocumentOutput {
+        language: "java".to_string(),
+        path: "src/Api.java".to_string(),
+        symbols: Vec::new(),
+        occurrences: vec![OccurrenceOutput {
+            symbol: "java#Api.routerFunction()".to_string(),
+            range: vec![1, 0, 1, 42],
+            enclosing_range: Vec::new(),
+            definition: true,
+            import: false,
+            read: false,
+            write: false,
+        }],
+    }];
+    let mut facts = Vec::new();
+    extract_routes(
+        &pack,
+        "src/Api.java",
+        &lines.join("\n"),
+        &documents,
+        None,
+        &mut facts,
+    );
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].path.as_deref(), Some("/"));
+    assert_eq!(
+        facts[0].symbol.as_deref(),
+        Some("java#Api.routerFunction()")
+    );
+}
+
+#[test]
+fn java_request_mapping_method_and_multiple_paths_are_all_emitted() {
+    let pack = FrameworkPack {
+        id: "spring-mvc".to_string(),
+        language: "java".to_string(),
+        name: "Spring MVC".to_string(),
+        kind: "web".to_string(),
+        signals: vec!["@RequestMapping".to_string()],
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let mut facts = Vec::new();
+    extract_routes(
+        &pack,
+        "src/Owners.java",
+        "@RequestMapping(\"/api\")\n@RequestMapping(method = RequestMethod.GET, path = {\"/owners\", \"/users\"})\npublic void list() {}",
+        &[],
+        None,
+        &mut facts,
+    );
+    assert_eq!(facts.len(), 2);
+    assert_eq!(facts[0].method.as_deref(), Some("GET"));
+    assert_eq!(facts[0].path.as_deref(), Some("/api/owners"));
+    assert_eq!(facts[1].path.as_deref(), Some("/api/users"));
+}
+
+#[test]
+fn java_field_injection_annotation_can_be_on_the_previous_line() {
+    assert_eq!(
+        dependency_type_name("@Autowired @Qualifier(\"users\") private UserService service;"),
+        Some("UserService".to_string())
+    );
+    assert_eq!(
+        java_dependency_annotation_context(
+            &[
+                "@Autowired",
+                "@Qualifier(\"users\")",
+                "private UserService service;",
+            ],
+            0,
+        ),
+        Some("@Autowired @Qualifier(\"users\") private UserService service;".to_string())
+    );
+}
+
+#[test]
 fn cross_file_provider_reference_resolves_framework_handler() {
     let documents = vec![
         DocumentOutput {
@@ -335,6 +476,10 @@ fn symbol_short_name_handles_lsp_location_suffix() {
     assert_eq!(
         symbol_short_name("scip-php composer visualmap/test-php 1.0.0.0 App/Handler#index()."),
         "index"
+    );
+    assert_eq!(
+        symbol_short_name("lsp . . . app.Owner#updateOwner(int, OwnerRequest)@84:16"),
+        "updateOwner"
     );
     let documents = vec![DocumentOutput {
         language: "php".to_string(),
@@ -628,7 +773,12 @@ fn every_pack_is_detected_and_emits_its_declared_rules() {
             .unwrap_or_else(|| panic!("{} was not detected", pack.id));
         for rule in &pack.fixture.expected_facts {
             assert!(
-                output.facts.iter().any(|fact| fact.kind == *rule),
+                output.facts.iter().any(|fact| fact.kind == *rule)
+                    || (pack.language == "java"
+                        && analysis.frameworks.iter().any(|framework| {
+                            framework.language == "java"
+                                && framework.facts.iter().any(|fact| fact.kind == *rule)
+                        })),
                 "{} did not emit {}",
                 pack.id,
                 rule
@@ -643,7 +793,15 @@ fn every_pack_is_detected_and_emits_its_declared_rules() {
             assert!(
                 analysis.relations.iter().any(|relation| {
                     relation.framework == pack.id && relation.kind == *relation_kind
-                }),
+                }) || (pack.language == "java"
+                    && *relation_kind == "HANDLES"
+                    && analysis.relations.iter().any(|relation| {
+                        relation.kind == "HANDLES"
+                            && analysis.frameworks.iter().any(|framework| {
+                                framework.language == "java"
+                                    && framework.facts.iter().any(|fact| fact.id == relation.to)
+                            })
+                    })),
                 "{} did not emit a {} relation",
                 pack.id,
                 relation_kind
@@ -845,6 +1003,191 @@ fn every_declared_pack_has_an_executable_shared_rule() {
             );
         }
     }
+}
+
+#[test]
+fn duplicate_framework_routes_keep_one_fact_and_handle_relation() {
+    let route = |id: &str, framework: &str| FrameworkFact {
+        id: id.to_string(),
+        kind: "HTTP_ROUTE".to_string(),
+        framework: framework.to_string(),
+        symbol: Some("java#Controller.handle".to_string()),
+        method: Some("GET".to_string()),
+        path: Some("/owners/{ownerId}".to_string()),
+        source_file: "src/Controller.java".to_string(),
+        source_line: 12,
+        source_end_line: 12,
+        source_range: vec![11, 0, 11, 40],
+        evidence: vec!["http_route_syntax".to_string()],
+        properties: BTreeMap::new(),
+    };
+    let output = |id: &str, framework: &str| FrameworkOutput {
+        id: id.to_string(),
+        language: "java".to_string(),
+        name: framework.to_string(),
+        kind: "web".to_string(),
+        adapter: "annotation-routing".to_string(),
+        status: "detected".to_string(),
+        matched_signals: vec!["@Controller".to_string()],
+        files: vec!["src/Controller.java".to_string()],
+        facts: vec![route(&format!("{id}-route"), framework)],
+    };
+    let mut frameworks = vec![
+        output("spring", "spring"),
+        output("spring-mvc", "spring-mvc"),
+    ];
+    let mut relations = vec![
+        FrameworkRelation {
+            from: "java#Controller.handle".to_string(),
+            to: "spring-route".to_string(),
+            kind: "HANDLES".to_string(),
+            framework: "spring".to_string(),
+            path: "src/Controller.java".to_string(),
+            range: vec![11, 0, 11, 40],
+            evidence: vec!["http_route_syntax".to_string()],
+        },
+        FrameworkRelation {
+            from: "java#Controller.handle".to_string(),
+            to: "spring-mvc-route".to_string(),
+            kind: "HANDLES".to_string(),
+            framework: "spring-mvc".to_string(),
+            path: "src/Controller.java".to_string(),
+            range: vec![11, 0, 11, 40],
+            evidence: vec!["http_route_syntax".to_string()],
+        },
+    ];
+
+    dedupe_java_facts(&mut frameworks, &mut relations);
+
+    assert_eq!(
+        frameworks
+            .iter()
+            .map(|item| item.facts.len())
+            .sum::<usize>(),
+        1
+    );
+    assert_eq!(relations.len(), 1);
+    assert_eq!(relations[0].to, "spring-route");
+}
+
+#[test]
+fn java_constructor_dependencies_require_the_enclosing_type() {
+    let lines = [
+        "public class ApiGatewayController {",
+        "    public ApiGatewayController(CustomersServiceClient customers,",
+        "                                VisitsServiceClient visits) {",
+        "    }",
+        "    public String getOwner(String ownerId) {",
+        "        return ownerId;",
+        "    }",
+    ];
+    assert_eq!(
+        java_constructor_dependency_types(&lines, 1),
+        vec![
+            "CustomersServiceClient".to_string(),
+            "VisitsServiceClient".to_string()
+        ]
+    );
+    assert!(java_constructor_dependency_types(&lines, 4).is_empty());
+}
+
+#[test]
+fn java_package_private_constructor_dependencies_are_indexed() {
+    let lines = [
+        "class ApiGatewayController {",
+        "    ApiGatewayController(CustomersServiceClient customers) {",
+        "    }",
+    ];
+    assert_eq!(
+        java_constructor_dependency_types(&lines, 1),
+        vec!["CustomersServiceClient".to_string()]
+    );
+}
+
+#[test]
+fn java_route_paths_ignore_non_path_annotation_values() {
+    assert_eq!(
+        java_route_paths(
+            r#"@RequestMapping(path = {"/owners", "/pets"}, headers = "X-Route=/header", produces = "/mime")"#
+        ),
+        vec!["/owners".to_string(), "/pets".to_string()]
+    );
+    assert_eq!(
+        java_route_paths(r#"@GetMapping(value = "/owners", params = "/debug")"#),
+        vec!["/owners".to_string()]
+    );
+}
+
+#[test]
+fn java_dependency_facts_require_injection_context() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let spring = load_packs(root)
+        .expect("framework packs should load")
+        .into_iter()
+        .find(|pack| pack.id == "spring")
+        .expect("spring pack");
+    let source = "@Component\nclass Client {\n    Client(WebClient webClient) {}\n}\nclass OwnerRequest {\n    OwnerRequest(String ownerId) {}\n}\n";
+    let mut facts = Vec::new();
+    extract_generic_facts(&spring, "src/Client.java", source, &[], &mut facts);
+    let dependencies = facts
+        .iter()
+        .filter(|fact| fact.kind == "DEPENDENCY")
+        .filter_map(|fact| fact.properties.get("target"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(dependencies, vec!["WebClient".to_string()]);
+}
+
+#[test]
+fn java_service_facts_for_one_type_are_deduplicated_across_lines() {
+    let fact = |id: &str, line: usize| FrameworkFact {
+        id: id.to_string(),
+        kind: "SERVICE".to_string(),
+        framework: "spring".to_string(),
+        symbol: Some("java#Client".to_string()),
+        method: None,
+        path: None,
+        source_file: "src/Client.java".to_string(),
+        source_line: line,
+        source_end_line: line,
+        source_range: vec![line as i32 - 1, 0, line as i32 - 1, 10],
+        evidence: vec!["service_annotation".to_string()],
+        properties: BTreeMap::new(),
+    };
+    let mut frameworks = vec![FrameworkOutput {
+        id: "spring".to_string(),
+        language: "java".to_string(),
+        name: "Spring".to_string(),
+        kind: "web".to_string(),
+        adapter: "annotation-routing".to_string(),
+        status: "detected".to_string(),
+        matched_signals: Vec::new(),
+        files: vec!["src/Client.java".to_string()],
+        facts: vec![fact("service-1", 1), fact("service-2", 2)],
+    }];
+    let mut relations = vec![
+        FrameworkRelation {
+            from: "java#Client".to_string(),
+            to: "service-1".to_string(),
+            kind: "DECLARES_SERVICE".to_string(),
+            framework: "spring".to_string(),
+            path: "src/Client.java".to_string(),
+            range: vec![0, 0, 0, 10],
+            evidence: vec!["service_annotation".to_string()],
+        },
+        FrameworkRelation {
+            from: "java#Client".to_string(),
+            to: "service-2".to_string(),
+            kind: "DECLARES_SERVICE".to_string(),
+            framework: "spring".to_string(),
+            path: "src/Client.java".to_string(),
+            range: vec![1, 0, 1, 10],
+            evidence: vec!["service_annotation".to_string()],
+        },
+    ];
+    dedupe_java_facts(&mut frameworks, &mut relations);
+    assert_eq!(frameworks[0].facts.len(), 1);
+    assert_eq!(relations.len(), 1);
 }
 
 fn representative_line(rule: &str) -> &'static str {

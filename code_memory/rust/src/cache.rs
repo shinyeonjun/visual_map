@@ -169,7 +169,7 @@ pub(crate) fn framework_cache_key(
     project_config_digest: u64,
 ) -> String {
     let mut hash = 0xcbf29ce484222325u64;
-    checksum_update(&mut hash, b"code-memory-framework-cache.v5");
+    checksum_update(&mut hash, b"code-memory-framework-cache.v24");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     for document in documents {
         checksum_update(&mut hash, document.path.as_bytes());
@@ -546,7 +546,7 @@ pub(crate) fn language_cache_key(
     let mut hash = 0xcbf29ce484222325u64;
     // Provider-to-VisualMap normalization changes must not reuse a previous
     // provider result with the same source checksum.
-    checksum_update(&mut hash, b"code-memory-language-cache.v131");
+    checksum_update(&mut hash, b"code-memory-language-cache.v147");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, lang.id.as_bytes());
     let provider_program = find_tool(lang.tool, providers_root).or_else(|| {
@@ -660,7 +660,15 @@ pub(crate) fn write_language_cache(
         relations: relations.to_vec(),
         diagnostics: diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.path.is_some())
+            .filter(|diagnostic| {
+                diagnostic.path.is_some()
+                    || diagnostic
+                        .message
+                        .contains("semantic provider reached its time/resource limit")
+                    || diagnostic
+                        .message
+                        .contains("large-workspace semantic enrichment")
+            })
             .map(|diagnostic| CachedDiagnostic {
                 language: diagnostic.language.clone(),
                 level: diagnostic.level.to_string(),

@@ -161,14 +161,6 @@ pub(crate) fn analyze_language(
     call_ranges: &HashMap<String, Vec<Vec<i32>>>,
     project_config_digest: u64,
 ) -> LanguageAnalysis {
-    if lang.id == "java" && files.len() > java_semantic_file_limit() {
-        return language_excluded(
-            lang,
-            "native-lsp",
-            files,
-            "Java semantic analysis deferred for a large workspace; structural map remains available",
-        );
-    }
     if lang.id == "rust" && files.len() > rust_semantic_file_limit() {
         return language_excluded(
             lang,
@@ -306,6 +298,11 @@ pub(crate) fn analyze_language(
                         && provider_diagnostics
                             .iter()
                             .any(|diagnostic| is_fatal_lsp_error(&diagnostic.message));
+                    let provider_partial = provider_diagnostics.iter().any(|diagnostic| {
+                        diagnostic
+                            .message
+                            .contains("semantic provider reached its time/resource limit")
+                    });
                     let mut analysis = if provider_stopped {
                         language_excluded(
                             lang,
@@ -321,6 +318,9 @@ pub(crate) fn analyze_language(
                             lang, provider, root, files, documents, relations,
                         )
                     };
+                    if provider_partial && analysis.language.status == "indexed" {
+                        analysis.language.status = "indexed-partial";
+                    }
                     if let Some(warning) = ruby_bundle_warning.clone() {
                         analysis.diagnostics.push(warning);
                     }
@@ -355,14 +355,6 @@ pub(crate) fn analyze_language(
             }
         }
     }
-}
-
-fn java_semantic_file_limit() -> usize {
-    env::var("CODE_MEMORY_JAVA_SEMANTIC_MAX_FILES")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| (100..=20_000).contains(value))
-        .unwrap_or(1_500)
 }
 
 fn rust_semantic_file_limit() -> usize {

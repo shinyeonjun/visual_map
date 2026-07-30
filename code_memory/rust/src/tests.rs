@@ -928,6 +928,34 @@ fn java_maven_reactor_uses_one_provider_module() {
 }
 
 #[test]
+fn java_gradle_reactor_uses_one_provider_module() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-java-gradle-reactor-plan-{}",
+        std::process::id()
+    ));
+    let nested = root.join("service");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(nested.join("src/main/java")).expect("create gradle reactor");
+    fs::create_dir_all(nested.join("build")).expect("create nested build marker");
+    fs::write(root.join("settings.gradle"), "include 'service'\n")
+        .expect("write gradle reactor manifest");
+    fs::write(nested.join("build.gradle"), "plugins { id 'java' }\n")
+        .expect("write nested gradle manifest");
+    let file = nested.join("src/main/java/Main.java");
+    fs::write(&file, "class Main {}\n").expect("write java source");
+    let lang = LANGUAGES
+        .iter()
+        .find(|lang| lang.id == "java")
+        .copied()
+        .expect("java language");
+    let modules = module_plan::plan_language_modules(&root, lang, std::slice::from_ref(&file));
+    assert_eq!(modules.len(), 1);
+    assert_eq!(modules[0].id, "root");
+    assert_eq!(modules[0].root, root);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn dart_workspace_uses_one_provider_module() {
     let root = std::env::temp_dir().join(format!(
         "code-memory-dart-workspace-plan-{}",

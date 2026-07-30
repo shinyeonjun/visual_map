@@ -16,6 +16,14 @@ use crate::{
     LanguageSpec,
 };
 
+fn bundled_java_home(jdtls_path: &Path) -> Option<PathBuf> {
+    let parent = jdtls_path.parent()?;
+    let candidates = [parent.join("runtime"), parent.parent()?.join("runtime")];
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.join("bin").is_dir())
+}
+
 pub(crate) fn run_native_lsp(
     lang: &LanguageSpec,
     root: &Path,
@@ -79,8 +87,16 @@ pub(crate) fn run_native_lsp_with_server(
             "CODE_MEMORY_JDTLS_WORKSPACE",
             project_cache_root(&analysis_root)
                 .join("lsp-workspaces")
-                .join("java"),
+                .join("java-v2"),
         );
+        // Do not inherit a stale user JAVA_HOME from an older installation.
+        // JDTLS needs the same bundled JDK for project/classpath resolution as
+        // the launcher uses to start it.
+        if let Some(jdtls_path) = find_tool("jdtls", providers_root) {
+            if let Some(bundled_java_home) = bundled_java_home(&jdtls_path) {
+                command.env("JAVA_HOME", bundled_java_home);
+            }
+        }
     } else if server == "ruby-lsp" {
         let bundle_cache = project_cache_root(&analysis_root).join("bundler");
         command.env("BUNDLE_USER_CACHE", &bundle_cache);
@@ -192,7 +208,7 @@ pub(crate) fn run_native_lsp_with_server(
         HashSet::new()
     };
     let mut seen_semantic_files = HashSet::new();
-    let semantic_files: Vec<&PathBuf> = analysis_files
+    let mut semantic_files: Vec<&PathBuf> = analysis_files
         .iter()
         .copied()
         // clangd needs a translation unit to establish flags and include
@@ -239,30 +255,44 @@ pub(crate) fn run_native_lsp_with_server(
         Some(DART_LARGE_OPEN_LIMIT)
     } else if server == "rust-analyzer" && large_workspace {
         Some(RUST_LARGE_OPEN_LIMIT)
+    } else if server == "jdtls" && large_workspace {
+        // JDTLS indexes source files from the workspace. Sending thousands of
+        // didOpen buffers duplicates that state and slows Gradle reactors.
+        Some(256)
     } else {
         None
     };
+    let mut partial_reason = None;
     for (opened_index, file) in semantic_files.iter().enumerate() {
         let relative = file
             .strip_prefix(root)
             .unwrap_or(file)
             .to_string_lossy()
             .replace('\\', "/");
-        let text = fs::read_to_string(file).unwrap_or_default();
-        source_cache.insert(relative.clone(), text);
+        let should_open = open_limit.is_none_or(|limit| opened_index < limit)
+            && (server != "clangd" || !is_cpp_header(file) || reachable_headers.contains(*file));
         // clangd needs a translation unit to establish compiler flags. Opening
         // every header as a standalone document makes it parse with fake flags
         // and is both slow and misleading; headers are queried after active
         // translation units have been opened.
-        if open_limit.is_none_or(|limit| opened_index < limit)
-            && (server != "clangd" || !is_cpp_header(file) || reachable_headers.contains(*file))
-        {
+        if should_open {
+            let text = fs::read_to_string(file).unwrap_or_default();
+            source_cache.insert(relative.clone(), text);
             let uri = path_to_uri(file);
             let text = source_cache
                 .get(&relative)
                 .map(String::as_str)
                 .unwrap_or_default();
-            connection.did_open(&uri, lsp_language_id(server, file, lang.id), text)?;
+            if let Err(error) =
+                connection.did_open(&uri, lsp_language_id(server, file, lang.id), text)
+            {
+                if is_recoverable_lsp_session_error(&error) {
+                    partial_reason = Some(error.clone());
+                    connection.fatal_error = Some(error);
+                    break;
+                }
+                return Err(error);
+            }
             // Dart's analysis server can stop draining stdin while it queues a
             // large package graph. Throttle notifications before the pipe
             // buffer fills; this keeps the session deadline effective instead
@@ -282,7 +312,42 @@ pub(crate) fn run_native_lsp_with_server(
         500
     }));
 
-    for file in &semantic_files {
+    let semantic_file_count = semantic_files.len();
+    let mut workspace_symbol_mode = false;
+    if server == "jdtls" && large_workspace {
+        match connection.workspace_symbols() {
+            Ok(symbols) if !symbols.is_empty() => {
+                for (uri, symbol) in symbols {
+                    let relative = uri_to_relative_path(&uri, root);
+                    if document_indexes.contains_key(&relative) {
+                        document_symbol_files.insert(relative.clone());
+                        symbol_cache.entry(relative).or_default().push(symbol);
+                    }
+                }
+                workspace_symbol_mode = !symbol_cache.is_empty();
+            }
+            Ok(_) => {}
+            Err(error) if is_recoverable_lsp_session_error(&error) => {
+                partial_reason = Some(error.clone());
+                connection.fatal_error.get_or_insert(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    'document_symbols: for file in &semantic_files {
+        if workspace_symbol_mode {
+            let relative = file
+                .strip_prefix(root)
+                .unwrap_or(file)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if document_symbol_files.contains(&relative) {
+                continue;
+            }
+        }
+        if partial_reason.is_some() {
+            break 'document_symbols;
+        }
         if server == "clangd" && is_cpp_header(file) && !reachable_headers.contains(*file) {
             continue;
         }
@@ -327,7 +392,11 @@ pub(crate) fn run_native_lsp_with_server(
                         symbols = value;
                     }
                 }
-                Err(error) if is_recoverable_lsp_query_error(&error) => break,
+                Err(error) if is_recoverable_lsp_session_error(&error) => {
+                    partial_reason = Some(error.clone());
+                    connection.fatal_error.get_or_insert(error);
+                    break 'document_symbols;
+                }
                 Err(error) => return Err(error),
             }
             let symbols_ready = !symbols.is_empty()
@@ -345,6 +414,26 @@ pub(crate) fn run_native_lsp_with_server(
         }
         symbol_cache.insert(relative, symbols);
     }
+    if partial_reason.is_some() {
+        semantic_files.retain(|file| {
+            let relative = file
+                .strip_prefix(root)
+                .unwrap_or(file)
+                .to_string_lossy()
+                .replace('\\', "/");
+            document_symbol_files.contains(&relative)
+        });
+    }
+    for file in &semantic_files {
+        let relative = file
+            .strip_prefix(root)
+            .unwrap_or(file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        source_cache
+            .entry(relative)
+            .or_insert_with(|| fs::read_to_string(file).unwrap_or_default());
+    }
     if server == "clangd"
         || (!large_workspace
             && lang.id == "rust"
@@ -361,7 +450,9 @@ pub(crate) fn run_native_lsp_with_server(
                     }
                 }
             }
-            Err(error) if is_recoverable_lsp_query_error(&error) => {}
+            Err(error) if is_recoverable_lsp_session_error(&error) => {
+                partial_reason.get_or_insert(error);
+            }
             Err(error) => return Err(error),
         }
     }
@@ -600,7 +691,7 @@ pub(crate) fn run_native_lsp_with_server(
                 Vec::new()
             };
             for (target_symbol, target_relative, range) in outgoing_calls {
-                if let Some(target_index) = document_indexes.get(&target_relative).copied() {
+                if document_indexes.contains_key(&target_relative) {
                     let mut call_occurrence = scip::types::Occurrence::new();
                     call_occurrence.symbol = target_symbol;
                     call_occurrence.range = range;
@@ -610,7 +701,7 @@ pub(crate) fn run_native_lsp_with_server(
                         symbol.range_end_line as i32,
                         symbol.range_end_character as i32,
                     ];
-                    index.documents[target_index]
+                    index.documents[source_index]
                         .occurrences
                         .push(call_occurrence);
                 }
@@ -638,7 +729,28 @@ pub(crate) fn run_native_lsp_with_server(
                 else {
                     continue;
                 };
-                for (target_uri, target_range) in connection.definitions_at(&uri, line, character) {
+                let mut targets = connection.definitions_at(&uri, line, character);
+                let provider_target_is_usable = targets.iter().any(|(target_uri, target_range)| {
+                    let Some(target_uri) = target_uri.as_deref() else {
+                        return false;
+                    };
+                    let target_relative = uri_to_relative_path(target_uri, root);
+                    document_indexes
+                        .get(&target_relative)
+                        .and_then(|target_index| index.documents.get(*target_index))
+                        .and_then(|_| symbol_cache.get(&target_relative))
+                        .and_then(|symbols| find_lsp_symbol_at_range(symbols, target_range))
+                        .is_some()
+                });
+                if !provider_target_is_usable && lang.id == "java" {
+                    if let Some((target_relative, target_range)) =
+                        unique_java_definition(&symbol_cache, &name)
+                    {
+                        targets
+                            .push((Some(path_to_uri(&root.join(target_relative))), target_range));
+                    }
+                }
+                for (target_uri, target_range) in targets {
                     let Some(target_uri) = target_uri else {
                         continue;
                     };
@@ -650,9 +762,9 @@ pub(crate) fn run_native_lsp_with_server(
                     else {
                         continue;
                     };
-                    let Some(target_index) = document_indexes.get(&target_relative).copied() else {
+                    if !document_indexes.contains_key(&target_relative) {
                         continue;
-                    };
+                    }
                     let mut call_occurrence = scip::types::Occurrence::new();
                     call_occurrence.symbol = symbol_string(
                         &target_relative,
@@ -662,14 +774,58 @@ pub(crate) fn run_native_lsp_with_server(
                     );
                     call_occurrence.range = call_range.clone();
                     call_occurrence.enclosing_range = owner_range.clone();
-                    index.documents[target_index]
+                    index.documents[source_index]
+                        .occurrences
+                        .push(call_occurrence);
+                }
+            }
+            if lang.id == "java" {
+                for (line, character, name) in
+                    java_unique_method_call_candidates(text, &symbol_cache)
+                {
+                    let call_range = vec![
+                        line as i32,
+                        character as i32,
+                        line as i32,
+                        (character + name.chars().count() as u32) as i32,
+                    ];
+                    let Some(owner_range) = find_enclosing_symbol_range(Some(symbols), &call_range)
+                    else {
+                        continue;
+                    };
+                    let Some((target_relative, target_symbol, _)) =
+                        unique_java_symbol(&symbol_cache, &name)
+                    else {
+                        continue;
+                    };
+                    if !document_indexes.contains_key(&target_relative) {
+                        continue;
+                    }
+                    let mut call_occurrence = scip::types::Occurrence::new();
+                    call_occurrence.symbol = target_symbol;
+                    call_occurrence.range = call_range;
+                    call_occurrence.enclosing_range = owner_range;
+                    index.documents[source_index]
                         .occurrences
                         .push(call_occurrence);
                 }
             }
         }
     }
-    if lang.id == "rust" {
+    if partial_reason.is_none() {
+        partial_reason = connection.fatal_error.clone();
+        if partial_reason.is_some() && !workspace_symbol_mode {
+            semantic_files.retain(|file| {
+                let relative = file
+                    .strip_prefix(root)
+                    .unwrap_or(file)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                document_symbol_files.contains(&relative)
+            });
+        }
+    }
+    if lang.id == "rust" && partial_reason.is_none() {
         // rust-analyzer may still finish sysroot loading after the last LSP
         // response. Let that worker settle before shutdown to avoid its
         // shutdown-time SendError panic.
@@ -681,19 +837,58 @@ pub(crate) fn run_native_lsp_with_server(
         // and makes the bundled provider print a SendError panic. The result
         // is complete already, so use the protocol exit notification and let
         // Drop reap the process without that race.
-        connection.notify("exit", Value::Null)?;
+        if partial_reason.is_none() {
+            connection.notify("exit", Value::Null)?;
+        } else {
+            let _ = connection.notify("exit", Value::Null);
+        }
     } else if let Err(error) = connection.shutdown() {
-        if !is_recoverable_lsp_query_error(&error) {
+        if partial_reason.is_none() && !is_recoverable_lsp_session_error(&error) {
             return Err(error);
         }
     }
-    connection.ensure_healthy()?;
+    if partial_reason.is_none() {
+        connection.ensure_healthy()?;
+    }
     let mut provider_diagnostics = connection.take_provider_diagnostics(root, lang.id);
     if server == "dart" && dart_synthetic_package_map {
         provider_diagnostics = compact_dart_synthetic_diagnostics(provider_diagnostics);
+    } else if server == "jdtls" && large_workspace {
+        provider_diagnostics = compact_large_workspace_diagnostics(provider_diagnostics, lang.id);
     }
     let mut diagnostics = startup_diagnostics;
     diagnostics.extend(provider_diagnostics);
+    if let Some(reason) = partial_reason {
+        diagnostics.push(Diagnostic {
+            language: lang.id.to_string(),
+            level: "warning",
+            message: format!(
+                "{} semantic provider reached its time/resource limit; indexed {} of {} source documents. {} ({reason})",
+                lang.name,
+                document_symbol_files.len(),
+                semantic_file_count,
+                if document_symbol_files.len() < semantic_file_count {
+                    "The remaining files are marked missing"
+                } else {
+                    "File coverage was retained; deeper semantic enrichment may be incomplete"
+                }
+            ),
+            path: None,
+            line: None,
+        });
+    }
+    if workspace_symbol_mode {
+        diagnostics.push(Diagnostic {
+            language: lang.id.to_string(),
+            level: "warning",
+            message: format!(
+                "large Java workspace reused the provider workspace-symbol index for {} of {} source documents; remaining files were queried individually",
+                document_symbol_files.len(), semantic_file_count
+            ),
+            path: None,
+            line: None,
+        });
+    }
     if large_workspace {
         let omitted = if large_map_enrichment && !large_call_enrichment {
             "large-project call hierarchy enrichment"
@@ -758,10 +953,10 @@ pub(crate) fn configure_lsp_workspace(
     _language: &str,
     root: &Path,
 ) -> Result<(), String> {
-    let settings = if server == "rust-analyzer" {
-        rust_analyzer_settings()
-    } else {
-        serde_json::json!({})
+    let settings = match server {
+        "rust-analyzer" => rust_analyzer_settings(),
+        "jdtls" => java_language_server_settings(),
+        _ => serde_json::json!({}),
     };
     connection.set_workspace_settings(settings.clone());
     if server != "rust-analyzer" {
@@ -794,6 +989,22 @@ fn rust_analyzer_settings() -> Value {
                 "loadOutDirsFromCheck": false
             },
             "procMacro": {"enable": false}
+        }
+    })
+}
+
+fn java_language_server_settings() -> Value {
+    serde_json::json!({
+        "java": {
+            "autobuild": {"enabled": false},
+            "import": {
+                "gradle": {
+                    "offline": {"enabled": true},
+                    "wrapper": {"enabled": false}
+                },
+                "maven": {"offline": {"enabled": true}}
+            },
+            "references": {"includeDecompiledSources": false}
         }
     })
 }
@@ -1078,6 +1289,38 @@ fn compact_dart_synthetic_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagn
             level: "warning",
             message: format!(
                 "{suppressed} Dart provider diagnostics were collapsed because local-only package analysis cannot resolve external package symbols"
+            ),
+            path: None,
+            line: None,
+        });
+    }
+    output
+}
+
+fn compact_large_workspace_diagnostics(
+    diagnostics: Vec<Diagnostic>,
+    language: &str,
+) -> Vec<Diagnostic> {
+    let mut seen = HashSet::new();
+    let mut suppressed = 0usize;
+    let mut output = Vec::new();
+    for diagnostic in diagnostics {
+        let key = format!(
+            "{}:{}:{}",
+            diagnostic.language, diagnostic.level, diagnostic.message
+        );
+        if seen.insert(key) {
+            output.push(diagnostic);
+        } else {
+            suppressed += 1;
+        }
+    }
+    if suppressed > 0 {
+        output.push(Diagnostic {
+            language: language.to_string(),
+            level: "warning",
+            message: format!(
+                "{suppressed} repeated Java provider diagnostics were collapsed for the large-workspace view"
             ),
             path: None,
             line: None,
@@ -1553,7 +1796,7 @@ impl LspConnection {
         for item in value.as_array().into_iter().flatten() {
             let Some(uri) = item
                 .get("location")
-                .and_then(|location| location.get("uri"))
+                .and_then(|location| location.get("uri").or_else(|| location.get("targetUri")))
                 .and_then(Value::as_str)
             else {
                 continue;
@@ -1808,6 +2051,10 @@ fn is_recoverable_lsp_query_error(error: &str) -> bool {
     error.contains("native LSP response timeout")
 }
 
+fn is_recoverable_lsp_session_error(error: &str) -> bool {
+    is_recoverable_lsp_query_error(error) || is_fatal_lsp_error(error)
+}
+
 impl Drop for LspConnection {
     fn drop(&mut self) {
         // Give the server a short grace period after the LSP exit notification.
@@ -1965,11 +2212,26 @@ pub(crate) fn uri_to_relative_path(uri: &str, root: &Path) -> String {
             .unwrap_or(uri)
             .replace('/', "\\"),
     );
-    Path::new(&path)
-        .strip_prefix(root)
-        .unwrap_or(Path::new(&path))
-        .to_string_lossy()
-        .replace('\\', "/")
+    let path_ref = Path::new(&path);
+    if let Ok(relative) = path_ref.strip_prefix(root) {
+        return relative.to_string_lossy().replace('\\', "/");
+    }
+    #[cfg(windows)]
+    {
+        let path = path.trim_end_matches('\\');
+        let root = root.to_string_lossy().replace('/', "\\");
+        let root = root.trim_end_matches('\\');
+        if path.eq_ignore_ascii_case(root) {
+            return String::new();
+        }
+        if path.len() > root.len()
+            && path[..root.len()].eq_ignore_ascii_case(root)
+            && path.as_bytes()[root.len()] == b'\\'
+        {
+            return path[root.len() + 1..].replace('\\', "/");
+        }
+    }
+    path_ref.to_string_lossy().replace('\\', "/")
 }
 
 pub(crate) fn percent_decode(value: String) -> String {
@@ -2002,10 +2264,18 @@ pub(crate) fn hex_value(value: u8) -> Option<u8> {
 }
 
 pub(crate) fn symbol_string(file: &str, name: &str, line: u32, character: u32) -> String {
+    // Some LSP servers include the return type in call-hierarchy item names
+    // (`method(args) : ReturnType`) while document symbols use
+    // `method(args)`. Keep one stable identity for both forms.
+    let canonical_name = name
+        .rsplit_once(" : ")
+        .map(|(base, return_type)| (!return_type.is_empty()).then_some(base))
+        .flatten()
+        .unwrap_or(name);
     format!(
         "lsp . . . {}#{}@{}:{}",
         file.replace('/', "."),
-        name,
+        canonical_name,
         line,
         character
     )
@@ -2171,6 +2441,113 @@ fn lexical_call_candidates_with_set(
             if !definition_positions.contains(&(line_number as u32, character)) {
                 candidates.push((line_number as u32, character, name.to_string()));
             }
+        }
+    }
+    candidates
+}
+
+fn unique_java_definition(
+    symbol_cache: &HashMap<String, Vec<LspSymbol>>,
+    name: &str,
+) -> Option<(String, Vec<i32>)> {
+    let mut candidate = None;
+    for (relative, symbols) in symbol_cache {
+        for symbol in symbols.iter().filter(|symbol| {
+            symbol.name == name
+                && (is_callable_kind(symbol.kind)
+                    || symbol
+                        .detail
+                        .as_deref()
+                        .is_some_and(|detail| detail.contains('(')))
+        }) {
+            if candidate.is_some() {
+                // ponytail: ambiguous method names stay unresolved; add receiver/type
+                // binding only when a real project needs overloaded-name recovery.
+                return None;
+            }
+            candidate = Some((
+                relative.clone(),
+                vec![
+                    symbol.range_start_line as i32,
+                    symbol.range_start_character as i32,
+                    symbol.range_end_line as i32,
+                    symbol.range_end_character as i32,
+                ],
+            ));
+        }
+    }
+    candidate
+}
+
+fn unique_java_symbol(
+    symbol_cache: &HashMap<String, Vec<LspSymbol>>,
+    name: &str,
+) -> Option<(String, String, Vec<i32>)> {
+    let mut candidate = None;
+    for (relative, symbols) in symbol_cache {
+        for symbol in symbols.iter().filter(|symbol| {
+            symbol.name == name
+                && (is_callable_kind(symbol.kind)
+                    || symbol
+                        .detail
+                        .as_deref()
+                        .is_some_and(|detail| detail.contains('(')))
+        }) {
+            if candidate.is_some() {
+                return None;
+            }
+            candidate = Some((
+                relative.clone(),
+                symbol_string(
+                    relative,
+                    &symbol.name,
+                    symbol.selection_line,
+                    symbol.selection_character,
+                ),
+                vec![
+                    symbol.range_start_line as i32,
+                    symbol.range_start_character as i32,
+                    symbol.range_end_line as i32,
+                    symbol.range_end_character as i32,
+                ],
+            ));
+        }
+    }
+    candidate
+}
+
+fn java_unique_method_call_candidates(
+    source: &str,
+    symbol_cache: &HashMap<String, Vec<LspSymbol>>,
+) -> Vec<(u32, u32, String)> {
+    let mut candidates = Vec::new();
+    for (line_number, line) in source.lines().enumerate() {
+        let bytes = line.as_bytes();
+        let mut offset = 0;
+        while offset < bytes.len() {
+            if !is_identifier_start(bytes[offset]) {
+                offset += 1;
+                continue;
+            }
+            let start = offset;
+            offset += 1;
+            while offset < bytes.len() && is_identifier_continue(bytes[offset]) {
+                offset += 1;
+            }
+            if start == 0 || bytes[start - 1] != b'.' {
+                continue;
+            }
+            let name = &line[start..offset];
+            if !line[offset..].trim_start().starts_with('(')
+                || unique_java_symbol(symbol_cache, name).is_none()
+            {
+                continue;
+            }
+            candidates.push((
+                line_number as u32,
+                utf16_len(&line[..start]),
+                name.to_string(),
+            ));
         }
     }
     candidates
@@ -2370,12 +2747,103 @@ pub(crate) fn find_lsp_symbol_at_range<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{lsp_message_length_allowed, MAX_LSP_MESSAGE_BYTES};
+    use super::{
+        bundled_java_home, java_unique_method_call_candidates, lsp_message_length_allowed,
+        symbol_string, unique_java_definition, uri_to_relative_path, LspSymbol,
+        MAX_LSP_MESSAGE_BYTES,
+    };
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::Path;
 
     #[test]
     fn lsp_message_size_is_bounded() {
         assert!(lsp_message_length_allowed(0));
         assert!(lsp_message_length_allowed(MAX_LSP_MESSAGE_BYTES));
         assert!(!lsp_message_length_allowed(MAX_LSP_MESSAGE_BYTES + 1));
+    }
+
+    #[test]
+    fn java_unique_definition_fallback_rejects_ambiguous_names() {
+        let method = |name: &str| LspSymbol {
+            name: name.to_string(),
+            kind: 6,
+            detail: None,
+            range_start_line: 1,
+            range_start_character: 0,
+            range_end_line: 1,
+            range_end_character: 10,
+            selection_line: 1,
+            selection_character: 5,
+        };
+        let mut symbols = HashMap::new();
+        symbols.insert("src/Client.java".to_string(), vec![method("getOwner")]);
+        assert_eq!(
+            unique_java_definition(&symbols, "getOwner").map(|(path, _)| path),
+            Some("src/Client.java".to_string())
+        );
+        symbols.insert("src/OtherClient.java".to_string(), vec![method("getOwner")]);
+        assert!(unique_java_definition(&symbols, "getOwner").is_none());
+    }
+
+    #[test]
+    fn java_static_call_candidate_requires_a_unique_project_method() {
+        let mut symbols = HashMap::new();
+        symbols.insert(
+            "src/Client.java".to_string(),
+            vec![LspSymbol {
+                name: "getOwner".to_string(),
+                kind: 6,
+                detail: None,
+                range_start_line: 1,
+                range_start_character: 0,
+                range_end_line: 1,
+                range_end_character: 20,
+                selection_line: 1,
+                selection_character: 5,
+            }],
+        );
+        assert_eq!(
+            java_unique_method_call_candidates("return client.getOwner(id);", &symbols),
+            vec![(0, 14, "getOwner".to_string())]
+        );
+    }
+
+    #[test]
+    fn lsp_symbol_identity_ignores_call_hierarchy_return_type_suffix() {
+        assert_eq!(
+            symbol_string("src/Client.java", "getOwner(int) : Mono<Owner>", 3, 8),
+            symbol_string("src/Client.java", "getOwner(int)", 3, 8)
+        );
+        assert_eq!(
+            symbol_string("src/Client.java", "getOwner(int)", 3, 8),
+            "lsp . . . src.Client.java#getOwner(int)@3:8"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_file_uri_drive_case_is_relative_to_the_workspace() {
+        assert_eq!(
+            uri_to_relative_path("file:///d:/Project/src/App.java", Path::new(r"D:\Project")),
+            "src/App.java"
+        );
+    }
+
+    #[test]
+    fn bundled_java_home_supports_a_jdtls_bin_launcher() {
+        let root =
+            std::env::temp_dir().join(format!("code-memory-jdtls-runtime-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let launcher = root.join("jdtls").join("bin").join("jdtls.cmd");
+        let runtime_bin = root.join("jdtls").join("runtime").join("bin");
+        fs::create_dir_all(launcher.parent().expect("launcher parent")).expect("create launcher");
+        fs::create_dir_all(&runtime_bin).expect("create runtime");
+        fs::write(&launcher, b"launcher").expect("write launcher");
+        assert_eq!(
+            bundled_java_home(&launcher),
+            Some(root.join("jdtls/runtime"))
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

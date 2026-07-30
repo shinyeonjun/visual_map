@@ -249,10 +249,75 @@ pub(crate) fn analyze_with_sources(
         }
     }
 
+    dedupe_java_facts(&mut frameworks, &mut relations);
+
     Ok(Analysis {
         frameworks,
         relations,
     })
+}
+
+fn dedupe_java_facts(frameworks: &mut [FrameworkOutput], relations: &mut Vec<FrameworkRelation>) {
+    let java_framework_ids = frameworks
+        .iter()
+        .filter(|framework| framework.language == "java")
+        .map(|framework| framework.id.clone())
+        .collect::<HashSet<_>>();
+    let mut seen_facts = HashSet::<(String, String, usize, String)>::new();
+    let mut kept_fact_ids = HashSet::<String>::new();
+
+    for framework in frameworks {
+        if framework.language != "java" {
+            continue;
+        }
+        framework.facts.retain(|fact| {
+            let target = if fact.kind == "HTTP_ROUTE" {
+                format!(
+                    "{}:{}",
+                    fact.method.clone().unwrap_or_default(),
+                    fact.path.clone().unwrap_or_default()
+                )
+            } else {
+                fact.properties
+                    .get("target")
+                    .cloned()
+                    .or_else(|| fact.path.clone())
+                    .unwrap_or_default()
+            };
+            let source_line = if matches!(fact.kind.as_str(), "SERVICE" | "COMPONENT") {
+                0
+            } else {
+                fact.source_line
+            };
+            let key = (
+                fact.kind.clone(),
+                fact.source_file.clone(),
+                source_line,
+                target,
+            );
+            if seen_facts.insert(key) {
+                kept_fact_ids.insert(fact.id.clone());
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    let mut seen_handles = HashSet::<(String, String, String, String, Vec<i32>)>::new();
+    relations.retain(|relation| {
+        if !java_framework_ids.contains(&relation.framework) {
+            return true;
+        }
+        kept_fact_ids.contains(&relation.to)
+            && seen_handles.insert((
+                relation.from.clone(),
+                relation.to.clone(),
+                relation.kind.clone(),
+                relation.path.clone(),
+                relation.range.clone(),
+            ))
+    });
 }
 
 fn has_route_syntax_candidate(source: &str) -> bool {
@@ -378,7 +443,9 @@ fn extract_routes_with_index(
             continue;
         }
         if let Some(prefix) = route_prefix(line) {
-            if !has_http_method_annotation(line) {
+            let request_mapping_has_method =
+                line.contains("@RequestMapping") && request_mapping_method(line).is_some();
+            if !has_http_method_annotation(line) && !request_mapping_has_method {
                 annotation_prefix = Some(prefix);
                 continue;
             }
@@ -401,15 +468,42 @@ fn extract_routes_with_index(
         let Some((route_path, end)) = first_route_path(&route_line) else {
             continue;
         };
-        let route_path = if pack.id == "fastapi" {
-            combine_route_prefix(
-                fastapi_context.and_then(|context| context.prefix_for(path, line)),
-                &route_path,
-            )
+        let route_paths = if pack.language == "java" {
+            java_route_paths(&route_line)
         } else {
-            combine_route_prefix(annotation_prefix.as_deref(), &route_path)
+            route_paths(&route_line)
         };
-        let handler_name = if pack.id == "fastapi" {
+        let route_paths = if route_paths.is_empty() {
+            vec![route_path]
+        } else {
+            route_paths
+        };
+        let functional_lambda = if pack.language != "java" {
+            false
+        } else if route_line.contains("->") || route_line.contains("=>") {
+            true
+        } else {
+            let mut found = false;
+            for line in lines.iter().skip(index).take(8) {
+                if line.contains("->") || line.contains("=>") {
+                    found = true;
+                    break;
+                }
+                let trimmed = line.trim_start();
+                if trimmed.contains("public ")
+                    || trimmed.contains("protected ")
+                    || trimmed.contains("private ")
+                {
+                    break;
+                }
+            }
+            found
+        };
+        let handler_name = if functional_lambda {
+            (pack.language == "java")
+                .then(|| enclosing_java_method(&lines, index))
+                .flatten()
+        } else if pack.id == "fastapi" {
             fastapi_handler_name(&lines, index, &route_line[end..])
         } else {
             config_route_handler(&route_line)
@@ -436,21 +530,31 @@ fn extract_routes_with_index(
             })
             .filter(|symbol| project_symbol_is_defined_indexed(symbol_index, symbol));
         let source_line = index + 1;
-        let id = format!("route:{}:{}:{}:{}", pack.id, path, source_line, route_path);
-        facts.push(FrameworkFact {
-            id,
-            kind: "HTTP_ROUTE".to_string(),
-            framework: pack.id.clone(),
-            symbol: handler,
-            method: Some(method.to_string()),
-            path: Some(route_path),
-            source_file: path.to_string(),
-            source_line,
-            source_end_line: source_line,
-            source_range: line_source_range(index, line),
-            evidence: vec!["http_route_syntax".to_string()],
-            properties: BTreeMap::new(),
-        });
+        for route_path in route_paths {
+            let route_path = if pack.id == "fastapi" {
+                combine_route_prefix(
+                    fastapi_context.and_then(|context| context.prefix_for(path, line)),
+                    &route_path,
+                )
+            } else {
+                combine_route_prefix(annotation_prefix.as_deref(), &route_path)
+            };
+            let id = format!("route:{}:{}:{}:{}", pack.id, path, source_line, route_path);
+            facts.push(FrameworkFact {
+                id,
+                kind: "HTTP_ROUTE".to_string(),
+                framework: pack.id.clone(),
+                symbol: handler.clone(),
+                method: Some(method.to_string()),
+                path: Some(route_path),
+                source_file: path.to_string(),
+                source_line,
+                source_end_line: source_line,
+                source_range: line_source_range(index, line),
+                evidence: vec!["http_route_syntax".to_string()],
+                properties: BTreeMap::new(),
+            });
+        }
     }
     if let Some((route_path, method, handler_name, source_line)) =
         file_system_route(pack, path, source)
@@ -643,13 +747,68 @@ fn extract_generic_facts_with_index(
             if matches!(output.as_str(), "HTTP_ROUTE" | "HANDLES") {
                 continue;
             }
+            if pack.language == "java"
+                && output == "DEPENDENCY"
+                && java_constructor_is_injection(&lines, index, &pack.id)
+            {
+                let dependencies = java_constructor_dependency_types(&lines, index);
+                if !dependencies.is_empty() {
+                    let handler_name = nearby_handler(&lines, index);
+                    let handler = handler_name
+                        .as_deref()
+                        .and_then(|name| resolve_symbol_at_indexed(symbol_index, path, name, index))
+                        .filter(|symbol| project_symbol_is_defined_indexed(symbol_index, symbol));
+                    for target in dependencies {
+                        let mut properties = BTreeMap::new();
+                        properties.insert("target".to_string(), target);
+                        facts.push(FrameworkFact {
+                            id: format!(
+                                "fact:{}:{}:{}:{}:{}",
+                                pack.id,
+                                output,
+                                path,
+                                index + 1,
+                                properties["target"]
+                            ),
+                            kind: output.clone(),
+                            framework: pack.id.clone(),
+                            symbol: handler.clone(),
+                            method: None,
+                            path: None,
+                            source_file: path.to_string(),
+                            source_line: index + 1,
+                            source_end_line: index + 1,
+                            source_range: line_source_range(index, line),
+                            evidence: vec!["java_constructor_injection".to_string()],
+                            properties,
+                        });
+                    }
+                    continue;
+                }
+            }
             let Some(evidence) = output_evidence(pack, output, line) else {
                 continue;
             };
+            let dependency_context = (pack.language == "java" && output == "DEPENDENCY")
+                .then(|| java_dependency_annotation_context(&lines, index))
+                .flatten();
+            let fact_line = dependency_context.as_deref().unwrap_or(line);
             let handler_name =
-                fact_target_name(output, line).or_else(|| nearby_handler(&lines, index));
+                if pack.language == "java" && matches!(output.as_str(), "SERVICE" | "COMPONENT") {
+                    fact_target_name(output, line).or_else(|| java_nearby_type(&lines, index))
+                } else {
+                    fact_target_name(output, fact_line).or_else(|| nearby_handler(&lines, index))
+                };
             let symbol = handler_name
-                .and_then(|name| resolve_symbol_at_indexed(symbol_index, path, &name, index))
+                .as_ref()
+                .and_then(|name| {
+                    if pack.language == "java" && matches!(output.as_str(), "SERVICE" | "COMPONENT")
+                    {
+                        resolve_java_type_indexed(symbol_index, path, name)
+                    } else {
+                        resolve_symbol_at_indexed(symbol_index, path, name, index)
+                    }
+                })
                 .filter(|symbol| project_symbol_is_defined_indexed(symbol_index, symbol));
             facts.push(FrameworkFact {
                 id: format!("fact:{}:{}:{}:{}", pack.id, output, path, index + 1),
@@ -667,6 +826,172 @@ fn extract_generic_facts_with_index(
             });
         }
     }
+}
+
+fn java_constructor_dependency_types(lines: &[&str], index: usize) -> Vec<String> {
+    if !lines.get(index).is_some_and(|line| line.contains('(')) {
+        return Vec::new();
+    }
+    let Some(signature) = lines
+        .iter()
+        .skip(index)
+        .take(16)
+        .scan(String::new(), |buffer, line| {
+            if !buffer.is_empty() {
+                buffer.push(' ');
+            }
+            buffer.push_str(line.trim());
+            Some(buffer.clone())
+        })
+        .find(|value| value.contains(')'))
+    else {
+        return Vec::new();
+    };
+    let Some(open) = signature.find('(') else {
+        return Vec::new();
+    };
+    let before_open = signature[..open].trim();
+    let Some(constructor) = before_open
+        .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
+        .next()
+    else {
+        return Vec::new();
+    };
+    if constructor.is_empty()
+        || !constructor
+            .chars()
+            .next()
+            .is_some_and(|value| value.is_ascii_uppercase())
+        || java_enclosing_type(lines, index).as_deref() != Some(constructor)
+        || !(before_open.contains("public ")
+            || before_open.contains("protected ")
+            || before_open.contains("private ")
+            || before_open
+                .split_whitespace()
+                .filter(|token| *token != constructor)
+                .all(|token| token.starts_with('@') || token.starts_with('<')))
+    {
+        return Vec::new();
+    }
+    let Some(close) = signature[open + 1..]
+        .find(')')
+        .map(|value| value + open + 1)
+    else {
+        return Vec::new();
+    };
+    signature[open + 1..close]
+        .split(',')
+        .filter_map(|parameter| {
+            parameter
+                .split_whitespace()
+                .filter(|token| !token.starts_with('@'))
+                .map(|token| {
+                    token.trim_matches(|value: char| {
+                        !value.is_ascii_alphanumeric() && value != '.' && value != '_'
+                    })
+                })
+                .find(|token| {
+                    token
+                        .chars()
+                        .next()
+                        .is_some_and(|value| value.is_ascii_uppercase())
+                })
+                .map(|token| token.split('<').next().unwrap_or(token).to_string())
+        })
+        .collect()
+}
+
+fn java_constructor_is_injection(lines: &[&str], index: usize, framework: &str) -> bool {
+    for (offset, line) in lines.iter().take(index + 1).rev().take(5).enumerate() {
+        if line.contains("@Autowired") || line.contains("@Inject") {
+            return true;
+        }
+        if offset > 0 && !line.trim().is_empty() {
+            break;
+        }
+    }
+    if !matches!(
+        framework,
+        "spring" | "spring-boot" | "spring-mvc" | "spring-webflux"
+    ) {
+        return false;
+    }
+    let Some(type_name) = java_enclosing_type(lines, index) else {
+        return false;
+    };
+    let Some(type_index) =
+        lines
+            .iter()
+            .enumerate()
+            .take(index + 1)
+            .rev()
+            .find_map(|(line_index, line)| {
+                (identifier_after(line, "class ").as_deref() == Some(type_name.as_str())
+                    || identifier_after(line, "record ").as_deref() == Some(type_name.as_str()))
+                .then_some(line_index)
+            })
+    else {
+        return false;
+    };
+    for line in lines.iter().take(type_index).rev().take(8) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if [
+            "@Component",
+            "@Service",
+            "@Repository",
+            "@Controller",
+            "@RestController",
+            "@Configuration",
+        ]
+        .iter()
+        .any(|annotation| line.contains(annotation))
+        {
+            return true;
+        }
+        break;
+    }
+    false
+}
+
+fn java_dependency_annotation_context(lines: &[&str], index: usize) -> Option<String> {
+    let line = *lines.get(index)?;
+    if !(line.contains("@Autowired") || line.contains("@Inject")) || line.contains('(') {
+        return None;
+    }
+    let mut context = line.trim().to_string();
+    for next in lines.iter().skip(index + 1).take(4) {
+        let trimmed = next.trim();
+        if next.contains('(') && !trimmed.starts_with('@') {
+            return None;
+        }
+        context.push(' ');
+        context.push_str(trimmed);
+        if next.contains(';') {
+            return Some(context);
+        }
+    }
+    None
+}
+
+fn java_nearby_type(lines: &[&str], index: usize) -> Option<String> {
+    lines.iter().skip(index).take(8).find_map(|line| {
+        ["class ", "record ", "interface ", "enum "]
+            .iter()
+            .find_map(|keyword| identifier_after(line, keyword))
+    })
+}
+
+fn java_enclosing_type(lines: &[&str], index: usize) -> Option<String> {
+    lines
+        .iter()
+        .take(index + 1)
+        .rev()
+        .take(200)
+        .find_map(|line| {
+            identifier_after(line, "class ").or_else(|| identifier_after(line, "record "))
+        })
 }
 
 pub(crate) fn implementation_file_score(symbol: &str) -> u8 {
@@ -690,8 +1015,8 @@ pub(crate) fn symbol_short_name(symbol: &str) -> &str {
     let symbol = symbol.trim_end_matches(['.', ':', '/']);
     let symbol = symbol.trim_end_matches('#');
     let symbol = symbol.rsplit(['#', '.', ':', '/']).next().unwrap_or(symbol);
-    let symbol = symbol.split_whitespace().last().unwrap_or(symbol);
-    symbol.split('(').next().unwrap_or(symbol)
+    let symbol = symbol.split('(').next().unwrap_or(symbol);
+    symbol.split_whitespace().last().unwrap_or(symbol)
 }
 
 #[cfg(test)]

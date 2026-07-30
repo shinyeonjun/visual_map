@@ -159,6 +159,28 @@ pub(crate) fn resolve_symbol_at_indexed(
     resolve_symbol_indexed(index, path, &short_name)
 }
 
+pub(crate) fn resolve_java_type_indexed(
+    index: &FrameworkSymbolIndex,
+    path: &str,
+    name: &str,
+) -> Option<String> {
+    let candidates = index
+        .definitions_by_file_name
+        .get(&(path.to_string(), name.to_string()))?;
+    let type_definitions = candidates
+        .iter()
+        .filter(|symbol| {
+            symbol
+                .split('@')
+                .next()
+                .and_then(|value| value.rsplit_once('#'))
+                .is_some_and(|(_, short_name)| short_name == name)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    select_indexed_symbol(index, Some(&type_definitions))
+}
+
 pub(crate) fn output_evidence(pack: &FrameworkPack, output: &str, line: &str) -> Option<String> {
     let line = line.trim();
     if pack.id == "react" && output == "COMPONENT" {
@@ -264,6 +286,8 @@ pub(crate) fn output_evidence(pack: &FrameworkPack, output: &str, line: &str) ->
             line,
             &[
                 "@Service",
+                "@Component",
+                "@Repository",
                 "@Injectable",
                 "@Singleton",
                 "@ApplicationScoped",
@@ -679,6 +703,7 @@ pub(crate) fn dependency_type_name(line: &str) -> Option<String> {
         let rest = &line[start + marker.len()..];
         if let Some(name) = rest
             .split_whitespace()
+            .filter(|value| !value.starts_with('@'))
             .map(|value| value.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_'))
             .find(|value| {
                 value
@@ -1189,10 +1214,28 @@ pub(crate) fn route_method(line: &str) -> Option<&'static str> {
     if trimmed.starts_with("POST ") || trimmed.starts_with("post ") {
         return Some("POST");
     }
-    if line.contains("@RequestMapping") || line.contains("#[route(") {
+    if line.contains("@RequestMapping") {
+        return request_mapping_method(line).or(Some("ANY"));
+    }
+    if line.contains("#[route(") {
         return Some("ANY");
     }
     None
+}
+
+pub(crate) fn request_mapping_method(line: &str) -> Option<&'static str> {
+    let methods = [
+        ("RequestMethod.GET", "GET"),
+        ("RequestMethod.POST", "POST"),
+        ("RequestMethod.PUT", "PUT"),
+        ("RequestMethod.PATCH", "PATCH"),
+        ("RequestMethod.DELETE", "DELETE"),
+        ("RequestMethod.OPTIONS", "OPTIONS"),
+        ("RequestMethod.HEAD", "HEAD"),
+    ];
+    methods
+        .iter()
+        .find_map(|(needle, method)| line.contains(needle).then_some(*method))
 }
 
 pub(crate) fn first_route_path(line: &str) -> Option<(String, usize)> {
@@ -1222,6 +1265,98 @@ pub(crate) fn first_route_path(line: &str) -> Option<(String, usize)> {
         }
     }
     None
+}
+
+pub(crate) fn route_paths(line: &str) -> Vec<String> {
+    let bytes = line.as_bytes();
+    let mut paths = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        let quote = bytes[index];
+        if quote != b'"' && quote != b'\'' {
+            index += 1;
+            continue;
+        }
+        let Some(offset) = bytes[index + 1..].iter().position(|value| *value == quote) else {
+            break;
+        };
+        let end = index + 1 + offset;
+        let value = &line[index + 1..end];
+        if value.starts_with('/') {
+            paths.push(value.to_string());
+        }
+        index = end + 1;
+    }
+    paths
+}
+
+pub(crate) fn java_route_paths(line: &str) -> Vec<String> {
+    let Some((annotation_start, _)) = [
+        "@RequestMapping",
+        "@GetMapping",
+        "@PostMapping",
+        "@PutMapping",
+        "@PatchMapping",
+        "@DeleteMapping",
+        "@OptionsMapping",
+        "@HeadMapping",
+    ]
+    .iter()
+    .find_map(|name| line.find(name).map(|start| (start, *name))) else {
+        return Vec::new();
+    };
+    let Some(open) = line[annotation_start..]
+        .find('(')
+        .map(|offset| offset + annotation_start)
+    else {
+        return Vec::new();
+    };
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut argument_start = open + 1;
+    let mut arguments = Vec::new();
+    for (offset, value) in line[open + 1..].char_indices() {
+        let index = open + 1 + offset;
+        if let Some(current_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if value == '\\' {
+                escaped = true;
+            } else if value == current_quote {
+                quote = None;
+            }
+            continue;
+        }
+        if value == '"' || value == '\'' {
+            quote = Some(value);
+        } else if value == '{' {
+            depth += 1;
+        } else if value == '}' {
+            depth = depth.saturating_sub(1);
+        } else if value == ',' && depth == 0 {
+            arguments.push(&line[argument_start..index]);
+            argument_start = index + 1;
+        } else if value == ')' && depth == 0 {
+            arguments.push(&line[argument_start..index]);
+            break;
+        }
+    }
+    let mut paths = Vec::new();
+    for (index, argument) in arguments.iter().enumerate() {
+        let trimmed = argument.trim_start();
+        let selected = index == 0 && !trimmed.contains('=')
+            || trimmed.starts_with("path") && trimmed[4..].trim_start().starts_with('=')
+            || trimmed.starts_with("value") && trimmed[5..].trim_start().starts_with('=');
+        if selected {
+            for path in route_paths(argument) {
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+        }
+    }
+    paths
 }
 
 pub(crate) fn registration_handler(rest: &str) -> Option<String> {
@@ -1367,7 +1502,32 @@ pub(crate) fn annotation_handler_name(line: &str) -> Option<String> {
 }
 
 pub(crate) fn nearby_handler(lines: &[&str], index: usize) -> Option<String> {
-    for line in lines.iter().skip(index).take(7) {
+    // Java annotations must bind to the first declaration below them. Scanning
+    // broad keywords first can otherwise skip that method and bind to a later
+    // `void` method in the same window.
+    for line in lines.iter().skip(index).take(24) {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('@')
+            || trimmed.starts_with('[')
+            || trimmed.starts_with("#[")
+            || !(trimmed.contains("public ")
+                || trimmed.contains("protected ")
+                || trimmed.contains("private "))
+        {
+            continue;
+        }
+        if let Some(open) = line.find('(') {
+            let before = line[..open].trim_end();
+            let name = before
+                .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
+                .next()
+                .unwrap_or_default();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    for line in lines.iter().skip(index).take(24) {
         for keyword in [
             "function ",
             "fn ",
@@ -1384,7 +1544,7 @@ pub(crate) fn nearby_handler(lines: &[&str], index: usize) -> Option<String> {
             }
         }
     }
-    for line in lines.iter().skip(index).take(7) {
+    for line in lines.iter().skip(index).take(24) {
         let trimmed = line.trim_start();
         if trimmed.starts_with('@') || trimmed.starts_with('[') || trimmed.starts_with("#[") {
             continue;
@@ -1405,6 +1565,46 @@ pub(crate) fn nearby_handler(lines: &[&str], index: usize) -> Option<String> {
                 return Some(name.to_string());
             }
         }
+    }
+    None
+}
+
+/// Returns the Java method that contains a functional route registration.
+///
+/// A `RouterFunction` route often has no named handler at all:
+/// `andRoute(GET("/"), request -> ...)`. The method declaration is still an
+/// exact source anchor for the registration, unlike guessing a call from the
+/// lambda body. Only declaration-shaped lines are accepted so an expression
+/// such as `RouterFunctions.route(...)` cannot become a false handler.
+pub(crate) fn enclosing_java_method(lines: &[&str], index: usize) -> Option<String> {
+    for line in lines[..index.min(lines.len())].iter().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with(['@', '/', '*'])
+            || trimmed.contains('=')
+            || trimmed.contains(" return ")
+            || trimmed.starts_with("return ")
+            || !trimmed.contains('{')
+            || !trimmed.contains('(')
+        {
+            continue;
+        }
+        let open = trimmed.find('(')?;
+        let before = trimmed[..open].trim_end();
+        let name = before
+            .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
+            .next()
+            .unwrap_or_default();
+        let lower = name.to_ascii_lowercase();
+        if name.is_empty()
+            || matches!(
+                lower.as_str(),
+                "if" | "for" | "while" | "switch" | "catch" | "route" | "get" | "post"
+            )
+        {
+            continue;
+        }
+        return Some(name.to_string());
     }
     None
 }

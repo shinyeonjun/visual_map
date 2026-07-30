@@ -643,6 +643,16 @@ pub(crate) fn index_project(
                     &module.files,
                     &cached.documents,
                 );
+                let cached_partial = cached.diagnostics.iter().any(|diagnostic| {
+                    diagnostic
+                        .message
+                        .contains("semantic provider reached its time/resource limit")
+                });
+                let status = if cached_partial && status == "indexed" {
+                    "indexed-partial"
+                } else {
+                    status
+                };
                 diagnostics.extend(cached.diagnostics.into_iter().map(|diagnostic| Diagnostic {
                     language: diagnostic.language,
                     level: match diagnostic.level.as_str() {

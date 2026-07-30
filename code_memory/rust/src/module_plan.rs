@@ -56,10 +56,10 @@ pub(crate) fn plan_language_modules(
             project_excluded_files: 0,
         }];
     }
-    // JDTLS imports a Gradle/Maven reactor before serving the first request.
-    // Repeating that import for every child module is slower and less reliable
-    // than keeping a structural map for very large Java workspaces.
-    if lang.id == "java" && files.len() > 1_500 {
+    if lang.id == "java" && java_reactor_root(root) {
+        // One JDTLS session must own a Maven/Gradle reactor. Splitting its
+        // included builds starts several JVMs and loses cross-module symbols;
+        // the provider already knows how to resolve the reactor from its root.
         return vec![ModulePlan {
             id: String::from("root"),
             root: root.to_path_buf(),
@@ -360,6 +360,15 @@ fn has_local_compile_context(root: &Path) -> bool {
         entry.file_type().is_ok_and(|file_type| file_type.is_dir())
             && entry.path().join("compile_commands.json").is_file()
     })
+}
+
+fn java_reactor_root(root: &Path) -> bool {
+    if root.join("settings.gradle").is_file() || root.join("settings.gradle.kts").is_file() {
+        return true;
+    }
+    fs::read_to_string(root.join("pom.xml"))
+        .ok()
+        .is_some_and(|source| source.contains("<modules>") && source.contains("<module>"))
 }
 
 pub(crate) fn rebase_language_analysis(
