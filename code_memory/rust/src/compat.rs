@@ -133,6 +133,7 @@ fn query_graph(payload: &Value) -> Result<(), String> {
     let query = required_string(payload, "query")?.to_ascii_uppercase();
     let index = read_index(payload)?;
     if query.contains("HANDLES") {
+        let endpoint_aliases = architecture_endpoint_aliases(&index);
         let rows = index
             .get("framework_relations")
             .and_then(Value::as_array)
@@ -140,9 +141,14 @@ fn query_graph(payload: &Value) -> Result<(), String> {
             .flatten()
             .filter(|relation| relation.get("kind").and_then(Value::as_str) == Some("HANDLES"))
             .map(|relation| {
+                let from = relation.get("from").cloned().unwrap_or(Value::Null);
+                let to = relation
+                    .get("to")
+                    .map(|value| normalize_endpoint(value, &endpoint_aliases))
+                    .unwrap_or(Value::Null);
                 json!([
-                    relation.get("from").cloned().unwrap_or(Value::Null),
-                    relation.get("to").cloned().unwrap_or(Value::Null),
+                    from,
+                    to,
                 ])
             })
             .collect::<Vec<_>>();
@@ -185,6 +191,87 @@ fn query_graph(payload: &Value) -> Result<(), String> {
         "rows": rows,
         "total": total
     }))
+}
+
+fn architecture_endpoint_aliases(index: &Value) -> HashMap<String, String> {
+    let mut aliases = HashMap::new();
+    let Some(nodes) = index.get("__architecture_nodes").and_then(Value::as_array) else {
+        return aliases;
+    };
+
+    for node in nodes {
+        let Some(id) = node.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if node.get("kind").and_then(Value::as_str) != Some("ENDPOINT") {
+            continue;
+        }
+
+        aliases.insert(id.to_string(), id.to_string());
+        if let Some(suffix) = id.strip_prefix("entrypoint:") {
+            aliases.insert(format!("route:{suffix}"), id.to_string());
+            if let Some((framework, route_suffix)) = suffix.split_once(":route:") {
+                let route_suffix = route_suffix
+                    .strip_prefix(&format!("{framework}:"))
+                    .unwrap_or(route_suffix);
+                aliases.insert(
+                    format!("route:{framework}:{route_suffix}"),
+                    id.to_string(),
+                );
+            }
+        }
+    }
+
+    aliases
+}
+
+fn normalize_endpoint(value: &Value, aliases: &HashMap<String, String>) -> Value {
+    let Some(id) = value.as_str() else {
+        return value.clone();
+    };
+    aliases
+        .get(id)
+        .cloned()
+        .map(Value::String)
+        .unwrap_or_else(|| value.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn framework_route_alias_is_normalized_to_architecture_endpoint() {
+        let index = json!({
+            "__architecture_nodes": [
+                {
+                    "id": "entrypoint:fastapi:route:fastapi:src/routes.py:10:/items",
+                    "kind": "ENDPOINT"
+                }
+            ]
+        });
+        let aliases = architecture_endpoint_aliases(&index);
+
+        assert_eq!(
+            normalize_endpoint(
+                &json!("route:fastapi:src/routes.py:10:/items"),
+                &aliases
+            ),
+            json!("entrypoint:fastapi:route:fastapi:src/routes.py:10:/items")
+        );
+    }
+
+    #[test]
+    fn unknown_framework_endpoint_is_not_guessed() {
+        let aliases = architecture_endpoint_aliases(&json!({
+            "__architecture_nodes": []
+        }));
+
+        assert_eq!(
+            normalize_endpoint(&json!("route:unknown"), &aliases),
+            json!("route:unknown")
+        );
+    }
 }
 
 fn search_code(payload: &Value) -> Result<(), String> {

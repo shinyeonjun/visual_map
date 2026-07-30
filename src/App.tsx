@@ -6,6 +6,11 @@ import { DevDiagnostics } from "./components/common/DevDiagnostics";
 import { WorkbenchView } from "./components/workbench/WorkbenchView";
 import { currentOperationStatus, repoPathErrorFor } from "./app/appState";
 import { toUserError } from "./app/operationStatus";
+import {
+  validateInventoryBootstrap,
+  validateWorkspace,
+  validateWorkspaceAnalysisResult,
+} from "./app/runtimeContracts";
 import { buildDbProfileControls, buildVisualMapControls, buildWorkspaceControls } from "./app/controlBuilders";
 import { hasTauriRuntime } from "./app/tauriRuntime";
 import { useCodeInventory } from "./hooks/useCodeInventory";
@@ -18,9 +23,7 @@ import { dbProfileSourceUsesPath, codeInventoryItemCount } from "./types/workspa
 import type {
   InitializeWorkspaceAnalysisRequest,
   SaveDbProfileRequest,
-  WorkspaceAnalysisResult,
 } from "./types/workspace";
-import type { InventoryBootstrap } from "./types/visual-map";
 import { prepareSearchIndex } from "./visual/search";
 import type { AnalysisProgress, AnalysisSetupChoice } from "./components/workbench/ProjectAnalysisSetupModal";
 
@@ -37,17 +40,8 @@ function App() {
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ percent: 0, label: "분석 준비 중" });
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [dbConnectionError, setDbConnectionError] = useState<string | null>(null);
+  const [snapshotBootstrappedWorkspaceId, setSnapshotBootstrappedWorkspaceId] = useState<string | null>(null);
   const busyActionRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!analysisInitializing) return;
-    const timer = window.setInterval(() => {
-      setAnalysisProgress((current) => current.percent >= 78
-        ? current
-        : { ...current, percent: Math.min(78, current.percent + 1) });
-    }, 1200);
-    return () => window.clearInterval(timer);
-  }, [analysisInitializing]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || !hasTauriRuntime()) {
@@ -82,10 +76,12 @@ function App() {
   const { engineRegistry, engineError } = useEngineRegistry();
   const visual = useVisualMap({
     currentWorkspaceId: workspaces.currentWorkspace?.id ?? null,
+    bootstrapReady: snapshotBootstrappedWorkspaceId === (workspaces.currentWorkspace?.id ?? null),
     onOperation: setLatestOperationAction,
   });
   async function refreshInventorySnapshot(workspaceId: string) {
     if (await visual.refreshInventorySnapshot(workspaceId)) {
+      setSnapshotBootstrappedWorkspaceId(workspaceId);
       setSnapshotRecoveryNotice(null);
     }
   }
@@ -116,6 +112,7 @@ function App() {
   useLayoutEffect(() => {
     const workspace = workspaces.currentWorkspace;
     if (!workspace) {
+      setSnapshotBootstrappedWorkspaceId(null);
       setSnapshotRestoring(false);
       setAnalysisSetupWorkspace(null);
       return;
@@ -124,11 +121,13 @@ function App() {
     setSnapshotRecoveryNotice(null);
     setAnalysisError(null);
     setAnalysisSetupWorkspace(null);
+    setSnapshotBootstrappedWorkspaceId(null);
     setSnapshotRestoring(true);
     let cancelled = false;
     let needsAnalysisSetup = false;
-    void invoke<InventoryBootstrap | null>("load_inventory_bootstrap", { workspaceId: workspace.id })
-      .then((bootstrap) => {
+    void invoke<unknown>("load_inventory_bootstrap", { workspaceId: workspace.id })
+      .then((value) => {
+        const bootstrap = validateInventoryBootstrap(value);
         if (cancelled) {
           return;
         }
@@ -151,6 +150,7 @@ function App() {
         if (restoredDb.tables.length) {
           db.restoreDbInventory(restoredDb, null);
         }
+        setSnapshotBootstrappedWorkspaceId(workspace.id);
       })
       .catch(() => {
         if (!cancelled) {
@@ -257,13 +257,13 @@ function App() {
             source: dbProfileControls.profileSource,
             path: sourceUsesPath ? dbProfileControls.profilePath.trim() : null,
           };
-          configuredWorkspace = await invoke<import("./types/workspace").Workspace>("save_db_profile", { request: saveRequest });
+          configuredWorkspace = validateWorkspace(await invoke<unknown>("save_db_profile", { request: saveRequest }));
           workspaces.setCurrentWorkspace(configuredWorkspace);
           await workspaces.refreshWorkspaces(configuredWorkspace.id);
           setAnalysisProgress({ percent: 20, label: "DB 연결 준비 완료" });
         }
 
-        setAnalysisProgress({ percent: connectDb ? 30 : 20, label: "코드·DB 구조 분석 중" });
+        setAnalysisProgress({ percent: connectDb ? 30 : 20, label: "코드·DB 구조 분석 중", determinate: false });
 
         const request: InitializeWorkspaceAnalysisRequest = {
           workspaceId: configuredWorkspace.id,
@@ -271,8 +271,10 @@ function App() {
           dbProfileId: connectDb ? configuredWorkspace.activeDbProfileId : null,
           connectionString: connectDb && !sourceUsesPath ? dbProfileControls.connectionString.trim() : null,
         };
-        const result = await invoke<WorkspaceAnalysisResult>("initialize_workspace_analysis", { request });
-        setAnalysisProgress({ percent: 86, label: "분석 결과 정리 중" });
+        const result = validateWorkspaceAnalysisResult(
+          await invoke<unknown>("initialize_workspace_analysis", { request }),
+        );
+        setAnalysisProgress({ percent: 86, label: "분석 결과 정리 중", determinate: true });
         workspaces.setCurrentWorkspace(result.workspace);
         if (result.code?.inventory) {
           code.restoreCodeInventory(result.code.inventory, result.workspace.id);

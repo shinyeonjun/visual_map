@@ -1,7 +1,9 @@
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { Component, type ReactNode } from "react";
 
-export class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+type AppErrorBoundaryProps = { children: ReactNode; fallback?: ReactNode };
+
+export class AppErrorBoundary extends Component<AppErrorBoundaryProps, { error: Error | null }> {
   state = { error: null as Error | null };
 
   static getDerivedStateFromError(error: Error) {
@@ -11,6 +13,10 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, { error
   render() {
     if (!this.state.error) {
       return this.props.children;
+    }
+
+    if (this.props.fallback) {
+      return this.props.fallback;
     }
 
     return (

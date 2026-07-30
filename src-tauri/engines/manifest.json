@@ -20,7 +20,11 @@
       "licenseId": "Apache-2.0",
       "contractVersion": "1",
       "releaseReady": false,
-      "developmentArtifacts": []
+      "developmentArtifacts": [
+        {
+          "sha256": "5E8084A321EECCDC418DEF78395BB8709F1859F1426C124A133BFD42F15BBC3E"
+        }
+      ]
     },
     {
       "id": "database-memory",

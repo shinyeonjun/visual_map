@@ -1,4 +1,4 @@
-import { Database, RefreshCw, Trash2 } from "lucide-react";
+import { Database, LockKeyhole, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { dbInventoryTableCount, dbProfileSourceLabel } from "../../types/workspace";
 import type { DbProfileControls } from "../../types/controls";
@@ -42,6 +42,16 @@ export function DatabaseSourceSection({
   return (
     <section className={`side-card database-source ${hasWorkspace ? "" : "locked"} ${hasInventory ? "ready" : ""}`}>
       <PanelHeader icon={<Database size={16} />} title="데이터베이스" />
+      {!hasWorkspace && (
+        <div className="source-locked-message">
+          <LockKeyhole size={18} aria-hidden="true" />
+          <span>
+            <b>프로젝트를 먼저 연결하세요</b>
+            <small>코드 분석 후 필요할 때 DB 구조를 추가할 수 있습니다.</small>
+          </span>
+          <em>선택 사항</em>
+        </div>
+      )}
       {hasWorkspace && hasProfile && <div className={`source-next ${nextAction.tone === "ready" ? "source-ready" : ""}`}>
         <span>
           <b>{nextAction.label}</b>

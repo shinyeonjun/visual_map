@@ -14,7 +14,7 @@ import {
 
 export type TargetKind = "api" | "code" | "table" | "column";
 
-type TargetItem = {
+export type TargetItem = {
   id: string;
   kind: TargetKind;
   badge: string;
@@ -25,7 +25,14 @@ type TargetItem = {
   mode: "api-flow" | "search-focus" | "table-usage" | "column-impact";
 };
 
-type TargetCatalog = Record<TargetKind, TargetItem[]>;
+export type TargetCatalog = Record<TargetKind, TargetItem[]>;
+
+export type ApiTreeNode = {
+  key: string;
+  label: string;
+  children: ApiTreeNode[];
+  items: TargetItem[];
+};
 
 const CODE_TARGET_RANK: Record<string, number> = {
   handler: 0,
@@ -109,6 +116,40 @@ export function buildTargetCatalog(
       }));
     }),
   };
+}
+
+export function buildApiTree(items: TargetItem[]): ApiTreeNode {
+  const root: ApiTreeNode = { key: "root", label: "", children: [], items: [] };
+
+  for (const item of items) {
+    let node = root;
+    for (const segment of apiPathSegments(item.title)) {
+      let child = node.children.find((candidate) => candidate.label === segment);
+      if (!child) {
+        child = { key: `${node.key}/${segment}`, label: segment, children: [], items: [] };
+        node.children.push(child);
+      }
+      node = child;
+    }
+    node.items.push(item);
+  }
+
+  sortApiTree(root);
+  return root;
+}
+
+export function apiPathSegments(title: string): string[] {
+  const value = title.trim();
+  const slashIndex = value.indexOf("/");
+  const path = slashIndex >= 0 ? value.slice(slashIndex) : value;
+  const segments = path.split("/").filter(Boolean);
+  return segments.length > 0 ? segments : [path || title.trim() || "/"];
+}
+
+function sortApiTree(node: ApiTreeNode): void {
+  node.children.sort((left, right) => left.label.localeCompare(right.label, "ko-KR", { numeric: true }));
+  node.items.sort((left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
+  for (const child of node.children) sortApiTree(child);
 }
 
 function compareApiTargets(left: CodeInventory["routes"][number], right: CodeInventory["routes"][number]): number {

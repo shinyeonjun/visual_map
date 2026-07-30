@@ -143,7 +143,7 @@ export function ApiReadingPath({
   );
 }
 
-function ApiConnectionView({
+export function ApiConnectionView({
   answer,
   map,
   selectedNodeId,

@@ -127,15 +127,22 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
       - name: Lint Rust
+        env:
+          BACKEND_VISUAL_MAP_SKIP_PROVIDER_RESOURCES: "1"
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Test Rust
+        env:
+          BACKEND_VISUAL_MAP_SKIP_PROVIDER_RESOURCES: "1"
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
       - name: Test database adapter against the pinned sidecar
+        env:
+          BACKEND_VISUAL_MAP_SKIP_PROVIDER_RESOURCES: "1"
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml workspace::tests::database_memory_v2_adapter_round_trip_is_complete_and_metadata_only -- --ignored --exact
 
       - name: Build internal release-mode desktop binary
         env:
           BACKEND_VISUAL_MAP_BUILD_SCOPE: internal
+          BACKEND_VISUAL_MAP_SKIP_PROVIDER_RESOURCES: "1"
         run: npx tauri build --no-bundle

@@ -1,6 +1,9 @@
 use super::*;
 use std::fs;
 
+#[cfg(windows)]
+use std::{thread, time::Duration};
+
 #[test]
 fn dev_mode_prefers_exe_engines_directory_when_present() {
     let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\BackendVisualMap");
@@ -400,6 +403,32 @@ fn command_runner_reports_timeout() {
     assert!(result.stderr.contains("시간이 초과되었습니다"));
 }
 
+#[cfg(windows)]
+#[test]
+fn command_runner_kills_a_cancelled_operation() {
+    let operation_id = format!("process-cancel-test-{}", std::process::id());
+    let guard = begin_engine_operation(&operation_id).unwrap();
+    let runner = thread::spawn({
+        let operation_id = operation_id.clone();
+        move || {
+            run_command_with_env(
+                Path::new("node.exe"),
+                &["-e", "setTimeout(() => {}, 5000)"],
+                Duration::from_secs(10),
+                &[("BACKEND_VISUAL_MAP_OPERATION_ID", operation_id.as_str())],
+            )
+            .unwrap()
+        }
+    });
+    thread::sleep(Duration::from_millis(50));
+    assert!(cancel_engine_operation(&operation_id));
+    let result = runner.join().unwrap();
+
+    assert!(!result.ok);
+    assert!(result.stderr.contains("취소되었습니다"));
+    drop(guard);
+}
+
 #[test]
 fn process_stream_reader_drains_but_does_not_store_past_its_limit() {
     let input = std::io::Cursor::new(vec![b'x'; 1024]);
@@ -427,6 +456,16 @@ fn sidecar_args_reject_installer_and_mcp_registration_paths() {
         sidecar_args(["--config", "claude_desktop_config.json"]).unwrap_err(),
         "허용되지 않는 sidecar 실행 인자입니다"
     );
+}
+
+#[test]
+fn engine_operation_cancellation_is_scoped_and_released() {
+    let operation_id = format!("cancel-test-{}", std::process::id());
+    let guard = begin_engine_operation(&operation_id).unwrap();
+    assert!(cancel_engine_operation(&operation_id));
+    assert!(!cancel_engine_operation("missing-operation"));
+    drop(guard);
+    assert!(!cancel_engine_operation(&operation_id));
 }
 
 #[test]

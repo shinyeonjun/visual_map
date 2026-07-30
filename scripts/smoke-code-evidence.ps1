@@ -84,6 +84,8 @@ try {
         [string]$_.kind -eq "READS" -and @($_.evidence | Where-Object { [string]$_.path -like "*server.py*" }).Count -gt 0
     })
     if ($falseReads.Count -gt 0) {
+        Write-Host "False READS edges:" -ForegroundColor Yellow
+        $falseReads | ConvertTo-Json -Depth 10 | Write-Host
         throw "Negative fixture produced $($falseReads.Count) SQL READS false positive(s)."
     }
     Write-Host "Code evidence golden/negative gate passed."

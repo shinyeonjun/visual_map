@@ -1,4 +1,4 @@
-import { Code2, Database } from "lucide-react";
+import { Braces, Code2, Database, GitBranch } from "lucide-react";
 import type { ReactNode } from "react";
 import type { EngineRegistry } from "../../types/engine";
 import {
@@ -47,26 +47,22 @@ export function WorkbenchStatusBar({
   const mapSummary = mapStatusSummary(visualMapControls.currentMap);
   const evidenceSummary = evidenceStatusSummary(visualMapControls.currentMap, visualMapControls.enriching);
   const coverageSummary = analysisCoverageSummary(visualMapControls.analysisCoverage);
+  const codeCount = codeInventorySymbolCount(workspaceControls.codeInventory);
+  const routeCount = codeInventoryRouteCount(workspaceControls.codeInventory);
+  const tableCount = dbInventoryTableCount(dbProfileControls.inventory);
+  const relationCount = visualMapControls.currentMap?.edges.length ?? 0;
 
   return (
     <footer className="statusbar">
       <span className="status-workspace">프로젝트: {workspaceLabel}</span>
-      <EngineStatus
-        label="코드 읽기"
-        role="code"
-        registry={engineRegistry}
-        error={engineError}
-        missingText={hasCodeInventory ? "저장된 목록" : undefined}
-        missingTitle={hasCodeInventory ? "저장된 코드 목록으로 보는 중입니다. 다시 읽으려면 코드 읽기 도구가 필요합니다." : undefined}
-      />
-      <EngineStatus
-        label="DB 읽기"
-        role="db"
-        registry={engineRegistry}
-        error={engineError}
-        missingText={hasDbInventory ? "저장된 구조" : undefined}
-        missingTitle={hasDbInventory ? "저장된 DB 구조로 보는 중입니다. 다시 읽으려면 DB 읽기 도구가 필요합니다." : undefined}
-      />
+      {hasWorkspace && (
+        <div className="status-metrics" aria-label="분석 요약">
+          <span><Code2 size={13} /> 코드 <b>{codeCount.toLocaleString("ko-KR")}</b></span>
+          <span><Braces size={13} /> API <b>{routeCount.toLocaleString("ko-KR")}</b></span>
+          <span><Database size={13} /> DB <b>{tableCount.toLocaleString("ko-KR")}</b></span>
+          <span><GitBranch size={13} /> 관계 <b>{relationCount.toLocaleString("ko-KR")}</b></span>
+        </div>
+      )}
       {hasWorkspace && (
         <>
           <span className="push status-source">
@@ -98,14 +94,35 @@ export function WorkbenchStatusBar({
           {workspaceControls.operationStatus.details && <pre>{workspaceControls.operationStatus.details}</pre>}
         </details>
       )}
-      {hasWorkspace && (
-        <DiagnosticsExport
-          workspaceControls={workspaceControls}
-          dbProfileControls={dbProfileControls}
-          visualMapControls={visualMapControls}
-          engineRegistry={engineRegistry}
-        />
-      )}
+      <details className="status-diagnostics">
+        <summary>진단</summary>
+        <div className="status-diagnostics-body">
+          <EngineStatus
+            label="코드 읽기"
+            role="code"
+            registry={engineRegistry}
+            error={engineError}
+            missingText={hasCodeInventory ? "저장된 목록" : undefined}
+            missingTitle={hasCodeInventory ? "저장된 코드 목록으로 보는 중입니다. 다시 읽으려면 코드 읽기 도구가 필요합니다." : undefined}
+          />
+          <EngineStatus
+            label="DB 읽기"
+            role="db"
+            registry={engineRegistry}
+            error={engineError}
+            missingText={hasDbInventory ? "저장된 구조" : undefined}
+            missingTitle={hasDbInventory ? "저장된 DB 구조로 보는 중입니다. 다시 읽으려면 DB 읽기 도구가 필요합니다." : undefined}
+          />
+          {hasWorkspace ? (
+            <DiagnosticsExport
+              workspaceControls={workspaceControls}
+              dbProfileControls={dbProfileControls}
+              visualMapControls={visualMapControls}
+              engineRegistry={engineRegistry}
+            />
+          ) : null}
+        </div>
+      </details>
       {devSlot}
     </footer>
   );

@@ -29,6 +29,21 @@ describe("useVisualMap transitions", () => {
     });
   });
 
+  it("waits for snapshot bootstrap before requesting the initial map", async () => {
+    const { rerender } = renderHook(
+      ({ ready }: { ready: boolean }) =>
+        useVisualMap({ currentWorkspaceId: "workspace-1", bootstrapReady: ready }),
+      { initialProps: { ready: false } },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(invokeMock).not.toHaveBeenCalled();
+
+    rerender({ ready: true });
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(invokeMock).toHaveBeenCalledWith("get_visual_map", expect.anything());
+  });
+
   it("keeps the last committed mode visible while the next mode loads", async () => {
     const { result } = renderHook(() => useVisualMap({ currentWorkspaceId: "workspace-1" }));
 
@@ -48,6 +63,20 @@ describe("useVisualMap transitions", () => {
     }));
     act(() => requests[1].resolve(visualMap("api-flow", "code:route-1")));
     await waitFor(() => expect(result.current.visualMap?.mode).toBe("api-flow"));
+  });
+
+  it("reuses a previously projected base map without another backend request", async () => {
+    const { result } = renderHook(() => useVisualMap({ currentWorkspaceId: "workspace-1" }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    act(() => requests[0].resolve(visualMap("atlas", "overview")));
+    await waitFor(() => expect(result.current.visualMap?.mode).toBe("atlas"));
+
+    act(() => result.current.showMapMode("atlas", null));
+
+    await waitFor(() => expect(result.current.visualMapLoading).toBe(false));
+    expect(requests).toHaveLength(1);
+    expect(result.current.visualMap?.mode).toBe("atlas");
   });
 
   it("commits an enriched DB answer once instead of flashing the base answer first", async () => {

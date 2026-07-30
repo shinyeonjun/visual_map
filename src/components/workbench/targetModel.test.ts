@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CodeInventory, DbInventory } from "../../types/workspace";
-import { buildTargetCatalog, firstAvailableTargetKind, targetKindForMode } from "./targetModel";
+import { apiPathSegments, buildApiTree, buildTargetCatalog, firstAvailableTargetKind, targetKindForMode } from "./targetModel";
 
 describe("targetModel", () => {
   it("maps each target type to its automatic answer mode", () => {
@@ -105,6 +105,22 @@ describe("targetModel", () => {
     expect(catalog.table.map((item) => item.title)).toEqual(["audit.events", "public.users"]);
     expect(inventory.routes.map((item) => item.name)).toEqual(["/api/zebra", "/api/accounts"]);
     expect(database.tables.map((table) => table.name)).toEqual(["users", "events"]);
+  });
+
+  it("builds API folders from route paths without framework-specific mapping", () => {
+    const catalog = buildTargetCatalog({
+      ...codeInventory(),
+      routes: [
+        { ...codeInventory().routes[0], id: "auth-login", name: "POST /api/v1/auth/login" },
+        { ...codeInventory().routes[0], id: "auth-me", name: "GET /api/v1/auth/me" },
+        { ...codeInventory().routes[0], id: "session-detail", name: "GET /api/v1/sessions/{session_id}" },
+      ],
+    }, null);
+    const tree = buildApiTree(catalog.api);
+    const api = tree.children.find((node) => node.label === "api");
+    const v1 = api?.children.find((node) => node.label === "v1");
+    expect(v1?.children.map((node) => node.label)).toEqual(["auth", "sessions"]);
+    expect(apiPathSegments("fastapi: DELETE /api/v1/sessions/{session_id}")).toEqual(["api", "v1", "sessions", "{session_id}"]);
   });
 });
 

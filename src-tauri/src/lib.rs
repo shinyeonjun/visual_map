@@ -550,6 +550,7 @@ fn refresh_snapshot_freshness(
 }
 
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 fn get_visual_map(
     app: tauri::AppHandle,
     workspace_id: String,
@@ -558,7 +559,12 @@ fn get_visual_map(
     change_intent: Option<ChangeIntent>,
     enrich_code_evidence: Option<bool>,
     composition: Option<CompositionMapRequest>,
+    operation_id: Option<String>,
 ) -> CommandResult<VisualMap> {
+    let _operation_guard = operation_id
+        .as_deref()
+        .map(engine::begin_engine_operation)
+        .transpose()?;
     let app_data_dir = app_data_dir(&app)?;
     let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
     let registry = get_engine_availability(app)?;
@@ -609,6 +615,7 @@ fn get_visual_map(
             focus_id.as_deref(),
             &mode,
             &mut enriched_snapshot,
+            operation_id.as_deref(),
         );
         return Ok(atlas::visual_map_with_change(
             &enriched_snapshot,
@@ -624,6 +631,11 @@ fn get_visual_map(
         mode,
         change_intent,
     ))
+}
+
+#[tauri::command(async)]
+fn cancel_visual_map(operation_id: String) -> CommandResult<bool> {
+    Ok(engine::cancel_engine_operation(&operation_id))
 }
 
 fn enrich_composition_code_evidence(
@@ -734,12 +746,20 @@ fn enrich_snapshot_code_evidence(
     focus_id: Option<&str>,
     mode: &str,
     snapshot: &mut InventorySnapshot,
+    operation_id: Option<&str>,
 ) {
     let Some(focus_id) = focus_id else {
         return;
     };
     if mode == "api-flow" {
-        enrich_api_code_evidence(app_data_dir, registry, workspace_id, focus_id, snapshot);
+        enrich_api_code_evidence(
+            app_data_dir,
+            registry,
+            workspace_id,
+            focus_id,
+            snapshot,
+            operation_id,
+        );
         return;
     }
     let Some(focus) = snapshot
@@ -783,6 +803,7 @@ fn enrich_snapshot_code_evidence(
         table.id.as_str(),
         evidence_target_id.as_str(),
         snapshot,
+        operation_id,
     ) else {
         return;
     };
@@ -812,13 +833,14 @@ fn enrich_snapshot_code_evidence(
         );
         return;
     };
-    match workspace::focused_code_search(
+    match workspace::focused_code_search_with_operation(
         app_data_dir,
         registry,
         workspace_id,
         column.name.as_str(),
         Some(path_filter.as_str()),
         32,
+        operation_id,
     ) {
         Ok(search) => {
             atlas::apply_focused_code_evidence(
@@ -844,6 +866,7 @@ fn enrich_api_code_evidence(
     workspace_id: &str,
     focus_id: &str,
     snapshot: &mut InventorySnapshot,
+    operation_id: Option<&str>,
 ) {
     if let Ok(workspace) = workspace::open_workspace(app_data_dir, workspace_id) {
         let code_ids = api_code_evidence_source_ids(snapshot, focus_id);
@@ -861,6 +884,7 @@ fn enrich_api_code_evidence(
             target_id.as_str(),
             target_id.as_str(),
             snapshot,
+            operation_id,
         );
     }
 }
@@ -915,6 +939,7 @@ fn enrich_table_code_evidence(
     table_id: &str,
     evidence_target_id: &str,
     snapshot: &mut InventorySnapshot,
+    operation_id: Option<&str>,
 ) -> Option<(Vec<String>, bool)> {
     let table = snapshot
         .items
@@ -942,13 +967,14 @@ fn enrich_table_code_evidence(
         );
     }
 
-    let table_search = match workspace::focused_code_search(
+    let table_search = match workspace::focused_code_search_with_operation(
         app_data_dir,
         registry,
         workspace_id,
         table.name.as_str(),
         None,
         32,
+        operation_id,
     ) {
         Ok(search) => search,
         Err(_) => {
@@ -1407,6 +1433,7 @@ pub fn run() {
             search_inventory,
             refresh_snapshot_freshness,
             get_visual_map,
+            cancel_visual_map,
             open_source_location,
             reveal_source_location,
             create_workspace,

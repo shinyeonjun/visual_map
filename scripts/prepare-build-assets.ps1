@@ -14,6 +14,17 @@ function Invoke-Checked([string]$Label, [scriptblock]$Command) {
 
 Push-Location $root
 try {
+  if ($internal -and $env:BACKEND_VISUAL_MAP_SKIP_PROVIDER_RESOURCES -eq "1") {
+    Write-Output "SKIP: managed language providers (internal CI build)"
+  } elseif ($internal) {
+    Invoke-Checked "existing managed language provider bundle" {
+      & .\scripts\prepare-provider-assets.ps1 -VerifyOnly
+    }
+  } else {
+    Invoke-Checked "managed language providers" {
+      & .\scripts\prepare-provider-assets.ps1
+    }
+  }
   Invoke-Checked "frontend build" { & npm run build }
   if ($internal) {
     Invoke-Checked "declared internal engines" {

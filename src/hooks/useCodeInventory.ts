@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useLayoutEffect, useState } from "react";
 import { toUserError } from "../app/operationStatus";
+import { validateCodeIndexResult, validateCodeInventory } from "../app/runtimeContracts";
 import {
   codeInventoryCodeItems,
   codeInventoryDefaultRoute,
@@ -56,12 +57,7 @@ export function useCodeInventory({
         setCodeStatus("저장소 구조 읽는 중...");
         setCodeError(null);
         setCodeErrorDetail(null);
-        const result = await invoke<{
-          workspace: Workspace;
-          run: { ok: boolean; stderr: string };
-          inventory?: CodeInventory | null;
-          inventoryError?: string | null;
-        }>("index_code_repository", { request });
+        const result = validateCodeIndexResult(await invoke<unknown>("index_code_repository", { request }));
         setCurrentWorkspace(result.workspace);
         if (result.run.ok) {
           clearCodeInventory();
@@ -104,6 +100,7 @@ export function useCodeInventory({
   }
 
   function restoreCodeInventory(inventory: CodeInventory, workspaceId = currentWorkspace?.id ?? null) {
+    validateCodeInventory(inventory);
     setCodeInventory(inventory);
     setInventoryWorkspaceId(workspaceId);
     setSelectedCodeItem(firstCodeInventoryItem(inventory));
@@ -113,6 +110,7 @@ export function useCodeInventory({
   }
 
   async function storeCodeInventory(workspaceId: string, inventory: CodeInventory) {
+    validateCodeInventory(inventory);
     setCodeInventory(inventory);
     setInventoryWorkspaceId(workspaceId);
     setSelectedCodeItem(firstCodeInventoryItem(inventory));

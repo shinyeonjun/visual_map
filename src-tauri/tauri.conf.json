@@ -37,6 +37,7 @@
       "engines/manifest.json": "engines/manifest.json",
       "engines/code-memory-language.exe": "engines/code-memory-language.exe",
       "engines/packs": "engines/packs",
+      "engines/provider-bundles": "engines/provider-bundles",
       "engines/database-memory.exe": "engines/database-memory.exe"
     },
     "icon": [

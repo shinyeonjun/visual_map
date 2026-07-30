@@ -4,10 +4,8 @@ import {
   Clock3,
   Folder,
   FolderCog,
-  ListTree,
   Network,
   RefreshCw,
-  Search,
   TriangleAlert,
 } from "lucide-react";
 import { useSearchHotkey } from "../../hooks/useSearchHotkey";
@@ -15,16 +13,17 @@ import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "..
 import { codeInventoryItemCount } from "../../types/workspace";
 import { searchScopeText } from "../../visual/search";
 import { SearchResultsPopover, focusFirstSearchResult } from "../common/SearchResultsPopover";
+import type { AnalysisProgress } from "./ProjectAnalysisSetupModal";
 
 export function WorkbenchTopBar({
   sourceManagerOpen,
   onToggleSourceManager,
-  surface,
-  onShowAnswers,
-  onShowAdvanced,
   workspaceControls,
   dbProfileControls,
   visualMapControls,
+  legacySearch = true,
+  analysisInitializing = false,
+  analysisProgress,
 }: {
   sourceManagerOpen: boolean;
   onToggleSourceManager: () => void;
@@ -34,6 +33,9 @@ export function WorkbenchTopBar({
   workspaceControls: WorkspaceControls;
   dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
+  legacySearch?: boolean;
+  analysisInitializing?: boolean;
+  analysisProgress?: AnalysisProgress;
 }) {
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
   const hasInventory =
@@ -41,7 +43,7 @@ export function WorkbenchTopBar({
     Boolean(dbProfileControls.inventory?.tables.length);
   const searchScope = searchScopeText(workspaceControls.codeInventory, dbProfileControls.inventory);
   const { searchInputRef, queueSearch, cancelQueuedSearch, flushSearch } = useSearchHotkey(
-    sourceManagerOpen ? undefined : visualMapControls.openSearchPopover,
+    legacySearch && !sourceManagerOpen ? visualMapControls.openSearchPopover : undefined,
     visualMapControls.searchQuery,
     visualMapControls.setSearchQuery,
   );
@@ -55,7 +57,10 @@ export function WorkbenchTopBar({
         <span className="brand-mark" aria-hidden="true">
           <Network size={18} />
         </span>
-        <strong className="product-name">백엔드 비주얼 맵</strong>
+        <span className="product-brand-copy">
+          <strong className="product-name">Visual Map</strong>
+          <small>코드와 데이터의 연결을 한눈에</small>
+        </span>
       </div>
 
       <label className={`top-select select-shell ${hasWorkspace ? "" : "empty"}`}>
@@ -90,18 +95,21 @@ export function WorkbenchTopBar({
         <span>{freshness.label}</span>
       </span>
 
-      <div
-        className={`search-shell product-search ${hasInventory ? "" : "disabled"}`}
-        onBlur={(event) => {
-          const nextTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
-          if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
-            flushSearch(searchInputRef.current?.value ?? visualMapControls.searchQuery);
-            visualMapControls.closeSearchPopover();
-          }
-        }}
-      >
-        <label className="global-search">
-          <Search size={15} />
+      {analysisInitializing && (
+        <div className="analysis-progress-chip" role="status" aria-live="polite" aria-label={analysisProgress?.determinate === false ? `분석 단계: ${analysisProgress.label}` : `분석 진행률 ${analysisProgress?.percent ?? 0}%`}>
+          <div className="analysis-progress-chip-heading">
+            <span>{analysisProgress?.determinate === false ? "분석 단계" : "분석 진행률"}</span>
+            <strong>{analysisProgress?.determinate === false ? "진행 중" : `${Math.round(analysisProgress?.percent ?? 0)}%`}</strong>
+          </div>
+          <div className={`analysis-progress-chip-track ${analysisProgress?.determinate === false ? "indeterminate" : ""}`} aria-hidden="true">
+            <span style={analysisProgress?.determinate === false ? undefined : { width: `${Math.min(100, Math.max(0, analysisProgress?.percent ?? 0))}%` }} />
+          </div>
+          <small>{analysisProgress?.label ?? "분석 중"}</small>
+        </div>
+      )}
+
+      {legacySearch && (
+        <div className="legacy-search-access" aria-label="프로젝트 전역 검색">
           <input
             id="global-inventory-search"
             ref={searchInputRef}
@@ -110,22 +118,21 @@ export function WorkbenchTopBar({
             disabled={!hasInventory}
             onFocus={() => hasInventory && visualMapControls.openSearchPopover()}
             onChange={(event) => queueSearch(event.currentTarget.value)}
+            onBlur={(event) => {
+              flushSearch(event.currentTarget.value);
+              visualMapControls.closeSearchPopover();
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 if (event.currentTarget.value !== visualMapControls.searchQuery) {
                   const value = event.currentTarget.value;
                   cancelQueuedSearch();
                   visualMapControls.runSearch(value);
-                  return;
+                } else {
+                  const firstResult = visualMapControls.searchGroups[0]?.results[0];
+                  firstResult ? visualMapControls.selectSearchResult(firstResult) : visualMapControls.runSearch();
                 }
-                const firstResult = visualMapControls.searchGroups[0]?.results[0];
-                firstResult ? visualMapControls.selectSearchResult(firstResult) : visualMapControls.runSearch();
               } else if (event.key === "ArrowDown" && visualMapControls.searchGroups.length > 0) {
-                if (event.currentTarget.value !== visualMapControls.searchQuery) {
-                  event.preventDefault();
-                  flushSearch(event.currentTarget.value);
-                  return;
-                }
                 event.preventDefault();
                 focusFirstSearchResult();
               } else if (event.key === "Escape") {
@@ -134,39 +141,10 @@ export function WorkbenchTopBar({
               }
             }}
             placeholder={hasInventory ? `${searchScope} 검색` : "소스를 연결하면 검색할 수 있습니다"}
-            title="Ctrl+K로 검색"
           />
-          <kbd aria-hidden="true">Ctrl K</kbd>
-        </label>
-        {hasInventory && (
-          <SearchResultsPopover visualMapControls={visualMapControls} searchScope={searchScope} />
-        )}
-      </div>
-
-      <div className="product-view-switch" role="group" aria-label="읽기 화면">
-        <button
-          className={(surface ?? "answers") === "answers" ? "active" : ""}
-          type="button"
-          aria-label="답 보기"
-          aria-pressed={(surface ?? "answers") === "answers"}
-          title="대상을 선택해 핵심 답 보기"
-          onClick={onShowAnswers}
-        >
-          <ListTree size={15} />
-          <span>답 보기</span>
-        </button>
-        <button
-          className={surface === "advanced" ? "active" : ""}
-          type="button"
-          aria-label="전체 구조"
-          aria-pressed={surface === "advanced"}
-          title="프로젝트 전체 구조와 고급 분석 열기"
-          onClick={onShowAdvanced}
-        >
-          <Network size={15} />
-          <span>전체 구조</span>
-        </button>
-      </div>
+          {hasInventory ? <SearchResultsPopover visualMapControls={visualMapControls} searchScope={searchScope} /> : null}
+        </div>
+      )}
 
       <button
         className={`source-manager-trigger ${sourceManagerActive ? "active" : ""}`}

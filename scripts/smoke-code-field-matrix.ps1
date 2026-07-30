@@ -15,6 +15,13 @@ $EnginePath = [IO.Path]::GetFullPath($EnginePath)
 if (-not (Test-Path -LiteralPath $EnginePath -PathType Leaf)) {
   throw "Code engine not found: $EnginePath"
 }
+$engineProvidersRoot = Join-Path (Split-Path -Parent $EnginePath) "providers"
+if (-not (Test-Path -LiteralPath $engineProvidersRoot -PathType Container)) {
+  $sourceProvidersRoot = Join-Path $repoRoot "code_memory\providers"
+  if (Test-Path -LiteralPath $sourceProvidersRoot -PathType Container) {
+    $env:CODE_MEMORY_PROVIDERS_ROOT = [IO.Path]::GetFullPath($sourceProvidersRoot)
+  }
+}
 
 $matrix = @(
   [pscustomobject]@{
@@ -283,6 +290,7 @@ try {
 } finally {
   Remove-Item Env:CBM_CACHE_DIR -ErrorAction SilentlyContinue
   Remove-Item Env:CBM_ALLOWED_ROOT -ErrorAction SilentlyContinue
+  Remove-Item Env:CODE_MEMORY_PROVIDERS_ROOT -ErrorAction SilentlyContinue
   Remove-Item Env:BACKEND_MAP_TEST_CODE_REPO -ErrorAction SilentlyContinue
   Remove-Item Env:BACKEND_MAP_TEST_CODE_ENGINE -ErrorAction SilentlyContinue
   if ($ownsRoot -and -not $Keep) {

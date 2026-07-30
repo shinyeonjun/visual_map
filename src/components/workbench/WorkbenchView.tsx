@@ -5,11 +5,11 @@ import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "..
 import type { EngineRegistry } from "../../types/engine";
 import { codeInventoryItemCount } from "../../types/workspace";
 import { AtlasCanvas } from "../atlas/AtlasCanvas";
+import { AppErrorBoundary } from "../common/AppErrorBoundary";
 import { focusDbProfileSetup } from "../common/focusSourceSetup";
 import { AnswerCanvas } from "./AnswerCanvas";
 import { InspectorPanel } from "./InspectorPanel";
-import { ModePanel } from "./ModePanel";
-import { TargetNavigator } from "./TargetNavigator";
+import { ProjectExplorer } from "./ProjectExplorer";
 import { WorkbenchLeftPanel } from "./WorkbenchLeftPanel";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
 import { WorkbenchTopBar } from "./WorkbenchTopBar";
@@ -68,13 +68,15 @@ export function WorkbenchView({
     hasAnswerSource ||
     visualMapControls.snapshotStaleReasons.length > 0 ||
     Boolean(visualMapControls.snapshotSavedAt);
+  const workspaceShellReady =
+    workspaceControls.initialized && hasWorkspace && !analysisSetupOpen && !analysisInitializing;
   const workspaceReady =
     workspaceControls.initialized && hasWorkspace && hasSnapshotState && !workspaceTransitioning && !analysisSetupOpen && !analysisInitializing;
   // Keep the evidence column mounted once a project exists so mode changes do not
   // resize the canvas. Its contents can change; the workspace geometry cannot.
-  const showInspector = workspaceReady;
+  const showInspector = workspaceShellReady;
   const inspectorVisible = evidenceDrawerOpen || Boolean(visualMapControls.selectedNode || visualMapControls.selectedEdge);
-  const drawerOpen = sourceManagerOpen && workspaceReady;
+  const drawerOpen = sourceManagerOpen && workspaceShellReady;
   const sourceManagerRef = useRef<HTMLElement | null>(null);
   const lastAnswerRef = useRef<{ workspaceId: string; mode: string; focusId: string } | null>(null);
   const workspaceId = workspaceControls.currentWorkspace?.id ?? null;
@@ -100,7 +102,6 @@ export function WorkbenchView({
     : answerReady && committedAnswerFocus
       ? `답 준비 완료: ${answerTargetTitle(visualMapControls, committedAnswerFocus)}`
       : "";
-
   useLayoutEffect(() => {
     lastAnswerRef.current = null;
     setPendingSurface(null);
@@ -153,7 +154,7 @@ export function WorkbenchView({
     setSurface("answers");
   }
 
-  function showAdvanced(mode: "atlas" | "composition") {
+  function showAdvanced(mode: "atlas") {
     const focusId = answerFocusId(visualMapControls);
     if (workspaceId && focusId && targetKindForMode(visibleMode)) {
       lastAnswerRef.current = { workspaceId, mode: visibleMode, focusId };
@@ -207,6 +208,9 @@ export function WorkbenchView({
         workspaceControls={workspaceControls}
         dbProfileControls={dbProfileControls}
         visualMapControls={visualMapControls}
+        legacySearch={false}
+        analysisInitializing={analysisInitializing}
+        analysisProgress={analysisProgress}
       />
       <p
         className="workbench-answer-status"
@@ -217,31 +221,22 @@ export function WorkbenchView({
       >
         {answerStatus}
       </p>
-      <div className={`workspace product-workspace ${workspaceReady ? "" : "is-single-column"} ${showInspector ? "has-inspector" : ""} ${inspectorVisible ? "inspector-visible" : ""}`}>
-        {workspaceReady ? <aside className="product-navigation" aria-label="주요 탐색">
-          {surface === "advanced" ? (
-            <ModePanel
-              workspaceControls={workspaceControls}
-              dbProfileControls={dbProfileControls}
-              visualMapControls={visualMapControls}
-              onNavigate={() => setSourceManagerOpen(false)}
-              onOpenSources={() => setSourceManagerOpen(true)}
-            />
-          ) : (
-            <TargetNavigator
-              workspaceControls={workspaceControls}
-              dbProfileControls={dbProfileControls}
-              visualMapControls={visualMapControls}
-              onSelectTarget={() => setSurface("answers")}
-              onOpenDatabase={() => {
-                setSourceManagerOpen(true);
-                window.requestAnimationFrame(() => focusDbProfileSetup(dbProfileControls));
-              }}
-              onOpenRelations={() => showAdvanced("composition")}
-            />
-          )}
+      <div className={`workspace product-workspace ${workspaceShellReady ? "" : "is-single-column"} ${showInspector ? "has-inspector" : ""} ${inspectorVisible ? "inspector-visible" : ""}`}>
+        {workspaceShellReady ? <aside className="product-navigation" aria-label="주요 탐색">
+          <ProjectExplorer
+            workspaceControls={workspaceControls}
+            dbProfileControls={dbProfileControls}
+            visualMapControls={visualMapControls}
+            onOpenDatabase={() => {
+              setSourceManagerOpen(true);
+              window.requestAnimationFrame(() => focusDbProfileSetup(dbProfileControls));
+            }}
+            surface={surface}
+            onShowAnswers={showAnswers}
+            onShowAdvanced={showAdvanced}
+          />
         </aside> : null}
-        {!workspaceControls.initialized || workspaceTransitioning || analysisInitializing ? (
+        {!workspaceControls.initialized || analysisInitializing || workspaceTransitioning ? (
           <main className="workspace-initializing" aria-busy="true" aria-live="polite">
             <LoaderCircle className="spin" size={22} />
             <strong>
@@ -271,20 +266,24 @@ export function WorkbenchView({
             <button className="outline-action compact" type="button" onClick={onOpenAnalysis}>분석 설정 열기</button>
           </main>
         ) : hasWorkspace && surface === "advanced" ? (
-          <AtlasCanvas
-            openSourceManager={() => setSourceManagerOpen(true)}
-            workspaceControls={workspaceControls}
-            dbProfileControls={dbProfileControls}
-            visualMapControls={visualMapControls}
-          />
+          <AppErrorBoundary fallback={<SurfaceFailure />}>
+            <AtlasCanvas
+              openSourceManager={() => setSourceManagerOpen(true)}
+              workspaceControls={workspaceControls}
+              dbProfileControls={dbProfileControls}
+              visualMapControls={visualMapControls}
+            />
+          </AppErrorBoundary>
         ) : hasWorkspace ? (
-          <AnswerCanvas
-            workspaceControls={workspaceControls}
-            dbProfileControls={dbProfileControls}
-            visualMapControls={visualMapControls}
-            onOpenSources={() => setSourceManagerOpen(true)}
-            onOpenEvidence={() => setEvidenceDrawerOpen(true)}
-          />
+          <AppErrorBoundary fallback={<SurfaceFailure />}>
+            <AnswerCanvas
+              workspaceControls={workspaceControls}
+              dbProfileControls={dbProfileControls}
+              visualMapControls={visualMapControls}
+              onOpenSources={() => setSourceManagerOpen(true)}
+              onOpenEvidence={() => setEvidenceDrawerOpen(true)}
+            />
+          </AppErrorBoundary>
         ) : (
           <main className="source-onboarding-main">
             <header className="source-onboarding-heading">
@@ -309,14 +308,16 @@ export function WorkbenchView({
         {showInspector && (
           <aside className="side side-right evidence-panel">
             {surface === "advanced" || answerHasTarget ? (
-              <InspectorPanel
-                onClose={closeInspector}
-                title={surface === "answers" ? "근거" : "선택한 대상"}
-                variant={surface === "answers" ? "answer" : "full"}
-                workspaceControls={workspaceControls}
-                dbProfileControls={dbProfileControls}
-                visualMapControls={visualMapControls}
-              />
+              <AppErrorBoundary fallback={<SurfaceFailure />}>
+                <InspectorPanel
+                  onClose={closeInspector}
+                  title={surface === "answers" ? "근거" : "선택한 대상"}
+                  variant={surface === "answers" ? "answer" : "full"}
+                  workspaceControls={workspaceControls}
+                  dbProfileControls={dbProfileControls}
+                  visualMapControls={visualMapControls}
+                />
+              </AppErrorBoundary>
             ) : (
               <section className="side-card inspector answer-evidence-placeholder">
                 <div className="panel-header">
@@ -333,7 +334,7 @@ export function WorkbenchView({
           </aside>
         )}
       </div>
-      {workspaceReady && hasSnapshotState && surface === "advanced" && (
+      {workspaceShellReady && hasSnapshotState && (
         <WorkbenchStatusBar
           workspaceControls={workspaceControls}
           dbProfileControls={dbProfileControls}
@@ -423,6 +424,15 @@ export function WorkbenchView({
       first.focus();
     }
   }
+}
+
+function SurfaceFailure() {
+  return (
+    <section className="workspace-initializing" role="alert" data-surface-error="true">
+      <strong>이 화면을 표시하지 못했습니다</strong>
+      <span>저장된 분석 결과는 유지됩니다. 다른 화면을 선택하거나 앱을 다시 열어 주세요.</span>
+    </section>
+  );
 }
 
 function answerFocusId(visualMapControls: VisualMapControls): string | null {

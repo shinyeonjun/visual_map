@@ -7,7 +7,10 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -16,6 +19,68 @@ type EngineHashEntry = (u64, SystemTime, String);
 type EngineHashCache = Mutex<HashMap<PathBuf, EngineHashEntry>>;
 
 static ENGINE_HASH_CACHE: OnceLock<EngineHashCache> = OnceLock::new();
+static ENGINE_OPERATION_CANCELLATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
+    OnceLock::new();
+
+pub(crate) struct EngineOperationGuard {
+    operation_id: String,
+}
+
+impl Drop for EngineOperationGuard {
+    fn drop(&mut self) {
+        if let Some(registry) = ENGINE_OPERATION_CANCELLATIONS.get() {
+            if let Ok(mut registry) = registry.lock() {
+                registry.remove(&self.operation_id);
+            }
+        }
+    }
+}
+
+pub(crate) fn begin_engine_operation(operation_id: &str) -> Result<EngineOperationGuard, String> {
+    validate_operation_id(operation_id)?;
+    let registry = ENGINE_OPERATION_CANCELLATIONS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut registry = registry
+        .lock()
+        .map_err(|_| "읽기 작업 취소 상태가 손상됐습니다".to_string())?;
+    if registry.contains_key(operation_id) {
+        return Err("이미 실행 중인 읽기 작업 ID입니다".to_string());
+    }
+    registry.insert(operation_id.to_string(), Arc::new(AtomicBool::new(false)));
+    Ok(EngineOperationGuard {
+        operation_id: operation_id.to_string(),
+    })
+}
+
+pub(crate) fn cancel_engine_operation(operation_id: &str) -> bool {
+    let Some(registry) = ENGINE_OPERATION_CANCELLATIONS.get() else {
+        return false;
+    };
+    let Ok(registry) = registry.lock() else {
+        return false;
+    };
+    let Some(cancellation) = registry.get(operation_id) else {
+        return false;
+    };
+    cancellation.store(true, Ordering::Release);
+    true
+}
+
+fn cancellation_for_operation(operation_id: &str) -> Option<Arc<AtomicBool>> {
+    ENGINE_OPERATION_CANCELLATIONS
+        .get()
+        .and_then(|registry| registry.lock().ok())
+        .and_then(|registry| registry.get(operation_id).cloned())
+}
+
+fn validate_operation_id(operation_id: &str) -> Result<(), String> {
+    if operation_id.is_empty()
+        || operation_id.len() > 128
+        || operation_id.chars().any(char::is_control)
+    {
+        return Err("읽기 작업 ID가 올바르지 않습니다".to_string());
+    }
+    Ok(())
+}
 
 // A broken sidecar must not be able to exhaust the desktop process while its
 // pipe is drained. Normal bounded inventory responses stay well below this.
@@ -536,6 +601,16 @@ pub(crate) fn run_command_with_env(
 ) -> Result<EngineRunResult, String> {
     let started_at = timestamp();
     let deadline = Instant::now() + timeout;
+    let cancellation = envs
+        .iter()
+        .find(|(key, _)| *key == "BACKEND_VISUAL_MAP_OPERATION_ID")
+        .and_then(|(_, operation_id)| cancellation_for_operation(operation_id));
+    if cancellation
+        .as_ref()
+        .is_some_and(|value| value.load(Ordering::Acquire))
+    {
+        return Ok(cancelled_engine_run(started_at, Vec::new(), Vec::new()));
+    }
     let mut child = Command::new(executable)
         .args(args)
         .envs(envs.iter().copied())
@@ -578,6 +653,16 @@ pub(crate) fn run_command_with_env(
             });
         }
 
+        if cancellation
+            .as_ref()
+            .is_some_and(|value| value.load(Ordering::Acquire))
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
+            return Ok(cancelled_engine_run(started_at, stdout, stderr));
+        }
+
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
@@ -603,6 +688,23 @@ pub(crate) fn run_command_with_env(
         }
 
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn cancelled_engine_run(started_at: String, stdout: Vec<u8>, stderr: Vec<u8>) -> EngineRunResult {
+    let stderr = String::from_utf8_lossy(&stderr);
+    let stderr = if stderr.trim().is_empty() {
+        "읽기 도구 실행이 취소되었습니다".to_string()
+    } else {
+        format!("{}\n읽기 도구 실행이 취소되었습니다", stderr.trim_end())
+    };
+    EngineRunResult {
+        ok: false,
+        stdout: redact_secrets(&String::from_utf8_lossy(&stdout)),
+        stderr: redact_secrets(&stderr),
+        exit_code: None,
+        started_at,
+        finished_at: timestamp(),
     }
 }
 

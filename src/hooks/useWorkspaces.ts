@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { githubRepoName, repoPathErrorFor } from "../app/appState";
 import { toUserError } from "../app/operationStatus";
+import { validateWorkspace, validateWorkspaceList } from "../app/runtimeContracts";
 import { hasTauriRuntime, tauriUnavailableMessage } from "../app/tauriRuntime";
 import {
   workspaceRepoInputValue,
@@ -43,10 +44,11 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
     }
 
     try {
-      const [items, warnings] = await Promise.all([
-        invoke<Workspace[]>("list_workspaces"),
+      const [itemsValue, warnings] = await Promise.all([
+        invoke<unknown>("list_workspaces"),
         invoke<WorkspaceRecoveryWarning[]>("get_workspace_recovery_warnings"),
       ]);
+      const items = validateWorkspaceList(itemsValue);
       setWorkspaces(items);
       setRecoveryWarnings(warnings);
       const selected =
@@ -131,7 +133,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       }
 
       try {
-        const created = await invoke<Workspace>("create_workspace", { request });
+        const created = validateWorkspace(await invoke<unknown>("create_workspace", { request }));
         selectWorkspace(created);
         setWorkspaceStatus(
           repoSourceMode === "github"
@@ -197,7 +199,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
       }
 
       try {
-        const opened = await invoke<Workspace>("open_workspace", { workspaceId });
+        const opened = validateWorkspace(await invoke<unknown>("open_workspace", { workspaceId }));
         selectWorkspace(opened);
         setWorkspaceStatus(`프로젝트 열림: ${opened.name}`);
         setWorkspaceError(null);
@@ -223,7 +225,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
     let refreshed = false;
     await withBusy("workspace-refresh", async () => {
       try {
-        const updated = await invoke<Workspace>("refresh_github_workspace", { workspaceId });
+        const updated = validateWorkspace(await invoke<unknown>("refresh_github_workspace", { workspaceId }));
         selectWorkspace(updated);
         setWorkspaceStatus(`GitHub 업데이트 완료: ${updated.name}`);
         setWorkspaceError(null);
@@ -243,7 +245,7 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
     }
     await withBusy("workspace-repair", async () => {
       try {
-        const repaired = await invoke<Workspace>("repair_workspace_from_backup", { workspaceId });
+        const repaired = validateWorkspace(await invoke<unknown>("repair_workspace_from_backup", { workspaceId }));
         setWorkspaceStatus(`백업에서 프로젝트를 복구했습니다: ${repaired.name}`);
         setWorkspaceError(null);
         await refreshWorkspaces(repaired.id);

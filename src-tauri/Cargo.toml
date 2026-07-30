@@ -30,3 +30,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tauri-plugin-dialog = "2"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }

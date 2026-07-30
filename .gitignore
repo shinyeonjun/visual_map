@@ -58,6 +58,10 @@ coverage/
 /code_memory/tests/fixtures/**/.code_memory/
 /code_memory/tests/fixtures/**/.ruby-lsp/
 
+# App-local managed providers are staged from code_memory/providers for local builds.
+/src-tauri/engines/providers/
+/src-tauri/engines/provider-bundles/
+
 # Integrated database-memory engine: keep source and examples, ignore local builds/caches.
 /db_memory/target/
 /db_memory/target-*/

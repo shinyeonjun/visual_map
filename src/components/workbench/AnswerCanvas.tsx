@@ -35,6 +35,7 @@ import {
 } from "../../types/workspace";
 import { visualEdgeKindLabel, visualEdgeTruthClass } from "../../visual/labels";
 import { columnRefFromNodeId, dbTableIdentityLabel, tableKeyFromDbNodeId } from "../../visual/nodeIds";
+import { ApiConnectionView } from "../atlas/ApiReadingPath";
 
 const ANSWER_MODES = new Set(["api-flow", "search-focus", "table-usage", "column-impact"]);
 
@@ -93,7 +94,7 @@ export function AnswerCanvas({
         onOpenSources={onOpenSources}
       />
       {visibleMode === "api-flow" && map?.apiReading ? (
-        <ApiAnswer analysisBasis={analysisBasis} map={map} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
+        <ApiAnswer analysisBasis={analysisBasis} map={map} dbProfileControls={dbProfileControls} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
       ) : (visibleMode === "table-usage" || visibleMode === "column-impact") && map?.reviewBoard ? (
         <ImpactAnswer analysisBasis={analysisBasis} map={map} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
       ) : (
@@ -166,11 +167,13 @@ function AnswerHome({
 function ApiAnswer({
   analysisBasis,
   map,
+  dbProfileControls,
   visualMapControls,
   onOpenEvidence,
 }: {
   analysisBasis: string;
   map: VisualMap;
+  dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
   onOpenEvidence: () => void;
 }) {
@@ -209,25 +212,45 @@ function ApiAnswer({
 
       <AnswerSection title="처리 흐름" count={knownSteps.length} description="호출 깊이로 정렬한 확정 근거와 구조 관계">
         {visibleSteps.length > 0 ? (
-          <ol className="answer-flow">
-            {visibleSteps.map((step, index) => (
-              <li key={step.id}>
-                <button
-                  type="button"
-                  disabled={!step.nodeId}
-                  onClick={() => selectReviewNode(step.nodeId, map, visualMapControls)}
-                >
-                  <span className="answer-flow-index">{String(index + 1).padStart(2, "0")}</span>
-                  <span className="answer-flow-copy">
-                    <small>{apiLaneLabel(step.lane)} · 깊이 {step.depth}</small>
-                    <strong>{step.lane === "route" ? routeDisplayName(step.title, method) : step.title}</strong>
-                    <em>{step.detail}</em>
-                  </span>
-                  <TruthMark truthClass={step.truthClass} />
-                </button>
-              </li>
-            ))}
-          </ol>
+          <>
+            <div className="answer-flow-map" aria-label="API 요청이 코드와 데이터로 이어지는 연결 지도">
+              <div className="answer-flow-map-intro">
+                <span>요청이 실제 코드와 데이터로 이어지는 길</span>
+                <small>카드를 누르면 오른쪽에서 파일과 근거를 확인합니다.</small>
+              </div>
+              <ApiConnectionView
+                answer={answer}
+                map={map}
+                selectedNodeId={visualMapControls.selectedNode?.id ?? null}
+                selectedEdgeId={visualMapControls.selectedEdge?.id ?? null}
+                dbTables={dbProfileControls.inventory?.tables ?? []}
+                onSelectNode={visualMapControls.selectNode}
+                onSelectEdge={visualMapControls.selectEdge}
+              />
+            </div>
+            <details className="answer-flow-details">
+              <summary>단계별 근거 목록으로 보기</summary>
+              <ol className="answer-flow">
+                {visibleSteps.map((step, index) => (
+                  <li key={step.id}>
+                    <button
+                      type="button"
+                      disabled={!step.nodeId}
+                      onClick={() => selectReviewNode(step.nodeId, map, visualMapControls)}
+                    >
+                      <span className="answer-flow-index">{String(index + 1).padStart(2, "0")}</span>
+                      <span className="answer-flow-copy">
+                        <small>{apiLaneLabel(step.lane)} · 깊이 {step.depth}</small>
+                        <strong>{step.lane === "route" ? routeDisplayName(step.title, method) : step.title}</strong>
+                        <em>{step.detail}</em>
+                      </span>
+                      <TruthMark truthClass={step.truthClass} />
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            </details>
+          </>
         ) : (
           <AnswerEmpty title="다음 호출을 찾지 못했습니다" detail="라우트 소스에서 실제 핸들러 연결을 먼저 확인하세요." />
         )}

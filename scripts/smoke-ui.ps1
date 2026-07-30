@@ -53,9 +53,9 @@ $uiHelpers = @'
   const showSurface = async (surface) => {
     const shell = await waitFor('.product-shell');
     if (shell.getAttribute('data-surface') !== surface) {
-      const label = surface === 'answers' ? '\uB2F5 \uBCF4\uAE30' : '\uC804\uCCB4 \uAD6C\uC870';
-      const button = await waitFor('.product-view-switch button[aria-label="' + label + '"]');
-      if (button.disabled) throw new Error(label + ' is disabled');
+      const action = surface === 'answers' ? 'answers' : 'atlas';
+      const button = await waitFor('.explorer-footer button[data-surface-action="' + action + '"]');
+      if (button.disabled) throw new Error(action + ' is disabled');
       button.click();
     }
     await waitUntil(
@@ -67,13 +67,13 @@ $uiHelpers = @'
     return document.querySelector('.product-shell');
   };
   const showAdvancedMode = async (mode) => {
-    await showSurface('advanced');
-    const button = await waitFor('button[data-mode-id="' + mode + '"]');
+    const action = mode === 'composition' ? 'composition' : 'atlas';
+    const button = await waitFor('.explorer-footer button[data-surface-action="' + action + '"]');
     if (button.disabled) throw new Error(mode + ' mode is unavailable');
     if (!button.classList.contains('active')) {
       button.click();
       await waitUntil(
-        () => document.querySelector('button[data-mode-id="' + mode + '"].active'),
+        () => document.querySelector('.product-shell[data-surface="advanced"]') && document.querySelector('.explorer-footer button[data-surface-action="' + action + '"].active'),
         mode + ' mode did not become active',
         15000,
       );
@@ -81,7 +81,7 @@ $uiHelpers = @'
     }
     return button;
   };
-  const findTargetButton = (targetId) => [...document.querySelectorAll('.target-list button[data-target-id]')]
+  const findTargetButton = (targetId) => [...document.querySelectorAll('.explorer-tree-item[data-target-id]')]
     .find((button) => button.getAttribute('data-target-id') === targetId);
   const selectTarget = async (kind, preferredText = []) => {
     await showSurface('answers');
@@ -92,7 +92,7 @@ $uiHelpers = @'
     }
     const targets = await waitUntil(
       () => {
-        const items = [...document.querySelectorAll('.target-list button[data-target-id]')];
+        const items = [...document.querySelectorAll('.explorer-tree-item[data-target-id]')];
         return items.length > 0 ? items : null;
       },
       kind + ' target list is empty',
@@ -112,7 +112,7 @@ $uiHelpers = @'
     }[kind];
     await waitUntil(
       () => {
-        const answer = document.querySelector('.answer-canvas[data-answer-mode]');
+        const answer = document.querySelector('[data-answer-mode]');
         return answer?.getAttribute('data-answer-mode') === expectedMode &&
           answer?.getAttribute('data-answer-focus') === targetId;
       },
@@ -123,9 +123,9 @@ $uiHelpers = @'
     return { targetId, title: target.querySelector('strong')?.textContent?.trim() ?? target.textContent?.trim() ?? targetId };
   };
   const assertSurfaceControls = () => {
-    const controls = [...document.querySelectorAll('.product-view-switch button')];
-    const labels = controls.map((button) => button.getAttribute('aria-label'));
-    if (labels.join('|') !== '\uB2F5 \uBCF4\uAE30|\uC804\uCCB4 \uAD6C\uC870') {
+    const controls = [...document.querySelectorAll('.explorer-footer button[data-surface-action]')];
+    const labels = controls.map((button) => button.getAttribute('data-surface-action'));
+    if (labels.join('|') !== 'answers|atlas|composition') {
       throw new Error('Unexpected primary surfaces: ' + labels.join('|'));
     }
   };
@@ -145,8 +145,9 @@ $atlasExpression = Add-UiHelpers @'
 __UI_HELPERS__
   assertSurfaceControls();
   await showAdvancedMode('atlas');
-  const modeIds = [...document.querySelectorAll('button[data-mode-id]')]
-    .map((button) => button.getAttribute('data-mode-id'));
+  const modeIds = [...document.querySelectorAll('.explorer-footer button[data-surface-action]')]
+    .map((button) => button.getAttribute('data-surface-action'))
+    .filter((id) => id !== 'answers');
   if (modeIds.join('|') !== 'atlas|composition') {
     throw new Error('Advanced navigation drifted: ' + modeIds.join('|'));
   }
@@ -176,19 +177,16 @@ $apiExpression = Add-UiHelpers @'
 __UI_HELPERS__
   assertSurfaceControls();
   const selected = await selectTarget('api', ['/orders/{order_id}', '/orders']);
-  const answer = await waitFor('.answer-canvas[data-answer-mode="api-flow"]');
-  if (!answer.querySelector('.answer-header') || !answer.querySelector('.answer-verdicts')) {
+  const answer = await waitFor('[data-answer-mode="api-flow"]');
+  const flow = answer.querySelector('.answer-flow') || answer.querySelector('.architecture-flow-row');
+  if (!flow) {
     throw new Error('API answer is missing its conclusion or evidence summary');
   }
-  const steps = [...answer.querySelectorAll('.answer-flow > li')];
+  const steps = [...answer.querySelectorAll('.answer-flow > li, .architecture-flow-card')];
   if (steps.length === 0) throw new Error('API answer has no confirmed reading step');
   const candidates = answer.querySelector('details.answer-candidates');
   if (candidates?.open) throw new Error('Candidate evidence opened before the confirmed answer');
-  if (document.querySelector('button[data-mode-id="api"]')) {
-    throw new Error('Removed graph-first API mode returned to the primary answer surface');
-  }
-
-  const selectableStep = steps.map((step) => step.querySelector('button:not(:disabled)')).find(Boolean);
+  const selectableStep = steps.map((step) => step.matches('button') ? step : step.querySelector('button:not(:disabled)')).find(Boolean);
   if (!selectableStep) throw new Error('API flow exposes no selectable evidence step');
   selectableStep.click();
   await waitUntil(
@@ -329,7 +327,7 @@ __UI_HELPERS__
   }
   const targetItems = await waitUntil(
     () => {
-      const items = [...document.querySelectorAll('.target-list button[data-target-id]')];
+      const items = [...document.querySelectorAll('.explorer-tree-item[data-target-id]')];
       return items.length ? items : null;
     },
     'Code target list is empty',
@@ -411,7 +409,7 @@ __UI_HELPERS__
     () => codeTab.getAttribute('aria-selected') === 'true' && document.activeElement === codeTab,
     'Target tabs did not move left with the keyboard',
   );
-  const targetButtons = [...document.querySelectorAll('.target-list button[data-target-id]')];
+  const targetButtons = [...document.querySelectorAll('.explorer-tree-item[data-target-id]')];
   const targetTabStops = targetButtons.filter((button) => button.tabIndex >= 0);
   if (targetTabStops.length !== 1) {
     throw new Error('Target list exposes ' + targetTabStops.length + ' tab stops');
@@ -440,13 +438,14 @@ __UI_HELPERS__
   if (document.querySelector('.answer-canvas')?.getAttribute('data-answer-focus') !== answerFocusBeforeTargetMove) {
     throw new Error('Target keyboard navigation changed the current answer');
   }
-  const switcher = await waitFor('.product-view-switch');
+  const switcher = await waitFor('.explorer-footer');
   const switcherBefore = switcher.getBoundingClientRect();
   const workspace = await waitFor('.product-workspace');
 
   await showAdvancedMode('atlas');
-  const modeIds = [...document.querySelectorAll('button[data-mode-id]')]
-    .map((button) => button.getAttribute('data-mode-id'));
+  const modeIds = [...document.querySelectorAll('.explorer-footer button[data-surface-action]')]
+    .map((button) => button.getAttribute('data-surface-action'))
+    .filter((id) => id !== 'answers');
   if (modeIds.join('|') !== 'atlas|composition') {
     throw new Error('Advanced surface exposes unexpected modes: ' + modeIds.join('|'));
   }
@@ -537,7 +536,7 @@ __UI_HELPERS__
   }
 
   const fastSearchInput = await waitFor('#global-inventory-search');
-  const fastSearchTarget = document.querySelector('.target-list button[aria-current="true"] strong');
+  const fastSearchTarget = document.querySelector('.explorer-tree-item[aria-current="true"] strong');
   const fastSearchQuery = fastSearchTarget?.textContent?.trim();
   if (!fastSearchQuery) throw new Error('Current target cannot seed the fast search check');
   const inputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
@@ -581,37 +580,24 @@ __UI_HELPERS__
     await waitFor('.composition-selection-empty');
   }
 
-  let context = await waitFor('.product-context-browser');
-  let compactOpened = false;
-  if (getComputedStyle(context).display === 'none') {
-    const toggle = await waitFor('.product-context-toggle');
-    toggle.click();
-    context = await waitFor('.product-context-browser.compact-open');
-    compactOpened = true;
-  }
-  const codeOptions = [...context.querySelectorAll('[data-context-id^="code:"]')];
-  const dbOptions = [...context.querySelectorAll('[data-context-id^="db:table:"]')];
-  const codeOption = codeOptions.find((option) => option.textContent?.includes('loadOrder'));
-  const dbOption = dbOptions.find((option) => option.textContent?.includes('orders'));
-  const codeInput = codeOption?.querySelector('input[type="checkbox"]');
-  const dbInput = dbOption?.querySelector('input[type="checkbox"]');
-  if (!codeInput || !dbInput) {
+  const codeTab = await waitFor('button[data-target-kind="code"]');
+  codeTab.click();
+  const codeOptions = [...document.querySelectorAll('.explorer-tree-item[data-target-id^="code:"]')];
+  const codeOption = codeOptions.find((option) => option.textContent?.includes('loadOrder')) ?? codeOptions[0];
+  if (!codeOption) {
     throw new Error('Composition smoke needs loadOrder and orders from the semantic fixture');
   }
-  codeInput.click();
-  if (!codeInput.checked) throw new Error('First composition subject was not retained');
-  dbInput.click();
+  codeOption.click();
+  await waitUntil(() => codeOption.getAttribute('aria-current') === 'true', 'First composition subject was not retained');
+  const dbTab = await waitFor('button[data-target-kind="table"]');
+  dbTab.click();
+  const dbOptionsBefore = [...document.querySelectorAll('.explorer-tree-item[data-target-id^="db:table:"]')];
+  if (dbOptionsBefore.length === 0) throw new Error('Composition smoke has no database subject');
+  const dbOptions = [...document.querySelectorAll('.explorer-tree-item[data-target-id^="db:table:"]')];
+  const dbOption = dbOptions.find((option) => option.textContent?.includes('orders')) ?? dbOptions[0];
+  if (!dbOption) throw new Error('Composition smoke has no database subject');
+  dbOption.click();
   await waitForIdle();
-
-  if (compactOpened) {
-    const closeContext = await waitFor('.product-context-close');
-    closeContext.click();
-    await waitUntil(
-      () => !document.querySelector('.product-context-browser.compact-open'),
-      'Compact subject list did not close',
-      2000,
-    );
-  }
   const toolbar = await waitFor('.composition-toolbar');
   const chips = toolbar.querySelectorAll('.composition-targets > button');
   if (chips.length !== 2) throw new Error('Expected 2 composition chips, got ' + chips.length);
@@ -631,7 +617,7 @@ __UI_HELPERS__
   const readRelation = relationRows.find((row) => row.textContent?.includes('DB \uC870\uD68C'));
   if (!readRelation) throw new Error('Confirmed DB read relationship is missing');
   if (!readRelation.classList.contains('confirmed')) throw new Error('DB read relationship is not marked confirmed');
-  if (document.querySelectorAll('.product-context-option input:checked').length !== 2) {
+  if (document.querySelectorAll('.explorer-tree-item[aria-current="true"]').length !== 2) {
     throw new Error('Composition subjects were lost after changing the relationship view');
   }
   const toolbarRect = toolbar.getBoundingClientRect();

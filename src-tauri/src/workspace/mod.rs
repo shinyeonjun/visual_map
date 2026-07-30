@@ -5,9 +5,10 @@ mod db;
 mod fastapi_routes;
 mod fastendpoints_routes;
 mod model;
+mod provider_bundle;
 mod store;
 
-pub(crate) use code::focused_code_search;
+pub(crate) use code::focused_code_search_with_operation;
 pub(crate) use code::{
     code_inventory, index_code_repository, index_code_repository_without_persisting,
     route_binding_id,

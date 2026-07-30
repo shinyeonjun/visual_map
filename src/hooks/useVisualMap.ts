@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useLayoutEffect, useRef, useState } from "react";
 import { commandErrorCode, toUserError } from "../app/operationStatus";
+import {
+  validateInventoryBootstrap,
+  validateInventorySearchResult,
+  validateVisualMap,
+} from "../app/runtimeContracts";
 import { hasTauriRuntime } from "../app/tauriRuntime";
 import {
   collectSearchResults,
@@ -16,8 +21,6 @@ import type { SearchResult, SearchResultGroup } from "../types/controls";
 import type {
   AnalysisCoverage,
   ChangeIntent,
-  InventoryBootstrap,
-  InventorySearchResult,
   InventorySnapshot,
   VisualEdge,
   VisualMap,
@@ -32,13 +35,16 @@ type SearchContext = {
 };
 
 const DEFAULT_CHANGE_INTENT: ChangeIntent = { kind: "rename", value: null };
+const VISUAL_MAP_CACHE_LIMIT = 32;
 type RelationView = "connections" | "calls" | "data" | "impact";
 
 export function useVisualMap({
   currentWorkspaceId,
+  bootstrapReady = true,
   onOperation,
 }: {
   currentWorkspaceId: string | null;
+  bootstrapReady?: boolean;
   onOperation?: (action: string) => void;
 }) {
   const [visualMap, setVisualMap] = useState<VisualMap | null>(null);
@@ -81,14 +87,29 @@ export function useVisualMap({
   } | null>(null);
   const visualMapRequestRef = useRef(0);
   const evidenceGenerationRef = useRef(0);
-  const enrichedMapCacheRef = useRef(new Map<string, VisualMap>());
-  const enrichedMapRequestsRef = useRef(new Map<string, Promise<VisualMap>>());
+  const snapshotRevisionRef = useRef<string | null>(null);
+  const visualMapCacheRef = useRef(new Map<string, VisualMap>());
+  const visualMapRequestsRef = useRef(new Map<string, Promise<VisualMap>>());
+  const activeVisualMapOperationRef = useRef<string | null>(null);
   const searchContextRef = useRef<SearchContext | null>(null);
   const searchRequestRef = useRef(0);
 
+  function cancelActiveVisualMapOperation() {
+    const operationId = activeVisualMapOperationRef.current;
+    activeVisualMapOperationRef.current = null;
+    if (!operationId || !hasTauriRuntime()) {
+      return;
+    }
+    void invoke("cancel_visual_map", { operationId }).catch(() => {
+      // The request may have completed between the new selection and cancellation.
+    });
+  }
+
   useLayoutEffect(() => {
+    cancelActiveVisualMapOperation();
     currentWorkspaceIdRef.current = currentWorkspaceId;
     invalidateEnrichedMaps();
+    snapshotRevisionRef.current = null;
     searchRequestRef.current += 1;
     searchContextRef.current = null;
     setSearchQueryValue("");
@@ -99,16 +120,17 @@ export function useVisualMap({
     setCompositionFocusIds([]);
     relationViewRef.current = "connections";
     setRelationViewState("connections");
-    if (!currentWorkspaceId) {
-      clearVisualMapState();
+    if (!currentWorkspaceId || !bootstrapReady) {
+      if (!currentWorkspaceId) {
+        clearVisualMapState();
+      }
       return;
     }
-
     const context = savedMapContext(currentWorkspaceId);
     clearVisualSelection();
     setMapMode(context.mode);
     void loadVisualMap(context.focusId, context.mode, currentWorkspaceId);
-  }, [currentWorkspaceId]);
+  }, [bootstrapReady, currentWorkspaceId]);
 
   async function loadVisualMap(
     focusId?: string | null,
@@ -145,18 +167,51 @@ export function useVisualMap({
     setVisualMapEnriching(false);
     const isCurrentRequest = () =>
       visualMapRequestRef.current === requestId && currentWorkspaceIdRef.current === workspaceId;
+    const shouldEnrichCodeEvidence = Boolean(
+      (mode === "api-flow" && focusId) ||
+        (mode === "composition" && requestedRelationView !== "calls") ||
+        (mode === "table-usage" && focusId?.startsWith("db:table:")) ||
+        (mode === "column-impact" && focusId?.startsWith("db:column:")),
+    );
+    const cacheKey = visualMapCacheKey(
+      shouldEnrichCodeEvidence ? "enriched" : "base",
+      targetKey,
+      evidenceGenerationRef.current,
+    );
+
+    const cachedMap = visualMapCacheRef.current.get(cacheKey);
+    if (cachedMap) {
+      cancelActiveVisualMapOperation();
+      visualMapCacheRef.current.delete(cacheKey);
+      visualMapCacheRef.current.set(cacheKey, cachedMap);
+      setVisualMapError(null);
+      setVisualMapErrorDetail(null);
+      setVisualMapLoading(false);
+      setVisualMap(cachedMap);
+      setVisualMapKey(targetKey);
+      setProjectionElapsedMs(0);
+      syncVisualSelection(cachedMap);
+      setVisualMapStatus(cachedMap.nodes.length > 0 ? `캔버스 항목 ${cachedMap.nodes.length}개 표시` : "캔버스 항목 없음");
+      return cachedMap;
+    }
+
+    const sharesInFlightRequest = visualMapRequestsRef.current.has(cacheKey);
+    if (!sharesInFlightRequest) {
+      cancelActiveVisualMapOperation();
+    }
+    const operationId =
+      sharesInFlightRequest && activeVisualMapOperationRef.current
+        ? activeVisualMapOperationRef.current
+        : "visual-map-" + Date.now() + "-" + requestId;
+    if (!sharesInFlightRequest) {
+      activeVisualMapOperationRef.current = operationId;
+    }
 
     try {
       setVisualMapLoading(true);
       setVisualMapStatus("캔버스 준비 중");
       setVisualMapError(null);
       setVisualMapErrorDetail(null);
-      const shouldEnrichCodeEvidence = Boolean(
-        (mode === "api-flow" && focusId) ||
-          (mode === "composition" && requestedRelationView !== "calls") ||
-          (mode === "table-usage" && focusId?.startsWith("db:table:")) ||
-          (mode === "column-impact" && focusId?.startsWith("db:column:")),
-      );
       if (shouldEnrichCodeEvidence) {
         setVisualMapStatus("정적 SQL과 코드/DB 근거 확인 중");
         const enriched = await enrichVisualMap({
@@ -168,22 +223,34 @@ export function useVisualMap({
           targetKey,
           focusIds,
           relationView: requestedRelationView,
+          operationId,
         });
         if (isCurrentRequest()) {
           setProjectionElapsedMs(Math.round(performance.now() - startedAt));
         }
         return enriched;
       }
-      const map = await invoke<VisualMap>("get_visual_map", {
-        workspaceId,
-        focusId: focusId ?? null,
-        mode,
-        changeIntent: requestChangeIntent,
-        enrichCodeEvidence: false,
-        composition: mode === "composition"
-          ? { focusIds, relationView: requestedRelationView }
-          : null,
+      let request = visualMapRequestsRef.current.get(cacheKey);
+      if (!request) {
+        request = invoke<unknown>("get_visual_map", {
+          workspaceId,
+          focusId: focusId ?? null,
+          mode,
+          changeIntent: requestChangeIntent,
+          enrichCodeEvidence: false,
+          composition: mode === "composition"
+            ? { focusIds, relationView: requestedRelationView }
+            : null,
+          operationId,
+        }).then(validateVisualMap);
+        visualMapRequestsRef.current.set(cacheKey, request);
+      }
+      const map = await request.finally(() => {
+        if (visualMapRequestsRef.current.get(cacheKey) === request) {
+          visualMapRequestsRef.current.delete(cacheKey);
+        }
       });
+      rememberVisualMap(visualMapCacheRef.current, cacheKey, map);
       if (!isCurrentRequest()) {
         return null;
       }
@@ -222,6 +289,9 @@ export function useVisualMap({
     } finally {
       if (isCurrentRequest()) {
         setVisualMapLoading(false);
+        if (activeVisualMapOperationRef.current === operationId) {
+          activeVisualMapOperationRef.current = null;
+        }
       }
     }
   }
@@ -235,6 +305,7 @@ export function useVisualMap({
     targetKey,
     focusIds,
     relationView,
+    operationId,
   }: {
     workspaceId: string;
     focusId: string | null;
@@ -244,9 +315,10 @@ export function useVisualMap({
     targetKey: string;
     focusIds: string[];
     relationView: RelationView;
+    operationId: string;
   }): Promise<VisualMap | null> {
     const generation = evidenceGenerationRef.current;
-    const cacheKey = `${generation}:${targetKey}`;
+    const cacheKey = visualMapCacheKey("enriched", targetKey, generation);
     const isCurrentRequest = () =>
       evidenceGenerationRef.current === generation &&
       visualMapRequestRef.current === requestId &&
@@ -255,24 +327,26 @@ export function useVisualMap({
       setVisualMapEnriching(true);
     }
 
+    let request: Promise<VisualMap> | undefined;
     try {
-      let map = enrichedMapCacheRef.current.get(cacheKey);
+      let map = visualMapCacheRef.current.get(cacheKey);
       if (!map) {
-        let request = enrichedMapRequestsRef.current.get(cacheKey);
+        request = visualMapRequestsRef.current.get(cacheKey);
         if (!request) {
-          request = invoke<VisualMap>("get_visual_map", {
+          request = invoke<unknown>("get_visual_map", {
             workspaceId,
             focusId,
             mode,
             changeIntent,
             enrichCodeEvidence: true,
             composition: mode === "composition" ? { focusIds, relationView } : null,
-          });
-          enrichedMapRequestsRef.current.set(cacheKey, request);
+            operationId,
+          }).then(validateVisualMap);
+          visualMapRequestsRef.current.set(cacheKey, request);
         }
         map = await request;
         if (evidenceGenerationRef.current === generation) {
-          enrichedMapCacheRef.current.set(cacheKey, map);
+          rememberVisualMap(visualMapCacheRef.current, cacheKey, map);
         }
       }
       if (!isCurrentRequest()) {
@@ -286,16 +360,21 @@ export function useVisualMap({
       );
       return map;
     } finally {
-      enrichedMapRequestsRef.current.delete(cacheKey);
+      if (request && visualMapRequestsRef.current.get(cacheKey) === request) {
+        visualMapRequestsRef.current.delete(cacheKey);
+      }
       if (isCurrentRequest()) {
         setVisualMapEnriching(false);
+        if (activeVisualMapOperationRef.current === operationId) {
+          activeVisualMapOperationRef.current = null;
+        }
       }
     }
   }
 
   async function refreshInventorySnapshot(workspaceId: string): Promise<boolean> {
     try {
-      const bootstrap = await invoke<InventoryBootstrap | null>("load_inventory_bootstrap", { workspaceId });
+      const bootstrap = validateInventoryBootstrap(await invoke<unknown>("load_inventory_bootstrap", { workspaceId }));
       if (!bootstrap) {
         return false;
       }
@@ -500,7 +579,8 @@ export function useVisualMap({
 
     const requestId = ++searchRequestRef.current;
     const workspaceId = currentWorkspaceIdRef.current;
-    void invoke<InventorySearchResult>("search_inventory", { workspaceId, query })
+    void invoke<unknown>("search_inventory", { workspaceId, query })
+      .then(validateInventorySearchResult)
       .then((result) => {
         if (searchRequestRef.current === requestId && currentWorkspaceIdRef.current === workspaceId) {
           const resolved = searchCollectionFromInventoryResult(result);
@@ -641,6 +721,10 @@ export function useVisualMap({
   }
 
   function noteSnapshotLoaded(snapshot: InventorySnapshot, reloadMigratedFocus = true) {
+    if (snapshotRevisionRef.current !== snapshot.savedAt) {
+      snapshotRevisionRef.current = snapshot.savedAt;
+      invalidateEnrichedMaps();
+    }
     setSnapshotWorkspaceId(snapshot.workspaceId);
     setSnapshotSavedAt(snapshot.savedAt);
     noteSnapshotFreshness(snapshot.staleReasons ?? []);
@@ -689,6 +773,7 @@ export function useVisualMap({
     setSnapshotSourceSummary(null);
     setAnalysisCoverage(null);
     setSnapshotWorkspaceId(null);
+    snapshotRevisionRef.current = null;
     setProjectionElapsedMs(null);
     setVisualStateWorkspaceId(null);
     visualTargetRef.current = null;
@@ -711,8 +796,8 @@ export function useVisualMap({
 
   function invalidateEnrichedMaps() {
     evidenceGenerationRef.current += 1;
-    enrichedMapCacheRef.current.clear();
-    enrichedMapRequestsRef.current.clear();
+    visualMapCacheRef.current.clear();
+    visualMapRequestsRef.current.clear();
   }
 
   function clearVisualSelection() {
@@ -865,6 +950,20 @@ function mapRequestKey(
     relationView: RelationView = "connections",
 ): string {
   return `${workspaceId}\u0000${mode}\u0000${focusId ?? ""}\u0000${changeIntent?.kind ?? ""}\u0000${changeIntent?.value ?? ""}\u0000${focusIds.join("\u001f")}\u0000${relationView}`;
+}
+
+function visualMapCacheKey(kind: "base" | "enriched", targetKey: string, generation: number): string {
+  return `${generation}\u0000${kind}\u0000${targetKey}`;
+}
+
+function rememberVisualMap(cache: Map<string, VisualMap>, key: string, map: VisualMap): void {
+  cache.delete(key);
+  cache.set(key, map);
+  while (cache.size > VISUAL_MAP_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
 }
 
 function mapAnswersMode(map: VisualMap | null, mode: string): boolean {

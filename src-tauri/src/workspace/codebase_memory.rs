@@ -57,6 +57,7 @@ pub(crate) struct CodebaseMemoryInventory {
 pub(crate) struct CodebaseMemoryAdapter<'a> {
     engine: &'a engine::EngineAvailability,
     cache_dir: PathBuf,
+    provider_cache_dir: Option<PathBuf>,
 }
 
 impl<'a> CodebaseMemoryAdapter<'a> {
@@ -73,7 +74,18 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         Ok(Self {
             engine,
             cache_dir: cache_dir.into(),
+            provider_cache_dir: None,
         })
+    }
+
+    pub(crate) fn new_with_provider_cache(
+        registry: &'a EngineRegistry,
+        cache_dir: impl Into<PathBuf>,
+        provider_cache_dir: impl Into<PathBuf>,
+    ) -> Result<Self, String> {
+        let mut adapter = Self::new(registry, cache_dir)?;
+        adapter.provider_cache_dir = Some(provider_cache_dir.into());
+        Ok(adapter)
     }
 
     pub(crate) fn index_repository(
@@ -122,20 +134,22 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         })
     }
 
-    pub(crate) fn search_code(
+    pub(crate) fn search_code_with_operation(
         &self,
         project: &str,
         identifier: &str,
         path_filter: Option<&str>,
         requested_limit: usize,
+        operation_id: Option<&str>,
     ) -> Result<FocusedCodeSearch, String> {
         let payload =
             focused_code_search_payload(project, identifier, path_filter, requested_limit)?;
-        let run = self.invoke(
+        let run = self.invoke_with_operation(
             CodebaseMemoryTool::SearchCode,
             &payload,
             Duration::from_secs(60),
             None,
+            operation_id,
         )?;
 
         if !run.ok {
@@ -187,6 +201,17 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         timeout: Duration,
         allowed_root: Option<&str>,
     ) -> Result<engine::EngineRunResult, String> {
+        self.invoke_with_operation(tool, payload, timeout, allowed_root, None)
+    }
+
+    fn invoke_with_operation(
+        &self,
+        tool: CodebaseMemoryTool,
+        payload: &Value,
+        timeout: Duration,
+        allowed_root: Option<&str>,
+        operation_id: Option<&str>,
+    ) -> Result<engine::EngineRunResult, String> {
         let request = ArgsFile::create(&self.cache_dir, payload)?;
         let request_path = request.path().display().to_string();
         let args =
@@ -205,10 +230,31 @@ impl<'a> CodebaseMemoryAdapter<'a> {
                 path.display().to_string(),
             ));
         }
-        if let Some(path) = engine_dir
+        let provider_dir = engine_dir
             .map(|directory| directory.join("providers"))
             .filter(|path| path.is_dir())
-        {
+            .or_else(|| {
+                #[cfg(debug_assertions)]
+                {
+                    let source_dir =
+                        Path::new(env!("CARGO_MANIFEST_DIR")).join("engines/providers");
+                    source_dir.is_dir().then_some(source_dir)
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    None
+                }
+            });
+        let provider_dir = match provider_dir {
+            Some(path) => Some(path),
+            None => match (engine_dir, self.provider_cache_dir.as_deref()) {
+                (Some(engine_dir), Some(provider_cache_dir)) => {
+                    super::provider_bundle::ensure_provider_root(engine_dir, provider_cache_dir)?
+                }
+                _ => None,
+            },
+        };
+        if let Some(path) = provider_dir {
             env_values.push((
                 "CODE_MEMORY_PROVIDERS_ROOT".to_string(),
                 path.display().to_string(),
@@ -216,6 +262,12 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         }
         if let Some(allowed_root) = allowed_root {
             env_values.push(("CBM_ALLOWED_ROOT".to_string(), allowed_root.to_string()));
+        }
+        if let Some(operation_id) = operation_id {
+            env_values.push((
+                "BACKEND_VISUAL_MAP_OPERATION_ID".to_string(),
+                operation_id.to_string(),
+            ));
         }
         let envs = env_values
             .iter()

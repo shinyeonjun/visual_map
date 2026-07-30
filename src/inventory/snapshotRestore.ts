@@ -94,20 +94,18 @@ export function dbInventoryFromSnapshot(
   profileId: string,
   inventorySummary?: InventorySummary,
 ): DbInventory {
-  const loadedDbItemCount = snapshot.items.filter((item) => item.source === "db").length;
-  const tables = snapshot.items
-    .filter((item) => item.source === "db" && item.kind === "table")
+  const index = buildDbRestoreIndex(snapshot);
+  const tables = index.tables
     .map((item): DbInventoryTable => {
       const tableKey = item.id.replace(/^db:table:/, "");
-      const constraints = dbConstraintsForTable(snapshot, item);
+      const constraints = dbConstraintsForTable(index, item);
       const stableTableKey = isDbObjectKey(item.qualifiedName) ? item.qualifiedName : null;
       return {
         key: stableTableKey,
         database: parseDbStableObjectKey(stableTableKey)?.database ?? null,
         schema: item.path ?? null,
         name: item.name,
-        columns: snapshot.items
-          .filter((column) => column.source === "db" && column.kind === "column" && column.parentId === item.id)
+        columns: (index.columnsByParentId.get(item.id) ?? [])
           .map((column) => ({
             key: isDbColumnKey(column.qualifiedName) ? column.qualifiedName : null,
             tableKey: stableTableKey,
@@ -117,11 +115,11 @@ export function dbInventoryFromSnapshot(
             isPrimaryKey: Boolean(column.isPrimaryKey),
             isForeignKey: Boolean(column.isForeignKey),
           })),
-        foreignKeys: foreignKeysForTable(snapshot, tableKey, "outbound"),
-        inboundForeignKeys: foreignKeysForTable(snapshot, tableKey, "inbound"),
+        foreignKeys: foreignKeysForTable(index, tableKey, "outbound"),
+        inboundForeignKeys: foreignKeysForTable(index, tableKey, "inbound"),
         constraints,
-        indexes: dbIndexesForTable(snapshot, item),
-        dependents: dbDependentsForTable(snapshot, item),
+        indexes: dbIndexesForTable(index, item),
+        dependents: dbDependentsForTable(index, item),
       };
     });
 
@@ -129,7 +127,7 @@ export function dbInventoryFromSnapshot(
   return {
     profileId,
     tables,
-    partial: Boolean(inventorySummary?.sources.db && inventorySummary.sources.db.total > loadedDbItemCount),
+    partial: Boolean(inventorySummary?.sources.db && inventorySummary.sources.db.total > index.loadedDbItemCount),
     snapshotKey: snapshot.metadata?.db?.snapshotKey ?? null,
     contractVersion: snapshot.metadata?.db?.contractVersion ?? null,
     limitRequested: snapshot.metadata?.db?.limitRequested ?? null,
@@ -148,6 +146,75 @@ export function dbInventoryFromSnapshot(
         tableKey: gap.relatedIds?.find((id) => id.startsWith("db:table:"))?.replace(/^db:table:/, "") ?? null,
       })),
   };
+}
+
+type DbRestoreIndex = {
+  loadedDbItemCount: number;
+  tables: InventoryItem[];
+  itemsById: Map<string, InventoryItem>;
+  columnsByParentId: Map<string, InventoryItem[]>;
+  constraintsByParentId: Map<string, InventoryItem[]>;
+  indexesByParentId: Map<string, InventoryItem[]>;
+  containsByPair: Map<string, SnapshotLink>;
+  foreignKeysByTableDirection: Map<string, SnapshotLink[]>;
+  linksByKind: Map<string, SnapshotLink[]>;
+};
+
+function buildDbRestoreIndex(snapshot: InventorySnapshot): DbRestoreIndex {
+  const itemsById = new Map<string, InventoryItem>();
+  const tables: InventoryItem[] = [];
+  const columnsByParentId = new Map<string, InventoryItem[]>();
+  const constraintsByParentId = new Map<string, InventoryItem[]>();
+  const indexesByParentId = new Map<string, InventoryItem[]>();
+  let loadedDbItemCount = 0;
+
+  for (const item of snapshot.items) {
+    itemsById.set(item.id, item);
+    if (item.source !== "db") continue;
+    loadedDbItemCount += 1;
+    if (item.kind === "table") tables.push(item);
+    if (item.kind === "column" && item.parentId) addToIndex(columnsByParentId, item.parentId, item);
+    if (item.kind === "constraint" && item.parentId) addToIndex(constraintsByParentId, item.parentId, item);
+    if (item.kind === "index" && item.parentId) addToIndex(indexesByParentId, item.parentId, item);
+  }
+
+  const containsByPair = new Map<string, SnapshotLink>();
+  const foreignKeysByTableDirection = new Map<string, SnapshotLink[]>();
+  const linksByKind = new Map<string, SnapshotLink[]>();
+  for (const link of snapshot.links ?? []) {
+    addToIndex(linksByKind, link.kind, link);
+    if (link.kind === "contains") {
+      containsByPair.set(`${link.from}\0${link.to}`, link);
+      continue;
+    }
+    if (link.kind !== "db_fk") continue;
+    const from = dbColumnRef(link.from);
+    const to = dbColumnRef(link.to);
+    if (!from || !to) continue;
+    addToIndex(foreignKeysByTableDirection, `outbound\0${from.tableKey}`, link);
+    addToIndex(foreignKeysByTableDirection, `inbound\0${to.tableKey}`, link);
+  }
+
+  return {
+    loadedDbItemCount,
+    tables,
+    itemsById,
+    columnsByParentId,
+    constraintsByParentId,
+    indexesByParentId,
+    containsByPair,
+    foreignKeysByTableDirection,
+    linksByKind,
+  };
+}
+
+function addToIndex<T>(index: Map<string, T[]>, key: string, value: T): void {
+  const values = index.get(key);
+  if (values) {
+    values.push(value);
+  } else {
+    index.set(key, [value]);
+  }
 }
 
 export function codeInventoryItemFromSnapshot(item: InventoryItem, project: string): CodeInventoryItem {
@@ -213,22 +280,17 @@ function codeCategory(item: CodeInventoryItem): string {
 }
 
 function foreignKeysForTable(
-  snapshot: InventorySnapshot,
+  index: DbRestoreIndex,
   tableKey: string,
   direction: "outbound" | "inbound",
 ): DbForeignKey[] {
   const grouped = new Map<string, DbForeignKey>();
-  for (const link of snapshot.links ?? []) {
-    if (link.kind !== "db_fk") {
-      continue;
-    }
+  for (const link of index.foreignKeysByTableDirection.get(`${direction}\0${tableKey}`) ?? []) {
     const from = dbColumnRef(link.from);
     const to = dbColumnRef(link.to);
-    if (!from || !to || (direction === "outbound" ? from.tableKey : to.tableKey) !== tableKey) {
-      continue;
-    }
-    const sourceTable = snapshot.items.find((item) => item.id === `db:table:${from.tableKey}`);
-    const referencedTable = snapshot.items.find((item) => item.id === `db:table:${to.tableKey}`);
+    if (!from || !to) continue;
+    const sourceTable = index.itemsById.get(`db:table:${from.tableKey}`);
+    const referencedTable = index.itemsById.get(`db:table:${to.tableKey}`);
     const key = linkEvidence(link, "db-object-key");
     const groupKey = `${key ?? link.label ?? ""}\0${from.tableKey}\0${to.tableKey}`;
     const existing = grouped.get(groupKey);
@@ -259,11 +321,10 @@ function foreignKeysForTable(
   return [...grouped.values()];
 }
 
-function dbConstraintsForTable(snapshot: InventorySnapshot, table: InventoryItem): DbConstraint[] {
-  return snapshot.items
-    .filter((item) => item.source === "db" && item.kind === "constraint" && item.parentId === table.id)
+function dbConstraintsForTable(index: DbRestoreIndex, table: InventoryItem): DbConstraint[] {
+  return (index.constraintsByParentId.get(table.id) ?? [])
     .map((item) => {
-      const evidence = dbObjectEvidence(snapshot, table.id, item.id);
+      const evidence = dbObjectEvidence(index, table.id, item.id);
       return {
         key: linkEvidence(evidence, "db-object-key") ?? (isDbObjectKey(item.qualifiedName) ? item.qualifiedName : null),
         name: linkEvidence(evidence, "db-object-name"),
@@ -281,11 +342,10 @@ function dbConstraintsForTable(snapshot: InventorySnapshot, table: InventoryItem
     });
 }
 
-function dbIndexesForTable(snapshot: InventorySnapshot, table: InventoryItem): DbIndex[] {
-  return snapshot.items
-    .filter((item) => item.source === "db" && item.kind === "index" && item.parentId === table.id)
+function dbIndexesForTable(index: DbRestoreIndex, table: InventoryItem): DbIndex[] {
+  return (index.indexesByParentId.get(table.id) ?? [])
     .map((item) => {
-      const evidence = dbObjectEvidence(snapshot, table.id, item.id);
+      const evidence = dbObjectEvidence(index, table.id, item.id);
       return {
         key: linkEvidence(evidence, "db-object-key") ?? (isDbObjectKey(item.qualifiedName) ? item.qualifiedName : null),
         name: linkEvidence(evidence, "db-object-name") ?? item.name,
@@ -299,21 +359,20 @@ function dbIndexesForTable(snapshot: InventorySnapshot, table: InventoryItem): D
     });
 }
 
-function dbDependentsForTable(snapshot: InventorySnapshot, table: InventoryItem): DbDependentObject[] {
-  const columnIds = new Set(
-    snapshot.items
-      .filter((item) => item.source === "db" && item.kind === "column" && item.parentId === table.id)
-      .map((item) => item.id),
-  );
-  const itemById = new Map(snapshot.items.map((item) => [item.id, item]));
+function dbDependentsForTable(index: DbRestoreIndex, table: InventoryItem): DbDependentObject[] {
+  const columnIds = new Set((index.columnsByParentId.get(table.id) ?? []).map((item) => item.id));
   const grouped = new Map<string, DbDependentObject>();
 
-  for (const link of snapshot.links ?? []) {
+  const links = [
+    ...(index.linksByKind.get("db_trigger") ?? []),
+    ...(index.linksByKind.get("db_dependency") ?? []),
+  ];
+  for (const link of links) {
     const trigger = link.kind === "db_trigger" && link.from === table.id;
     const dependency = link.kind === "db_dependency" && (link.to === table.id || columnIds.has(link.to));
     if (!trigger && !dependency) continue;
 
-    const object = itemById.get(trigger ? link.to : link.from);
+    const object = index.itemsById.get(trigger ? link.to : link.from);
     if (!object || !isDbDependentKey(object.qualifiedName, object.kind)) continue;
 
     const existing = grouped.get(object.qualifiedName) ?? {
@@ -342,10 +401,8 @@ function dependentRelation(kind: string): string {
   return "routine_depends_on";
 }
 
-function dbObjectEvidence(snapshot: InventorySnapshot, tableId: string, objectId: string): SnapshotLink | undefined {
-  return (snapshot.links ?? []).find(
-    (link) => link.kind === "contains" && link.from === tableId && link.to === objectId,
-  );
+function dbObjectEvidence(index: DbRestoreIndex, tableId: string, objectId: string): SnapshotLink | undefined {
+  return index.containsByPair.get(`${tableId}\0${objectId}`);
 }
 
 function linkEvidence(link: SnapshotLink | undefined, kind: string): string | null {

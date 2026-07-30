@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { toUserError } from "../app/operationStatus";
 import { hasTauriRuntime } from "../app/tauriRuntime";
+import { validateEngineRegistry } from "../app/runtimeContracts";
 import type { EngineRegistry } from "../types/engine";
 
 export function useEngineRegistry() {
@@ -13,8 +14,9 @@ export function useEngineRegistry() {
       return;
     }
 
-    invoke<EngineRegistry>("get_engine_availability")
-      .then((registry) => {
+    invoke<unknown>("get_engine_availability")
+      .then((value) => {
+        const registry = validateEngineRegistry(value);
         setEngineRegistry(registry);
         setEngineError(null);
       })

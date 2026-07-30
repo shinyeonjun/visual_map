@@ -24,4 +24,15 @@ describe("AppErrorBoundary", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("프로젝트 원본과 저장된 읽기 결과는 변경하지 않았습니다");
     expect(screen.getByRole("button", { name: "앱 다시 불러오기" })).toBeInTheDocument();
   });
+
+  it("can isolate a surface failure without replacing the whole shell", () => {
+    render(
+      <AppErrorBoundary fallback={<div role="alert">캔버스를 표시할 수 없습니다</div>}>
+        <BrokenView />
+      </AppErrorBoundary>,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("캔버스를 표시할 수 없습니다");
+    expect(screen.queryByRole("button", { name: "앱 다시 불러오기" })).not.toBeInTheDocument();
+  });
 });

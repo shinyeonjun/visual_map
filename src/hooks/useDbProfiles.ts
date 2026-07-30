@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useLayoutEffect, useState } from "react";
 import { toUserError } from "../app/operationStatus";
+import { validateDbIndexResult, validateDbInventory, validateWorkspace } from "../app/runtimeContracts";
 import { hasTauriRuntime, tauriUnavailableMessage } from "../app/tauriRuntime";
 import {
   dbInventoryTableKey,
@@ -122,7 +123,7 @@ export function useDbProfiles({
 
     await withBusy("db-save", async () => {
       try {
-        const updated = await invoke<Workspace>("save_db_profile", { request });
+        const updated = validateWorkspace(await invoke<unknown>("save_db_profile", { request }));
         setCurrentWorkspace(updated);
         clearDbInventory();
         clearVisualMap();
@@ -147,13 +148,7 @@ export function useDbProfiles({
 
     await withBusy("db-index", async () => {
       try {
-        const result = await invoke<{
-          workspace: Workspace;
-          run: { ok: boolean; stderr: string; stdout?: string };
-          indexJson?: unknown | null;
-          inventory?: DbInventory | null;
-          inventoryError?: string | null;
-        }>("index_db_profile", { request });
+        const result = validateDbIndexResult(await invoke<unknown>("index_db_profile", { request }));
         const dbMessage = redactUiSecret(result.run.stderr || result.run.stdout || "DB 읽기 실패", dbConnectionString);
         setCurrentWorkspace(result.workspace);
         if (result.run.ok) {
@@ -224,10 +219,10 @@ export function useDbProfiles({
     const deletedName = activeProfile.name;
     await withBusy("db-delete", async () => {
       try {
-        const updated = await invoke<Workspace>("delete_db_profile", {
+        const updated = validateWorkspace(await invoke<unknown>("delete_db_profile", {
           workspaceId: currentWorkspace.id,
           profileId: activeProfile.id,
-        });
+        }));
         setCurrentWorkspace(updated);
         clearDbInventory();
         clearVisualMap();
@@ -292,6 +287,7 @@ export function useDbProfiles({
     selectedTableKey: string | null,
     workspaceId = currentWorkspace?.id ?? null,
   ) {
+    validateDbInventory(inventory);
     setDbInventory(inventory);
     setInventoryWorkspaceId(workspaceId);
     setSelectedDbTableKey(selectedTableKey);
@@ -301,6 +297,7 @@ export function useDbProfiles({
   }
 
   async function storeDbInventory(workspaceId: string, inventory: DbInventory) {
+    validateDbInventory(inventory);
     const presentedInventory = {
       ...inventory,
       partial: Boolean(inventory.partial || dbInventoryTableCount(inventory) > inventory.tables.length),

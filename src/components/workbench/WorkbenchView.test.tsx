@@ -20,8 +20,6 @@ vi.mock("./InspectorPanel", () => ({
     </div>
   ),
 }));
-vi.mock("./ModePanel", () => ({ ModePanel: () => <nav data-testid="advanced-navigation" /> }));
-vi.mock("./TargetNavigator", () => ({ TargetNavigator: () => <nav data-testid="answer-navigation" /> }));
 vi.mock("./WorkbenchLeftPanel", () => ({ WorkbenchLeftPanel: () => <div /> }));
 vi.mock("./WorkbenchStatusBar", () => ({ WorkbenchStatusBar: () => <div /> }));
 vi.mock("./WorkbenchTopBar", () => ({
@@ -80,7 +78,7 @@ describe("WorkbenchView surface transitions", () => {
   it.each([
     ["the project opens", true, false],
     ["the saved answer restores", false, true],
-  ])("keeps project content hidden while %s", (_phase, opening, restoringSnapshot) => {
+  ])("keeps the shell visible while %s", (_phase, opening, restoringSnapshot) => {
     const { container } = render(
       <WorkbenchView
         sourceManagerOpen={false}
@@ -111,10 +109,9 @@ describe("WorkbenchView surface transitions", () => {
     );
 
     expect(screen.getByText("프로젝트 분석을 불러오고 있습니다")).toBeInTheDocument();
-    expect(screen.queryByTestId("answer-navigation")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("advanced-navigation")).not.toBeInTheDocument();
+    expect(container.querySelector(".product-navigation")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "프로젝트를 연결하세요" })).not.toBeInTheDocument();
-    expect(container.querySelector(".product-workspace")).toHaveClass("is-single-column");
+    expect(container.querySelector(".product-workspace")).not.toHaveClass("is-single-column");
   });
 
   it("keeps the committed layout until the requested map commits", async () => {

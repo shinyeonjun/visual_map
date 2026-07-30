@@ -54,7 +54,11 @@ fn index_code_repository_with_persistence(
             .display()
             .to_string(),
     );
-    let adapter = CodebaseMemoryAdapter::new(registry, &code_cache_path)?;
+    let adapter = CodebaseMemoryAdapter::new_with_provider_cache(
+        registry,
+        &code_cache_path,
+        paths.app_data_dir.join("providers"),
+    )?;
     let previous_project = workspace
         .code_project
         .clone()
@@ -115,7 +119,11 @@ pub(crate) fn code_inventory(
         .code_project
         .clone()
         .unwrap_or_else(|| workspace.name.clone());
-    let adapter = CodebaseMemoryAdapter::new(registry, code_cache_path)?;
+    let adapter = CodebaseMemoryAdapter::new_with_provider_cache(
+        registry,
+        code_cache_path,
+        paths.app_data_dir.join("providers"),
+    )?;
     code_inventory_from_adapter(&adapter, project, &workspace.repo_path)
 }
 
@@ -189,13 +197,14 @@ pub(crate) fn next_code_project_generation() -> String {
     )
 }
 
-pub(crate) fn focused_code_search(
+pub(crate) fn focused_code_search_with_operation(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
     workspace_id: &str,
     identifier: &str,
     path_filter: Option<&str>,
     requested_limit: usize,
+    operation_id: Option<&str>,
 ) -> Result<FocusedCodeSearch, String> {
     validate_workspace_id(workspace_id)?;
     let paths = base_paths(app_data_dir);
@@ -205,11 +214,17 @@ pub(crate) fn focused_code_search(
         .code_project
         .as_deref()
         .unwrap_or(workspace.name.as_str());
-    CodebaseMemoryAdapter::new(registry, code_cache_path)?.search_code(
+    CodebaseMemoryAdapter::new_with_provider_cache(
+        registry,
+        code_cache_path,
+        paths.app_data_dir.join("providers"),
+    )?
+    .search_code_with_operation(
         project,
         identifier,
         path_filter,
         requested_limit,
+        operation_id,
     )
 }
 

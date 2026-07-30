@@ -330,6 +330,58 @@
   font-style: normal;
 }
 
+.answer-flow-map {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-raised) 100%);
+}
+.answer-flow-map-intro {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-raised);
+}
+.answer-flow-map-intro span { color: var(--ink-2); font-size: 11px; font-weight: 800; }
+.answer-flow-map-intro small { color: var(--ink-4); font-size: 9.5px; }
+.answer-flow-map .api-connection-view { min-width: 0; overflow-x: auto; }
+.answer-flow-map .api-connection-canvas { min-width: 620px; }
+.answer-flow-details { margin-top: 10px; border-top: 1px solid var(--line); }
+.answer-flow-details > summary {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  font-weight: 760;
+  cursor: pointer;
+  list-style: none;
+}
+.answer-flow-details > summary::-webkit-details-marker { display: none; }
+.answer-flow-details > summary::before { content: "＋"; margin-right: 6px; color: var(--blue-ink); font: 800 13px/1 var(--mono); }
+.answer-flow-details[open] > summary::before { content: "－"; }
+.answer-flow-details[open] { padding-bottom: 8px; }
+
+@media (prefers-color-scheme: dark) {
+  .product-shell .answer-flow-map .api-diagram-node,
+  .product-shell .answer-flow-map .api-gap-node,
+  .product-shell .answer-flow-map .api-connection-legend,
+  .product-shell .answer-flow-map .api-edge-label,
+  .product-shell .answer-flow-map .api-candidate-label {
+    background: var(--bg-raised);
+    color: var(--ink-2);
+  }
+  .product-shell .answer-flow-map .api-node-columns,
+  .product-shell .answer-flow-map .api-diagram-node > small,
+  .product-shell .answer-flow-map .api-connection-legend span {
+    color: var(--ink-3);
+  }
+}
+
 .answer-flow { margin: 0; padding: 0; list-style: none; }
 .answer-flow li { position: relative; display: grid; }
 .answer-flow li:not(:last-child)::after {
@@ -679,4 +731,110 @@
 
 @media (prefers-reduced-motion: reduce) {
   .answer-loading > section i { animation: none; }
+}
+
+/* Keep every answer state monochrome in dark mode, including secondary states. */
+@media (prefers-color-scheme: dark) {
+  .product-shell .target-navigator,
+  .product-shell .target-filter:focus-within,
+  .product-shell .target-list-empty button:hover,
+  .product-shell .target-navigator-footer > button,
+  .product-shell .answer-canvas,
+  .product-shell .answer-flow-index,
+  .product-shell .answer-change-intent select,
+  .product-shell .answer-change-intent input,
+  .product-shell .answer-change-intent button,
+  .product-shell .answer-search-action {
+    background: var(--bg-raised);
+    color: var(--ink-2);
+  }
+
+  .product-shell .answer-refreshing {
+    background: color-mix(in srgb, var(--bg-raised) 96%, transparent);
+    color: var(--ink-2);
+  }
+
+  .product-shell .answer-flow-index {
+    color: var(--ink);
+  }
+
+  .product-shell .answer-change-intent button.active {
+    background: var(--accent-soft);
+    color: var(--ink);
+  }
+
+  .product-shell .answer-search-action {
+    box-shadow: none;
+  }
+
+  .product-shell .answer-empty-source button {
+    background: var(--ink);
+    color: var(--bg-raised);
+  }
+}
+
+/* Keep the image-like flow readable without hiding the final DB card. */
+.product-shell[data-surface="answers"] .product-workspace.has-inspector {
+  grid-template-columns: 300px minmax(0, 1fr) 336px;
+}
+
+.product-shell[data-surface="answers"] .evidence-panel {
+  width: 336px;
+}
+
+.architecture-flow-row {
+  gap: 6px;
+}
+
+.architecture-flow-link {
+  gap: 6px;
+}
+
+.architecture-flow-card {
+  width: 150px;
+  min-height: 150px;
+  padding: 12px;
+}
+
+.architecture-flow-arrow {
+  min-width: 34px;
+}
+
+@media (max-width: 1240px) {
+  .product-shell[data-surface="answers"] .product-workspace.has-inspector {
+    grid-template-columns: 260px minmax(0, 1fr) 300px;
+  }
+
+  .product-shell[data-surface="answers"] .evidence-panel {
+    width: 300px;
+  }
+
+  .architecture-flow-card {
+    width: 136px;
+    padding: 10px;
+  }
+}
+
+@media (max-width: 1020px) {
+  .product-shell[data-surface="answers"] .product-workspace.has-inspector {
+    grid-template-columns: 220px minmax(0, 1fr) 276px;
+  }
+
+  .product-shell[data-surface="answers"] .evidence-panel {
+    width: 276px;
+  }
+
+  .architecture-flow-card {
+    width: 126px;
+  }
+}
+
+@media (max-width: 820px) {
+  .product-shell[data-surface="answers"] .product-workspace.has-inspector {
+    grid-template-columns: 204px minmax(0, 1fr);
+  }
+
+  .product-shell[data-surface="answers"] .evidence-panel {
+    width: min(320px, calc(100% - 204px));
+  }
 }
