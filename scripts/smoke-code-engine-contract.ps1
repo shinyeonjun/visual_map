@@ -119,8 +119,12 @@ try {
             '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>fixture</groupId><artifactId>provider-smoke</artifactId><version>1.0.0</version></project>',
             [Text.UTF8Encoding]::new($false)
         )
-        $javaSource = @'
+$javaSource = @'
 package fixture;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 @interface RequestMapping { String value() default ""; }
 @interface RestController {}
