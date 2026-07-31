@@ -466,7 +466,6 @@ pub(crate) fn framework_fact_label(
     path: Option<&str>,
     method: Option<&str>,
     symbol: &Option<String>,
-    framework: &str,
 ) -> Option<(&'static str, String)> {
     let label = match kind {
         "HTTP_ROUTE" => format!("{} {}", method.unwrap_or("ANY"), path.unwrap_or("/")),
@@ -498,11 +497,6 @@ pub(crate) fn framework_fact_label(
         "SCHEDULED_JOB" | "SERVER_ACTION" => "JOB",
         "EVENT_HANDLER" | "ASYNC_CALLS" => "EVENT",
         _ => "FLOW_NODE",
-    };
-    let label = if framework.is_empty() {
-        label
-    } else {
-        format!("{framework}: {label}")
     };
     Some((node_kind, label))
 }

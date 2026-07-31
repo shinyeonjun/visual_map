@@ -458,7 +458,10 @@ fn skip_whitespace(bytes: &[u8], from: usize) -> usize {
 }
 
 fn is_class_like(item: &CodeInventoryItem) -> bool {
-    matches!(item.engine_label.as_str(), "Class" | "Record" | "Struct")
+    matches!(
+        item.engine_label.as_str(),
+        "Class" | "Record" | "Struct" | "Type"
+    )
 }
 
 fn is_csharp_path(path: &str) -> bool {
@@ -647,7 +650,7 @@ mod tests {
                 item(
                     "List",
                     list_parent,
-                    "Class",
+                    "Type",
                     "Endpoints/List.cs",
                     (1, 8),
                     None,

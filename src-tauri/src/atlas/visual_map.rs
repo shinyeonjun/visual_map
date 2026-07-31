@@ -401,7 +401,16 @@ pub(super) fn confirmed_link_edge(
         ),
         _ => (
             "snapshot-link",
-            format!("{from_name} 항목과 {to_name} 항목의 확정 연결입니다"),
+            format!(
+                "{from_name} → {to_name}: {} {} 관계입니다",
+                link.label.as_deref().unwrap_or("연결"),
+                match link.truth_class.as_str() {
+                    "confirmed" => "확정",
+                    "structural" => "구조",
+                    "candidate" => "후보",
+                    _ => "미확인",
+                }
+            ),
         ),
     };
 

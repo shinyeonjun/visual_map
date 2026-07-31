@@ -132,7 +132,8 @@ fn read_architecture(payload: &Value) -> Result<Value, String> {
 fn query_graph(payload: &Value) -> Result<(), String> {
     let query = required_string(payload, "query")?.to_ascii_uppercase();
     let index = read_index(payload)?;
-    if query.contains("HANDLES") {
+    let relationship_kind = query_relationship_kind(&query);
+    if relationship_kind == Some("HANDLES") {
         let endpoint_aliases = architecture_endpoint_aliases(&index);
         let rows = index
             .get("framework_relations")
@@ -156,7 +157,7 @@ fn query_graph(payload: &Value) -> Result<(), String> {
             "total": total
         }));
     }
-    if query.contains("CALLS") {
+    if relationship_kind == Some("CALLS") {
         let rows = index
             .get("relations")
             .and_then(Value::as_array)
@@ -167,15 +168,42 @@ fn query_graph(payload: &Value) -> Result<(), String> {
                 json!([
                     relation.get("from").cloned().unwrap_or(Value::Null),
                     relation.get("to").cloned().unwrap_or(Value::Null),
-                    1.0,
-                    "semantic",
-                    "semantic-call",
+                    relation.get("confidence").cloned().unwrap_or(Value::Null),
+                    relation.get("strategy").cloned().unwrap_or(Value::Null),
+                    Value::Null,
+                    relation.get("path").cloned().unwrap_or(Value::Null),
+                    relation.get("range").cloned().unwrap_or(Value::Null),
                 ])
             })
             .collect::<Vec<_>>();
         let total = rows.len();
         return print_json(&json!({
-            "columns": ["source", "target", "confidence", "strategy", "call_expression"],
+            "columns": ["source", "target", "confidence", "strategy", "call_expression", "path", "range"],
+            "rows": rows,
+            "total": total
+        }));
+    }
+    if let Some(kind) = relationship_kind {
+        let rows = index
+            .get("__architecture_edges")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|edge| edge.get("kind").and_then(Value::as_str) == Some(kind))
+            .map(|edge| {
+                json!([
+                    edge.get("from").cloned().unwrap_or(Value::Null),
+                    edge.get("to").cloned().unwrap_or(Value::Null),
+                    edge.get("kind").cloned().unwrap_or(Value::Null),
+                    edge.get("level").cloned().unwrap_or(Value::Null),
+                    edge.get("properties").cloned().unwrap_or(Value::Null),
+                    edge.get("evidence").cloned().unwrap_or(Value::Null),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let total = rows.len();
+        return print_json(&json!({
+            "columns": ["source", "target", "kind", "level", "properties", "evidence"],
             "rows": rows,
             "total": total
         }));
@@ -188,6 +216,16 @@ fn query_graph(payload: &Value) -> Result<(), String> {
         "rows": rows,
         "total": total
     }))
+}
+
+fn query_relationship_kind(query: &str) -> Option<&str> {
+    let relationship = query.split_once('[')?.1.split_once(']')?.0;
+    let kind = relationship.split_once(':')?.1;
+    let kind = kind
+        .trim_start()
+        .split(|character: char| !character.is_ascii_uppercase() && character != '_')
+        .next()?;
+    (!kind.is_empty()).then_some(kind)
 }
 
 fn architecture_endpoint_aliases(index: &Value) -> HashMap<String, String> {
@@ -263,6 +301,105 @@ mod tests {
             json!("route:unknown")
         );
     }
+
+    #[test]
+    fn focused_search_counts_hidden_files_without_substring_false_positives() {
+        let files = vec![
+            (
+                "src/a.java".to_string(),
+                "orders.find(); preorders.find(); orders_id = 1;".to_string(),
+            ),
+            (
+                "src/b.java".to_string(),
+                "return orders.save();".to_string(),
+            ),
+        ];
+        let (results, matches, total) =
+            collect_search_matches(&files, &HashMap::new(), "orders", None, 1);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(matches, 2);
+        assert_eq!(total, 2);
+    }
+
+    #[test]
+    fn generated_path_filter_is_exact_and_escaped() {
+        let filter = r"^(src/a\.java|tests/b\.java)$";
+
+        assert!(path_matches_filter("src/a.java", filter));
+        assert!(path_matches_filter("tests/b.java", filter));
+        assert!(!path_matches_filter("nested/src/a.java", filter));
+        assert!(path_matches_filter("src/db/orders.sql", "^src/db/"));
+        assert!(!path_matches_filter("src/db/orders.sql", r"src/.*"));
+    }
+
+    #[test]
+    fn relationship_query_detection_does_not_confuse_node_labels() {
+        assert_eq!(
+            query_relationship_kind("MATCH (a)-[rel:IMPORTS]->(b) RETURN a, b"),
+            Some("IMPORTS")
+        );
+        assert_eq!(
+            query_relationship_kind("MATCH (node:ROUTE|FUNCTION) RETURN node"),
+            None
+        );
+    }
+
+    #[test]
+    fn inventory_preserves_provider_enclosing_symbol() {
+        let parent = "scip-dotnet nuget . . Contributors/Delete#";
+        let method = "scip-dotnet nuget . . Contributors/Delete#Configure().";
+        let documents = vec![json!({
+            "path": "Contributors/Delete.cs",
+            "symbols": [{
+                "symbol": method,
+                "kind": "Method",
+                "enclosing_symbol": parent
+            }],
+            "occurrences": []
+        })];
+        let mut rows = Vec::new();
+        add_document_symbols(&documents, None, &mut rows, &mut HashSet::new());
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0][0], "Method");
+        assert_eq!(rows[0][1], "Configure");
+        assert_eq!(rows[0][10], parent);
+    }
+
+    #[test]
+    fn inventory_expands_single_line_provider_definition_to_lexical_scope() {
+        let root = std::env::temp_dir().join(format!(
+            "code-memory-inventory-scope-{}",
+            std::process::id()
+        ));
+        let path = root.join("Contributors/Delete.cs");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "public class Delete : EndpointWithoutRequest\n{\n  public override void Configure()\n  {\n    Get(\"/items\");\n  }\n}\n",
+        )
+        .unwrap();
+        let documents = vec![json!({
+            "path": "Contributors/Delete.cs",
+            "symbols": [{
+                "symbol": "scip-dotnet nuget . . Contributors/Delete#Configure().",
+                "kind": "Method"
+            }],
+            "occurrences": [{
+                "symbol": "scip-dotnet nuget . . Contributors/Delete#Configure().",
+                "range": [2, 23, 32],
+                "definition": true
+            }]
+        })];
+        let mut rows = Vec::new();
+        add_document_symbols(&documents, root.to_str(), &mut rows, &mut HashSet::new());
+
+        assert_eq!(rows[0][4], 3);
+        assert_eq!(rows[0][6], 6);
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 fn search_code(payload: &Value) -> Result<(), String> {
@@ -272,6 +409,9 @@ fn search_code(payload: &Value) -> Result<(), String> {
         .and_then(Value::as_str)
         .ok_or("project index has no project_root")?;
     let identifier = extract_identifier(required_string(payload, "pattern")?);
+    if identifier.is_empty() {
+        return Err("search pattern does not contain an identifier".to_string());
+    }
     let path_filter = payload.get("path_filter").and_then(Value::as_str);
     let limit = payload
         .get("limit")
@@ -279,27 +419,53 @@ fn search_code(payload: &Value) -> Result<(), String> {
         .unwrap_or(32)
         .clamp(1, 32) as usize;
     let documents = document_symbol_names(&index);
+    let (results, total_matches, total_results) = collect_search_matches(
+        &load_text_files(Path::new(root)),
+        &documents,
+        &identifier,
+        path_filter,
+        limit,
+    );
+    print_json(&json!({
+        "results": results,
+        "total_grep_matches": total_matches,
+        "total_results": total_results,
+        "raw_match_count": 0,
+    }))
+}
+
+fn collect_search_matches(
+    files: &[(String, String)],
+    documents: &HashMap<String, Vec<String>>,
+    identifier: &str,
+    path_filter: Option<&str>,
+    limit: usize,
+) -> (Vec<Value>, usize, usize) {
     let mut results = Vec::new();
     let mut total_matches = 0usize;
-    for (path, source) in load_text_files(Path::new(root)) {
-        if path_filter.is_some_and(|filter| !path_matches_filter(&path, filter)) {
+    let mut total_results = 0usize;
+    for (path, source) in files {
+        if path_filter.is_some_and(|filter| !path_matches_filter(path, filter)) {
             continue;
         }
         let lines = source
             .lines()
             .enumerate()
-            .filter_map(|(line, text)| text.contains(&identifier).then_some(line as u64 + 1))
+            .filter_map(|(line, text)| {
+                contains_identifier(text, identifier).then_some(line as u64 + 1)
+            })
             .collect::<Vec<_>>();
         if lines.is_empty() {
             continue;
         }
         total_matches += lines.len();
+        total_results += 1;
         if results.len() >= limit {
             continue;
         }
         let qualified_name = documents
-            .get(&path)
-            .and_then(|names| names.iter().find(|name| name.contains(&identifier)))
+            .get(path)
+            .and_then(|names| names.iter().find(|name| name.contains(identifier)))
             .cloned()
             .unwrap_or_else(|| format!("{path}::{identifier}"));
         results.push(json!({
@@ -311,13 +477,20 @@ fn search_code(payload: &Value) -> Result<(), String> {
             "match_lines": lines,
         }));
     }
-    let total_results = results.len();
-    print_json(&json!({
-        "results": results,
-        "total_grep_matches": total_matches,
-        "total_results": total_results,
-        "raw_match_count": 0,
-    }))
+    (results, total_matches, total_results)
+}
+
+fn contains_identifier(text: &str, identifier: &str) -> bool {
+    text.match_indices(identifier).any(|(start, _)| {
+        let end = start + identifier.len();
+        let before = text[..start].chars().next_back();
+        let after = text[end..].chars().next();
+        !before.is_some_and(is_identifier_character) && !after.is_some_and(is_identifier_character)
+    })
+}
+
+fn is_identifier_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '_'
 }
 
 fn inventory_columns() -> [&'static str; 20] {
@@ -353,7 +526,12 @@ fn inventory_rows(index: &Value) -> Vec<Value> {
         add_architecture_nodes(architecture_nodes, &evidence, &mut nodes, &mut seen);
     }
     if let Some(documents) = index.get("documents").and_then(Value::as_array) {
-        add_document_symbols(documents, &mut nodes, &mut seen);
+        add_document_symbols(
+            documents,
+            index.get("project_root").and_then(Value::as_str),
+            &mut nodes,
+            &mut seen,
+        );
     }
     nodes.sort_by(|left, right| {
         left.get(2)
@@ -407,16 +585,29 @@ fn add_architecture_nodes(
             properties.get("routeMethod").and_then(Value::as_str),
             properties.get("signature").and_then(Value::as_str),
             properties.get("isTest").and_then(Value::as_bool),
+            None,
+            None,
         ));
     }
 }
 
-fn add_document_symbols(documents: &[Value], rows: &mut Vec<Value>, seen: &mut HashSet<String>) {
+fn add_document_symbols(
+    documents: &[Value],
+    project_root: Option<&str>,
+    rows: &mut Vec<Value>,
+    seen: &mut HashSet<String>,
+) {
     for document in documents {
         let path = document
             .get("path")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let source = project_root
+            .filter(|_| !path.is_empty())
+            .and_then(|root| fs::read_to_string(Path::new(root).join(path)).ok());
+        let source_lines = source
+            .as_deref()
+            .map(|source| source.lines().collect::<Vec<_>>());
         let symbols = document
             .get("symbols")
             .and_then(Value::as_array)
@@ -440,35 +631,70 @@ fn add_document_symbols(documents: &[Value], rows: &mut Vec<Value>, seen: &mut H
             }
             let occurrence = occurrences
                 .iter()
-                .find(|occurrence| occurrence.get("symbol").and_then(Value::as_str) == Some(id));
-            let line = occurrence
+                .find(|occurrence| occurrence.get("symbol").and_then(Value::as_str) == Some(id))
+                .copied();
+            let provider_range = occurrence
                 .and_then(|occurrence| occurrence.get("range"))
                 .and_then(Value::as_array)
-                .and_then(|range| range.first())
-                .and_then(Value::as_i64)
-                .map(|line| line.max(0) as u64 + 1)
-                .unwrap_or_default();
+                .map(|range| {
+                    range
+                        .iter()
+                        .filter_map(Value::as_i64)
+                        .map(|value| value.clamp(0, i64::from(i32::MAX)) as i32)
+                        .collect::<Vec<_>>()
+                });
             let kind = symbol
                 .get("kind")
                 .and_then(Value::as_str)
                 .map(normalize_symbol_kind)
                 .unwrap_or("Variable");
-            let name = symbol_name(id);
+            let source_range =
+                inventory_symbol_range(provider_range.as_deref(), source_lines.as_deref(), kind);
+            let name = symbol
+                .get("display_name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| symbol_name(id));
             let signature = symbol.get("signature").and_then(Value::as_str);
             rows.push(inventory_row(
                 kind,
                 &name,
                 id,
                 (!path.is_empty()).then_some(path.to_string()),
-                line,
+                0,
                 None,
                 None,
                 None,
                 signature,
                 None,
+                Some(&source_range),
+                symbol.get("enclosing_symbol").and_then(Value::as_str),
             ));
         }
     }
+}
+
+fn inventory_symbol_range(
+    provider_range: Option<&[i32]>,
+    source_lines: Option<&[&str]>,
+    kind: &str,
+) -> Vec<i32> {
+    let range = provider_range.unwrap_or_default();
+    let provider_spans_lines =
+        crate::range_parts(range).is_some_and(|(start, _, end, _)| end > start);
+    if provider_spans_lines
+        || !matches!(
+            kind,
+            "Function" | "Method" | "Constructor" | "Class" | "Struct" | "Interface" | "Type"
+        )
+    {
+        return range.to_vec();
+    }
+    source_lines
+        .and_then(|lines| crate::source_scope_from_lines(lines, range))
+        .unwrap_or_else(|| range.to_vec())
 }
 
 fn inventory_row(
@@ -482,19 +708,30 @@ fn inventory_row(
     route_method: Option<&str>,
     signature: Option<&str>,
     is_test: Option<bool>,
+    source_range: Option<&[i32]>,
+    parent_qualified_name: Option<&str>,
 ) -> Value {
+    let source_location = source_range.and_then(crate::range_parts);
+    let start_line = source_location
+        .map(|(start, _, _, _)| start.max(0) as u64 + 1)
+        .unwrap_or(line);
+    let start_column = source_location.map(|(_, start, _, _)| start.max(0) as u64);
+    let end_line = source_location
+        .map(|(_, _, end, _)| end.max(0) as u64 + 1)
+        .unwrap_or(line);
+    let end_column = source_location.map(|(_, _, _, end)| end.max(0) as u64);
     json!([
         [label],
         name,
         qualified_name,
         file_path,
-        (line > 0).then_some(line),
-        Value::Null,
-        (line > 0).then_some(line),
-        Value::Null,
+        (start_line > 0).then_some(start_line),
+        start_column,
+        (end_line > 0).then_some(end_line),
+        end_column,
         method,
         Value::Null,
-        Value::Null,
+        parent_qualified_name,
         Value::Null,
         Value::Null,
         Value::Null,
@@ -588,6 +825,11 @@ fn normalize_symbol_kind(kind: &str) -> &'static str {
 }
 
 fn symbol_name(symbol: &str) -> String {
+    if let Ok(parsed) = scip::symbol::parse_symbol(symbol) {
+        if let Some(descriptor) = parsed.descriptors.last() {
+            return descriptor.name.clone();
+        }
+    }
     let value = symbol
         .rsplit_once('#')
         .map(|(_, value)| value)
@@ -620,14 +862,76 @@ fn extract_identifier(pattern: &str) -> String {
 }
 
 fn path_matches_filter(path: &str, filter: &str) -> bool {
-    let mut filter = filter.trim().trim_start_matches('^').trim_end_matches('$');
-    if filter.starts_with('(') && filter.ends_with(')') {
-        filter = &filter[1..filter.len() - 1];
+    let filter = filter.trim();
+    if let Some(exact) = filter
+        .strip_prefix("^(")
+        .and_then(|value| value.strip_suffix(")$"))
+    {
+        for part in split_unescaped(exact, '|') {
+            let Some(candidate) = regex_literal(part) else {
+                return false;
+            };
+            if candidate == path {
+                return true;
+            }
+        }
+        return false;
     }
-    filter
-        .split('|')
-        .map(|part| part.replace(r"\.", "."))
-        .any(|part| part == path || path.contains(&part))
+    let anchored_start = filter.starts_with('^');
+    let anchored_end = filter.ends_with('$');
+    let value = filter
+        .strip_prefix('^')
+        .unwrap_or(filter)
+        .strip_suffix('$')
+        .unwrap_or_else(|| filter.strip_prefix('^').unwrap_or(filter));
+    let Some(value) = regex_literal(value) else {
+        return false;
+    };
+    match (anchored_start, anchored_end) {
+        (true, true) => path == value,
+        (true, false) => path.starts_with(&value),
+        (false, true) => path.ends_with(&value),
+        (false, false) => path.contains(&value),
+    }
+}
+
+fn split_unescaped(value: &str, separator: char) -> Vec<&str> {
+    let mut output = Vec::new();
+    let mut start = 0;
+    let mut escaped = false;
+    for (index, character) in value.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == separator {
+            output.push(&value[start..index]);
+            start = index + character.len_utf8();
+        }
+    }
+    output.push(&value[start..]);
+    output
+}
+
+fn regex_literal(value: &str) -> Option<String> {
+    let mut output = String::new();
+    let mut escaped = false;
+    for character in value.chars() {
+        if escaped {
+            output.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if matches!(
+            character,
+            '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$'
+        ) {
+            return None;
+        } else {
+            output.push(character);
+        }
+    }
+    (!escaped).then_some(output)
 }
 
 fn load_text_files(root: &Path) -> Vec<(String, String)> {

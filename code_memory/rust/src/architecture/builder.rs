@@ -681,6 +681,21 @@ impl ArchitectureBuilder {
 
     pub(crate) fn emit_call_boundaries(&mut self, output: &IndexOutput) {
         for relation in &output.relations {
+            let strategy = relation.strategy.as_deref().unwrap_or("unknown");
+            let resolution = if relation.confidence.is_some_and(|value| value >= 0.85)
+                && strategy.starts_with("provider-")
+            {
+                "provider"
+            } else {
+                "unknown"
+            };
+            let mut properties = BTreeMap::from([
+                ("resolution".to_string(), resolution.to_string()),
+                ("strategy".to_string(), strategy.to_string()),
+            ]);
+            if let Some(confidence) = relation.confidence {
+                properties.insert("confidence".to_string(), confidence.to_string());
+            }
             let from = self
                 .symbol_modules
                 .get(&relation.from)
@@ -716,11 +731,11 @@ impl ArchitectureBuilder {
                         &format!("file:{to_file}"),
                         kind,
                         "summary",
-                        BTreeMap::from([(String::from("resolution"), String::from("provider"))]),
+                        properties.clone(),
                         ArchitectureEvidence {
                             path: relation.path.clone(),
                             range: relation.range.clone(),
-                            note: Some(format!("provider:{}", relation.kind)),
+                            note: Some(format!("{strategy}:{}", relation.kind)),
                         },
                     );
                 }
@@ -733,11 +748,11 @@ impl ArchitectureBuilder {
                 &to,
                 kind,
                 "summary",
-                BTreeMap::new(),
+                properties,
                 ArchitectureEvidence {
                     path: relation.path.clone(),
                     range: relation.range.clone(),
-                    note: Some(format!("provider:{}", relation.kind)),
+                    note: Some(format!("{strategy}:{}", relation.kind)),
                 },
             );
         }
@@ -754,7 +769,6 @@ impl ArchitectureBuilder {
                     fact.path.as_deref(),
                     fact.method.as_deref(),
                     &fact.symbol,
-                    &fact.framework,
                 ) else {
                     continue;
                 };
@@ -765,6 +779,15 @@ impl ArchitectureBuilder {
                 let id = format!("entrypoint:{}:{}", framework.id, fact.id);
                 let mut properties = fact.properties.clone();
                 properties.insert("framework".to_string(), framework.id.clone());
+                if fact.kind == "HTTP_ROUTE" {
+                    if let Some(method) = &fact.method {
+                        properties.insert("method".to_string(), method.clone());
+                        properties.insert("routeMethod".to_string(), method.clone());
+                    }
+                    if let Some(path) = &fact.path {
+                        properties.insert("routePath".to_string(), path.clone());
+                    }
+                }
                 properties.insert(
                     "handler_resolution".to_string(),
                     if target.is_some() {
@@ -777,7 +800,11 @@ impl ArchitectureBuilder {
                     id.clone(),
                     kind,
                     label.clone(),
-                    label.clone(),
+                    if fact.framework.is_empty() {
+                        label.clone()
+                    } else {
+                        format!("{}: {label}", fact.framework)
+                    },
                     Some(fact.source_file.clone()),
                     Some(framework.language.clone()),
                     Some(module.clone()),
@@ -816,20 +843,17 @@ impl ArchitectureBuilder {
         let mut flows = Vec::new();
         for (entrypoint, kind, label) in &self.entrypoints {
             let mut queue = VecDeque::from([entrypoint.clone()]);
+            let mut reachable = BTreeSet::new();
             let mut nodes = BTreeSet::new();
-            let mut edge_ids = BTreeSet::new();
-            let mut truncated = false;
             while let Some(node) = queue.pop_front() {
-                if !nodes.insert(node.clone()) {
+                if !reachable.insert(node.clone()) {
                     continue;
                 }
-                if nodes.len() >= 50 {
-                    truncated = true;
-                    continue;
+                if nodes.len() < 50 {
+                    nodes.insert(node.clone());
                 }
                 for edge in adjacency.get(&node).into_iter().flatten() {
-                    edge_ids.insert(edge.id.clone());
-                    if !nodes.contains(&edge.to) {
+                    if !reachable.contains(&edge.to) {
                         queue.push_back(edge.to.clone());
                     }
                 }
@@ -837,15 +861,27 @@ impl ArchitectureBuilder {
             if nodes.len() <= 1 {
                 continue;
             }
+            let edge_ids = self
+                .edges
+                .values()
+                .filter(|edge| {
+                    edge.level == "summary"
+                        && edge.kind != "CONTAINS"
+                        && nodes.contains(&edge.from)
+                        && nodes.contains(&edge.to)
+                })
+                .map(|edge| edge.id.clone())
+                .collect();
+            let omitted_node_count = reachable.len().saturating_sub(nodes.len());
             flows.push(ArchitectureFlow {
                 id: format!("flow:{entrypoint}"),
                 kind: kind.clone(),
                 label: label.clone(),
                 entrypoint: entrypoint.clone(),
                 node_ids: nodes.into_iter().collect(),
-                edge_ids: edge_ids.into_iter().collect(),
-                truncated,
-                omitted_node_count: queue.len(),
+                edge_ids,
+                truncated: omitted_node_count > 0,
+                omitted_node_count,
             });
         }
         flows.sort_by(|left, right| left.id.cmp(&right.id));
@@ -862,5 +898,53 @@ impl ArchitectureBuilder {
             flows,
             diagnostics: self.diagnostics,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flow_cap_reports_every_hidden_node_without_dangling_edges() {
+        let mut builder = ArchitectureBuilder::new(Path::new("."), HashMap::new(), Vec::new());
+        for index in 0..55 {
+            builder.node(
+                format!("node-{index}"),
+                "MODULE",
+                format!("node-{index}"),
+                format!("node-{index}"),
+                None,
+                None,
+                None,
+                false,
+                BTreeMap::new(),
+            );
+            if index > 0 {
+                builder.edge(
+                    &format!("node-{}", index - 1),
+                    &format!("node-{index}"),
+                    "CALLS",
+                    "summary",
+                    BTreeMap::new(),
+                    ArchitectureEvidence {
+                        path: "src/chain.java".to_string(),
+                        range: Vec::new(),
+                        note: None,
+                    },
+                );
+            }
+        }
+        builder.entrypoints.push((
+            "node-0".to_string(),
+            "ENDPOINT".to_string(),
+            "GET /chain".to_string(),
+        ));
+
+        let flow = builder.build_flows().pop().unwrap();
+        assert_eq!(flow.node_ids.len(), 50);
+        assert_eq!(flow.edge_ids.len(), 49);
+        assert!(flow.truncated);
+        assert_eq!(flow.omitted_node_count, 5);
     }
 }

@@ -59,6 +59,8 @@ pub(crate) fn analyze_with_sources(
     let metadata_sources = collect_metadata_sources(project_root);
     let mut source_signal_cache = HashMap::<(String, String), bool>::new();
     let mut metadata_signal_cache = HashMap::<(String, String), bool>::new();
+    let mut source_code_masks = HashMap::<String, String>::new();
+    let mut source_comment_masks = HashMap::<String, String>::new();
     let play_routes = fs::read_to_string(project_root.join("conf").join("routes"))
         .ok()
         .map(|text| (String::from("conf/routes"), text));
@@ -81,8 +83,24 @@ pub(crate) fn analyze_with_sources(
         let mut matched_signals = HashSet::new();
         let mut matched_files = HashSet::new();
         for &(relative, text) in &sources {
+            let code = source_code_masks
+                .entry(relative.to_string())
+                .or_insert_with(|| source_code_mask(text, &pack.language));
+            let comments = source_comment_masks
+                .entry(relative.to_string())
+                .or_insert_with(|| source_without_comments(text, &pack.language));
             for signal in &pack.signals {
-                if cached_source_signal_match(&mut source_signal_cache, relative, text, signal) {
+                let signal_source = if signal_uses_string_literal(signal) {
+                    comments.as_str()
+                } else {
+                    code.as_str()
+                };
+                if cached_source_signal_match(
+                    &mut source_signal_cache,
+                    relative,
+                    signal_source,
+                    signal,
+                ) {
                     matched_signals.insert(signal.clone());
                     matched_files.insert(relative.to_string());
                 }
@@ -102,9 +120,24 @@ pub(crate) fn analyze_with_sources(
         }
         if pack.id == "play" {
             if let Some((relative, text)) = play_routes.as_ref() {
+                let code = source_code_masks
+                    .entry(relative.to_string())
+                    .or_insert_with(|| source_code_mask(text, &pack.language));
+                let comments = source_comment_masks
+                    .entry(relative.to_string())
+                    .or_insert_with(|| source_without_comments(text, &pack.language));
                 for signal in &pack.signals {
-                    if cached_source_signal_match(&mut source_signal_cache, relative, text, signal)
-                    {
+                    let signal_source = if signal_uses_string_literal(signal) {
+                        comments.as_str()
+                    } else {
+                        code.as_str()
+                    };
+                    if cached_source_signal_match(
+                        &mut source_signal_cache,
+                        relative,
+                        signal_source,
+                        signal,
+                    ) {
                         matched_signals.insert(signal.clone());
                         matched_files.insert(relative.clone());
                     }
@@ -146,7 +179,7 @@ pub(crate) fn analyze_with_sources(
             .copied()
             .filter(|(path, source)| {
                 if has_route_rules {
-                    has_route_syntax_candidate(source)
+                    has_route_syntax_candidate(source, &pack.language)
                         || file_system_route(&pack, path, source).is_some()
                         || source_signal_files.contains(path)
                 } else {
@@ -320,7 +353,8 @@ fn dedupe_java_facts(frameworks: &mut [FrameworkOutput], relations: &mut Vec<Fra
     });
 }
 
-fn has_route_syntax_candidate(source: &str) -> bool {
+fn has_route_syntax_candidate(source: &str, language: &str) -> bool {
+    let source = source_code_mask(source, language);
     [
         ".route(",
         ".get(",
@@ -414,6 +448,159 @@ fn has_route_syntax_candidate(source: &str) -> bool {
     .any(|marker| source.contains(marker))
 }
 
+fn source_code_mask(source: &str, language: &str) -> String {
+    source_mask(source, language, true)
+}
+
+fn source_without_comments(source: &str, language: &str) -> String {
+    source_mask(source, language, false)
+}
+
+fn signal_uses_string_literal(signal: &str) -> bool {
+    signal
+        .split_once(':')
+        .is_some_and(|(prefix, _)| matches!(prefix, "import" | "require" | "include"))
+}
+
+fn source_mask(source: &str, language: &str, mask_strings: bool) -> String {
+    let chars = source.chars().collect::<Vec<_>>();
+    let mut masked = String::with_capacity(source.len());
+    let mut index = 0;
+    let mut block_comment = false;
+    let mut html_comment = false;
+    let mut quote: Option<(char, bool)> = None;
+    let hash_comments = matches!(language, "python" | "ruby" | "php");
+
+    while index < chars.len() {
+        let current = chars[index];
+        if block_comment {
+            if current == '*' && chars.get(index + 1) == Some(&'/') {
+                masked.push(' ');
+                masked.push(' ');
+                index += 2;
+                block_comment = false;
+            } else {
+                masked.push(if matches!(current, '\r' | '\n') {
+                    current
+                } else {
+                    ' '
+                });
+                index += 1;
+            }
+            continue;
+        }
+        if html_comment {
+            if chars.get(index..index + 3) == Some(&['-', '-', '>']) {
+                masked.push_str("   ");
+                index += 3;
+                html_comment = false;
+            } else {
+                masked.push(if matches!(current, '\r' | '\n') {
+                    current
+                } else {
+                    ' '
+                });
+                index += 1;
+            }
+            continue;
+        }
+        if let Some((delimiter, triple)) = quote {
+            if triple && chars.get(index..index + 3) == Some(&[delimiter, delimiter, delimiter]) {
+                if mask_strings {
+                    masked.push_str("   ");
+                } else {
+                    masked.extend([delimiter, delimiter, delimiter]);
+                }
+                index += 3;
+                quote = None;
+            } else if !triple && current == '\\' && index + 1 < chars.len() {
+                if mask_strings {
+                    masked.push(' ');
+                    masked.push(if matches!(chars[index + 1], '\r' | '\n') {
+                        chars[index + 1]
+                    } else {
+                        ' '
+                    });
+                } else {
+                    masked.push(current);
+                    masked.push(chars[index + 1]);
+                }
+                index += 2;
+            } else if !triple && current == delimiter {
+                masked.push(if mask_strings { ' ' } else { current });
+                index += 1;
+                quote = None;
+            } else if !triple && matches!(current, '\r' | '\n') && delimiter != '`' {
+                masked.push(current);
+                index += 1;
+                quote = None;
+            } else {
+                masked.push(if !mask_strings || matches!(current, '\r' | '\n') {
+                    current
+                } else {
+                    ' '
+                });
+                index += 1;
+            }
+            continue;
+        }
+
+        if chars.get(index..index + 4) == Some(&['<', '!', '-', '-']) {
+            masked.push_str("    ");
+            index += 4;
+            html_comment = true;
+        } else if current == '/' && chars.get(index + 1) == Some(&'*') {
+            masked.push_str("  ");
+            index += 2;
+            block_comment = true;
+        } else if current == '/' && chars.get(index + 1) == Some(&'/') {
+            while index < chars.len() && !matches!(chars[index], '\r' | '\n') {
+                masked.push(' ');
+                index += 1;
+            }
+        } else if hash_comments
+            && current == '#'
+            && !(language == "php" && chars.get(index + 1) == Some(&'['))
+        {
+            while index < chars.len() && !matches!(chars[index], '\r' | '\n') {
+                masked.push(' ');
+                index += 1;
+            }
+        } else if matches!(current, '"' | '`') || (current == '\'' && language != "rust") {
+            let triple =
+                chars.get(index + 1) == Some(&current) && chars.get(index + 2) == Some(&current);
+            if triple {
+                if mask_strings {
+                    masked.push_str("   ");
+                } else {
+                    masked.extend([current, current, current]);
+                }
+                index += 3;
+            } else {
+                masked.push(if mask_strings { ' ' } else { current });
+                index += 1;
+            }
+            quote = Some((current, triple));
+        } else {
+            masked.push(current);
+            index += 1;
+        }
+    }
+    masked
+}
+
+fn declares_type(line: &str) -> bool {
+    line.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .any(|token| matches!(token, "class" | "interface" | "record" | "struct"))
+}
+
+fn has_route_prefix_syntax(line: &str) -> bool {
+    line.contains("@RequestMapping")
+        || line.contains("@Controller(")
+        || line.contains("@Path(")
+        || (line.trim_start().starts_with("[Route(") && !line.contains("#[Route("))
+}
+
 fn extract_routes(
     pack: &FrameworkPack,
     path: &str,
@@ -435,34 +622,48 @@ fn extract_routes_with_index(
     facts: &mut Vec<FrameworkFact>,
 ) {
     let lines: Vec<&str> = source.lines().collect();
+    let code = source_code_mask(source, &pack.language);
+    let code_lines: Vec<&str> = code.lines().collect();
     let mut annotation_prefix: Option<String> = None;
+    let mut pending_prefix: Option<String> = None;
     for (index, line) in lines.iter().enumerate() {
+        let code_line = code_lines.get(index).copied().unwrap_or_default();
         if pack.id == "fastapi"
-            && (line.contains("APIRouter(") || line.contains(".include_router("))
+            && (code_line.contains("APIRouter(") || code_line.contains(".include_router("))
         {
             continue;
         }
-        if let Some(prefix) = route_prefix(line) {
-            let request_mapping_has_method =
-                line.contains("@RequestMapping") && request_mapping_method(line).is_some();
-            if !has_http_method_annotation(line) && !request_mapping_has_method {
-                annotation_prefix = Some(prefix);
+        if declares_type(code_line) {
+            annotation_prefix = pending_prefix.take();
+        }
+        if has_route_prefix_syntax(code_line) {
+            let Some(prefix) = route_prefix(line) else {
+                continue;
+            };
+            let request_mapping_has_method = code_line.contains("@RequestMapping")
+                && request_mapping_method(code_line).is_some();
+            if !has_http_method_annotation(code_line) && !request_mapping_has_method {
+                pending_prefix = Some(prefix);
                 continue;
             }
         }
         let mut route_line = (*line).to_string();
+        let mut route_code = code_line.to_string();
         while first_route_path(&route_line).is_none()
-            && route_line.contains('(')
-            && route_line.matches('(').count() > route_line.matches(')').count()
+            && route_code.contains('(')
+            && route_code.matches('(').count() > route_code.matches(')').count()
         {
             let next = index + route_line.lines().count();
             let Some(next_line) = lines.get(next) else {
                 break;
             };
+            let next_code_line = code_lines.get(next).copied().unwrap_or_default();
             route_line.push('\n');
             route_line.push_str(next_line);
+            route_code.push('\n');
+            route_code.push_str(next_code_line);
         }
-        let Some(method) = route_method(&route_line) else {
+        let Some(method) = route_method(&route_code) else {
             continue;
         };
         let Some((route_path, end)) = first_route_path(&route_line) else {
@@ -480,11 +681,11 @@ fn extract_routes_with_index(
         };
         let functional_lambda = if pack.language != "java" {
             false
-        } else if route_line.contains("->") || route_line.contains("=>") {
+        } else if route_code.contains("->") || route_code.contains("=>") {
             true
         } else {
             let mut found = false;
-            for line in lines.iter().skip(index).take(8) {
+            for line in code_lines.iter().skip(index).take(8) {
                 if line.contains("->") || line.contains("=>") {
                     found = true;
                     break;
@@ -537,7 +738,10 @@ fn extract_routes_with_index(
                     &route_path,
                 )
             } else {
-                combine_route_prefix(annotation_prefix.as_deref(), &route_path)
+                combine_route_prefix(
+                    pending_prefix.as_deref().or(annotation_prefix.as_deref()),
+                    &route_path,
+                )
             };
             let id = format!("route:{}:{}:{}:{}", pack.id, path, source_line, route_path);
             facts.push(FrameworkFact {
@@ -549,12 +753,13 @@ fn extract_routes_with_index(
                 path: Some(route_path),
                 source_file: path.to_string(),
                 source_line,
-                source_end_line: source_line,
-                source_range: line_source_range(index, line),
+                source_end_line: source_line + route_line.lines().count().saturating_sub(1),
+                source_range: source_range_for_text(index, &route_line),
                 evidence: vec!["http_route_syntax".to_string()],
                 properties: BTreeMap::new(),
             });
         }
+        pending_prefix = None;
     }
     if let Some((route_path, method, handler_name, source_line)) =
         file_system_route(pack, path, source)
@@ -598,6 +803,20 @@ fn line_source_range(line_number: usize, line: &str) -> Vec<i32> {
         0,
         line_number as i32,
         line.chars().count() as i32,
+    ]
+}
+
+fn source_range_for_text(start_line: usize, text: &str) -> Vec<i32> {
+    let lines = text.lines().collect::<Vec<_>>();
+    let end_line = start_line + lines.len().saturating_sub(1);
+    vec![
+        start_line as i32,
+        0,
+        end_line as i32,
+        lines
+            .last()
+            .map(|line| line.chars().count())
+            .unwrap_or_default() as i32,
     ]
 }
 

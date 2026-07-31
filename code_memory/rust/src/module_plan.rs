@@ -313,9 +313,7 @@ fn collect_module_marker_roots(dir: &Path, markers: &[&str], roots: &mut HashSet
             let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
             if markers.iter().any(|marker| {
                 let marker = marker.to_ascii_lowercase();
-                name == marker
-                    || (marker.starts_with('.') && name == marker)
-                    || (marker.starts_with('.') && name.ends_with(&marker))
+                name == marker || (marker.starts_with('.') && name.ends_with(&marker))
             }) {
                 has_marker = true;
             }

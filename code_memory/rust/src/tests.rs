@@ -74,6 +74,7 @@ fn mixed_c_family_headers_merge_to_one_document() {
         symbols: vec![SymbolOutput {
             symbol: "types#Value".to_string(),
             kind: "class".to_string(),
+            display_name: None,
             documentation: Vec::new(),
             signature: None,
             enclosing_symbol: None,
@@ -425,6 +426,62 @@ fn scip_numeric_language_uses_worker_language() {
 }
 
 #[test]
+fn scip_unspecified_dotnet_symbols_use_descriptor_contract() {
+    let endpoint = "scip-dotnet nuget . . Contributors/Delete#";
+    let configure = "scip-dotnet nuget . . Contributors/Delete#Configure().";
+    let constructor = "scip-dotnet nuget . . Contributors/Delete#`.ctor`().";
+    let parameter = "scip-dotnet nuget . . Contributors/Delete#Configure().(request)";
+
+    assert_eq!(
+        normalized_scip_symbol_kind("UnspecifiedKind".to_string(), endpoint),
+        "Type"
+    );
+    assert_eq!(
+        normalized_scip_symbol_kind("UnspecifiedKind".to_string(), configure),
+        "Method"
+    );
+    assert_eq!(
+        normalized_scip_symbol_kind("UnspecifiedKind".to_string(), constructor),
+        "Constructor"
+    );
+    assert_eq!(
+        normalized_scip_symbol_kind("UnspecifiedKind".to_string(), parameter),
+        "Variable"
+    );
+    assert_eq!(
+        inferred_scip_enclosing_symbol(configure, "Method").as_deref(),
+        Some(endpoint)
+    );
+    assert_eq!(inferred_scip_enclosing_symbol(parameter, "Variable"), None);
+    assert_eq!(
+        reparent_scip_symbol(
+            "scip-dotnet nuget . . Contributors/`<invalid-global-code>`#Configure(+1).",
+            endpoint
+        )
+        .as_deref(),
+        Some("scip-dotnet nuget . . Contributors/Delete#Configure(+1).")
+    );
+}
+
+#[test]
+fn source_scope_accepts_multiline_type_headers() {
+    let lines = [
+        "public class Create",
+        "  : Endpoint<CreateRequest,",
+        "             Results<Created,",
+        "                     Problem>>",
+        "{",
+        "  public void Configure() {}",
+        "}",
+    ];
+
+    assert_eq!(
+        source_scope_from_lines(&lines, &[0, 13, 19]),
+        Some(vec![0, 13, 6, 1])
+    );
+}
+
+#[test]
 fn lexical_call_candidates_scan_identifiers_once() {
     let symbols = vec![LspSymbol {
         name: "defined".to_string(),
@@ -530,6 +587,45 @@ fn source_discovery_does_not_follow_directory_symlinks() {
     let files = collect_files(&root, &["ts"]);
     assert!(files.iter().all(|path| !path.starts_with(&link)));
     let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn source_discovery_keeps_tests_and_legacy_code() {
+    let root =
+        std::env::temp_dir().join(format!("code-memory-source-tests-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for path in [
+        root.join("src/main.ts"),
+        root.join("test/unit.ts"),
+        root.join("tests/integration.ts"),
+        root.join("e2e/journey.ts"),
+        root.join("legacy/adapter.ts"),
+        root.join("node_modules/dependency.ts"),
+    ] {
+        fs::create_dir_all(path.parent().expect("fixture parent")).expect("create fixture parent");
+        fs::write(path, "export const value = true;\n").expect("write source fixture");
+    }
+
+    let files = collect_files(&root, &["ts"])
+        .into_iter()
+        .map(|path| {
+            path.strip_prefix(&root)
+                .expect("relative source")
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        files,
+        vec![
+            "e2e/journey.ts",
+            "legacy/adapter.ts",
+            "src/main.ts",
+            "test/unit.ts",
+            "tests/integration.ts",
+        ]
+    );
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

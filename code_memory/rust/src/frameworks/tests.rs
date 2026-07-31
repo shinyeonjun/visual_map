@@ -43,6 +43,72 @@ fn route_parser_covers_registration_and_annotation_shapes() {
 }
 
 #[test]
+fn route_parser_ignores_comments_and_string_examples() {
+    let pack = FrameworkPack {
+        id: "express".to_string(),
+        language: "typescript".to_string(),
+        name: "Express".to_string(),
+        kind: "web".to_string(),
+        signals: vec![],
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "registration-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = r#"
+const example = "app.get('/string-only', handler)";
+// app.post("/commented", handler);
+/*
+app.delete("/block-commented", handler);
+*/
+app.get(
+  "/real",
+  handler
+);
+"#;
+    assert!(has_route_syntax_candidate(source, "typescript"));
+    let mut facts = Vec::new();
+    extract_routes(&pack, "src/app.ts", source, &[], None, &mut facts);
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].path.as_deref(), Some("/real"));
+    assert_eq!(facts[0].source_line, 7);
+    assert_eq!(facts[0].source_end_line, 8);
+}
+
+#[test]
+fn java_route_prefix_does_not_leak_to_the_next_controller() {
+    let pack = FrameworkPack {
+        id: "spring".to_string(),
+        language: "java".to_string(),
+        name: "Spring".to_string(),
+        kind: "web".to_string(),
+        signals: vec![],
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = r#"
+@RequestMapping("/first")
+class FirstController {
+  @GetMapping("/one")
+  void one() {}
+}
+class SecondController {
+  @GetMapping("/two")
+  void two() {}
+}
+"#;
+    let mut facts = Vec::new();
+    extract_routes(&pack, "src/Controllers.java", source, &[], None, &mut facts);
+    let paths = facts
+        .iter()
+        .filter_map(|fact| fact.path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, vec!["/first/one", "/two"]);
+}
+
+#[test]
 fn fastapi_nested_router_prefix_and_handler_resolve() {
     let sources = vec![
             (
@@ -873,6 +939,32 @@ fn one_framework_signal_does_not_activate_a_pack() {
         }
     }
     let _ = fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn framework_signals_inside_comments_do_not_activate_a_pack() {
+    let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let temp = std::env::temp_dir().join(format!(
+        "code-memory-framework-comment-gate-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&temp);
+    fs::create_dir_all(temp.join("src")).unwrap();
+    fs::write(
+        temp.join("src/CommentOnly.java"),
+        "// import org.springframework.boot.SpringApplication;\n\
+         /* @SpringBootApplication\n\
+            @RestController */\n\
+         class CommentOnly {}\n",
+    )
+    .unwrap();
+
+    let analysis = analyze(&temp, &[], pack_root).unwrap();
+    assert!(analysis
+        .frameworks
+        .iter()
+        .all(|framework| framework.id != "spring-boot"));
+    let _ = fs::remove_dir_all(temp);
 }
 
 #[test]

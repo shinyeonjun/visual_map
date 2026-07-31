@@ -38,7 +38,7 @@ const BACKUP_REINDEX_NOTE: &str =
     "주 스냅샷 대신 이전 백업을 복구했습니다. 다시 읽어 최신 상태를 확인하세요.";
 const BACKUP_CODE_REINDEX_NOTE: &str = "백업에서 복구한 코드 목록은 다시 읽어야 합니다.";
 const BACKUP_DB_REINDEX_NOTE: &str = "백업에서 복구한 DB 구조는 다시 읽어야 합니다.";
-const CODE_ADAPTER_VERSION: &str = "3";
+const CODE_ADAPTER_VERSION: &str = "4";
 const CONFIRMED_CODE_CALL_CONFIDENCE: u8 = 85;
 const CANDIDATE_CODE_CALL_CONFIDENCE: u8 = 70;
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
@@ -161,6 +161,9 @@ pub(crate) fn build_inventory_snapshot(
                 .iter()
                 .map(|entry| code_item(entry, "file", "code", &code.project)),
         );
+        if let Some(architecture) = code.architecture.as_ref() {
+            snapshot.links.extend(code_architecture_links(architecture));
+        }
         snapshot.links.extend(code.calls.iter().map(code_call_link));
         let routes = code
             .routes
@@ -2035,6 +2038,18 @@ fn code_call_link(call: &CodeCall) -> SnapshotLink {
             text: expression.to_string(),
         });
     }
+    if let Some(path) = call.path.as_deref() {
+        evidence.push(Evidence {
+            kind: "engine-source-path".to_string(),
+            text: path.to_string(),
+        });
+    }
+    if !call.range.is_empty() {
+        evidence.push(Evidence {
+            kind: "engine-source-range".to_string(),
+            text: serde_json::to_string(&call.range).unwrap_or_default(),
+        });
+    }
 
     SnapshotLink {
         id: format!("code-call:{}->{}", call.from, call.to),
@@ -2047,6 +2062,101 @@ fn code_call_link(call: &CodeCall) -> SnapshotLink {
         engine_edge_type: Some("CALLS".to_string()),
         evidence,
     }
+}
+
+fn code_architecture_links(architecture: &Value) -> Vec<SnapshotLink> {
+    architecture
+        .get("edges")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|edge| edge.get("level").and_then(Value::as_str) == Some("summary"))
+        .filter(|edge| edge.get("kind").and_then(Value::as_str) != Some("CONTAINS"))
+        .filter_map(|edge| {
+            let from = edge.get("from").and_then(Value::as_str)?;
+            let to = edge.get("to").and_then(Value::as_str)?;
+            let edge_type = edge.get("kind").and_then(Value::as_str)?;
+            let properties = edge.get("properties").and_then(Value::as_object);
+            let resolution = properties
+                .and_then(|properties| properties.get("resolution"))
+                .and_then(Value::as_str);
+            let truth_class = match resolution {
+                Some("provider" | "handler" | "resolved") => "confirmed",
+                Some("internal" | "external" | "db_memory") => "structural",
+                Some("source-candidate") => "candidate",
+                Some("runtime-dependent" | "unknown") => "unknown",
+                _ if properties.is_some_and(|properties| properties.contains_key("framework")) => {
+                    "structural"
+                }
+                _ => "unknown",
+            };
+            let mut evidence = vec![
+                Evidence {
+                    kind: "engine-edge".to_string(),
+                    text: format!("codebase-memory architecture {edge_type}"),
+                },
+                Evidence {
+                    kind: "architecture-level".to_string(),
+                    text: "summary".to_string(),
+                },
+            ];
+            if let Some(properties) = properties {
+                for key in [
+                    "resolution",
+                    "strategy",
+                    "confidence",
+                    "framework",
+                    "source",
+                ] {
+                    if let Some(value) = properties.get(key).and_then(Value::as_str) {
+                        evidence.push(Evidence {
+                            kind: format!("architecture-{key}"),
+                            text: value.to_string(),
+                        });
+                    }
+                }
+            }
+            for location in edge
+                .get("evidence")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let path = location
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let range = location
+                    .get("range")
+                    .map(|range| range.to_string())
+                    .unwrap_or_default();
+                let note = location
+                    .get("note")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                evidence.push(Evidence {
+                    kind: "architecture-source".to_string(),
+                    text: format!("{path}:{range} {note}").trim().to_string(),
+                });
+            }
+            let id = edge
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{edge_type}:{from}->{to}"));
+            Some(SnapshotLink {
+                id: format!("code-architecture:{id}"),
+                from: format!("code:{from}"),
+                to: format!("code:{to}"),
+                kind: "code_architecture".to_string(),
+                label: Some(edge_type.to_string()),
+                truth_class: truth_class.to_string(),
+                direction: "outbound".to_string(),
+                engine_edge_type: Some(edge_type.to_string()),
+                evidence,
+            })
+        })
+        .collect()
 }
 
 fn confirmed_link(

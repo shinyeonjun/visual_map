@@ -22,6 +22,13 @@ if (-not (Test-Path -LiteralPath $engineProvidersRoot -PathType Container)) {
     $env:CODE_MEMORY_PROVIDERS_ROOT = [IO.Path]::GetFullPath($sourceProvidersRoot)
   }
 }
+$enginePacksRoot = Join-Path (Split-Path -Parent $EnginePath) "packs"
+if (-not (Test-Path -LiteralPath $enginePacksRoot -PathType Container)) {
+  $sourcePacksRoot = Join-Path $repoRoot "code_memory\packs"
+  if (Test-Path -LiteralPath $sourcePacksRoot -PathType Container) {
+    $env:CODE_MEMORY_PACKS_ROOT = [IO.Path]::GetFullPath($sourcePacksRoot)
+  }
+}
 
 $matrix = @(
   [pscustomobject]@{
@@ -144,11 +151,12 @@ try {
     $counts = @{}
     foreach ($label in "File", "Function", "Method", "Class", "Route") {
       $counts[$label] = @($nodeRows | Where-Object {
-        [string]$_[0] -match ('"' + $label + '"')
+        @($_[0]) -contains $label
       }).Count
     }
     $codeNodes = @($nodeRows | Where-Object {
-      [string]$_[0] -notmatch '"(File|Route)"'
+      $labels = @($_[0])
+      $labels -notcontains "File" -and $labels -notcontains "Route"
     }).Count
     if ($counts.File -eq 0 -or $codeNodes -eq 0) {
       throw "$($entry.Name) produced no usable file/code inventory."
@@ -161,15 +169,15 @@ try {
     }
 
     $callPayload = $base.Clone()
-    $callPayload.query = "MATCH (caller)-[rel:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target, rel.confidence AS confidence, rel.strategy AS strategy, rel.callee AS call_expression LIMIT 100000"
+    $callPayload.query = "MATCH (caller)-[rel:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target, rel.confidence AS confidence, rel.strategy AS strategy, rel.callee AS call_expression, rel.path AS path, rel.range AS range LIMIT 100000"
     $calls = Invoke-CodeTool "query_graph" $callPayload $cacheRoot
-    if ((@($calls.columns) -join ",") -ne "source,target,confidence,strategy,call_expression") {
+    if ((@($calls.columns) -join ",") -ne "source,target,confidence,strategy,call_expression,path,range") {
       throw "$($entry.Name) CALLS columns drifted: $(@($calls.columns) -join ',')"
     }
     if ([int]$calls.total -ge 100000) {
       throw "$($entry.Name) CALLS reached the adapter safety limit."
     }
-    $validCallRows = @($calls.rows | Where-Object { $_.Count -eq 5 -and $_[0] -and $_[1] })
+    $validCallRows = @($calls.rows | Where-Object { $_.Count -eq 7 -and $_[0] -and $_[1] })
     $confirmedCalls = 0
     $candidateCalls = 0
     $unknownCalls = 0
@@ -208,7 +216,7 @@ try {
       [void]$handleTargets.Add([string]$row[1])
     }
     $usableEngineRoutes = @($nodeRows | Where-Object {
-      [string]$_[0] -match '"Route"' -and
+      @($_[0]) -contains "Route" -and
       [string]$_[1] -notmatch '://' -and
       (
         ($_[3] -and [int]$_[4] -gt 0) -or

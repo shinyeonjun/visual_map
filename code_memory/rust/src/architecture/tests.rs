@@ -41,6 +41,8 @@ fn sample_output() -> IndexOutput {
             kind: "CALLS".to_string(),
             path: "app/routes.py".to_string(),
             range: vec![2, 4, 2, 12],
+            confidence: Some(1.0),
+            strategy: Some("provider-symbol-resolution".to_string()),
         }],
         file_relations: Vec::new(),
         project_model_files: Vec::new(),
@@ -93,14 +95,32 @@ fn unresolved_framework_route_is_kept_as_an_endpoint() {
     });
 
     let result = build(&root, &output);
-    assert!(result.nodes.iter().any(|node| {
-        node.kind == "ENDPOINT"
-            && node
-                .properties
-                .get("handler_resolution")
-                .map(String::as_str)
-                == Some("unresolved")
-    }));
+    let endpoint = result
+        .nodes
+        .iter()
+        .find(|node| node.kind == "ENDPOINT")
+        .expect("route endpoint");
+    assert_eq!(endpoint.name, "GET /health");
+    assert_eq!(endpoint.label, "fastapi: GET /health");
+    assert_eq!(
+        endpoint.properties.get("method").map(String::as_str),
+        Some("GET")
+    );
+    assert_eq!(
+        endpoint.properties.get("routeMethod").map(String::as_str),
+        Some("GET")
+    );
+    assert_eq!(
+        endpoint.properties.get("routePath").map(String::as_str),
+        Some("/health")
+    );
+    assert_eq!(
+        endpoint
+            .properties
+            .get("handler_resolution")
+            .map(String::as_str),
+        Some("unresolved")
+    );
     assert!(!result.edges.iter().any(|edge| edge.kind == "ENTRYPOINT_TO"));
     let _ = fs::remove_dir_all(root);
 }
@@ -212,6 +232,7 @@ fn cross_file_provider_call_is_visible_below_the_module_overview() {
             symbols: vec![SymbolOutput {
                 symbol: "lsp . . . app.main.py#main@1:4".to_string(),
                 kind: "Function".to_string(),
+                display_name: None,
                 documentation: Vec::new(),
                 signature: None,
                 enclosing_symbol: None,
@@ -224,6 +245,7 @@ fn cross_file_provider_call_is_visible_below_the_module_overview() {
             symbols: vec![SymbolOutput {
                 symbol: "lsp . . . app.service.py#service@1:4".to_string(),
                 kind: "Function".to_string(),
+                display_name: None,
                 documentation: Vec::new(),
                 signature: None,
                 enclosing_symbol: None,
@@ -237,6 +259,8 @@ fn cross_file_provider_call_is_visible_below_the_module_overview() {
         kind: "CALLS".to_string(),
         path: "app/main.py".to_string(),
         range: vec![0, 20, 0, 27],
+        confidence: Some(1.0),
+        strategy: Some("provider-symbol-resolution".to_string()),
     }];
     let result = build(&root, &output);
     assert!(result.edges.iter().any(|edge| {

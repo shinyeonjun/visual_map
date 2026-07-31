@@ -43,7 +43,7 @@ pub(crate) const CODE_NODE_LABELS: &[&str] = &[
     "Package",
     "Resource",
 ];
-pub(crate) const CALLS_QUERY: &str = "MATCH (caller)-[rel:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target, rel.confidence AS confidence, rel.strategy AS strategy, rel.callee AS call_expression LIMIT 100000";
+pub(crate) const CALLS_QUERY: &str = "MATCH (caller)-[rel:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target, rel.confidence AS confidence, rel.strategy AS strategy, rel.callee AS call_expression, rel.path AS path, rel.range AS range LIMIT 100000";
 pub(crate) const HANDLES_QUERY: &str = "MATCH (handler)-[:HANDLES]->(route) RETURN handler.qualified_name AS source, route.qualified_name AS target LIMIT 100000";
 
 #[derive(Debug)]

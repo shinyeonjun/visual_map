@@ -187,6 +187,10 @@ pub(crate) struct CodeCall {
     pub strategy: Option<String>,
     #[serde(default)]
     pub expression: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub range: Vec<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

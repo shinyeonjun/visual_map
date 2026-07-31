@@ -118,8 +118,8 @@ def create_order(request):
         },
         @{
             Name = "CALLS"
-            Query = "MATCH (caller)-[rel:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target, rel.confidence AS confidence, rel.strategy AS strategy, rel.callee AS call_expression LIMIT 100000"
-            Columns = @("source", "target", "confidence", "strategy", "call_expression")
+            Query = "MATCH (caller)-[rel:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target, rel.confidence AS confidence, rel.strategy AS strategy, rel.callee AS call_expression, rel.path AS path, rel.range AS range LIMIT 100000"
+            Columns = @("source", "target", "confidence", "strategy", "call_expression", "path", "range")
         },
         @{
             Name = "HANDLES"
@@ -148,15 +148,18 @@ def create_order(request):
             }
         }
         if ($contract.Name -eq "CALLS") {
-            $scored = @($result.rows) | Where-Object {
+            $scored = @(@($result.rows) | Where-Object {
                 $score = 0.0
                 $validScore = [double]::TryParse([string]$_[2], [ref]$score)
-                $_.Count -eq 5 -and
+                $_.Count -eq 7 -and
+                -not [string]::IsNullOrWhiteSpace([string]$_[0]) -and
+                -not [string]::IsNullOrWhiteSpace([string]$_[1]) -and
                 $validScore -and
                 $score -ge 0 -and $score -le 1 -and
                 -not [string]::IsNullOrWhiteSpace([string]$_[3]) -and
-                -not [string]::IsNullOrWhiteSpace([string]$_[4])
-            }
+                -not [string]::IsNullOrWhiteSpace([string]$_[5]) -and
+                @($_[6]).Count -ge 3
+            })
             if ($scored.Count -eq 0) {
                 throw "CALLS returned no scored relationship evidence."
             }

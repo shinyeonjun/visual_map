@@ -221,6 +221,16 @@ fn apply_explicit_query_evidence_for_code_uncached(
         .filter(|item| item.source == "db" && item.kind == "table")
         .cloned()
         .collect::<Vec<_>>();
+    let tables_by_name = tables.iter().fold(
+        HashMap::<String, Vec<&InventoryItem>>::new(),
+        |mut grouped, table| {
+            grouped
+                .entry(table.name.to_ascii_lowercase())
+                .or_default()
+                .push(table);
+            grouped
+        },
+    );
     let columns_by_table = snapshot
         .items
         .iter()
@@ -253,7 +263,7 @@ fn apply_explicit_query_evidence_for_code_uncached(
                 .accesses
                 .iter()
                 .filter_map(|access| {
-                    let resolved = resolve_table(&access.token, &tables);
+                    let resolved = resolve_table(&access.token, &tables_by_name);
                     match resolved.as_slice() {
                         [table] => Some((access, *table)),
                         _ => None,
@@ -263,7 +273,7 @@ fn apply_explicit_query_evidence_for_code_uncached(
             for (access, table) in &resolved_accesses {
                 let columns = columns_by_table
                     .get(table.id.as_str())
-                    .cloned()
+                    .map(Vec::as_slice)
                     .unwrap_or_default();
                 let evidence = QueryEvidence {
                     operation: access.operation,
@@ -271,7 +281,7 @@ fn apply_explicit_query_evidence_for_code_uncached(
                         &query,
                         access,
                         table,
-                        &columns,
+                        columns,
                         &resolved_accesses,
                         &columns_by_table,
                     ),
@@ -281,7 +291,7 @@ fn apply_explicit_query_evidence_for_code_uncached(
                     snapshot,
                     matched,
                     table,
-                    &columns,
+                    columns,
                     &evidence,
                     line + query.line_offset,
                 );
@@ -305,10 +315,15 @@ fn semantic_source_signature(
     repo_path: &str,
     code_ids: &[String],
 ) -> Vec<String> {
+    let items = snapshot
+        .items
+        .iter()
+        .map(|item| (item.id.as_str(), item))
+        .collect::<HashMap<_, _>>();
     code_ids
         .iter()
         .map(|code_id| {
-            let Some(item) = snapshot.items.iter().find(|item| item.id == *code_id) else {
+            let Some(item) = items.get(code_id.as_str()) else {
                 return format!("{code_id}|missing-item");
             };
             let path = item
@@ -655,12 +670,18 @@ fn has_legacy_comma_table_list(tokens: &[String]) -> bool {
     })
 }
 
-fn resolve_table<'a>(token: &str, tables: &'a [InventoryItem]) -> Vec<&'a InventoryItem> {
+fn resolve_table<'a>(
+    token: &str,
+    tables_by_name: &HashMap<String, Vec<&'a InventoryItem>>,
+) -> Vec<&'a InventoryItem> {
     let parts = token.split('.').collect::<Vec<_>>();
     let name = parts.last().copied().unwrap_or(token);
     let schema = (parts.len() > 1).then(|| parts[parts.len() - 2]);
-    tables
-        .iter()
+    tables_by_name
+        .get(&name.to_ascii_lowercase())
+        .into_iter()
+        .flatten()
+        .copied()
         .filter(|table| table.name.eq_ignore_ascii_case(name))
         .filter(|table| {
             schema.is_none_or(|schema| {

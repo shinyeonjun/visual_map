@@ -544,9 +544,15 @@ pub(crate) fn language_cache_key(
     source_snapshot: &SourceSnapshot,
 ) -> String {
     let mut hash = 0xcbf29ce484222325u64;
-    // Provider-to-VisualMap normalization changes must not reuse a previous
-    // provider result with the same source checksum.
-    checksum_update(&mut hash, b"code-memory-language-cache.v147");
+    // Provider output is normalized by this executable, so a new build must
+    // not reuse semantic data produced by an older normalization contract.
+    checksum_update(&mut hash, b"code-memory-language-cache.v148");
+    if let Ok(executable) = env::current_exe() {
+        if let Some(executable_hash) = cached_file_checksum(&executable) {
+            checksum_update(&mut hash, b"normalizer-executable");
+            checksum_update(&mut hash, &executable_hash.to_le_bytes());
+        }
+    }
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, lang.id.as_bytes());
     let provider_program = find_tool(lang.tool, providers_root).or_else(|| {

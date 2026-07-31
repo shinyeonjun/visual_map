@@ -730,6 +730,8 @@ fn code_call(value: &serde_json::Value) -> Option<CodeCall> {
             confidence: items.get(2).and_then(code_call_confidence),
             strategy: items.get(3).and_then(optional_json_string),
             expression: items.get(4).and_then(optional_json_string),
+            path: items.get(5).and_then(optional_json_string),
+            range: items.get(6).and_then(code_call_range).unwrap_or_default(),
         });
     }
 
@@ -771,12 +773,23 @@ fn code_call(value: &serde_json::Value) -> Option<CodeCall> {
             .get("call_expression")
             .or_else(|| value.get("callExpression"))
             .and_then(optional_json_string),
+        path: value
+            .get("path")
+            .or_else(|| value.get("file_path"))
+            .or_else(|| value.get("filePath"))
+            .and_then(optional_json_string),
+        range: value
+            .get("range")
+            .and_then(code_call_range)
+            .unwrap_or_default(),
     })
 }
 
-fn code_call_rank(call: &CodeCall) -> (u8, &str, &str) {
+fn code_call_rank(call: &CodeCall) -> (u8, bool, bool, &str, &str) {
     (
         call.confidence.unwrap_or(0),
+        call.path.is_some(),
+        !call.range.is_empty(),
         call.strategy.as_deref().unwrap_or_default(),
         call.expression.as_deref().unwrap_or_default(),
     )
@@ -799,6 +812,14 @@ fn optional_json_string(value: &serde_json::Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn code_call_range(value: &serde_json::Value) -> Option<Vec<i32>> {
+    value
+        .as_array()?
+        .iter()
+        .map(|item| i32::try_from(item.as_i64()?).ok())
+        .collect()
 }
 
 fn endpoint_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {

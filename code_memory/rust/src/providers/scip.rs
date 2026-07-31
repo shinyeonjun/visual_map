@@ -151,7 +151,9 @@ pub(crate) fn read_scip(
             }
         }
         for information in &document.symbols {
-            if is_type_symbol_kind(information.kind) && !information.symbol.is_empty() {
+            if is_type_symbol_kind(information.kind, &information.symbol)
+                && !information.symbol.is_empty()
+            {
                 type_symbols.insert(information.symbol.clone());
             }
         }
@@ -197,6 +199,73 @@ pub(crate) fn read_scip(
             ))
         })
         .collect();
+    let type_owner_scopes: HashMap<String, Vec<(String, Vec<i32>)>> = definitions
+        .iter()
+        .filter_map(|(document_path, document_definitions)| {
+            let type_definitions = document_definitions
+                .iter()
+                .filter(|(symbol, _)| type_symbols.contains(symbol))
+                .cloned()
+                .collect::<Vec<_>>();
+            if type_definitions.is_empty() {
+                return None;
+            }
+            let source = source_cache
+                .entry(document_path.clone())
+                .or_insert_with(|| {
+                    fs::read_to_string(project_root.join(document_path)).unwrap_or_default()
+                });
+            let scopes = source_scopes(source, &type_definitions);
+            (!scopes.is_empty()).then_some((document_path.clone(), scopes))
+        })
+        .collect();
+    let mut document_symbol_aliases = HashMap::<String, HashMap<String, String>>::new();
+    let mut alias_targets = HashMap::<String, HashSet<String>>::new();
+    for document in &scip_documents {
+        let document_path = normalize_scip_path(&document.relative_path, project_root);
+        for info in &document.symbols {
+            let provider_kind = info
+                .kind
+                .enum_value()
+                .map(|value| format!("{value:?}"))
+                .unwrap_or_else(|_| "Unspecified".to_string());
+            let kind = normalized_scip_symbol_kind(provider_kind, &info.symbol);
+            if !is_type_member_kind(&kind) {
+                continue;
+            }
+            let source_owner = definitions
+                .get(&document_path)
+                .and_then(|definitions| {
+                    definitions
+                        .iter()
+                        .find(|(symbol, _)| symbol == &info.symbol)
+                })
+                .and_then(|(_, range)| {
+                    find_source_owner(type_owner_scopes.get(&document_path), range)
+                });
+            let Some(alias) = source_owner
+                .as_deref()
+                .and_then(|owner| reparent_scip_symbol(&info.symbol, owner))
+                .filter(|alias| alias != &info.symbol)
+            else {
+                continue;
+            };
+            document_symbol_aliases
+                .entry(document_path.clone())
+                .or_default()
+                .insert(info.symbol.clone(), alias.clone());
+            alias_targets
+                .entry(info.symbol.clone())
+                .or_default()
+                .insert(alias);
+        }
+    }
+    let unique_symbol_aliases = alias_targets
+        .into_iter()
+        .filter_map(|(symbol, aliases)| {
+            (aliases.len() == 1).then(|| (symbol, aliases.into_iter().next().unwrap()))
+        })
+        .collect::<HashMap<_, _>>();
 
     let type_script_call_ranges: Option<HashMap<String, HashSet<(i32, i32, i32, i32)>>> =
         call_ranges.map(|ranges| {
@@ -228,6 +297,7 @@ pub(crate) fn read_scip(
                 });
         }
         let language = normalize_scip_language(&document.language, fallback_language);
+        let local_symbol_aliases = document_symbol_aliases.get(&document_path);
         let mut symbols = Vec::new();
         for info in document.symbols {
             for relationship in &info.relationships {
@@ -253,28 +323,81 @@ pub(crate) fn read_scip(
                 } else {
                     continue;
                 };
+                let from = canonical_scip_symbol(
+                    &info.symbol,
+                    local_symbol_aliases,
+                    &unique_symbol_aliases,
+                );
+                let to = canonical_scip_symbol(
+                    &relationship.symbol,
+                    local_symbol_aliases,
+                    &unique_symbol_aliases,
+                );
+                if from == to {
+                    continue;
+                }
                 relations.push(RelationOutput {
-                    from: info.symbol.clone(),
-                    to: relationship.symbol.clone(),
+                    from,
+                    to,
                     kind: kind.to_string(),
                     path: document_path.clone(),
                     range: Vec::new(),
+                    confidence: Some(1.0),
+                    strategy: Some("provider-relationship".to_string()),
                 });
             }
+            let provider_kind = info
+                .kind
+                .enum_value()
+                .map(|value| format!("{value:?}"))
+                .unwrap_or_else(|_| "Unspecified".to_string());
+            let kind = normalized_scip_symbol_kind(provider_kind, &info.symbol);
+            let symbol =
+                canonical_scip_symbol(&info.symbol, local_symbol_aliases, &unique_symbol_aliases);
+            let inferred_enclosing_symbol = inferred_scip_enclosing_symbol(&symbol, &kind);
+            let source_enclosing_symbol = is_type_member_kind(&kind)
+                .then(|| {
+                    definitions
+                        .get(&document_path)
+                        .and_then(|definitions| {
+                            definitions
+                                .iter()
+                                .find(|(symbol, _)| symbol == &info.symbol)
+                        })
+                        .and_then(|(_, range)| {
+                            find_source_owner(type_owner_scopes.get(&document_path), range)
+                        })
+                })
+                .flatten();
+            let display_name = (!info.display_name.trim().is_empty()).then_some(info.display_name);
+            let provider_enclosing_symbol = (!info.enclosing_symbol.is_empty()).then(|| {
+                canonical_scip_symbol(
+                    &info.enclosing_symbol,
+                    local_symbol_aliases,
+                    &unique_symbol_aliases,
+                )
+            });
+            let enclosing_symbol = if is_type_member_kind(&kind) {
+                provider_enclosing_symbol
+                    .as_ref()
+                    .filter(|symbol| type_symbols.contains(*symbol))
+                    .cloned()
+                    .or(source_enclosing_symbol)
+                    .or(provider_enclosing_symbol)
+                    .or(inferred_enclosing_symbol)
+            } else {
+                provider_enclosing_symbol.or(inferred_enclosing_symbol)
+            };
             symbols.push(SymbolOutput {
-                symbol: info.symbol,
-                kind: info
-                    .kind
-                    .enum_value()
-                    .map(|value| format!("{value:?}"))
-                    .unwrap_or_else(|_| "Unspecified".to_string()),
+                symbol,
+                kind,
+                display_name,
                 documentation: info.documentation,
                 signature: info
                     .signature_documentation
                     .as_ref()
                     .map(|s| s.text.clone()),
-                enclosing_symbol: (!info.enclosing_symbol.is_empty())
-                    .then_some(info.enclosing_symbol),
+                enclosing_symbol,
             });
         }
 
@@ -282,6 +405,11 @@ pub(crate) fn read_scip(
         for occurrence in document.occurrences {
             let definition = has_role(occurrence.symbol_roles, SymbolRole::Definition);
             let import = has_role(occurrence.symbol_roles, SymbolRole::Import);
+            let occurrence_symbol = canonical_scip_symbol(
+                &occurrence.symbol,
+                local_symbol_aliases,
+                &unique_symbol_aliases,
+            );
             if !definition && !occurrence.symbol.is_empty() {
                 let owner = (!occurrence.enclosing_range.is_empty())
                     .then(|| {
@@ -304,6 +432,9 @@ pub(crate) fn read_scip(
                     })
                     .or_else(|| {
                         find_source_owner(owner_scopes.get(&document_path), &occurrence.range)
+                    })
+                    .map(|owner| {
+                        canonical_scip_symbol(&owner, local_symbol_aliases, &unique_symbol_aliases)
                     });
                 if let Some(owner) = owner {
                     let kind = if import {
@@ -337,7 +468,7 @@ pub(crate) fn read_scip(
                     } else {
                         "REFERENCES"
                     };
-                    let relation_from = if kind == "CALLS" && owner == occurrence.symbol {
+                    let relation_from = if kind == "CALLS" && owner == occurrence_symbol {
                         if fallback_language == "ruby" {
                             // Ruby top-level calls have no enclosing LSP
                             // symbol. Keep the real target and anchor the
@@ -352,21 +483,23 @@ pub(crate) fn read_scip(
                     };
                     if let Some(relation_from) = relation_from.filter(|from| {
                         !is_non_visual_symbol(from)
-                            && !is_non_visual_symbol(&occurrence.symbol)
-                            && (kind == "CALLS" || from != &occurrence.symbol)
+                            && !is_non_visual_symbol(&occurrence_symbol)
+                            && (kind == "CALLS" || from != &occurrence_symbol)
                     }) {
                         relations.push(RelationOutput {
                             from: relation_from,
-                            to: occurrence.symbol.clone(),
+                            to: occurrence_symbol.clone(),
                             kind: kind.to_string(),
                             path: document_path.clone(),
                             range: occurrence.range.clone(),
+                            confidence: Some(1.0),
+                            strategy: Some("provider-symbol-resolution".to_string()),
                         });
                     }
                 }
             }
             occurrences.push(OccurrenceOutput {
-                symbol: occurrence.symbol,
+                symbol: occurrence_symbol,
                 range: occurrence.range,
                 enclosing_range: occurrence.enclosing_range,
                 definition,
@@ -402,17 +535,85 @@ pub(crate) fn read_scip(
 
 fn is_type_symbol_kind(
     kind: protobuf::EnumOrUnknown<scip::types::symbol_information::Kind>,
+    symbol: &str,
 ) -> bool {
     use scip::types::symbol_information::Kind;
-    matches!(
-        kind.enum_value(),
-        Ok(Kind::Class
+    match kind.enum_value() {
+        Ok(
+            Kind::Class
             | Kind::Struct
             | Kind::Interface
             | Kind::Enum
             | Kind::TypeAlias
-            | Kind::TypeParameter)
-    )
+            | Kind::TypeParameter,
+        ) => true,
+        Ok(Kind::UnspecifiedKind) | Err(_) => {
+            normalized_scip_symbol_kind("UnspecifiedKind".to_string(), symbol) == "Type"
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn normalized_scip_symbol_kind(provider_kind: String, symbol: &str) -> String {
+    if !matches!(provider_kind.as_str(), "Unspecified" | "UnspecifiedKind") {
+        return provider_kind;
+    }
+    let Ok(parsed) = scip::symbol::parse_symbol(symbol) else {
+        return "Unspecified".to_string();
+    };
+    let Some(descriptor) = parsed.descriptors.last() else {
+        return "Unspecified".to_string();
+    };
+    use scip::types::descriptor::Suffix;
+    match descriptor.suffix.enum_value() {
+        Ok(Suffix::Type) => "Type",
+        Ok(Suffix::Method) if matches!(descriptor.name.as_str(), ".ctor" | ".cctor" | "<init>") => {
+            "Constructor"
+        }
+        Ok(Suffix::Method) => "Method",
+        Ok(Suffix::Term) => "Field",
+        Ok(Suffix::Namespace | Suffix::Package) => "Namespace",
+        Ok(Suffix::TypeParameter) => "TypeParameter",
+        Ok(Suffix::Parameter | Suffix::Local) => "Variable",
+        Ok(Suffix::Macro) => "Macro",
+        Ok(Suffix::Meta | Suffix::UnspecifiedSuffix) | Err(_) => "Unspecified",
+    }
+    .to_string()
+}
+
+pub(crate) fn inferred_scip_enclosing_symbol(symbol: &str, kind: &str) -> Option<String> {
+    if !is_type_member_kind(kind) {
+        return None;
+    }
+    let mut parsed = scip::symbol::parse_symbol(symbol).ok()?;
+    (parsed.descriptors.len() > 1).then(|| {
+        parsed.descriptors.pop();
+        scip::symbol::format_symbol(parsed)
+    })
+}
+
+pub(crate) fn reparent_scip_symbol(symbol: &str, parent: &str) -> Option<String> {
+    let child = scip::symbol::parse_symbol(symbol).ok()?;
+    let descriptor = child.descriptors.last()?.clone();
+    let mut parent = scip::symbol::parse_symbol(parent).ok()?;
+    parent.descriptors.push(descriptor);
+    Some(scip::symbol::format_symbol(parent))
+}
+
+fn canonical_scip_symbol(
+    symbol: &str,
+    local_aliases: Option<&HashMap<String, String>>,
+    unique_aliases: &HashMap<String, String>,
+) -> String {
+    local_aliases
+        .and_then(|aliases| aliases.get(symbol))
+        .or_else(|| unique_aliases.get(symbol))
+        .cloned()
+        .unwrap_or_else(|| symbol.to_string())
+}
+
+fn is_type_member_kind(kind: &str) -> bool {
+    matches!(kind, "Method" | "Constructor" | "Field")
 }
 
 fn is_non_visual_symbol(symbol: &str) -> bool {
@@ -633,27 +834,39 @@ pub(crate) fn source_scope_from_lines(
     lines: &[&str],
     definition_range: &[i32],
 ) -> Option<Vec<i32>> {
-    // ponytail: brace-only owner fallback; provider enclosing ranges remain authoritative.
+    // ponytail: lexical brace fallback; provider enclosing ranges remain authoritative.
     let (definition_line, definition_character, _, _) = range_parts(definition_range)?;
     let mut opening = None;
-    for line_number in definition_line as usize..lines.len().min(definition_line as usize + 3) {
+    for line_number in definition_line as usize..lines.len() {
         let start = if line_number == definition_line as usize {
             definition_character.max(0) as usize
         } else {
             0
         };
-        if let Some(character) = lines[line_number]
-            .get(start..)
-            .and_then(|line| line.find('{'))
-        {
-            opening = Some((line_number, start + character));
-            break;
+        let line = lines[line_number].get(start..)?;
+        let terminator = [line.find(';'), line.find("=>")]
+            .into_iter()
+            .flatten()
+            .min();
+        if let Some(brace) = line.find('{') {
+            if terminator.is_none() || Some(brace) < terminator {
+                opening = Some((line_number, start + brace));
+                break;
+            }
+        }
+        if terminator.is_some() {
+            return None;
         }
     }
-    let (opening_line, _opening_character) = opening?;
+    let (opening_line, opening_character) = opening?;
     let mut depth = 0i32;
     for line_number in opening_line..lines.len() {
-        for character in lines[line_number].chars() {
+        let line = if line_number == opening_line {
+            lines[line_number].get(opening_character..)?
+        } else {
+            lines[line_number]
+        };
+        for character in line.chars() {
             match character {
                 '{' => depth += 1,
                 '}' => {

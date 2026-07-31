@@ -35,6 +35,16 @@ pub(crate) fn run_native_lsp(
     run_native_lsp_with_server(lang, server, root, out, providers_root, files)
 }
 
+pub(crate) fn run_native_lsp_source_only(
+    lang: &LanguageSpec,
+    root: &Path,
+    out: &Path,
+    providers_root: Option<&Path>,
+    files: &[PathBuf],
+) -> Result<Vec<Diagnostic>, String> {
+    run_native_lsp_with_server_mode(lang, "jdtls", root, out, providers_root, files, true)
+}
+
 pub(crate) fn run_native_lsp_with_server(
     lang: &LanguageSpec,
     server: &str,
@@ -42,6 +52,18 @@ pub(crate) fn run_native_lsp_with_server(
     out: &Path,
     providers_root: Option<&Path>,
     files: &[PathBuf],
+) -> Result<Vec<Diagnostic>, String> {
+    run_native_lsp_with_server_mode(lang, server, root, out, providers_root, files, false)
+}
+
+fn run_native_lsp_with_server_mode(
+    lang: &LanguageSpec,
+    server: &str,
+    root: &Path,
+    out: &Path,
+    providers_root: Option<&Path>,
+    files: &[PathBuf],
+    java_source_only: bool,
 ) -> Result<Vec<Diagnostic>, String> {
     let analysis_root = lsp_workspace_root(lang, root, files);
     let analysis_files: Vec<&PathBuf> = files
@@ -87,14 +109,23 @@ pub(crate) fn run_native_lsp_with_server(
             "CODE_MEMORY_JDTLS_WORKSPACE",
             project_cache_root(&analysis_root)
                 .join("lsp-workspaces")
-                .join("java-v2"),
+                .join(if java_source_only {
+                    "java-source-v1"
+                } else {
+                    "java-v2"
+                }),
         );
-        // Do not inherit a stale user JAVA_HOME from an older installation.
-        // JDTLS needs the same bundled JDK for project/classpath resolution as
-        // the launcher uses to start it.
-        if let Some(jdtls_path) = find_tool("jdtls", providers_root) {
-            if let Some(bundled_java_home) = bundled_java_home(&jdtls_path) {
-                command.env("JAVA_HOME", bundled_java_home);
+        // The bundled launcher uses its own Java executable. Preserve a valid
+        // project JAVA_HOME so Gradle can satisfy an exact toolchain request;
+        // replace only missing or stale values with the bundled runtime.
+        let inherited_java_home = env::var_os("JAVA_HOME")
+            .map(PathBuf::from)
+            .filter(|path| java_home_is_usable(path));
+        if inherited_java_home.is_none() {
+            if let Some(jdtls_path) = find_tool("jdtls", providers_root) {
+                if let Some(bundled_java_home) = bundled_java_home(&jdtls_path) {
+                    command.env("JAVA_HOME", bundled_java_home);
+                }
             }
         }
     } else if server == "ruby-lsp" {
@@ -178,6 +209,8 @@ pub(crate) fn run_native_lsp_with_server(
     )?;
     if server == "rust-analyzer" {
         connection.set_workspace_settings(rust_analyzer_settings());
+    } else if server == "jdtls" {
+        connection.set_workspace_settings(java_language_server_settings(java_source_only));
     }
     connection.initialize(
         &path_to_uri(&analysis_root),
@@ -185,7 +218,13 @@ pub(crate) fn run_native_lsp_with_server(
         lang.id,
     )?;
     connection.notify("initialized", serde_json::json!({}))?;
-    configure_lsp_workspace(&mut connection, server, lang.id, &analysis_root)?;
+    configure_lsp_workspace(
+        &mut connection,
+        server,
+        lang.id,
+        &analysis_root,
+        java_source_only,
+    )?;
 
     let mut index = Index::new();
     let mut document_indexes = HashMap::new();
@@ -729,28 +768,7 @@ pub(crate) fn run_native_lsp_with_server(
                 else {
                     continue;
                 };
-                let mut targets = connection.definitions_at(&uri, line, character);
-                let provider_target_is_usable = targets.iter().any(|(target_uri, target_range)| {
-                    let Some(target_uri) = target_uri.as_deref() else {
-                        return false;
-                    };
-                    let target_relative = uri_to_relative_path(target_uri, root);
-                    document_indexes
-                        .get(&target_relative)
-                        .and_then(|target_index| index.documents.get(*target_index))
-                        .and_then(|_| symbol_cache.get(&target_relative))
-                        .and_then(|symbols| find_lsp_symbol_at_range(symbols, target_range))
-                        .is_some()
-                });
-                if !provider_target_is_usable && lang.id == "java" {
-                    if let Some((target_relative, target_range)) =
-                        unique_java_definition(&symbol_cache, &name)
-                    {
-                        targets
-                            .push((Some(path_to_uri(&root.join(target_relative))), target_range));
-                    }
-                }
-                for (target_uri, target_range) in targets {
+                for (target_uri, target_range) in connection.definitions_at(&uri, line, character) {
                     let Some(target_uri) = target_uri else {
                         continue;
                     };
@@ -774,37 +792,6 @@ pub(crate) fn run_native_lsp_with_server(
                     );
                     call_occurrence.range = call_range.clone();
                     call_occurrence.enclosing_range = owner_range.clone();
-                    index.documents[source_index]
-                        .occurrences
-                        .push(call_occurrence);
-                }
-            }
-            if lang.id == "java" {
-                for (line, character, name) in
-                    java_unique_method_call_candidates(text, &symbol_cache)
-                {
-                    let call_range = vec![
-                        line as i32,
-                        character as i32,
-                        line as i32,
-                        (character + name.chars().count() as u32) as i32,
-                    ];
-                    let Some(owner_range) = find_enclosing_symbol_range(Some(symbols), &call_range)
-                    else {
-                        continue;
-                    };
-                    let Some((target_relative, target_symbol, _)) =
-                        unique_java_symbol(&symbol_cache, &name)
-                    else {
-                        continue;
-                    };
-                    if !document_indexes.contains_key(&target_relative) {
-                        continue;
-                    }
-                    let mut call_occurrence = scip::types::Occurrence::new();
-                    call_occurrence.symbol = target_symbol;
-                    call_occurrence.range = call_range;
-                    call_occurrence.enclosing_range = owner_range;
                     index.documents[source_index]
                         .occurrences
                         .push(call_occurrence);
@@ -952,10 +939,11 @@ pub(crate) fn configure_lsp_workspace(
     server: &str,
     _language: &str,
     root: &Path,
+    java_source_only: bool,
 ) -> Result<(), String> {
     let settings = match server {
         "rust-analyzer" => rust_analyzer_settings(),
-        "jdtls" => java_language_server_settings(),
+        "jdtls" => java_language_server_settings(java_source_only),
         _ => serde_json::json!({}),
     };
     connection.set_workspace_settings(settings.clone());
@@ -993,20 +981,32 @@ fn rust_analyzer_settings() -> Value {
     })
 }
 
-fn java_language_server_settings() -> Value {
+fn java_language_server_settings(source_only: bool) -> Value {
     serde_json::json!({
         "java": {
             "autobuild": {"enabled": false},
             "import": {
                 "gradle": {
+                    "enabled": !source_only,
                     "offline": {"enabled": true},
                     "wrapper": {"enabled": false}
                 },
-                "maven": {"offline": {"enabled": true}}
+                "maven": {
+                    "enabled": !source_only,
+                    "offline": {"enabled": true}
+                }
+            },
+            "project": {
+                "importOnFirstTimeStartup": if source_only { "disabled" } else { "automatic" }
             },
             "references": {"includeDecompiledSources": false}
         }
     })
+}
+
+fn java_home_is_usable(path: &Path) -> bool {
+    let executable = if cfg!(windows) { "java.exe" } else { "java" };
+    path.join("bin").join(executable).is_file()
 }
 
 fn configuration_value(settings: &Value, section: &str) -> Option<Value> {
@@ -1742,6 +1742,11 @@ impl LspConnection {
         } else {
             serde_json::json!({"workspaceFolders": true})
         };
+        let initialization_options = if language == "java" {
+            serde_json::json!({"settings": self.workspace_settings})
+        } else {
+            Value::Null
+        };
         let response = self.request(
             "initialize",
             serde_json::json!({
@@ -1759,7 +1764,8 @@ impl LspConnection {
                     },
                     "workspace": workspace_capabilities
                 },
-                "workspaceFolders": [{"uri": root_uri, "name": "code_memory"}]
+                "workspaceFolders": [{"uri": root_uri, "name": "code_memory"}],
+                "initializationOptions": initialization_options
             }),
         )?;
         self.type_hierarchy_supported = response
@@ -2446,113 +2452,6 @@ fn lexical_call_candidates_with_set(
     candidates
 }
 
-fn unique_java_definition(
-    symbol_cache: &HashMap<String, Vec<LspSymbol>>,
-    name: &str,
-) -> Option<(String, Vec<i32>)> {
-    let mut candidate = None;
-    for (relative, symbols) in symbol_cache {
-        for symbol in symbols.iter().filter(|symbol| {
-            symbol.name == name
-                && (is_callable_kind(symbol.kind)
-                    || symbol
-                        .detail
-                        .as_deref()
-                        .is_some_and(|detail| detail.contains('(')))
-        }) {
-            if candidate.is_some() {
-                // ponytail: ambiguous method names stay unresolved; add receiver/type
-                // binding only when a real project needs overloaded-name recovery.
-                return None;
-            }
-            candidate = Some((
-                relative.clone(),
-                vec![
-                    symbol.range_start_line as i32,
-                    symbol.range_start_character as i32,
-                    symbol.range_end_line as i32,
-                    symbol.range_end_character as i32,
-                ],
-            ));
-        }
-    }
-    candidate
-}
-
-fn unique_java_symbol(
-    symbol_cache: &HashMap<String, Vec<LspSymbol>>,
-    name: &str,
-) -> Option<(String, String, Vec<i32>)> {
-    let mut candidate = None;
-    for (relative, symbols) in symbol_cache {
-        for symbol in symbols.iter().filter(|symbol| {
-            symbol.name == name
-                && (is_callable_kind(symbol.kind)
-                    || symbol
-                        .detail
-                        .as_deref()
-                        .is_some_and(|detail| detail.contains('(')))
-        }) {
-            if candidate.is_some() {
-                return None;
-            }
-            candidate = Some((
-                relative.clone(),
-                symbol_string(
-                    relative,
-                    &symbol.name,
-                    symbol.selection_line,
-                    symbol.selection_character,
-                ),
-                vec![
-                    symbol.range_start_line as i32,
-                    symbol.range_start_character as i32,
-                    symbol.range_end_line as i32,
-                    symbol.range_end_character as i32,
-                ],
-            ));
-        }
-    }
-    candidate
-}
-
-fn java_unique_method_call_candidates(
-    source: &str,
-    symbol_cache: &HashMap<String, Vec<LspSymbol>>,
-) -> Vec<(u32, u32, String)> {
-    let mut candidates = Vec::new();
-    for (line_number, line) in source.lines().enumerate() {
-        let bytes = line.as_bytes();
-        let mut offset = 0;
-        while offset < bytes.len() {
-            if !is_identifier_start(bytes[offset]) {
-                offset += 1;
-                continue;
-            }
-            let start = offset;
-            offset += 1;
-            while offset < bytes.len() && is_identifier_continue(bytes[offset]) {
-                offset += 1;
-            }
-            if start == 0 || bytes[start - 1] != b'.' {
-                continue;
-            }
-            let name = &line[start..offset];
-            if !line[offset..].trim_start().starts_with('(')
-                || unique_java_symbol(symbol_cache, name).is_none()
-            {
-                continue;
-            }
-            candidates.push((
-                line_number as u32,
-                utf16_len(&line[..start]),
-                name.to_string(),
-            ));
-        }
-    }
-    candidates
-}
-
 pub(crate) fn is_identifier_start(byte: u8) -> bool {
     byte.is_ascii_alphabetic() || byte == b'_'
 }
@@ -2748,11 +2647,9 @@ pub(crate) fn find_lsp_symbol_at_range<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        bundled_java_home, java_unique_method_call_candidates, lsp_message_length_allowed,
-        symbol_string, unique_java_definition, uri_to_relative_path, LspSymbol,
-        MAX_LSP_MESSAGE_BYTES,
+        bundled_java_home, java_home_is_usable, java_language_server_settings,
+        lsp_message_length_allowed, symbol_string, uri_to_relative_path, MAX_LSP_MESSAGE_BYTES,
     };
-    use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
 
@@ -2761,52 +2658,6 @@ mod tests {
         assert!(lsp_message_length_allowed(0));
         assert!(lsp_message_length_allowed(MAX_LSP_MESSAGE_BYTES));
         assert!(!lsp_message_length_allowed(MAX_LSP_MESSAGE_BYTES + 1));
-    }
-
-    #[test]
-    fn java_unique_definition_fallback_rejects_ambiguous_names() {
-        let method = |name: &str| LspSymbol {
-            name: name.to_string(),
-            kind: 6,
-            detail: None,
-            range_start_line: 1,
-            range_start_character: 0,
-            range_end_line: 1,
-            range_end_character: 10,
-            selection_line: 1,
-            selection_character: 5,
-        };
-        let mut symbols = HashMap::new();
-        symbols.insert("src/Client.java".to_string(), vec![method("getOwner")]);
-        assert_eq!(
-            unique_java_definition(&symbols, "getOwner").map(|(path, _)| path),
-            Some("src/Client.java".to_string())
-        );
-        symbols.insert("src/OtherClient.java".to_string(), vec![method("getOwner")]);
-        assert!(unique_java_definition(&symbols, "getOwner").is_none());
-    }
-
-    #[test]
-    fn java_static_call_candidate_requires_a_unique_project_method() {
-        let mut symbols = HashMap::new();
-        symbols.insert(
-            "src/Client.java".to_string(),
-            vec![LspSymbol {
-                name: "getOwner".to_string(),
-                kind: 6,
-                detail: None,
-                range_start_line: 1,
-                range_start_character: 0,
-                range_end_line: 1,
-                range_end_character: 20,
-                selection_line: 1,
-                selection_character: 5,
-            }],
-        );
-        assert_eq!(
-            java_unique_method_call_candidates("return client.getOwner(id);", &symbols),
-            vec![(0, 14, "getOwner".to_string())]
-        );
     }
 
     #[test]
@@ -2844,6 +2695,37 @@ mod tests {
             bundled_java_home(&launcher),
             Some(root.join("jdtls/runtime"))
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn java_source_only_settings_disable_build_importers() {
+        let settings = java_language_server_settings(true);
+        assert_eq!(
+            settings.pointer("/java/import/gradle/enabled"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        assert_eq!(
+            settings.pointer("/java/import/maven/enabled"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        assert_eq!(
+            settings.pointer("/java/project/importOnFirstTimeStartup"),
+            Some(&serde_json::Value::String("disabled".to_string()))
+        );
+    }
+
+    #[test]
+    fn java_home_requires_a_real_launcher() {
+        let root =
+            std::env::temp_dir().join(format!("code-memory-java-home-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        assert!(!java_home_is_usable(&root));
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).expect("create java bin");
+        let executable = if cfg!(windows) { "java.exe" } else { "java" };
+        fs::write(bin.join(executable), b"launcher").expect("write java launcher");
+        assert!(java_home_is_usable(&root));
         let _ = fs::remove_dir_all(root);
     }
 }

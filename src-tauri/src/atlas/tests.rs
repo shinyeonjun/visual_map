@@ -317,7 +317,32 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
             files: 0,
             unknown: 1,
         },
-        architecture: Some(serde_json::json!({ "modules": ["orders"] })),
+        architecture: Some(serde_json::json!({
+            "edges": [
+                {
+                    "id": "edge:summary:IMPORTS:route:handler",
+                    "from": "shop.routes.create_order",
+                    "to": "shop.handlers.create_order",
+                    "kind": "IMPORTS",
+                    "level": "summary",
+                    "properties": { "resolution": "internal" },
+                    "evidence": [{
+                        "path": "src/routes/orders.rs",
+                        "range": [1, 0, 1, 12],
+                        "note": "module import"
+                    }]
+                },
+                {
+                    "id": "edge:tree:CONTAINS:route:handler",
+                    "from": "shop.routes.create_order",
+                    "to": "shop.handlers.create_order",
+                    "kind": "CONTAINS",
+                    "level": "tree",
+                    "properties": {},
+                    "evidence": []
+                }
+            ]
+        })),
         calls: vec![
             CodeCall {
                 from: "shop.routes.create_order".to_string(),
@@ -325,6 +350,8 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
                 confidence: Some(95),
                 strategy: Some("lsp_direct".to_string()),
                 expression: Some("create_order".to_string()),
+                path: Some("src/routes/orders.rs".to_string()),
+                range: vec![11, 4, 11, 16],
             },
             CodeCall {
                 from: "shop.handlers.create_order".to_string(),
@@ -332,6 +359,8 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
                 confidence: Some(38),
                 strategy: Some("unique_name".to_string()),
                 expression: Some("create_order".to_string()),
+                path: None,
+                range: Vec::new(),
             },
         ],
         handles: vec![CodeHandle {
@@ -366,6 +395,11 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
         .links
         .iter()
         .find(|link| link.kind == "code_call" && link.from == "code:shop.handlers.create_order")
+        .unwrap();
+    let architecture_link = snapshot
+        .links
+        .iter()
+        .find(|link| link.kind == "code_architecture")
         .unwrap();
     let unverified_route = snapshot
         .items
@@ -402,15 +436,36 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
             && evidence.text.contains("/api/v1/orders")
     }));
     assert_eq!(trusted_call.truth_class, "confirmed");
+    assert!(trusted_call
+        .evidence
+        .iter()
+        .any(|evidence| evidence.kind == "engine-source-path"
+            && evidence.text == "src/routes/orders.rs"));
+    assert!(trusted_call
+        .evidence
+        .iter()
+        .any(|evidence| evidence.kind == "engine-source-range" && evidence.text == "[11,4,11,16]"));
     assert_eq!(weak_call.truth_class, "unknown");
     assert!(weak_call
         .evidence
         .iter()
         .any(|evidence| evidence.kind == "engine-confidence-score" && evidence.text == "38%"));
+    assert_eq!(architecture_link.label.as_deref(), Some("IMPORTS"));
+    assert_eq!(architecture_link.truth_class, "structural");
     assert_eq!(
-        snapshot.metadata.architecture,
-        Some(serde_json::json!({ "modules": ["orders"] }))
+        architecture_link.engine_edge_type.as_deref(),
+        Some("IMPORTS")
     );
+    assert!(architecture_link
+        .evidence
+        .iter()
+        .any(|evidence| evidence.kind == "architecture-source"
+            && evidence.text.contains("src/routes/orders.rs")));
+    assert!(!snapshot
+        .links
+        .iter()
+        .any(|link| link.engine_edge_type.as_deref() == Some("CONTAINS")));
+    assert!(snapshot.metadata.architecture.is_some());
 
     let root = temp_root("snapshot-v2-round-trip");
     save_inventory_snapshot(&root, &snapshot).unwrap();
@@ -534,7 +589,7 @@ fn snapshot_with_metadata_records_code_source() {
     assert_eq!(code.source_path.as_deref(), Some(r"D:\repo\shop-api"));
     assert_eq!(code.source_type, "local-folder");
     assert_eq!(code.engine_version.as_deref(), Some("0.1.0"));
-    assert_eq!(code.adapter_version.as_deref(), Some("3"));
+    assert_eq!(code.adapter_version.as_deref(), Some("4"));
     assert!(snapshot.stale_reasons.is_empty());
 }
 

@@ -174,6 +174,8 @@ pub(crate) struct DocumentOutput {
 pub(crate) struct SymbolOutput {
     pub(crate) symbol: String,
     pub(crate) kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) display_name: Option<String>,
     pub(crate) documentation: Vec<String>,
     pub(crate) signature: Option<String>,
     pub(crate) enclosing_symbol: Option<String>,
@@ -197,6 +199,10 @@ pub(crate) struct RelationOutput {
     pub(crate) kind: String,
     pub(crate) path: String,
     pub(crate) range: Vec<i32>,
+    #[serde(default)]
+    pub(crate) confidence: Option<f64>,
+    #[serde(default)]
+    pub(crate) strategy: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

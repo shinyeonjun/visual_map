@@ -1456,7 +1456,9 @@ fn code_inventory_extracts_calls_between_known_inventory_items_only() {
                 "to": "services.OrderService.create",
                 "confidence": "0.95",
                 "strategy": "lsp_direct",
-                "call_expression": "OrderService.create"
+                "call_expression": "OrderService.create",
+                "path": "src/routes/orders.java",
+                "range": [12, 8, 12, 27]
             },
             {
                 "caller.qualified_name": "services.OrderService.create",
@@ -1486,6 +1488,8 @@ fn code_inventory_extracts_calls_between_known_inventory_items_only() {
                 confidence: Some(95),
                 strategy: Some("lsp_direct".to_string()),
                 expression: Some("OrderService.create".to_string()),
+                path: Some("src/routes/orders.java".to_string()),
+                range: vec![12, 8, 12, 27],
             },
             CodeCall {
                 from: "services.OrderService.create".to_string(),
@@ -1493,6 +1497,8 @@ fn code_inventory_extracts_calls_between_known_inventory_items_only() {
                 confidence: Some(75),
                 strategy: Some("unique_name".to_string()),
                 expression: Some("recordAudit".to_string()),
+                path: None,
+                range: Vec::new(),
             },
         ]
     );
@@ -1544,6 +1550,8 @@ fn code_inventory_rejects_only_production_calls_into_test_code() {
             confidence: Some(85),
             strategy: None,
             expression: None,
+            path: None,
+            range: Vec::new(),
         }]
     );
 }
@@ -1923,8 +1931,15 @@ fn code_field_fastendpoints_adapter_proves_real_routes_and_handlers() {
 
     assert!(
         derived.len() >= 5,
-        "expected the pinned fixture's real FastEndpoints routes, got {}",
-        derived.len()
+        "expected the pinned fixture's real FastEndpoints routes, got {}: {:?}",
+        derived.len(),
+        derived
+            .iter()
+            .map(|route| (
+                route.detail["routeMethod"].as_str().unwrap_or_default(),
+                route.name.as_str()
+            ))
+            .collect::<Vec<_>>()
     );
     let create_route = derived
         .iter()
@@ -1934,12 +1949,35 @@ fn code_field_fastendpoints_adapter_proves_real_routes_and_handlers() {
                 && route.detail["handlerQualifiedName"]
                     .as_str()
                     .is_some_and(|handler| {
-                        handler.contains(
-                            "Clean.Architecture.Web.Contributors.Create.Create.ExecuteAsync",
-                        )
+                        inventory
+                            .handlers
+                            .iter()
+                            .chain(inventory.functions.iter())
+                            .chain(inventory.unknown.iter())
+                            .any(|item| {
+                                item.id == handler
+                                    && item.name == "ExecuteAsync"
+                                    && item.file_path.as_deref().is_some_and(|path| {
+                                        path.replace('\\', "/").ends_with("/Contributors/Create.cs")
+                                    })
+                            })
                     })
         })
-        .expect("main project POST /Contributors route");
+        .unwrap_or_else(|| {
+            panic!(
+                "main project POST /Contributors route; derived={:?}",
+                derived
+                    .iter()
+                    .map(|route| (
+                        route.detail["routeMethod"].as_str().unwrap_or_default(),
+                        route.name.as_str(),
+                        route.detail["handlerQualifiedName"]
+                            .as_str()
+                            .unwrap_or_default()
+                    ))
+                    .collect::<Vec<_>>()
+            )
+        });
     let derived_ids = derived
         .iter()
         .map(|route| route.id.as_str())
@@ -1993,18 +2031,44 @@ fn code_field_fastapi_adapter_proves_real_import_calls() {
         .iter()
         .filter(|call| {
             call.from == handler
-                && call.confidence == Some(95)
-                && call.strategy.as_deref() == Some("python_static_import")
+                && call.confidence.is_some_and(|confidence| confidence >= 95)
+                && matches!(
+                    call.strategy.as_deref(),
+                    Some("provider-symbol-resolution" | "python_static_import")
+                )
         })
-        .map(|call| call.to.as_str())
         .collect::<Vec<_>>();
+    let code_items = inventory
+        .handlers
+        .iter()
+        .chain(inventory.services.iter())
+        .chain(inventory.repositories.iter())
+        .chain(inventory.functions.iter())
+        .chain(inventory.classes.iter())
+        .chain(inventory.modules.iter())
+        .chain(inventory.unknown.iter())
+        .collect::<Vec<_>>();
+    let reaches = |name: &str, path: &str| {
+        proven.iter().any(|call| {
+            code_items.iter().any(|item| {
+                item.id == call.to
+                    && item.name == name
+                    && item
+                        .file_path
+                        .as_deref()
+                        .is_some_and(|item_path| item_path.replace('\\', "/").ends_with(path))
+            })
+        })
+    };
 
-    assert!(proven
-        .iter()
-        .any(|target| target.ends_with(".backend.app.crud.authenticate")));
-    assert!(proven
-        .iter()
-        .any(|target| target.ends_with(".backend.app.core.security.create_access_token")));
+    assert!(
+        reaches("authenticate", "backend/app/crud.py"),
+        "missing source-backed crud.authenticate in {proven:?}"
+    );
+    assert!(
+        reaches("create_access_token", "backend/app/core/security.py"),
+        "missing source-backed security.create_access_token in {proven:?}"
+    );
     println!("product FastAPI static import calls={}", proven.len());
     fs::remove_dir_all(root).unwrap();
 }
@@ -2025,6 +2089,8 @@ fn code_engine_queries_use_one_bounded_node_contract_and_safe_aliases() {
     assert!(CALLS_QUERY.contains(" AS confidence"));
     assert!(CALLS_QUERY.contains(" AS strategy"));
     assert!(CALLS_QUERY.contains(" AS call_expression"));
+    assert!(CALLS_QUERY.contains(" AS path"));
+    assert!(CALLS_QUERY.contains(" AS range"));
     assert!(!CALLS_QUERY.contains(" AS from"));
     assert!(HANDLES_QUERY.starts_with("MATCH (handler)-[:HANDLES]->(route)"));
     assert!(HANDLES_QUERY.contains(" AS source"));

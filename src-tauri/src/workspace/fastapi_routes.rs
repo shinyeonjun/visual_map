@@ -1387,6 +1387,8 @@ def list_sessions(shadowed):
                 confidence: Some(38),
                 strategy: Some("unique_name".to_string()),
                 expression: Some("crud.authenticate".to_string()),
+                path: None,
+                range: Vec::new(),
             },
             CodeCall {
                 from: caller.clone(),
@@ -1394,6 +1396,8 @@ def list_sessions(shadowed):
                 confidence: Some(38),
                 strategy: Some("unique_name".to_string()),
                 expression: Some("security.create_access_token".to_string()),
+                path: None,
+                range: Vec::new(),
             },
             CodeCall {
                 from: caller.clone(),
@@ -1401,6 +1405,8 @@ def list_sessions(shadowed):
                 confidence: Some(38),
                 strategy: Some("unique_name".to_string()),
                 expression: Some("shadowed.run".to_string()),
+                path: None,
+                range: Vec::new(),
             },
             CodeCall {
                 from: caller,
@@ -1408,6 +1414,8 @@ def list_sessions(shadowed):
                 confidence: Some(38),
                 strategy: Some("unique_name".to_string()),
                 expression: Some("crud.users.authenticate".to_string()),
+                path: None,
+                range: Vec::new(),
             },
         ];
 

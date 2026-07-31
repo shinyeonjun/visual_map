@@ -9,9 +9,9 @@ use std::sync::{Mutex, OnceLock};
 use crate::{
     dart_dependency_metadata_gap, dotnet_requires_unavailable_legacy_sdk, find_tool,
     has_compile_context_for_files, is_fatal_lsp_error, normalize_scip_path, read_scip,
-    run_native_lsp, run_native_lsp_with_server, run_scip_indexer, write_language_cache, Diagnostic,
-    DocumentCoverage, DocumentOutput, FileCoverageOutput, LanguageAnalysis, LanguageOutput,
-    LanguageSpec, ProviderKind, RelationOutput,
+    run_native_lsp, run_native_lsp_source_only, run_native_lsp_with_server, run_scip_indexer,
+    write_language_cache, Diagnostic, DocumentCoverage, DocumentOutput, FileCoverageOutput,
+    LanguageAnalysis, LanguageOutput, LanguageSpec, ProviderKind, RelationOutput,
 };
 
 static RUST_BUILD_TOOL_GAP_CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
@@ -282,14 +282,65 @@ pub(crate) fn analyze_language(
     };
 
     match result {
-        Ok(provider_diagnostics) => {
-            let parsed = read_scip(
-                &scip_path,
-                lang.id,
-                root,
-                &allowed_document_paths(root, &provider_files),
-                Some(call_ranges),
-            );
+        Ok(mut provider_diagnostics) => {
+            let allowed_paths = allowed_document_paths(root, &provider_files);
+            let mut parsed =
+                read_scip(&scip_path, lang.id, root, &allowed_paths, Some(call_ranges));
+            let mut java_source_fallback_used = false;
+            let java_needs_source_fallback = lang.id == "java"
+                && parsed
+                    .as_ref()
+                    .is_ok_and(|(documents, _)| semantic_output_is_empty(documents));
+            if java_needs_source_fallback {
+                let _ = fs::remove_file(&scip_path);
+                match run_native_lsp_source_only(
+                    &lang,
+                    root,
+                    &scip_path,
+                    providers_root,
+                    &provider_files,
+                ) {
+                    Ok(fallback_diagnostics) => {
+                        match read_scip(
+                            &scip_path,
+                            lang.id,
+                            root,
+                            &allowed_paths,
+                            Some(call_ranges),
+                        ) {
+                            Ok((documents, relations)) if !semantic_output_is_empty(&documents) => {
+                                java_source_fallback_used = true;
+                                provider_diagnostics.push(Diagnostic {
+                                    language: lang.id.to_string(),
+                                    level: "warning",
+                                    message: "Java build import returned no semantic facts; source-only fallback retained project declarations and local relationships without a complete build classpath".to_string(),
+                                    path: None,
+                                    line: None,
+                                });
+                                provider_diagnostics.extend(fallback_diagnostics);
+                                parsed = Ok((documents, relations));
+                            }
+                            Ok(_) => provider_diagnostics.extend(fallback_diagnostics),
+                            Err(error) => provider_diagnostics.push(Diagnostic {
+                                language: lang.id.to_string(),
+                                level: "warning",
+                                message: format!(
+                                    "Java source-only fallback returned invalid output: {error}"
+                                ),
+                                path: None,
+                                line: None,
+                            }),
+                        }
+                    }
+                    Err(error) => provider_diagnostics.push(Diagnostic {
+                        language: lang.id.to_string(),
+                        level: "warning",
+                        message: format!("Java source-only fallback failed: {error}"),
+                        path: None,
+                        line: None,
+                    }),
+                }
+            }
             let _ = fs::remove_file(&scip_path);
             match parsed {
                 Ok((documents, relations)) => {
@@ -298,11 +349,12 @@ pub(crate) fn analyze_language(
                         && provider_diagnostics
                             .iter()
                             .any(|diagnostic| is_fatal_lsp_error(&diagnostic.message));
-                    let provider_partial = provider_diagnostics.iter().any(|diagnostic| {
-                        diagnostic
-                            .message
-                            .contains("semantic provider reached its time/resource limit")
-                    });
+                    let provider_partial = java_source_fallback_used
+                        || provider_diagnostics.iter().any(|diagnostic| {
+                            diagnostic
+                                .message
+                                .contains("semantic provider reached its time/resource limit")
+                        });
                     let mut analysis = if provider_stopped {
                         language_excluded(
                             lang,
@@ -355,6 +407,13 @@ pub(crate) fn analyze_language(
             }
         }
     }
+}
+
+fn semantic_output_is_empty(documents: &[DocumentOutput]) -> bool {
+    documents.is_empty()
+        || documents
+            .iter()
+            .all(|document| document.symbols.is_empty() && document.occurrences.is_empty())
 }
 
 fn rust_semantic_file_limit() -> usize {
