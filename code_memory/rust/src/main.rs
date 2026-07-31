@@ -74,7 +74,7 @@ fn run() -> Result<(), String> {
                     .join(out)
             };
             let architecture_out = optional_path(&rest, "--architecture-out")
-                .map(|path| resolve_output_path(path))
+                .map(resolve_output_path)
                 .transpose()?
                 .unwrap_or_else(|| default_architecture_output(&out));
             index_project(
@@ -701,7 +701,6 @@ pub(crate) fn index_project(
                 providers_root: providers_root.clone(),
                 module_id: module.id,
                 provider_config: module.provider_config,
-                allow_js: module.allow_js,
                 project_excluded_files: module.project_excluded_files,
                 project_config_digest,
                 call_ranges: if matches!(lang.id, "typescript" | "javascript") {
@@ -1018,19 +1017,7 @@ fn prepare_typescript_units(
 fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
     if job.members.len() == 1 {
         let member = &job.members[0];
-        let mut analysis = analyze_language(
-            member.lang,
-            &member.root,
-            &member.project_root,
-            &member.work,
-            &member.files,
-            &member.cache_key,
-            member.providers_root.as_deref(),
-            member.provider_config.as_deref(),
-            member.allow_js,
-            &member.call_ranges,
-            member.project_config_digest,
-        );
+        let mut analysis = analyze_language(member);
         analysis.project_excluded_files = member.project_excluded_files;
         rebase_language_analysis(&mut analysis, &member.root, &member.project_root);
         return vec![analysis];
@@ -1072,9 +1059,7 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
             &primary.root,
             &scip_path,
             primary.providers_root.as_deref(),
-            files.len(),
             primary.provider_config.as_deref(),
-            primary.allow_js,
             &files,
             primary.project_config_digest,
         )

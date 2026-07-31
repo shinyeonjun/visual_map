@@ -345,7 +345,10 @@ pub(crate) fn extract_code_inventory(
     files_json: &serde_json::Value,
 ) -> Result<CodeInventory, String> {
     let mut seen = HashMap::new();
-    let routes = extract_labeled_items(&project, routes_json, &["Route"], &mut seen)?;
+    let routes = extract_labeled_items(&project, routes_json, &["Route"], &mut seen)?
+        .into_iter()
+        .filter(|item| !code_item_is_test(item))
+        .collect::<Vec<_>>();
     let code_items = extract_labeled_items(&project, services_json, CODE_NODE_LABELS, &mut seen)?;
     let files = extract_labeled_items(&project, files_json, &["File"], &mut seen)?;
     let handlers = category_items(&code_items, "handler");
@@ -463,15 +466,46 @@ pub(super) fn extract_code_calls_with_gaps(
 
 fn code_item_is_test(item: &CodeInventoryItem) -> bool {
     object_bool(&item.detail, &["is_test", "isTest"])
-        || item.file_path.as_deref().is_some_and(|path| {
-            path.split(['/', '\\']).any(|segment| {
-                let segment = segment.to_ascii_lowercase();
-                matches!(segment.as_str(), "test" | "tests" | "__tests__")
-                    || segment.ends_with(".tests")
-                    || segment.ends_with(".unittests")
-                    || segment.ends_with(".integrationtests")
-            })
-        })
+        || item.file_path.as_deref().is_some_and(is_test_file_path)
+}
+
+fn is_test_file_path(path: &str) -> bool {
+    if path.split(['/', '\\']).any(|segment| {
+        let segment = segment.to_ascii_lowercase();
+        matches!(segment.as_str(), "test" | "tests" | "__tests__")
+            || segment.ends_with(".tests")
+            || segment.ends_with(".unittests")
+            || segment.ends_with(".integrationtests")
+    }) {
+        return true;
+    }
+
+    let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let lower = file_name.to_ascii_lowercase();
+    let stem = lower
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(&lower);
+    let original_stem = file_name
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(file_name);
+    stem == "test"
+        || stem == "tests"
+        || stem.starts_with("test_")
+        || stem.starts_with("test-")
+        || stem.ends_with("_test")
+        || stem.ends_with("_tests")
+        || stem.ends_with(".test")
+        || stem.ends_with(".tests")
+        || stem.ends_with(".spec")
+        || stem.ends_with(".specs")
+        || stem.ends_with("_spec")
+        || stem.ends_with("_specs")
+        || original_stem.ends_with("Test")
+        || original_stem.ends_with("Tests")
+        || original_stem.ends_with("Spec")
+        || original_stem.ends_with("Specs")
 }
 
 #[cfg(test)]
@@ -1023,6 +1057,27 @@ pub(crate) fn code_project_from_index_stdout(stdout: &str, fallback: &str) -> St
 #[cfg(test)]
 mod tests {
     use super::architecture_diagnostics;
+
+    #[test]
+    fn test_file_name_conventions_are_treated_as_non_product_code() {
+        for path in [
+            "src/auth.test.ts",
+            "src/auth.spec.ts",
+            "pkg/orders_test.go",
+            "tests/test_auth.py",
+            "src/UserServiceTest.java",
+            "src/widget_spec.rb",
+        ] {
+            assert!(super::is_test_file_path(path), "{path}");
+        }
+        for path in [
+            "src/TestController.java",
+            "src/Contest.java",
+            "src/testClient.go",
+        ] {
+            assert!(!super::is_test_file_path(path), "{path}");
+        }
+    }
 
     #[test]
     fn provider_diagnostics_become_visible_inventory_gaps() {

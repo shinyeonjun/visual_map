@@ -11,7 +11,7 @@ use crate::{
     has_compile_context_for_files, is_fatal_lsp_error, normalize_scip_path, read_scip,
     run_native_lsp, run_native_lsp_source_only, run_native_lsp_with_server, run_scip_indexer,
     write_language_cache, Diagnostic, DocumentCoverage, DocumentOutput, FileCoverageOutput,
-    LanguageAnalysis, LanguageOutput, LanguageSpec, ProviderKind, RelationOutput,
+    LanguageAnalysis, LanguageJob, LanguageOutput, LanguageSpec, ProviderKind, RelationOutput,
 };
 
 static RUST_BUILD_TOOL_GAP_CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
@@ -148,19 +148,16 @@ pub(crate) fn language_analysis_from_index(
     }
 }
 
-pub(crate) fn analyze_language(
-    lang: LanguageSpec,
-    root: &Path,
-    _project_root: &Path,
-    work: &Path,
-    files: &[PathBuf],
-    cache_key: &str,
-    providers_root: Option<&Path>,
-    provider_config: Option<&Path>,
-    allow_js: bool,
-    call_ranges: &HashMap<String, Vec<Vec<i32>>>,
-    project_config_digest: u64,
-) -> LanguageAnalysis {
+pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
+    let lang = job.lang;
+    let root = &job.root;
+    let work = &job.work;
+    let files = &job.files;
+    let cache_key = &job.cache_key;
+    let providers_root = job.providers_root.as_deref();
+    let provider_config = job.provider_config.as_deref();
+    let call_ranges = job.call_ranges.as_ref();
+    let project_config_digest = job.project_config_digest;
     if lang.id == "rust" && files.len() > rust_semantic_file_limit() {
         return language_excluded(
             lang,
@@ -269,9 +266,7 @@ pub(crate) fn analyze_language(
             root,
             &scip_path,
             providers_root,
-            provider_files.len(),
             provider_config,
-            allow_js,
             &provider_files,
             project_config_digest,
         )
@@ -714,66 +709,47 @@ pub(crate) fn build_file_coverage(
                     .and_then(|extension| extension.to_str())
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("vue"))
                 && project_model_files.contains(path.as_str());
+            let source_exclusion = source_exclusion_reason(file);
+            let provider_status = language_status.get(language.as_str()).copied();
+            let no_compile_context = provider_status == Some("excluded");
+            let provider_excluded = language_excluded_complete.contains(language.as_str());
+            let inactive_c_file = matches!(language.as_str(), "c" | "cpp")
+                && active_c_files.as_ref().is_some_and(|active| {
+                    !is_c_family_header_path(file) && !active.contains(&canonical)
+                });
             let status = if indexed.contains(path.as_str()) || modeled_vue {
                 "indexed"
-            } else if source_exclusion_reason(file).is_some() {
-                "excluded"
-            } else if language_status.get(language.as_str()).copied() == Some("excluded") {
-                "excluded"
-            } else if language_excluded_complete.contains(language.as_str()) {
-                "excluded"
-            } else if header_not_reachable {
-                "excluded"
-            } else if dotnet_outside_project {
-                "excluded"
-            } else if matches!(language.as_str(), "c" | "cpp")
-                && active_c_files.as_ref().is_some_and(|active| {
-                    !is_c_family_header_path(file)
-                        && !active.contains(&file.canonicalize().unwrap_or_else(|_| file.clone()))
-                })
+            } else if source_exclusion.is_some()
+                || no_compile_context
+                || provider_excluded
+                || header_not_reachable
+                || dotnet_outside_project
+                || inactive_c_file
             {
                 "excluded"
             } else {
                 "missing"
             };
             let reason = if status == "excluded" {
-                source_exclusion_reason(file)
+                source_exclusion
                     .map(str::to_string)
-                    .or_else(|| {
-                        (language_status.get(language.as_str()).copied() == Some("excluded"))
-                            .then_some("no-compile-context".to_string())
-                    })
-                    .or_else(|| {
-                        language_excluded_complete
-                            .contains(language.as_str())
-                            .then_some("provider-excluded".to_string())
-                    })
+                    .or_else(|| no_compile_context.then_some("no-compile-context".to_string()))
+                    .or_else(|| provider_excluded.then_some("provider-excluded".to_string()))
                     .or_else(|| header_not_reachable.then_some("header-not-reachable".to_string()))
                     .or_else(|| dotnet_outside_project.then_some("project-config".to_string()))
-                    .or_else(|| {
-                        (matches!(language.as_str(), "c" | "cpp") && active_c_files.is_some())
-                            .then_some("not-in-active-build".to_string())
-                    })
+                    .or_else(|| inactive_c_file.then_some("not-in-active-build".to_string()))
             } else if status == "missing" {
                 let project_scoped = matches!(language.as_str(), "typescript" | "javascript")
                     && !project_model_files.is_empty()
                     && project_model_files.contains(path.as_str());
                 Some(
-                    if matches!(
-                        language_status.get(language.as_str()).copied(),
-                        Some("missing-tool")
-                    ) {
+                    if matches!(provider_status, Some("missing-tool")) {
                         "provider-missing"
-                    } else if matches!(
-                        language_status.get(language.as_str()).copied(),
-                        Some("indexer-failed" | "invalid-output")
-                    ) {
+                    } else if matches!(provider_status, Some("indexer-failed" | "invalid-output")) {
                         "provider-failed"
-                    } else if matches!(
-                        language_status.get(language.as_str()).copied(),
-                        Some("excluded-by-project-config")
-                    ) || (matches!(language.as_str(), "typescript" | "javascript")
-                        && !project_scoped)
+                    } else if matches!(provider_status, Some("excluded-by-project-config"))
+                        || (matches!(language.as_str(), "typescript" | "javascript")
+                            && !project_scoped)
                     {
                         "project-config"
                     } else {

@@ -227,7 +227,7 @@ fn assignment_string(source: &str, key: &str) -> Option<String> {
             return None;
         }
         let value = remainder
-            .trim_start_matches(|value: char| value == ' ' || value == '\t' || value == '=')
+            .trim_start_matches([' ', '\t', '='])
             .trim_start_matches(['"', '\''])
             .split(['"', '\'', ',', ')'])
             .next()
@@ -291,7 +291,6 @@ pub(crate) fn parse_imports(path: &str, language: &str, source: &str) -> Vec<Imp
                                     .split(',')
                                     .next()
                                     .unwrap_or(imported)
-                                    .trim()
                                     .split_whitespace()
                                     .next()
                                     .unwrap_or(""),
@@ -551,13 +550,12 @@ pub(crate) fn is_local_or_standard(
             return true;
         }
     }
-    if import.language == "java" || import.language == "csharp" || import.language == "php" {
-        if local_prefixes
+    if (import.language == "java" || import.language == "csharp" || import.language == "php")
+        && local_prefixes
             .iter()
             .any(|prefix| !prefix.is_empty() && package.starts_with(prefix))
-        {
-            return true;
-        }
+    {
+        return true;
     }
     if import.language == "go" && !package.contains('.') {
         return true;

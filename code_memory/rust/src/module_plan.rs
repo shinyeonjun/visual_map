@@ -19,7 +19,6 @@ pub(crate) struct LanguageJob {
     pub(crate) providers_root: Option<PathBuf>,
     pub(crate) module_id: String,
     pub(crate) provider_config: Option<PathBuf>,
-    pub(crate) allow_js: bool,
     pub(crate) call_ranges: Arc<HashMap<String, Vec<Vec<i32>>>>,
     pub(crate) project_excluded_files: usize,
     pub(crate) project_config_digest: u64,
@@ -247,8 +246,9 @@ fn collect_typescript_config_files(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 fn is_excluded_config_dir(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
     matches!(
-        name,
+        name.as_str(),
         ".git"
             | ".code_memory"
             | ".cache"
@@ -377,14 +377,8 @@ pub(crate) fn rebase_language_analysis(
     let mut symbol_prefixes = HashMap::new();
     for document in &analysis.documents {
         let global_path = rebase_relative_path(module_root, project_root, &document.path);
-        let old_prefix = format!(
-            "lsp . . . {}",
-            document.path.replace('/', ".").replace('\\', ".")
-        );
-        let new_prefix = format!(
-            "lsp . . . {}",
-            global_path.replace('/', ".").replace('\\', ".")
-        );
+        let old_prefix = format!("lsp . . . {}", document.path.replace(['/', '\\'], "."));
+        let new_prefix = format!("lsp . . . {}", global_path.replace(['/', '\\'], "."));
         symbol_prefixes.insert(old_prefix, new_prefix);
     }
     for document in &mut analysis.documents {

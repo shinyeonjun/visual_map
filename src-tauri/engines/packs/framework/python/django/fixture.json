@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "src/fixture.py",
-      "source": "from django.urls import path; urlpatterns = [path('/fixture', handler)]\napp.use(authMiddleware);\n@Service class UserService {}"
+      "source": "from django.urls import path\nurlpatterns = [\n    path(\"fixture\", handler),\n]\napp.use(authMiddleware);\n@Service class UserService {}"
     },
     {
       "path": "pyproject.toml",

@@ -59,6 +59,7 @@ impl ArchitectureBuilder {
         builder
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn node(
         &mut self,
         id: impl Into<String>,
@@ -555,7 +556,7 @@ impl ArchitectureBuilder {
             let Some(module) = self.file_modules.get(path).cloned() else {
                 continue;
             };
-            let language = language_for_path(&path).unwrap_or("unknown");
+            let language = language_for_path(path).unwrap_or("unknown");
             for (line_number, line) in source.lines().enumerate() {
                 if let Some(marker) = dynamic_call_marker(language, line) {
                     dynamic.push((
@@ -588,7 +589,7 @@ impl ArchitectureBuilder {
                             ),
                         ]),
                         evidence: Self::evidence(
-                            &path,
+                            path,
                             line_number + 1,
                             Some("static database boundary".to_string()),
                         ),
@@ -627,7 +628,7 @@ impl ArchitectureBuilder {
                             ("source".to_string(), "lexical-file-boundary".to_string()),
                         ]),
                         evidence: Self::evidence(
-                            &path,
+                            path,
                             line_number + 1,
                             Some("static file boundary".to_string()),
                         ),

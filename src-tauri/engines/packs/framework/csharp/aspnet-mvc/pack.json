@@ -6,8 +6,8 @@
   "kind": "web",
   "signals": [
     "Microsoft.AspNetCore.Mvc",
-    "[Controller]",
-    "[HttpGet]"
+    "ControllerBase",
+    "[Http"
   ],
   "outputs": [
     "HTTP_ROUTE",

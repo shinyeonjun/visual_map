@@ -1387,6 +1387,47 @@ fn code_inventory_extracts_items_from_search_results() {
 }
 
 #[test]
+fn code_inventory_does_not_publish_test_routes_as_project_apis() {
+    let routes = serde_json::json!({
+        "results": [
+            {
+                "name": "POST /orders",
+                "qualified_name": "routes.orders.create",
+                "label": "Route",
+                "file_path": "src/routes/orders.ts"
+            },
+            {
+                "name": "POST /orders",
+                "qualified_name": "tests.orders.create",
+                "label": "Route",
+                "file_path": "tests/integration/orders.test.ts"
+            },
+            {
+                "name": "GET /orders",
+                "qualified_name": "tests.flagged.orders",
+                "label": "Route",
+                "file_path": "src/fixtures/orders.ts",
+                "is_test": true
+            },
+            {
+                "name": "GET /auth",
+                "qualified_name": "routes.auth.test",
+                "label": "Route",
+                "file_path": "src/auth.test.ts"
+            }
+        ]
+    });
+    let empty = serde_json::json!({ "results": [] });
+
+    let inventory =
+        extract_code_inventory("shop-api".to_string(), None, &routes, &empty, &empty).unwrap();
+
+    assert_eq!(inventory.routes.len(), 1);
+    assert_eq!(inventory.routes[0].qualified_name, "routes.orders.create");
+    assert_eq!(inventory.summary.routes, 1);
+}
+
+#[test]
 fn code_inventory_role_buckets_require_class_like_role_names() {
     let routes = serde_json::json!({ "results": [] });
     let code = serde_json::json!({
@@ -1913,6 +1954,47 @@ fn pinned_code_field_inventory(label: &str) -> (PathBuf, CodeInventory) {
     .unwrap();
     assert!(result.run.ok, "{}", result.run.stderr);
     (root, result.inventory.expect("field inventory"))
+}
+
+#[test]
+#[ignore = "requires the pinned Node/Express field repository and code sidecar"]
+fn code_field_express_inventory_excludes_client_calls_and_cross_framework_duplicates() {
+    let (root, inventory) = pinned_code_field_inventory("express-field");
+
+    assert_eq!(inventory.routes.len(), 15);
+    assert!(inventory.routes.iter().all(|route| {
+        route
+            .file_path
+            .as_deref()
+            .is_some_and(|path| !path.replace('\\', "/").starts_with("tests/"))
+    }));
+    assert!(inventory
+        .routes
+        .iter()
+        .all(|route| !route.qualified_name.contains("entrypoint:koa:")));
+    assert_eq!(inventory.handles.len(), 14);
+    assert!(inventory.routes.iter().any(|route| {
+        route.name == "POST /v1/users"
+            && route
+                .file_path
+                .as_deref()
+                .is_some_and(|path| path.replace('\\', "/").ends_with("/user.route.js"))
+    }));
+    assert!(inventory.routes.iter().any(|route| {
+        route.name == "DELETE /v1/users/:userId"
+            && route
+                .file_path
+                .as_deref()
+                .is_some_and(|path| path.replace('\\', "/").ends_with("/user.route.js"))
+    }));
+
+    eprintln!(
+        "product Express routes={} handles={}",
+        inventory.routes.len(),
+        inventory.handles.len()
+    );
+
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

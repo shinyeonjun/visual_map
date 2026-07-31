@@ -5,11 +5,11 @@
   "files": [
     {
       "path": "src/fixture.cs",
-      "source": "[Route('/api')] [HttpGet('/fixture')] public IActionResult Handler() {}\napp.use(authMiddleware);"
+      "source": "using Microsoft.AspNetCore.Mvc;\n[ApiController]\n[Route(\"api/[controller]\")]\npublic class OrdersController : ControllerBase {\n    [HttpGet(\"{orderId}\")]\n    public IActionResult Handler() {}\n}\napp.use(authMiddleware);"
     },
     {
       "path": "fixture.csproj",
-      "source": "<Project><ItemGroup>\n<!-- signal: Microsoft.AspNetCore.Mvc | signal: [Controller] | signal: [HttpGet] -->\n</ItemGroup></Project>\n"
+      "source": "<Project><ItemGroup>\n<!-- signal: Microsoft.AspNetCore.Mvc | signal: ControllerBase | signal: [Http -->\n</ItemGroup></Project>\n"
     }
   ],
   "expected": {

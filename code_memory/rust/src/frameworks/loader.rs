@@ -287,6 +287,28 @@ pub(crate) fn signal_needle(signal: &str) -> String {
         .unwrap_or_else(|| signal.to_string())
 }
 
+pub(crate) fn framework_identity_confirmed(
+    pack: &FrameworkPack,
+    matched_signals: &HashSet<String>,
+) -> bool {
+    let identity_signals = pack.signals.iter().filter(|signal| {
+        signal.split_once(':').is_some_and(|(prefix, _)| {
+            matches!(
+                prefix,
+                "import" | "require" | "include" | "#include" | "package"
+            )
+        })
+    });
+    let mut declared = false;
+    for signal in identity_signals {
+        declared = true;
+        if matched_signals.contains(signal) {
+            return true;
+        }
+    }
+    !declared
+}
+
 pub(crate) fn source_signal_matches(relative: &str, source: &str, signal: &str) -> bool {
     let needle = signal_needle(signal);
     let prefix = signal.split_once(':').map(|(prefix, _)| prefix);
@@ -418,9 +440,9 @@ pub(crate) fn collect_metadata_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
             ) {
                 collect_metadata_paths(&path, paths);
             }
-        } else if {
+        } else {
             let file_name = entry.file_name().to_string_lossy().to_string();
-            matches!(
+            let is_metadata = matches!(
                 file_name.as_str(),
                 "package.json"
                     | "package-lock.json"
@@ -439,9 +461,10 @@ pub(crate) fn collect_metadata_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
                     | "conanfile.txt"
                     | "Package.swift"
             ) || file_name.ends_with(".csproj")
-                || file_name.ends_with(".sln")
-        } {
-            paths.push(path);
+                || file_name.ends_with(".sln");
+            if is_metadata {
+                paths.push(path);
+            }
         }
     }
 }

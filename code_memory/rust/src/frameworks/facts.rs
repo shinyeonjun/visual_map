@@ -10,6 +10,7 @@ pub(crate) struct FrameworkSymbolIndex {
     definitions_by_file_name: HashMap<(String, String), Vec<String>>,
     references_by_file_name: HashMap<(String, String), Vec<String>>,
     definitions_by_file_line_name: HashMap<(String, usize, String), Vec<String>>,
+    references_by_file_line_name: HashMap<(String, usize, String), Vec<(usize, String)>>,
     definitions_by_name: HashMap<String, Vec<String>>,
     defined: HashSet<String>,
     implementation_scores: HashMap<String, u8>,
@@ -20,6 +21,7 @@ pub(crate) fn build_framework_symbol_index(documents: &[DocumentOutput]) -> Fram
         definitions_by_file_name: HashMap::new(),
         references_by_file_name: HashMap::new(),
         definitions_by_file_line_name: HashMap::new(),
+        references_by_file_line_name: HashMap::new(),
         definitions_by_name: HashMap::new(),
         defined: HashSet::new(),
         implementation_scores: HashMap::new(),
@@ -55,6 +57,15 @@ pub(crate) fn build_framework_symbol_index(documents: &[DocumentOutput]) -> Fram
                     .entry(occurrence.symbol.clone())
                     .or_insert_with(|| implementation_file_score(&occurrence.symbol));
             } else {
+                if let Some(line) = occurrence.range.first().copied() {
+                    let column =
+                        occurrence.range.get(1).copied().unwrap_or_default().max(0) as usize;
+                    index
+                        .references_by_file_line_name
+                        .entry((document.path.clone(), line.max(0) as usize, name.clone()))
+                        .or_default()
+                        .push((column, occurrence.symbol.clone()));
+                }
                 index
                     .references_by_file_name
                     .entry(key)
@@ -64,6 +75,20 @@ pub(crate) fn build_framework_symbol_index(documents: &[DocumentOutput]) -> Fram
         }
     }
     index
+}
+
+fn select_rightmost_reference(
+    index: &FrameworkSymbolIndex,
+    references: Option<&Vec<(usize, String)>>,
+) -> Option<String> {
+    let references = references?;
+    let rightmost = references.iter().map(|(column, _)| *column).max()?;
+    let symbols = references
+        .iter()
+        .filter(|(column, _)| *column == rightmost)
+        .map(|(_, symbol)| symbol.clone())
+        .collect::<Vec<_>>();
+    select_indexed_symbol(index, Some(&symbols))
 }
 
 fn select_indexed_symbol(
@@ -159,6 +184,92 @@ pub(crate) fn resolve_symbol_at_indexed(
     resolve_symbol_indexed(index, path, &short_name)
 }
 
+pub(crate) fn resolve_symbol_in_file_indexed(
+    index: &FrameworkSymbolIndex,
+    path: &str,
+    name: &str,
+    source_line: usize,
+) -> Option<String> {
+    let short_name = symbol_short_name(name).to_string();
+    if let Some(symbol) = select_rightmost_reference(
+        index,
+        index.references_by_file_line_name.get(&(
+            path.to_string(),
+            source_line,
+            short_name.clone(),
+        )),
+    ) {
+        return Some(symbol);
+    }
+    if let Some(symbol) = select_indexed_symbol(
+        index,
+        index.definitions_by_file_line_name.get(&(
+            path.to_string(),
+            source_line,
+            short_name.clone(),
+        )),
+    ) {
+        return Some(symbol);
+    }
+    if let Some(symbol) = select_indexed_symbol(
+        index,
+        index
+            .references_by_file_name
+            .get(&(path.to_string(), short_name.clone())),
+    ) {
+        return Some(symbol);
+    }
+    select_indexed_symbol(
+        index,
+        index
+            .definitions_by_file_name
+            .get(&(path.to_string(), short_name)),
+    )
+}
+
+pub(crate) fn resolve_symbol_on_line_indexed(
+    index: &FrameworkSymbolIndex,
+    path: &str,
+    name: &str,
+    source_line: usize,
+) -> Option<String> {
+    let short_name = symbol_short_name(name).to_string();
+    select_rightmost_reference(
+        index,
+        index.references_by_file_line_name.get(&(
+            path.to_string(),
+            source_line,
+            short_name.clone(),
+        )),
+    )
+    .or_else(|| {
+        select_indexed_symbol(
+            index,
+            index
+                .definitions_by_file_line_name
+                .get(&(path.to_string(), source_line, short_name)),
+        )
+    })
+}
+
+pub(crate) fn project_definition_for_symbol_indexed(
+    index: &FrameworkSymbolIndex,
+    symbol: &str,
+) -> Option<String> {
+    if index.defined.contains(symbol) {
+        return Some(symbol.to_string());
+    }
+    let name = symbol_short_name(symbol);
+    let owner = symbol.rsplit_once('/').map(|(owner, _)| owner)?;
+    let candidates = index.definitions_by_name.get(name)?;
+    let matching_owner = candidates
+        .iter()
+        .filter(|candidate| candidate.rsplit_once('/').map(|(value, _)| value) == Some(owner))
+        .cloned()
+        .collect::<Vec<_>>();
+    select_indexed_symbol(index, Some(&matching_owner))
+}
+
 pub(crate) fn resolve_java_type_indexed(
     index: &FrameworkSymbolIndex,
     path: &str,
@@ -207,6 +318,7 @@ pub(crate) fn output_evidence(pack: &FrameworkPack, output: &str, line: &str) ->
     if output == "MIDDLEWARE"
         && ((line.starts_with("use ") && !line.contains(".use("))
             || (line.starts_with("import ") && !line.contains(".use("))
+            || (line.contains("require(") && !line.contains(".use("))
             || line.contains("void Use(")
             || line.contains("function use(")
             || line.contains("def use("))
@@ -606,7 +718,8 @@ pub(crate) fn fact_target_name(output: &str, line: &str) -> Option<String> {
             {
                 None
             } else {
-                generic_argument_after(line, &["UseMiddleware<"])
+                call_last_argument_handler(line, ".use(")
+                    .or_else(|| generic_argument_after(line, &["UseMiddleware<"]))
                     .or_else(|| {
                         constructed_type_after(line, &[".addMiddleware(", "->addMiddleware("])
                     })
@@ -670,7 +783,7 @@ pub(crate) fn fact_target_name(output: &str, line: &str) -> Option<String> {
                 .or_else(|| dependency_type_name(line))
         }
         "RPC_ENDPOINT" => argument_after(line, &["add_service(", "RegisterService("])
-            .and_then(|name| registration_type_name(line, &name).or_else(|| Some(name)))
+            .and_then(|name| registration_type_name(line, &name).or(Some(name)))
             .or_else(|| registration_type_name(line, ""))
             .or_else(|| identifier_after(line, "service "))
             .or_else(|| identifier_after(line, "class "))
@@ -693,6 +806,13 @@ pub(crate) fn fact_target_name(output: &str, line: &str) -> Option<String> {
             .or_else(|| identifier_after(line, "void ")),
         _ => None,
     }
+}
+
+fn call_last_argument_handler(line: &str, marker: &str) -> Option<String> {
+    let open = line.find(marker)? + marker.len() - 1;
+    let close = matching_parenthesis(line, open)?;
+    last_top_level_argument(&line[open + 1..close])
+        .and_then(|(_, candidate)| handler_name_from_expression(candidate))
 }
 
 pub(crate) fn dependency_type_name(line: &str) -> Option<String> {
@@ -732,7 +852,7 @@ pub(crate) fn event_property_target(line: &str) -> Option<String> {
             continue;
         };
         let rest = line[start + marker.len()..]
-            .trim_start_matches(|value: char| matches!(value, ':' | '=' | '+' | '>' | '"' | '\\'))
+            .trim_start_matches([':', '=', '+', '>', '"', '\\'])
             .trim_start();
         let candidate = rest
             .trim_start_matches('{')
@@ -764,7 +884,7 @@ pub(crate) fn event_call_last_argument(line: &str) -> Option<String> {
             continue;
         };
         let candidate = line[start + marker.len()..]
-            .split(|value: char| matches!(value, ')' | ';'))
+            .split([')', ';'])
             .next()
             .unwrap_or_default()
             .split(',')
@@ -773,8 +893,7 @@ pub(crate) fn event_call_last_argument(line: &str) -> Option<String> {
                     matches!(value, '&' | '*' | '"' | '\'' | '(' | ')' | '}' | ';')
                 })
             })
-            .filter(|value| !value.is_empty())
-            .last()
+            .rfind(|value| !value.is_empty())
             .unwrap_or_default()
             .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
             .next()
@@ -828,7 +947,7 @@ pub(crate) fn fact_properties(output: &str, line: &str) -> BTreeMap<String, Stri
             if let Some(start) = line.find("return <") {
                 let candidate = line[start + "return <".len()..]
                     .trim_start()
-                    .split(|value: char| matches!(value, ' ' | '>' | '/' | '{'))
+                    .split([' ', '>', '/', '{'])
                     .next()
                     .unwrap_or_default();
                 if !candidate.is_empty() {
@@ -882,7 +1001,7 @@ pub(crate) fn argument_after(line: &str, markers: &[&str]) -> Option<String> {
     } else {
         rest.trim_start()
             .trim_matches(|value: char| value == ')' || value == ';' || value == ',')
-            .split(|value: char| matches!(value, ')' | ';' | ','))
+            .split([')', ';', ','])
             .next()?
             .trim()
     };
@@ -903,9 +1022,7 @@ pub(crate) fn quoted_argument_after(line: &str, marker: &str) -> Option<String> 
 pub(crate) fn constructed_type_after(line: &str, markers: &[&str]) -> Option<String> {
     let marker = markers.iter().find(|marker| line.contains(**marker))?;
     let start = line.find(marker)? + marker.len();
-    let rest = line[start..]
-        .split(|value: char| matches!(value, ')' | ';'))
-        .next()?;
+    let rest = line[start..].split([')', ';']).next()?;
     let start = rest.find("new ")? + "new ".len();
     let name: String = rest[start..]
         .chars()
@@ -921,7 +1038,7 @@ pub(crate) fn registration_type_name(line: &str, requested_name: &str) -> Option
     let start = line.find(marker)?;
     let variable = if requested_name.is_empty() {
         line[start + marker.len()..]
-            .split(|value: char| matches!(value, ')' | ',' | ';'))
+            .split([')', ',', ';'])
             .next()?
             .trim()
             .trim_start_matches(['&', '*'])
@@ -945,7 +1062,7 @@ pub(crate) fn registration_type_name(line: &str, requested_name: &str) -> Option
     }
 
     let tokens = before
-        .rsplit(|value: char| matches!(value, ';' | '{' | '}'))
+        .rsplit([';', '{', '}'])
         .find(|segment| !segment.trim().is_empty())?
         .split_whitespace()
         .collect::<Vec<_>>();
@@ -961,7 +1078,7 @@ pub(crate) fn generic_argument_after(line: &str, markers: &[&str]) -> Option<Str
     let marker = markers.iter().find(|marker| line.contains(**marker))?;
     let start = line.find(marker)? + marker.len();
     let candidate = line[start..]
-        .split(|value: char| matches!(value, '>' | ',' | ')' | ';'))
+        .split(['>', ',', ')', ';'])
         .next()?
         .trim()
         .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
@@ -999,6 +1116,7 @@ pub(crate) fn route_prefix(line: &str) -> Option<String> {
     if !(line.contains("@RequestMapping")
         || line.contains("@Controller(")
         || line.contains("@Path(")
+        || line.trim_start().starts_with("[RoutePrefix(")
         || (line.trim_start().starts_with("[Route(") && !line.contains("#[Route(")))
     {
         return None;
@@ -1006,6 +1124,19 @@ pub(crate) fn route_prefix(line: &str) -> Option<String> {
     java_route_paths(line)
         .into_iter()
         .next()
+        .or_else(|| {
+            annotation_route_paths(
+                line,
+                &[
+                    "@RequestMapping",
+                    "@Controller",
+                    "@Path",
+                    "[RoutePrefix",
+                    "[Route",
+                ],
+            )
+            .and_then(|(paths, _)| paths.into_iter().next())
+        })
         .or_else(|| first_route_path(line).map(|(path, _)| path))
 }
 
@@ -1021,11 +1152,15 @@ pub(crate) fn has_http_method_annotation(line: &str) -> bool {
         "@PUT",
         "@PATCH",
         "@DELETE",
+        "@HEAD",
+        "@OPTIONS",
         "[HttpGet",
         "[HttpPost",
         "[HttpPut",
         "[HttpPatch",
         "[HttpDelete",
+        "[HttpHead",
+        "[HttpOptions",
     ]
     .iter()
     .any(|marker| line.contains(marker))
@@ -1053,6 +1188,9 @@ fn normalize_route_path(path: &str) -> String {
 }
 
 pub(crate) fn route_method(line: &str) -> Option<&'static str> {
+    if let Some(method) = configured_route_method(line) {
+        return Some(method);
+    }
     let methods: &[(&[&str], &str)] = &[
         (
             &[
@@ -1164,6 +1302,46 @@ pub(crate) fn route_method(line: &str) -> Option<&'static str> {
             ],
             "DELETE",
         ),
+        (
+            &[
+                ".head(",
+                "->head(",
+                "::head(",
+                "HEAD(",
+                "@Head(",
+                "@head(",
+                "@HEAD(",
+                "@app.head(",
+                "@router.head(",
+                "@HEAD",
+                "#[head(",
+                "[Head(",
+                "Head(",
+                "[HttpHead",
+                "HttpHead(",
+            ],
+            "HEAD",
+        ),
+        (
+            &[
+                ".options(",
+                "->options(",
+                "::options(",
+                "OPTIONS(",
+                "@Options(",
+                "@options(",
+                "@OPTIONS(",
+                "@app.options(",
+                "@router.options(",
+                "@OPTIONS",
+                "#[options(",
+                "[Options(",
+                "Options(",
+                "[HttpOptions",
+                "HttpOptions(",
+            ],
+            "OPTIONS",
+        ),
     ];
     for (patterns, method) in methods {
         if patterns.iter().any(|pattern| line.contains(pattern)) {
@@ -1233,6 +1411,41 @@ pub(crate) fn route_method(line: &str) -> Option<&'static str> {
     None
 }
 
+pub(crate) fn configured_route_method(line: &str) -> Option<&'static str> {
+    let lower = line.to_ascii_lowercase();
+    if !(lower.contains("methods")
+        || lower.contains("method =")
+        || lower.contains("method:")
+        || lower.contains("via:")
+        || lower.contains("acceptverbs"))
+    {
+        return None;
+    }
+    let quoted = quoted_values(line);
+    let methods = [
+        ("GET", "get"),
+        ("POST", "post"),
+        ("PUT", "put"),
+        ("PATCH", "patch"),
+        ("DELETE", "delete"),
+        ("HEAD", "head"),
+        ("OPTIONS", "options"),
+    ];
+    let mut found = methods.iter().filter_map(|(method, lower_method)| {
+        (quoted
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(method))
+            || lower.contains("via:") && lower.contains(&format!(":{lower_method}")))
+        .then_some(*method)
+    });
+    let method = found.next()?;
+    if found.next().is_some() {
+        Some("ANY")
+    } else {
+        Some(method)
+    }
+}
+
 pub(crate) fn request_mapping_method(line: &str) -> Option<&'static str> {
     let methods = [
         ("RequestMethod.GET", "GET"),
@@ -1250,37 +1463,178 @@ pub(crate) fn request_mapping_method(line: &str) -> Option<&'static str> {
 
 pub(crate) fn first_route_path(line: &str) -> Option<(String, usize)> {
     let bytes = line.as_bytes();
-    for start in 0..bytes.len() {
-        if bytes[start] != b'"' && bytes[start] != b'\'' {
-            continue;
-        }
-        let quote = bytes[start];
-        let end = bytes[start + 1..]
+    let mut start = 0usize;
+    while start < bytes.len() {
+        let Some(quote_offset) = bytes[start..]
+            .iter()
+            .position(|value| matches!(value, b'"' | b'\''))
+        else {
+            break;
+        };
+        let quote_start = start + quote_offset;
+        let quote = bytes[quote_start];
+        let Some(end_offset) = bytes[quote_start + 1..]
             .iter()
             .position(|value| *value == quote)
-            .map(|offset| start + 1 + offset)?;
-        let value = &line[start + 1..end];
-        if value.starts_with('/') {
+        else {
+            break;
+        };
+        let end = quote_start + 1 + end_offset;
+        let value = &line[quote_start + 1..end];
+        if value.starts_with('/') || value == "*" {
             return Some((value.to_string(), end + 1));
         }
+        start = end + 1;
     }
-    for method in ["GET ", "POST ", "PUT ", "PATCH ", "DELETE "] {
+    for method in [
+        "GET ", "POST ", "PUT ", "PATCH ", "DELETE ", "HEAD ", "OPTIONS ", "get ", "post ", "put ",
+        "patch ", "delete ", "head ", "options ",
+    ] {
         let Some(rest) = line.trim_start().strip_prefix(method) else {
             continue;
         };
-        let path = rest.split_whitespace().next()?;
-        if path.starts_with('/') {
-            let end = line.find(path)? + path.len();
-            return Some((path.to_string(), end));
+        let rest = rest.trim_start();
+        let (path, consumed) = if matches!(rest.as_bytes().first(), Some(b'"' | b'\'')) {
+            let quote = rest.as_bytes()[0];
+            let offset = rest.as_bytes()[1..]
+                .iter()
+                .position(|value| *value == quote)?;
+            (&rest[1..1 + offset], offset + 2)
+        } else {
+            let path = rest.split_whitespace().next()?;
+            (path, path.len())
+        };
+        if !path.is_empty() {
+            let rest_start = line.len() - rest.len();
+            return Some((path.to_string(), rest_start + consumed));
         }
     }
     None
 }
 
+pub(crate) fn annotation_route_paths(line: &str, markers: &[&str]) -> Option<(Vec<String>, usize)> {
+    let mut candidates = markers
+        .iter()
+        .flat_map(|marker| {
+            line.match_indices(marker)
+                .map(|(start, _)| (start, *marker))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_unstable_by_key(|(start, _)| *start);
+
+    for (marker_start, marker) in candidates {
+        let marker_end = marker_start + marker.len();
+        let tail = &line[marker_end..];
+        let trimmed = tail.trim_start();
+        if !trimmed.starts_with('(') {
+            let bare_annotation = marker.starts_with('[') && trimmed.starts_with(']')
+                || marker.starts_with('@')
+                    && tail
+                        .chars()
+                        .next()
+                        .is_none_or(|value| value.is_whitespace());
+            if bare_annotation {
+                return Some((vec![String::new()], marker_end));
+            }
+            continue;
+        }
+        let open = marker_end + tail.find('(')?;
+        let close = matching_parenthesis(line, open)?;
+        let argument = first_top_level_argument(&line[open + 1..close]).trim();
+        if argument.is_empty() || top_level_assignment(argument) {
+            return Some((vec![String::new()], close + 1));
+        }
+        let paths = quoted_values(argument);
+        if !paths.is_empty() {
+            return Some((paths, close + 1));
+        }
+    }
+    None
+}
+
+pub(crate) fn matching_parenthesis(line: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, value) in line[open..].char_indices() {
+        let index = open + offset;
+        if let Some(current_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if value == '\\' {
+                escaped = true;
+            } else if value == current_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match value {
+            '"' | '\'' => quote = Some(value),
+            '(' => depth += 1,
+            ')' if depth == 1 => return Some(index),
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn first_top_level_argument(arguments: &str) -> &str {
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, value) in arguments.char_indices() {
+        if let Some(current_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if value == '\\' {
+                escaped = true;
+            } else if value == current_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match value {
+            '"' | '\'' => quote = Some(value),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => return &arguments[..index],
+            _ => {}
+        }
+    }
+    arguments
+}
+
+fn top_level_assignment(argument: &str) -> bool {
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for value in argument.chars() {
+        if let Some(current_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if value == '\\' {
+                escaped = true;
+            } else if value == current_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match value {
+            '"' | '\'' => quote = Some(value),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            '=' if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 pub(crate) fn route_paths(line: &str) -> Vec<String> {
     quoted_values(line)
         .into_iter()
-        .filter(|value| value.starts_with('/'))
+        .filter(|value| value.starts_with('/') || value == "*")
         .collect()
 }
 
@@ -1375,10 +1729,10 @@ pub(crate) fn java_route_paths(line: &str) -> Vec<String> {
 }
 
 pub(crate) fn registration_handler(rest: &str) -> Option<String> {
-    for marker in [".and_then(", ".map("] {
+    for marker in [".and_then(", ".and(", ".map("] {
         if let Some(open) = rest.find(marker) {
             let candidate = rest[open + marker.len()..]
-                .split(|value| value == ')' || value == ',' || value == ';')
+                .split([')', ',', ';'])
                 .next()?
                 .trim();
             let name = candidate
@@ -1391,44 +1745,155 @@ pub(crate) fn registration_handler(rest: &str) -> Option<String> {
         }
     }
     if let Some(open) = rest.find(".to(") {
-        let candidate = rest[open + 4..]
-            .split(|value| value == ')' || value == ',' || value == ';')
-            .next()?
-            .trim();
+        let candidate = rest[open + 4..].split([')', ',', ';']).next()?.trim();
         if !candidate.is_empty() {
             return Some(candidate.to_string());
         }
     }
-    let candidate = if let Some(comma) = rest.find(',') {
-        rest[comma + 1..]
-            .split(|value| value == ')' || value == ';' || value == ',')
-            .next()?
-            .trim()
-    } else {
-        let open = rest.find('(')?;
-        rest[open + 1..]
-            .split(|value| value == ')' || value == ';' || value == ',')
-            .next()?
-            .trim()
-    };
-    if candidate.is_empty() || candidate.starts_with(['(', '{', '[']) {
-        return None;
+    if let Some((_, candidate)) = last_top_level_argument(rest) {
+        if let Some(name) = handler_name_from_expression(candidate) {
+            return Some(name);
+        }
     }
-    if candidate.starts_with(['&', '*']) {
-        let name: String = candidate[1..]
-            .chars()
-            .take_while(|value| value.is_ascii_alphanumeric() || *value == '_')
-            .collect();
-        return (!name.is_empty()).then_some(name);
+    let open = rest.find(")(")? + 2;
+    let candidate = rest[open..].split([')', ';', ',']).next()?.trim();
+    handler_name_from_expression(candidate)
+}
+
+fn last_top_level_argument(input: &str) -> Option<(usize, &str)> {
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut last = None;
+    let mut stopped = false;
+    for (index, value) in input.char_indices() {
+        if let Some(current_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if value == '\\' {
+                escaped = true;
+            } else if value == current_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match value {
+            '"' | '\'' | '`' => quote = Some(value),
+            '(' | '[' | '{' => depth += 1,
+            ')' if depth == 0
+                && input[index + value.len_utf8()..]
+                    .trim_start()
+                    .starts_with(',') => {}
+            ')' if depth == 0 => {
+                let candidate = input[start..index].trim();
+                if !candidate.is_empty() {
+                    let offset = start + input[start..index].find(candidate).unwrap_or_default();
+                    last = Some((offset, candidate));
+                }
+                stopped = true;
+                break;
+            }
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                let candidate = input[start..index].trim();
+                if !candidate.is_empty() {
+                    let offset = start + input[start..index].find(candidate).unwrap_or_default();
+                    last = Some((offset, candidate));
+                }
+                start = index + value.len_utf8();
+            }
+            ';' if depth == 0 => {
+                stopped = true;
+                break;
+            }
+            _ => {}
+        }
     }
+    if !stopped {
+        let candidate = input[start..].trim().trim_end_matches([')', ';']);
+        if !candidate.is_empty() {
+            let offset = start + input[start..].find(candidate).unwrap_or_default();
+            last = Some((offset, candidate));
+        }
+    }
+    last
+}
+
+fn handler_name_from_expression(candidate: &str) -> Option<String> {
+    let candidate = candidate
+        .trim()
+        .trim_matches(['"', '\'', '`'])
+        .trim_start_matches(['&', '*']);
     let candidate = candidate.strip_prefix("async ").unwrap_or(candidate);
     let candidate = candidate.strip_prefix("function ").unwrap_or(candidate);
-    let candidate = candidate.trim();
+    if candidate.is_empty() || candidate.starts_with(['(', '{', '[']) || candidate.contains("=>") {
+        return None;
+    }
+    if let Some(open) = candidate.find('(') {
+        let callable = candidate[..open]
+            .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
+            .find(|value| !value.is_empty())?;
+        if matches!(
+            callable.to_ascii_lowercase().as_str(),
+            "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
+        ) {
+            let close = matching_parenthesis(candidate, open)?;
+            return last_top_level_argument(&candidate[open + 1..close])
+                .and_then(|(_, value)| handler_name_from_expression(value));
+        }
+        return Some(callable.to_string());
+    }
     let name = candidate
         .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
-        .find(|value| !value.is_empty())
-        .unwrap_or(candidate);
-    (!name.is_empty()).then_some(name.to_string())
+        .find(|value| !value.is_empty())?;
+    Some(name.to_string())
+}
+
+pub(crate) fn javascript_chained_route_calls(source: &str) -> Vec<(String, Option<String>, usize)> {
+    let Some(route_open) = source.find(".route(").map(|start| start + ".route".len()) else {
+        return Vec::new();
+    };
+    let Some(route_close) = matching_parenthesis(source, route_open) else {
+        return Vec::new();
+    };
+    let methods = [
+        (".get(", "GET"),
+        (".post(", "POST"),
+        (".put(", "PUT"),
+        (".patch(", "PATCH"),
+        (".delete(", "DELETE"),
+        (".head(", "HEAD"),
+        (".options(", "OPTIONS"),
+    ];
+    let mut cursor = route_close + 1;
+    let mut calls = Vec::new();
+    while cursor < source.len() {
+        let Some((start, marker, method)) = methods
+            .iter()
+            .filter_map(|(marker, method)| {
+                source[cursor..]
+                    .find(marker)
+                    .map(|offset| (cursor + offset, *marker, *method))
+            })
+            .min_by_key(|(start, _, _)| *start)
+        else {
+            break;
+        };
+        let open = start + marker.len() - 1;
+        let Some(close) = matching_parenthesis(source, open) else {
+            break;
+        };
+        let handler = last_top_level_argument(&source[open + 1..close])
+            .and_then(|(_, value)| handler_name_from_expression(value));
+        calls.push((
+            method.to_string(),
+            handler,
+            source[..start].matches('\n').count(),
+        ));
+        cursor = close + 1;
+    }
+    calls
 }
 
 pub(crate) fn macro_registration_handler(line: &str) -> Option<String> {

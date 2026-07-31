@@ -14,8 +14,9 @@ use paths::{base_paths, ensure_base_dirs, AppPaths};
 use source::{OpenSourceLocationRequest, RevealSourceLocationRequest, SourceActionResult};
 use std::{
     borrow::Cow,
-    collections::BTreeSet,
+    collections::{BTreeSet, HashSet},
     path::{Path, PathBuf},
+    sync::{LazyLock, Mutex},
     thread,
 };
 use tauri::Manager;
@@ -69,6 +70,36 @@ struct InitializeWorkspaceAnalysisResult {
     code_error: Option<String>,
     db_error: Option<String>,
     snapshot_saved: bool,
+}
+
+// The desktop app is single-instance, but commands can still overlap within it.
+static ACTIVE_WORKSPACE_MUTATIONS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+struct WorkspaceMutationGuard {
+    workspace_id: String,
+}
+
+fn begin_workspace_mutation(workspace_id: &str) -> Result<WorkspaceMutationGuard, String> {
+    validate_workspace_id(workspace_id)?;
+    let mut active = ACTIVE_WORKSPACE_MUTATIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !active.insert(workspace_id.to_string()) {
+        return Err("이 작업공간에서 다른 변경 작업이 진행 중입니다".to_string());
+    }
+    Ok(WorkspaceMutationGuard {
+        workspace_id: workspace_id.to_string(),
+    })
+}
+
+impl Drop for WorkspaceMutationGuard {
+    fn drop(&mut self) {
+        ACTIVE_WORKSPACE_MUTATIONS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.workspace_id);
+    }
 }
 
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -132,6 +163,7 @@ fn save_db_profile(
     app: tauri::AppHandle,
     request: SaveDbProfileRequest,
 ) -> CommandResult<Workspace> {
+    let _mutation_guard = begin_workspace_mutation(&request.workspace_id)?;
     let app_data_dir = app_data_dir(&app)?;
     let previous_workspace = workspace::open_workspace(&app_data_dir, &request.workspace_id)?;
     let previous_snapshot =
@@ -164,6 +196,7 @@ fn index_db_profile(
     app: tauri::AppHandle,
     request: IndexDbProfileRequest,
 ) -> CommandResult<DbIndexResult> {
+    let _mutation_guard = begin_workspace_mutation(&request.workspace_id)?;
     let app_data_dir = app_data_dir(&app)?;
     let registry = get_engine_availability(app)?;
     let workspace_id = request.workspace_id.clone();
@@ -227,6 +260,7 @@ fn index_code_repository(
     app: tauri::AppHandle,
     request: IndexCodeRequest,
 ) -> CommandResult<CodeIndexResult> {
+    let _mutation_guard = begin_workspace_mutation(&request.workspace_id)?;
     let app_data_dir = app_data_dir(&app)?;
     let registry = get_engine_availability(app)?;
     let workspace_id = request.workspace_id.clone();
@@ -329,9 +363,10 @@ fn initialize_workspace_analysis(
         validate_workspace_id(profile_id)?;
     }
 
+    let workspace_id = request.workspace_id.clone();
+    let _mutation_guard = begin_workspace_mutation(&workspace_id)?;
     let app_data_dir = app_data_dir(&app)?;
     let registry = get_engine_availability(app)?;
-    let workspace_id = request.workspace_id.clone();
     let code_request = IndexCodeRequest {
         workspace_id: workspace_id.clone(),
     };
@@ -1497,6 +1532,7 @@ fn refresh_github_workspace(
     app: tauri::AppHandle,
     workspace_id: String,
 ) -> CommandResult<Workspace> {
+    let _mutation_guard = begin_workspace_mutation(&workspace_id)?;
     Ok(workspace::refresh_github_workspace(
         app_data_dir(&app)?,
         &workspace_id,
@@ -1515,6 +1551,7 @@ fn repair_workspace_from_backup(
     app: tauri::AppHandle,
     workspace_id: String,
 ) -> CommandResult<Workspace> {
+    let _mutation_guard = begin_workspace_mutation(&workspace_id)?;
     Ok(workspace::repair_workspace_from_backup(
         app_data_dir(&app)?,
         &workspace_id,
@@ -1523,6 +1560,7 @@ fn repair_workspace_from_backup(
 
 #[tauri::command(async)]
 fn delete_workspace(app: tauri::AppHandle, workspace_id: String) -> CommandResult<()> {
+    let _mutation_guard = begin_workspace_mutation(&workspace_id)?;
     Ok(workspace::delete_workspace(
         app_data_dir(&app)?,
         &workspace_id,
@@ -1535,6 +1573,7 @@ fn delete_db_profile(
     workspace_id: String,
     profile_id: String,
 ) -> CommandResult<Workspace> {
+    let _mutation_guard = begin_workspace_mutation(&workspace_id)?;
     let app_data_dir = app_data_dir(&app)?;
     let workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
     if !workspace
@@ -1589,6 +1628,16 @@ fn list_workspaces(app: tauri::AppHandle) -> CommandResult<Vec<Workspace>> {
 #[cfg(test)]
 mod command_tests {
     use super::*;
+
+    #[test]
+    fn workspace_mutations_are_serialized_per_workspace_and_release_on_drop() {
+        let first = begin_workspace_mutation("guard-workspace-a").unwrap();
+        assert!(begin_workspace_mutation("guard-workspace-a").is_err());
+        let other = begin_workspace_mutation("guard-workspace-b").unwrap();
+        drop(other);
+        drop(first);
+        assert!(begin_workspace_mutation("guard-workspace-a").is_ok());
+    }
 
     #[test]
     fn deleting_inactive_db_profile_keeps_active_snapshot() {
@@ -1688,7 +1737,17 @@ mod command_tests {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_app_paths,

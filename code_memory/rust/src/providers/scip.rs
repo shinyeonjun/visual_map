@@ -13,6 +13,10 @@ use crate::{
     OccurrenceOutput, RelationOutput, SymbolOutput,
 };
 
+type SourceRange = (i32, i32, i32, i32);
+type SymbolsByRange = HashMap<String, HashMap<SourceRange, String>>;
+type CallRangesByPath = HashMap<String, HashSet<SourceRange>>;
+
 pub(crate) fn ensure_default_scip_output(root: &Path, out: &Path) -> Result<(), String> {
     if out.is_file() {
         return Ok(());
@@ -115,8 +119,7 @@ pub(crate) fn read_scip(
     let mut scip_documents = read_scoped_scip_documents(path, project_root, allowed_paths)?;
     let mut definitions: HashMap<String, Vec<(String, Vec<i32>)>> = HashMap::new();
     let mut definition_indexes: HashMap<String, DefinitionRangeIndex> = HashMap::new();
-    let mut definitions_by_range: HashMap<String, HashMap<(i32, i32, i32, i32), String>> =
-        HashMap::new();
+    let mut definitions_by_range = SymbolsByRange::new();
     let mut type_symbols = HashSet::new();
     let mut source_cache = HashMap::<String, String>::new();
     let mut scope_fallback_paths = HashSet::<String>::new();
@@ -267,19 +270,18 @@ pub(crate) fn read_scip(
         })
         .collect::<HashMap<_, _>>();
 
-    let type_script_call_ranges: Option<HashMap<String, HashSet<(i32, i32, i32, i32)>>> =
-        call_ranges.map(|ranges| {
-            ranges
-                .iter()
-                .filter_map(|(path, values)| {
-                    let ranges: HashSet<(i32, i32, i32, i32)> = values
-                        .iter()
-                        .filter_map(|range| range_parts(range))
-                        .collect();
-                    (!ranges.is_empty()).then_some((path.clone(), ranges))
-                })
-                .collect()
-        });
+    let type_script_call_ranges: Option<CallRangesByPath> = call_ranges.map(|ranges| {
+        ranges
+            .iter()
+            .filter_map(|(path, values)| {
+                let ranges: HashSet<(i32, i32, i32, i32)> = values
+                    .iter()
+                    .filter_map(|range| range_parts(range))
+                    .collect();
+                (!ranges.is_empty()).then_some((path.clone(), ranges))
+            })
+            .collect()
+    });
     let needs_source_for_call_detection = !matches!(fallback_language, "typescript" | "javascript")
         || call_ranges.is_some_and(HashMap::is_empty);
     let mut relations = Vec::new();
@@ -662,7 +664,7 @@ fn read_scoped_scip_documents(
 }
 
 fn type_script_call_occurrence(
-    call_ranges: &Option<HashMap<String, HashSet<(i32, i32, i32, i32)>>>,
+    call_ranges: &Option<CallRangesByPath>,
     path: &str,
     occurrence: &[i32],
 ) -> bool {
@@ -837,13 +839,13 @@ pub(crate) fn source_scope_from_lines(
     // ponytail: lexical brace fallback; provider enclosing ranges remain authoritative.
     let (definition_line, definition_character, _, _) = range_parts(definition_range)?;
     let mut opening = None;
-    for line_number in definition_line as usize..lines.len() {
+    for (line_number, full_line) in lines.iter().enumerate().skip(definition_line as usize) {
         let start = if line_number == definition_line as usize {
             definition_character.max(0) as usize
         } else {
             0
         };
-        let line = lines[line_number].get(start..)?;
+        let line = full_line.get(start..)?;
         let terminator = [line.find(';'), line.find("=>")]
             .into_iter()
             .flatten()
@@ -860,11 +862,11 @@ pub(crate) fn source_scope_from_lines(
     }
     let (opening_line, opening_character) = opening?;
     let mut depth = 0i32;
-    for line_number in opening_line..lines.len() {
+    for (line_number, full_line) in lines.iter().enumerate().skip(opening_line) {
         let line = if line_number == opening_line {
-            lines[line_number].get(opening_character..)?
+            full_line.get(opening_character..)?
         } else {
-            lines[line_number]
+            full_line
         };
         for character in line.chars() {
             match character {
@@ -894,8 +896,8 @@ pub(crate) fn has_role(value: i32, role: SymbolRole) -> bool {
 fn select_dotnet_solution(root: &Path, source_files: &[PathBuf]) -> Option<PathBuf> {
     let mut solutions = collect_files(root, &["sln", "slnx"]);
     solutions.sort_by(|left, right| {
-        dotnet_solution_score(right, &source_files)
-            .cmp(&dotnet_solution_score(left, &source_files))
+        dotnet_solution_score(right, source_files)
+            .cmp(&dotnet_solution_score(left, source_files))
             .then_with(|| left.cmp(right))
     });
     solutions.into_iter().next()
@@ -1108,9 +1110,7 @@ pub(crate) fn run_scip_indexer(
     root: &Path,
     out: &Path,
     providers_root: Option<&Path>,
-    source_file_count: usize,
     provider_config: Option<&Path>,
-    _allow_js: bool,
     source_files: &[PathBuf],
     project_config_digest: u64,
 ) -> Result<(), String> {
@@ -1191,7 +1191,7 @@ pub(crate) fn run_scip_indexer(
                     }
                 }
             }
-            if source_file_count >= 2_000 {
+            if source_files.len() >= 2_000 {
                 // ponytail: disable the provider's cross-project source cache
                 // for large inputs; this trades repeated parsing for bounded RAM.
                 command.arg("--no-global-caches");

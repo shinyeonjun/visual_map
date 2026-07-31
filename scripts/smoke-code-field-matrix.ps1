@@ -48,6 +48,12 @@ $matrix = @(
     Languages = "Python/FastAPI + TypeScript monorepo"
     Url = "https://github.com/fastapi/full-stack-fastapi-template.git"
     Commit = "4cd0d9e51aebd1af6f82d91ad0df4c9e41f4dea2"
+  },
+  [pscustomobject]@{
+    Name = "node-express-boilerplate"
+    Languages = "JavaScript/Express"
+    Url = "https://github.com/hagopj13/node-express-boilerplate.git"
+    Commit = "179ae84efec61b14206d0305d941daed6c6d07f9"
   }
 )
 
@@ -227,6 +233,23 @@ try {
         ($usableEngineRoutes -eq 0 -or $validHandleRows.Count -eq 0)) {
       throw "$($entry.Name) produced no source-backed API route/HANDLES path."
     }
+    if ($entry.Name -eq "node-express-boilerplate") {
+      $routeRows = @($nodeRows | Where-Object { @($_[0]) -contains "Route" })
+      $testRoutes = @($routeRows | Where-Object {
+        [string]$_[3] -match '(^|[\\/])(tests?|__tests__)([\\/]|$)'
+      })
+      $koaRoutes = @($routeRows | Where-Object { [string]$_[2] -match 'entrypoint:koa:' })
+      $routeNames = [System.Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal
+      )
+      foreach ($row in $routeRows) { [void]$routeNames.Add([string]$row[1]) }
+      if ($routeRows.Count -ne 15 -or $testRoutes.Count -ne 0 -or
+          $koaRoutes.Count -ne 0 -or $validHandleRows.Count -ne 14 -or
+          -not $routeNames.Contains("POST /v1/auth/register") -or
+          -not $routeNames.Contains("DELETE /v1/users/:userId")) {
+        throw "node-express route boundary drifted: routes=$($routeRows.Count), tests=$($testRoutes.Count), koa=$($koaRoutes.Count), handles=$($validHandleRows.Count)."
+      }
+    }
 
     $results.Add([pscustomobject][ordered]@{
       repository = $entry.Name
@@ -291,6 +314,27 @@ try {
   if ($LASTEXITCODE -ne 0) {
     throw "The product FastAPI static import field test failed."
   }
+
+  $env:BACKEND_MAP_TEST_CODE_REPO = Join-Path $matrixRoot "node-express-boilerplate"
+  $previousErrorAction = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $expressProductOutput = @(
+      & cargo test --locked --manifest-path $manifestPath code_field_express_inventory_excludes_client_calls_and_cross_framework_duplicates -- --ignored --nocapture 2>&1
+    )
+    $expressProductExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorAction
+  }
+  $expressProductOutput | ForEach-Object { Write-Output ([string]$_) }
+  if ($expressProductExitCode -ne 0) {
+    throw "The product Express adapter field test failed."
+  }
+  $expressResult = $results |
+    Where-Object { $_.repository -eq "node-express-boilerplate" } |
+    Select-Object -First 1
+  $expressResult.productAdapterRoutes = 15
+  $expressResult.productAdapterHandles = 14
 
   $results | Format-Table -AutoSize | Out-String | Write-Output
   $results | ConvertTo-Json -Depth 4 | Write-Output

@@ -18,10 +18,20 @@ fn route_parser_covers_registration_and_annotation_shapes() {
         ("app.get(\"/x\", handler);", "GET"),
         ("@app.get(\"/x\")\ndef health(): pass", "GET"),
         ("@router.post(\n\"/x\"\n)\ndef health(): pass", "POST"),
+        (
+            "@app.route(\"/x\", methods=[\"PATCH\"])\ndef health(): pass",
+            "PATCH",
+        ),
+        (
+            "@app.route(\"/x\", methods=[\"GET\", \"POST\"])\ndef health(): pass",
+            "ANY",
+        ),
         ("router.GET(\"/x\", handler);", "GET"),
         ("$app->post(\"/x\", handler);", "POST"),
         ("app.MapGet(\"/x\", handler);", "GET"),
         ("Route::delete(\"/x\", handler);", "DELETE"),
+        ("app.head(\"/x\", handler);", "HEAD"),
+        ("app.options(\"/x\", handler);", "OPTIONS"),
         ("path(\"/x\", handler);", "ANY"),
         ("routes = [Route(\"/x\", handler)]", "ANY"),
         ("router.route(\"/x\", get(handler));", "GET"),
@@ -72,7 +82,75 @@ app.get(
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].path.as_deref(), Some("/real"));
     assert_eq!(facts[0].source_line, 7);
-    assert_eq!(facts[0].source_end_line, 8);
+    assert_eq!(facts[0].source_end_line, 10);
+}
+
+#[test]
+fn registration_routes_use_the_final_callback_and_expand_method_chains() {
+    assert_eq!(
+        registration_handler(", validate(authValidation.register), authController.register);"),
+        Some("register".to_string())
+    );
+    assert_eq!(
+        registration_handler(", swaggerUi.setup(specs, { explorer: true }));"),
+        Some("setup".to_string())
+    );
+    assert_eq!(
+        fact_target_name("MIDDLEWARE", "app.use('/v1', routes);"),
+        Some("routes".to_string())
+    );
+    assert_eq!(
+        fact_target_name("MIDDLEWARE", "passport.use('jwt', jwtStrategy);"),
+        Some("jwtStrategy".to_string())
+    );
+
+    let calls = javascript_chained_route_calls(
+        ".route('/users')\n  .post(auth(), controller.create)\n  .get(auth(), controller.list);",
+    );
+    assert_eq!(
+        calls,
+        vec![
+            ("POST".to_string(), Some("create".to_string()), 1),
+            ("GET".to_string(), Some("list".to_string()), 2),
+        ]
+    );
+}
+
+#[test]
+fn javascript_static_router_mounts_compose_nested_prefixes_only_when_unique() {
+    let sources = [
+        (
+            "src/app.js",
+            "const routes = require('./routes');\napp.use('/v1', routes);",
+        ),
+        (
+            "src/routes/index.js",
+            "const express = require('express');\nconst users = require('./users');\nconst router = express.Router();\nrouter.use('/users', users);\nmodule.exports = router;",
+        ),
+        (
+            "src/routes/users.js",
+            "const express = require('express');\nconst router = express.Router();\nrouter.get('/:id', controller.get);\nmodule.exports = router;",
+        ),
+    ];
+    let context = JavascriptRouteContext::build(&sources);
+    assert_eq!(
+        context
+            .mounted_path("src/routes/users.js", "/:id")
+            .as_deref(),
+        Some("/v1/users/:id")
+    );
+
+    let ambiguous = JavascriptRouteContext::build(&[
+        (
+            "src/app.js",
+            "const users = require('./users');\napp.use('/v1/users', users);\napp.use('/v2/users', users);",
+        ),
+        (
+            "src/users.js",
+            "const express = require('express');\nconst router = express.Router();\nmodule.exports = router;",
+        ),
+    ]);
+    assert!(ambiguous.mounted_path("src/users.js", "/:id").is_none());
 }
 
 #[test]
@@ -110,8 +188,7 @@ class SecondController {
 
 #[test]
 fn fastapi_nested_router_prefix_and_handler_resolve() {
-    let sources = vec![
-            (
+    let sources = [(
                 "contexts.py".to_string(),
                 "from server.app.api.http.routes.context import catalog_router\nrouter = APIRouter(prefix=\"/api/v1/context\")\nrouter.include_router(catalog_router)\n".to_string(),
             ),
@@ -122,8 +199,7 @@ fn fastapi_nested_router_prefix_and_handler_resolve() {
             (
                 "context/catalog.py".to_string(),
                 "router = APIRouter()\n@router.get(\"/accounts\")\ndef list_accounts(): pass\n".to_string(),
-            ),
-        ];
+            )];
     let source_refs: Vec<(&str, &str)> = sources
         .iter()
         .map(|(path, source)| (path.as_str(), source.as_str()))
@@ -201,6 +277,77 @@ fn filesystem_frameworks_create_routes_from_file_conventions() {
     assert_eq!(facts[0].path.as_deref(), Some("/users/:id"));
     assert_eq!(facts[0].method.as_deref(), Some("GET"));
     assert_eq!(facts[0].evidence, vec!["filesystem_route_convention"]);
+}
+
+#[test]
+fn filesystem_routes_cover_exported_constants_groups_optional_catchalls_and_nuxt_suffixes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let packs = load_packs(root).expect("framework packs should load");
+    let pack = |language: &str, id: &str| {
+        packs
+            .iter()
+            .find(|pack| pack.language == language && pack.id == id)
+            .unwrap_or_else(|| panic!("missing {language}/{id} pack"))
+    };
+
+    let next = file_system_route(
+        pack("typescript", "nextjs"),
+        "app/(admin)/users/[[...slug]]/route.ts",
+        "export const GET = async () => new Response('ok');\n",
+    )
+    .expect("Next.js route");
+    assert_eq!(next.0, "/users/*slug");
+    assert_eq!(next.1, "GET");
+    assert_eq!(next.2.as_deref(), Some("GET"));
+    assert_eq!(next.3, 1);
+
+    let svelte = file_system_route(
+        pack("typescript", "sveltekit"),
+        "src/routes/(admin)/+server.ts",
+        "export const POST: RequestHandler = async () => new Response('ok');\n",
+    )
+    .expect("SvelteKit route");
+    assert_eq!(svelte.0, "/");
+    assert_eq!(svelte.1, "POST");
+    assert_eq!(svelte.2.as_deref(), Some("POST"));
+
+    let nuxt = file_system_route(
+        pack("javascript", "nuxt"),
+        "server/api/users/[id].get.ts",
+        "export default defineEventHandler(() => 'ok');\n",
+    )
+    .expect("Nuxt route");
+    assert_eq!(nuxt.0, "/users/:id");
+    assert_eq!(nuxt.1, "GET");
+    assert_eq!(nuxt.2.as_deref(), Some("default"));
+}
+
+#[test]
+fn dart_package_imports_can_confirm_shelf_identity() {
+    let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-dart-package-signal-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("lib")).unwrap();
+    fs::write(
+        root.join("lib/main.dart"),
+        "import 'package:shelf/shelf.dart';\nfinal router = Router();\nrouter.get('/health', handler);\n",
+    )
+    .unwrap();
+
+    let analysis = analyze(&root, &[], pack_root).unwrap();
+    let shelf = analysis
+        .frameworks
+        .iter()
+        .find(|framework| framework.language == "dart" && framework.id == "shelf")
+        .expect("Shelf framework");
+    assert!(shelf
+        .facts
+        .iter()
+        .any(|fact| fact.kind == "HTTP_ROUTE" && fact.path.as_deref() == Some("/health")));
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -547,6 +694,10 @@ fn symbol_short_name_handles_lsp_location_suffix() {
         symbol_short_name("lsp . . . app.Owner#updateOwner(int, OwnerRequest)@84:16"),
         "updateOwner"
     );
+    assert_eq!(
+        symbol_short_name("scip-typescript npm app 1.0.0 src/controllers/`auth.js`/register0:"),
+        "register"
+    );
     let documents = vec![DocumentOutput {
         language: "php".to_string(),
         path: "src/Fixture.php".to_string(),
@@ -562,6 +713,77 @@ fn symbol_short_name_handles_lsp_location_suffix() {
         }],
     }];
     assert!(resolve_symbol(&documents, "app/Config/Routes.php", "Handler::index").is_some());
+}
+
+#[test]
+fn registration_handler_reference_uses_the_rightmost_provider_target() {
+    let validation = "scip-typescript npm app 1.0.0 src/validations/`auth.js`/register.";
+    let validation_reference = "scip-typescript npm app 1.0.0 src/validations/`auth.js`/register0:";
+    let controller = "scip-typescript npm app 1.0.0 src/controllers/`auth.js`/register.";
+    let controller_reference = "scip-typescript npm app 1.0.0 src/controllers/`auth.js`/register0:";
+    let documents = vec![
+        DocumentOutput {
+            language: "javascript".to_string(),
+            path: "src/routes/auth.js".to_string(),
+            symbols: Vec::new(),
+            occurrences: vec![
+                OccurrenceOutput {
+                    symbol: validation_reference.to_string(),
+                    range: vec![8, 32, 8, 40],
+                    enclosing_range: Vec::new(),
+                    definition: false,
+                    import: false,
+                    read: true,
+                    write: false,
+                },
+                OccurrenceOutput {
+                    symbol: controller_reference.to_string(),
+                    range: vec![8, 61, 8, 69],
+                    enclosing_range: Vec::new(),
+                    definition: false,
+                    import: false,
+                    read: true,
+                    write: false,
+                },
+            ],
+        },
+        DocumentOutput {
+            language: "javascript".to_string(),
+            path: "src/validations/auth.js".to_string(),
+            symbols: Vec::new(),
+            occurrences: vec![OccurrenceOutput {
+                symbol: validation.to_string(),
+                range: vec![0, 0, 0, 8],
+                enclosing_range: Vec::new(),
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            }],
+        },
+        DocumentOutput {
+            language: "javascript".to_string(),
+            path: "src/controllers/auth.js".to_string(),
+            symbols: Vec::new(),
+            occurrences: vec![OccurrenceOutput {
+                symbol: controller.to_string(),
+                range: vec![0, 0, 0, 8],
+                enclosing_range: Vec::new(),
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            }],
+        },
+    ];
+    let index = build_framework_symbol_index(&documents);
+    let reference = resolve_symbol_in_file_indexed(&index, "src/routes/auth.js", "register", 8)
+        .expect("rightmost route reference");
+
+    assert_eq!(
+        project_definition_for_symbol_indexed(&index, &reference).as_deref(),
+        Some(controller)
+    );
 }
 
 #[test]
@@ -942,6 +1164,108 @@ fn one_framework_signal_does_not_activate_a_pack() {
 }
 
 #[test]
+fn express_routes_are_stable_when_client_tests_are_repeated() {
+    let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-express-client-boundary-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("tests/integration")).unwrap();
+    fs::write(
+        root.join("package.json"),
+        r#"{"dependencies":{"express":"4.21.0"},"devDependencies":{"supertest":"7.0.0"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/routes.js"),
+        r#"const express = require('express');
+const router = express.Router();
+router.use(auth);
+router.post('/direct', validate(body), controller.direct);
+router.get('/health', controller.health);
+router
+  .route('/users')
+  .post(auth(), controller.create)
+  .get(auth(), controller.list);
+module.exports = router;
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/app.js"),
+        "const express = require('express');\nconst routes = require('./routes');\nconst app = express();\napp.use('/v1', routes);\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/client.js"),
+        "const axios = require('axios');\naxios.post('/remote/orders', payload);\napi.get('/remote/users');\n",
+    )
+    .unwrap();
+
+    let analyze_routes = || {
+        let analysis = analyze(&root, &[], pack_root).unwrap();
+        assert!(analysis.frameworks.iter().all(|item| item.id != "koa"));
+        let express = analysis
+            .frameworks
+            .iter()
+            .find(|item| item.id == "express" && item.language == "javascript")
+            .expect("Express framework");
+        express
+            .facts
+            .iter()
+            .filter(|fact| fact.kind == "HTTP_ROUTE")
+            .map(|fact| {
+                (
+                    fact.method.clone().unwrap_or_default(),
+                    fact.path.clone().unwrap_or_default(),
+                    fact.source_file.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let before = analyze_routes();
+    assert_eq!(
+        before,
+        vec![
+            (
+                "POST".to_string(),
+                "/v1/direct".to_string(),
+                "src/routes.js".to_string()
+            ),
+            (
+                "GET".to_string(),
+                "/v1/health".to_string(),
+                "src/routes.js".to_string()
+            ),
+            (
+                "POST".to_string(),
+                "/v1/users".to_string(),
+                "src/routes.js".to_string()
+            ),
+            (
+                "GET".to_string(),
+                "/v1/users".to_string(),
+                "src/routes.js".to_string()
+            ),
+        ]
+    );
+
+    fs::write(
+        root.join("tests/integration/auth.test.js"),
+        "const request = require('supertest');\n".to_string()
+            + &"request(app).post('/v1/direct').send(payload);\n".repeat(100)
+            + &"request(app).get('/v1/users');\n".repeat(100),
+    )
+    .unwrap();
+    assert_eq!(analyze_routes(), before);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn framework_signals_inside_comments_do_not_activate_a_pack() {
     let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let temp = std::env::temp_dir().join(format!(
@@ -1009,6 +1333,47 @@ fn c_project_metadata_does_not_activate_web_or_ruby_packs() {
         .frameworks
         .iter()
         .all(|framework| !matches!(framework.id.as_str(), "nextjs" | "rack")));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn aspnet_core_controller_routes_have_one_concrete_owner() {
+    let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-aspnet-route-owner-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Controllers")).expect("create ASP.NET fixture");
+    fs::write(
+        root.join("Controllers/OrdersController.cs"),
+        r#"using Microsoft.AspNetCore.Mvc;
+[ApiController]
+[Route("/api/orders")]
+public class OrdersController : ControllerBase {
+    [HttpPost("/api/orders/{orderId}")]
+    public IActionResult Get(string orderId) => Ok();
+}
+"#,
+    )
+    .expect("write ASP.NET controller");
+    fs::write(
+        root.join("Program.cs"),
+        r#"var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+app.MapPut("/orders/{orderId}", () => "ok");
+"#,
+    )
+    .expect("write Minimal API fixture");
+
+    let analysis = analyze(&root, &[], pack_root).expect("analyze ASP.NET fixture");
+    let owners = analysis
+        .frameworks
+        .iter()
+        .filter(|framework| framework.facts.iter().any(|fact| fact.kind == "HTTP_ROUTE"))
+        .map(|framework| framework.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(owners, vec!["aspnet-mvc", "minimal-api"]);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1262,6 +1627,242 @@ class OwnerResource {
 }
 
 #[test]
+fn csharp_controller_routes_support_relative_and_bare_attributes() {
+    assert_eq!(
+        route_prefix("[RoutePrefix(\"api/legacy\")]").as_deref(),
+        Some("api/legacy")
+    );
+    let pack = FrameworkPack {
+        id: "aspnet-mvc".to_string(),
+        language: "csharp".to_string(),
+        name: "ASP.NET MVC".to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = r#"
+[ApiController]
+[Route("api/[controller]")]
+public class OrdersController : ControllerBase {
+    [HttpGet]
+    public IActionResult List() => Ok();
+
+    [HttpGet("{orderId}")]
+    public IActionResult Get(string orderId) => Ok();
+
+    [HttpHead]
+    [Route("{orderId}")]
+    public IActionResult Delete(string orderId) => Ok();
+}
+
+[RoutePrefix("api/legacy")]
+public class LegacyController : ApiController {
+    [HttpGet]
+    [Route("{orderId}")]
+    public IHttpActionResult Get(string orderId) => Ok();
+}
+"#;
+    let mut facts = Vec::new();
+    extract_routes(
+        &pack,
+        "Controllers/OrdersController.cs",
+        source,
+        &[],
+        None,
+        &mut facts,
+    );
+
+    let paths = facts
+        .iter()
+        .filter_map(|fact| fact.path.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        vec![
+            "/api/Orders",
+            "/api/Orders/{orderId}",
+            "/api/Orders/{orderId}",
+            "/api/legacy/{orderId}"
+        ]
+    );
+}
+
+#[test]
+fn nestjs_routes_support_relative_and_bare_decorators() {
+    let pack = FrameworkPack {
+        id: "nestjs".to_string(),
+        language: "typescript".to_string(),
+        name: "NestJS".to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = r#"
+@Controller('cats')
+export class CatsController {
+    @Get()
+    findAll() {}
+
+    @Get(':catId')
+    findOne() {}
+
+    @Options(':catId')
+    options() {}
+}
+"#;
+    let mut facts = Vec::new();
+    extract_routes(
+        &pack,
+        "src/cats.controller.ts",
+        source,
+        &[],
+        None,
+        &mut facts,
+    );
+
+    let paths = facts
+        .iter()
+        .filter_map(|fact| fact.path.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, vec!["/cats", "/cats/:catId", "/cats/:catId"]);
+}
+
+#[test]
+fn django_and_rails_routes_accept_framework_native_relative_paths() {
+    let route_pack = |id: &str, language: &str| FrameworkPack {
+        id: id.to_string(),
+        language: language.to_string(),
+        name: id.to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "registration-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+
+    let mut django = Vec::new();
+    extract_routes(
+        &route_pack("django", "python"),
+        "app/urls.py",
+        "path(\"\", home)\npath(\"users/<int:user_id>/\", detail)",
+        &[],
+        None,
+        &mut django,
+    );
+    assert_eq!(
+        django
+            .iter()
+            .filter_map(|fact| fact.path.as_deref())
+            .collect::<Vec<_>>(),
+        vec!["/", "/users/<int:user_id>/"]
+    );
+
+    let mut rails = Vec::new();
+    extract_routes(
+        &route_pack("rails", "ruby"),
+        "config/routes.rb",
+        "get \"photos/:photo_id\", to: \"photos#show\"",
+        &[],
+        None,
+        &mut rails,
+    );
+    assert_eq!(rails.len(), 1);
+    assert_eq!(rails[0].path.as_deref(), Some("/photos/:photo_id"));
+}
+
+#[test]
+fn jax_rs_routes_join_split_method_and_path_annotations() {
+    let pack = FrameworkPack {
+        id: "quarkus".to_string(),
+        language: "java".to_string(),
+        name: "Quarkus".to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = r#"
+@Path("owners")
+public class OwnerResource {
+    @GET
+    public Response list() { return ok(); }
+
+    @OPTIONS
+    @Path("{ownerId}")
+    public Response get() { return ok(); }
+}
+"#;
+    let mut facts = Vec::new();
+    extract_routes(
+        &pack,
+        "src/OwnerResource.java",
+        source,
+        &[],
+        None,
+        &mut facts,
+    );
+
+    let paths = facts
+        .iter()
+        .filter_map(|fact| fact.path.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, vec!["/owners", "/owners/{ownerId}"]);
+}
+
+#[test]
+fn quarkus_module_owns_its_jax_rs_routes() {
+    let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-quarkus-route-owner-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src/main/java/example")).expect("create Quarkus fixture");
+    fs::write(
+        root.join("src/main/java/example/OwnerResource.java"),
+        r#"package example;
+import io.quarkus.runtime.Startup;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+
+@Startup
+@ApplicationScoped
+@Path("owners")
+public class OwnerResource {
+    @GET
+    public String list() { return "owners"; }
+}
+"#,
+    )
+    .expect("write Quarkus resource");
+    fs::write(
+        root.join("pom.xml"),
+        "<project><dependencies><artifactId>quarkus-rest</artifactId></dependencies></project>",
+    )
+    .expect("write Quarkus manifest");
+
+    let analysis = analyze(&root, &[], pack_root).expect("analyze Quarkus fixture");
+    let owners = analysis
+        .frameworks
+        .iter()
+        .filter(|framework| framework.facts.iter().any(|fact| fact.kind == "HTTP_ROUTE"))
+        .map(|framework| framework.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(owners, vec!["quarkus"]);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn spring_route_owner_uses_the_module_web_stack() {
     let pack = |id: &str| FrameworkPack {
         id: id.to_string(),
@@ -1276,34 +1877,39 @@ fn spring_route_owner_uses_the_module_web_stack() {
     };
     let webflux = HashSet::from(["gateway".to_string()]);
     let mvc = HashSet::from(["customers".to_string()]);
+    let quarkus = HashSet::new();
 
-    assert!(java_pack_owns_routes(
+    assert!(pack_owns_routes(
         &pack("spring-webflux"),
         "gateway/src/Api.java",
         "@RestController class Api {}",
         &webflux,
         &mvc,
+        &quarkus,
     ));
-    assert!(!java_pack_owns_routes(
+    assert!(!pack_owns_routes(
         &pack("spring-webflux"),
         "customers/src/Owners.java",
         "@RestController class Owners {}",
         &webflux,
         &mvc,
+        &quarkus,
     ));
-    assert!(java_pack_owns_routes(
+    assert!(pack_owns_routes(
         &pack("spring-mvc"),
         "customers/src/Owners.java",
         "@RestController class Owners {}",
         &webflux,
         &mvc,
+        &quarkus,
     ));
-    assert!(!java_pack_owns_routes(
+    assert!(!pack_owns_routes(
         &pack("spring-boot"),
         "customers/src/Owners.java",
         "@GetMapping(\"/owners\")",
         &webflux,
         &mvc,
+        &quarkus,
     ));
 }
 

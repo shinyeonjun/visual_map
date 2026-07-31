@@ -5,11 +5,11 @@
   "files": [
     {
       "path": "src/fixture.cs",
-      "source": "[Route('/api')] [HttpGet('/fixture')] public IHttpActionResult Handler() {}\napp.use(authMiddleware);"
+      "source": "using System.Web.Http;\n[RoutePrefix(\"api/orders\")]\npublic class OrdersController : ApiController {\n    [HttpGet]\n    [Route(\"{orderId}\")]\n    public IHttpActionResult Handler() {}\n}\napp.use(authMiddleware);"
     },
     {
       "path": "fixture.csproj",
-      "source": "<Project><ItemGroup>\n<!-- signal: System.Web.Http | signal: ApiController | signal: [Route] -->\n</ItemGroup></Project>\n"
+      "source": "<Project><ItemGroup>\n<!-- signal: System.Web.Http | signal: ApiController | signal: IHttpActionResult -->\n</ItemGroup></Project>\n"
     }
   ],
   "expected": {

@@ -192,7 +192,7 @@ pub(crate) fn fastapi_include_edges(source: &str) -> Vec<(String, String, String
             .to_string();
         let rest = &line[start + ".include_router(".len()..];
         let child = rest
-            .split(|value: char| matches!(value, ',' | ')' | ' '))
+            .split([',', ')', ' '])
             .find(|value| !value.is_empty())
             .unwrap_or_default()
             .trim_matches(|value: char| !value.is_ascii_alphanumeric() && value != '_')

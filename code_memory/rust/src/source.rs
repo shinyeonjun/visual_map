@@ -50,12 +50,12 @@ pub(crate) fn load_source_snapshot_metadata_from_files(
     let mut file_hashes = std::collections::HashMap::new();
     let mut source_paths = Vec::new();
     for path in sorted_files.iter() {
-        let Ok(metadata) = fs::metadata(&path) else {
+        let Ok(metadata) = fs::metadata(path) else {
             continue;
         };
         let relative = path
             .strip_prefix(root)
-            .unwrap_or(&path)
+            .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
         if metadata.len() > MAX_SNAPSHOT_SOURCE_BYTES {
@@ -65,7 +65,7 @@ pub(crate) fn load_source_snapshot_metadata_from_files(
             source_paths.push(path.clone());
             continue;
         }
-        let Ok(bytes) = fs::read(&path) else {
+        let Ok(bytes) = fs::read(path) else {
             continue;
         };
         file_hashes.insert(relative, source_hash(&bytes));

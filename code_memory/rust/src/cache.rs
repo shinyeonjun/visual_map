@@ -84,6 +84,7 @@ pub(crate) fn architecture_cache_key(
     // serialized language index can stay identical while the Visual Map
     // projection changes (for example, preserving an unresolved route node).
     checksum_update(&mut hash, b"code-memory-architecture-cache.v17");
+    hash_current_executable(&mut hash, b"architecture-executable");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, pack_root.to_string_lossy().as_bytes());
     for document in &output.documents {
@@ -170,6 +171,7 @@ pub(crate) fn framework_cache_key(
 ) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     checksum_update(&mut hash, b"code-memory-framework-cache.v24");
+    hash_current_executable(&mut hash, b"framework-executable");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     for document in documents {
         checksum_update(&mut hash, document.path.as_bytes());
@@ -402,14 +404,18 @@ fn collect_project_config_files(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 fn is_project_config_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
+    if ((lower.starts_with("tsconfig.") || lower.starts_with("jsconfig."))
+        && lower.ends_with(".json"))
+        || matches!(lower.as_str(), "tsconfig.json" | "jsconfig.json")
+    {
+        return true;
+    }
     matches!(
         name,
         "package.json"
             | "package-lock.json"
             | "pnpm-lock.yaml"
             | "yarn.lock"
-            | "tsconfig.json"
-            | "jsconfig.json"
             | "pyproject.toml"
             | "pyrightconfig.json"
             | "requirements.txt"
@@ -547,12 +553,7 @@ pub(crate) fn language_cache_key(
     // Provider output is normalized by this executable, so a new build must
     // not reuse semantic data produced by an older normalization contract.
     checksum_update(&mut hash, b"code-memory-language-cache.v148");
-    if let Ok(executable) = env::current_exe() {
-        if let Some(executable_hash) = cached_file_checksum(&executable) {
-            checksum_update(&mut hash, b"normalizer-executable");
-            checksum_update(&mut hash, &executable_hash.to_le_bytes());
-        }
-    }
+    hash_current_executable(&mut hash, b"normalizer-executable");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, lang.id.as_bytes());
     let provider_program = find_tool(lang.tool, providers_root).or_else(|| {
@@ -591,6 +592,15 @@ pub(crate) fn language_cache_key(
         }
     }
     format!("{hash:016x}")
+}
+
+fn hash_current_executable(hash: &mut u64, marker: &[u8]) {
+    if let Ok(executable) = env::current_exe() {
+        if let Some(executable_hash) = cached_file_checksum(&executable) {
+            checksum_update(hash, marker);
+            checksum_update(hash, &executable_hash.to_le_bytes());
+        }
+    }
 }
 fn cached_file_checksum(path: &Path) -> Option<u64> {
     let metadata = fs::metadata(path).ok()?;

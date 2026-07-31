@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "src/fixture.rb",
-      "source": "get '/fixture', to: 'handler'\napp.use(authMiddleware);\n@Service class UserService {}"
+      "source": "get 'fixture', to: 'handler'\napp.use(authMiddleware);\n@Service class UserService {}"
     },
     {
       "path": "Gemfile",

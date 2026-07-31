@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "src/fixture.cs",
-      "source": "var app = WebApplication.Create(); app.Use(auth); app.MapGet('/fixture', handler);\napp.use(authMiddleware);\n@Autowired UserService service;"
+      "source": "var app = WebApplication.Create(); app.Use(auth);\napp.use(authMiddleware);\n@Autowired UserService service;"
     },
     {
       "path": "fixture.csproj",
@@ -14,12 +14,9 @@
   ],
   "expected": {
     "facts": [
-      "HTTP_ROUTE",
       "MIDDLEWARE",
       "DEPENDENCY"
     ],
-    "relations": [
-      "HANDLES"
-    ]
+    "relations": []
   }
 }

@@ -10,13 +10,10 @@
     "ControllerBase"
   ],
   "outputs": [
-    "HTTP_ROUTE",
-    "HANDLES",
     "MIDDLEWARE",
     "DEPENDENCY"
   ],
   "rule_sets": [
-    "HTTP_ROUTE",
     "MIDDLEWARE",
     "DEPENDENCY"
   ]

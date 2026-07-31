@@ -268,140 +268,6 @@ fn normalize_endpoint(value: &Value, aliases: &HashMap<String, String>) -> Value
         .unwrap_or_else(|| value.clone())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn framework_route_alias_is_normalized_to_architecture_endpoint() {
-        let index = json!({
-            "__architecture_nodes": [
-                {
-                    "id": "entrypoint:fastapi:route:fastapi:src/routes.py:10:/items",
-                    "kind": "ENDPOINT"
-                }
-            ]
-        });
-        let aliases = architecture_endpoint_aliases(&index);
-
-        assert_eq!(
-            normalize_endpoint(&json!("route:fastapi:src/routes.py:10:/items"), &aliases),
-            json!("entrypoint:fastapi:route:fastapi:src/routes.py:10:/items")
-        );
-    }
-
-    #[test]
-    fn unknown_framework_endpoint_is_not_guessed() {
-        let aliases = architecture_endpoint_aliases(&json!({
-            "__architecture_nodes": []
-        }));
-
-        assert_eq!(
-            normalize_endpoint(&json!("route:unknown"), &aliases),
-            json!("route:unknown")
-        );
-    }
-
-    #[test]
-    fn focused_search_counts_hidden_files_without_substring_false_positives() {
-        let files = vec![
-            (
-                "src/a.java".to_string(),
-                "orders.find(); preorders.find(); orders_id = 1;".to_string(),
-            ),
-            (
-                "src/b.java".to_string(),
-                "return orders.save();".to_string(),
-            ),
-        ];
-        let (results, matches, total) =
-            collect_search_matches(&files, &HashMap::new(), "orders", None, 1);
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(matches, 2);
-        assert_eq!(total, 2);
-    }
-
-    #[test]
-    fn generated_path_filter_is_exact_and_escaped() {
-        let filter = r"^(src/a\.java|tests/b\.java)$";
-
-        assert!(path_matches_filter("src/a.java", filter));
-        assert!(path_matches_filter("tests/b.java", filter));
-        assert!(!path_matches_filter("nested/src/a.java", filter));
-        assert!(path_matches_filter("src/db/orders.sql", "^src/db/"));
-        assert!(!path_matches_filter("src/db/orders.sql", r"src/.*"));
-    }
-
-    #[test]
-    fn relationship_query_detection_does_not_confuse_node_labels() {
-        assert_eq!(
-            query_relationship_kind("MATCH (a)-[rel:IMPORTS]->(b) RETURN a, b"),
-            Some("IMPORTS")
-        );
-        assert_eq!(
-            query_relationship_kind("MATCH (node:ROUTE|FUNCTION) RETURN node"),
-            None
-        );
-    }
-
-    #[test]
-    fn inventory_preserves_provider_enclosing_symbol() {
-        let parent = "scip-dotnet nuget . . Contributors/Delete#";
-        let method = "scip-dotnet nuget . . Contributors/Delete#Configure().";
-        let documents = vec![json!({
-            "path": "Contributors/Delete.cs",
-            "symbols": [{
-                "symbol": method,
-                "kind": "Method",
-                "enclosing_symbol": parent
-            }],
-            "occurrences": []
-        })];
-        let mut rows = Vec::new();
-        add_document_symbols(&documents, None, &mut rows, &mut HashSet::new());
-
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0][0][0], "Method");
-        assert_eq!(rows[0][1], "Configure");
-        assert_eq!(rows[0][10], parent);
-    }
-
-    #[test]
-    fn inventory_expands_single_line_provider_definition_to_lexical_scope() {
-        let root = std::env::temp_dir().join(format!(
-            "code-memory-inventory-scope-{}",
-            std::process::id()
-        ));
-        let path = root.join("Contributors/Delete.cs");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            "public class Delete : EndpointWithoutRequest\n{\n  public override void Configure()\n  {\n    Get(\"/items\");\n  }\n}\n",
-        )
-        .unwrap();
-        let documents = vec![json!({
-            "path": "Contributors/Delete.cs",
-            "symbols": [{
-                "symbol": "scip-dotnet nuget . . Contributors/Delete#Configure().",
-                "kind": "Method"
-            }],
-            "occurrences": [{
-                "symbol": "scip-dotnet nuget . . Contributors/Delete#Configure().",
-                "range": [2, 23, 32],
-                "definition": true
-            }]
-        })];
-        let mut rows = Vec::new();
-        add_document_symbols(&documents, root.to_str(), &mut rows, &mut HashSet::new());
-
-        assert_eq!(rows[0][4], 3);
-        assert_eq!(rows[0][6], 6);
-        fs::remove_dir_all(root).unwrap();
-    }
-}
-
 fn search_code(payload: &Value) -> Result<(), String> {
     let index = read_index(payload)?;
     let root = index
@@ -697,6 +563,7 @@ fn inventory_symbol_range(
         .unwrap_or_else(|| range.to_vec())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn inventory_row(
     label: &str,
     name: &str,
@@ -1072,4 +939,138 @@ fn print_json(value: &Value) -> Result<(), String> {
         serde_json::to_string(value).map_err(|e| format!("cannot serialize cli response: {e}"))?
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn framework_route_alias_is_normalized_to_architecture_endpoint() {
+        let index = json!({
+            "__architecture_nodes": [
+                {
+                    "id": "entrypoint:fastapi:route:fastapi:src/routes.py:10:/items",
+                    "kind": "ENDPOINT"
+                }
+            ]
+        });
+        let aliases = architecture_endpoint_aliases(&index);
+
+        assert_eq!(
+            normalize_endpoint(&json!("route:fastapi:src/routes.py:10:/items"), &aliases),
+            json!("entrypoint:fastapi:route:fastapi:src/routes.py:10:/items")
+        );
+    }
+
+    #[test]
+    fn unknown_framework_endpoint_is_not_guessed() {
+        let aliases = architecture_endpoint_aliases(&json!({
+            "__architecture_nodes": []
+        }));
+
+        assert_eq!(
+            normalize_endpoint(&json!("route:unknown"), &aliases),
+            json!("route:unknown")
+        );
+    }
+
+    #[test]
+    fn focused_search_counts_hidden_files_without_substring_false_positives() {
+        let files = vec![
+            (
+                "src/a.java".to_string(),
+                "orders.find(); preorders.find(); orders_id = 1;".to_string(),
+            ),
+            (
+                "src/b.java".to_string(),
+                "return orders.save();".to_string(),
+            ),
+        ];
+        let (results, matches, total) =
+            collect_search_matches(&files, &HashMap::new(), "orders", None, 1);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(matches, 2);
+        assert_eq!(total, 2);
+    }
+
+    #[test]
+    fn generated_path_filter_is_exact_and_escaped() {
+        let filter = r"^(src/a\.java|tests/b\.java)$";
+
+        assert!(path_matches_filter("src/a.java", filter));
+        assert!(path_matches_filter("tests/b.java", filter));
+        assert!(!path_matches_filter("nested/src/a.java", filter));
+        assert!(path_matches_filter("src/db/orders.sql", "^src/db/"));
+        assert!(!path_matches_filter("src/db/orders.sql", r"src/.*"));
+    }
+
+    #[test]
+    fn relationship_query_detection_does_not_confuse_node_labels() {
+        assert_eq!(
+            query_relationship_kind("MATCH (a)-[rel:IMPORTS]->(b) RETURN a, b"),
+            Some("IMPORTS")
+        );
+        assert_eq!(
+            query_relationship_kind("MATCH (node:ROUTE|FUNCTION) RETURN node"),
+            None
+        );
+    }
+
+    #[test]
+    fn inventory_preserves_provider_enclosing_symbol() {
+        let parent = "scip-dotnet nuget . . Contributors/Delete#";
+        let method = "scip-dotnet nuget . . Contributors/Delete#Configure().";
+        let documents = vec![json!({
+            "path": "Contributors/Delete.cs",
+            "symbols": [{
+                "symbol": method,
+                "kind": "Method",
+                "enclosing_symbol": parent
+            }],
+            "occurrences": []
+        })];
+        let mut rows = Vec::new();
+        add_document_symbols(&documents, None, &mut rows, &mut HashSet::new());
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0][0], "Method");
+        assert_eq!(rows[0][1], "Configure");
+        assert_eq!(rows[0][10], parent);
+    }
+
+    #[test]
+    fn inventory_expands_single_line_provider_definition_to_lexical_scope() {
+        let root = std::env::temp_dir().join(format!(
+            "code-memory-inventory-scope-{}",
+            std::process::id()
+        ));
+        let path = root.join("Contributors/Delete.cs");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "public class Delete : EndpointWithoutRequest\n{\n  public override void Configure()\n  {\n    Get(\"/items\");\n  }\n}\n",
+        )
+        .unwrap();
+        let documents = vec![json!({
+            "path": "Contributors/Delete.cs",
+            "symbols": [{
+                "symbol": "scip-dotnet nuget . . Contributors/Delete#Configure().",
+                "kind": "Method"
+            }],
+            "occurrences": [{
+                "symbol": "scip-dotnet nuget . . Contributors/Delete#Configure().",
+                "range": [2, 23, 32],
+                "definition": true
+            }]
+        })];
+        let mut rows = Vec::new();
+        add_document_symbols(&documents, root.to_str(), &mut rows, &mut HashSet::new());
+
+        assert_eq!(rows[0][4], 3);
+        assert_eq!(rows[0][6], 6);
+        fs::remove_dir_all(root).unwrap();
+    }
 }

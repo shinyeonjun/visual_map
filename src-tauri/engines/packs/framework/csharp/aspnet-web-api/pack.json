@@ -7,7 +7,7 @@
   "signals": [
     "System.Web.Http",
     "ApiController",
-    "[Route]"
+    "IHttpActionResult"
   ],
   "outputs": [
     "HTTP_ROUTE",

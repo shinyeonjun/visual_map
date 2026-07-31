@@ -5,11 +5,11 @@
   "files": [
     {
       "path": "src/fixture.java",
-      "source": "@Path('/fixture') @GET public void handler() {}\n@Autowired UserService service;"
+      "source": "@Path(\"fixture\")\npublic class FixtureResource {\n    @GET\n    public void handler() {}\n    @Autowired UserService service;\n}"
     },
     {
       "path": "pom.xml",
-      "source": "<project><dependencies>\n<!-- signal: jakarta. | signal: @Path | signal: @GET -->\n</dependencies></project>\n"
+      "source": "<project><dependencies>\n<!-- signal: jakarta.ws.rs | signal: @Path | signal: @GET -->\n</dependencies></project>\n"
     }
   ],
   "expected": {

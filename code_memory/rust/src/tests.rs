@@ -257,6 +257,60 @@ fn file_coverage_keeps_missing_files_visible() {
 }
 
 #[test]
+fn c_coverage_marks_files_outside_the_active_build() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-c-active-coverage-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create C coverage root");
+    let active = root.join("main.c");
+    let inactive = root.join("unused.c");
+    fs::write(&active, "int main(void) { return 0; }\n").expect("write active C file");
+    fs::write(&inactive, "int unused(void) { return 0; }\n").expect("write inactive C file");
+    fs::write(
+        root.join("compile_commands.json"),
+        format!(
+            "[{{\"directory\":\"{}\",\"command\":\"clang -c main.c\",\"file\":\"{}\"}}]",
+            root.display().to_string().replace('\\', "/"),
+            active.display().to_string().replace('\\', "/")
+        ),
+    )
+    .expect("write compile database");
+
+    let coverage = build_file_coverage(
+        &root,
+        &[("c".to_string(), active), ("c".to_string(), inactive)],
+        &[DocumentOutput {
+            language: "c".to_string(),
+            path: "main.c".to_string(),
+            symbols: Vec::new(),
+            occurrences: Vec::new(),
+        }],
+        &[LanguageOutput {
+            id: "c".to_string(),
+            name: "C".to_string(),
+            provider: "native-lsp",
+            files_found: 2,
+            files_indexed: 1,
+            files_excluded: 0,
+            files_missing: 1,
+            status: "indexed-partial",
+        }],
+        &[],
+    );
+    let active = coverage.iter().find(|item| item.path == "main.c").unwrap();
+    let inactive = coverage
+        .iter()
+        .find(|item| item.path == "unused.c")
+        .unwrap();
+    assert_eq!(active.status, "indexed");
+    assert_eq!(inactive.status, "excluded");
+    assert_eq!(inactive.reason.as_deref(), Some("not-in-active-build"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn merged_language_status_cannot_hide_provider_missing_files() {
     let analysis = LanguageAnalysis {
         language: LanguageOutput {
@@ -1185,6 +1239,9 @@ fn typescript_config_discovery_includes_nested_and_named_configs() {
     fs::create_dir_all(root.join("node_modules")).expect("create excluded directory");
     fs::write(root.join("node_modules").join("tsconfig.json"), "{}")
         .expect("write excluded config");
+    fs::create_dir_all(root.join("NODE_MODULES")).expect("create case-variant excluded directory");
+    fs::write(root.join("NODE_MODULES").join("tsconfig.hidden.json"), "{}")
+        .expect("write case-variant excluded config");
 
     let configs = typescript_config_files(&root);
     assert_eq!(configs.len(), 4);
@@ -1196,6 +1253,17 @@ fn typescript_config_discovery_includes_nested_and_named_configs() {
         .any(|path| path.ends_with("tsconfig.build.json")));
     assert!(configs.iter().any(|path| path.ends_with("jsconfig.json")));
     assert!(configs
+        .iter()
+        .any(|path| path.ends_with("tsconfig.test.json")));
+    assert!(configs
+        .iter()
+        .all(|path| !path.starts_with(root.join("NODE_MODULES"))));
+
+    let project_configs = project_config_files(&root);
+    assert!(project_configs
+        .iter()
+        .any(|path| path.ends_with("tsconfig.build.json")));
+    assert!(project_configs
         .iter()
         .any(|path| path.ends_with("tsconfig.test.json")));
     let _ = fs::remove_dir_all(root);

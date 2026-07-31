@@ -749,7 +749,7 @@ fn run_native_lsp_with_server_mode(
 
         if server != "clangd" && !large_workspace {
             let lexical_candidates =
-                lexical_call_candidates_with_set(&text, symbols, &known_symbol_names);
+                lexical_call_candidates_with_set(text, symbols, &known_symbol_names);
             if connection.fatal_error.is_some() {
                 continue;
             }
@@ -1667,7 +1667,7 @@ impl LspConnection {
         let mut seen = HashSet::new();
         self.provider_diagnostics
             .drain(..)
-            .map(|diagnostic| {
+            .filter_map(|diagnostic| {
                 let path = uri_to_relative_path(&diagnostic.uri, root);
                 let key = format!(
                     "{}:{}:{}:{}",
@@ -1713,7 +1713,6 @@ impl LspConnection {
                     line: diagnostic.line,
                 })
             })
-            .flatten()
             .collect()
     }
 
@@ -2275,8 +2274,7 @@ pub(crate) fn symbol_string(file: &str, name: &str, line: u32, character: u32) -
     // `method(args)`. Keep one stable identity for both forms.
     let canonical_name = name
         .rsplit_once(" : ")
-        .map(|(base, return_type)| (!return_type.is_empty()).then_some(base))
-        .flatten()
+        .and_then(|(base, return_type)| (!return_type.is_empty()).then_some(base))
         .unwrap_or(name);
     format!(
         "lsp . . . {}#{}@{}:{}",
@@ -2290,7 +2288,7 @@ pub(crate) fn symbol_string(file: &str, name: &str, line: u32, character: u32) -
 pub(crate) fn lsp_kind_to_scip(kind: u32) -> scip::types::symbol_information::Kind {
     use scip::types::symbol_information::Kind;
     match kind {
-        2 | 3 | 4 => Kind::Module,
+        2..=4 => Kind::Module,
         5 => Kind::Class,
         6 | 9 => Kind::Method,
         10 | 22 => Kind::Enum,
