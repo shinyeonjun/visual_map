@@ -46,6 +46,26 @@ function Compress-ProviderDirectory([string]$SourceDirectory, [string]$ArchivePa
     }
 }
 
+function Compress-ProviderRootFiles([string]$SourceDirectory, [string]$ArchivePath, [string[]]$FileNames) {
+    $zip = [IO.Compression.ZipFile]::Open(
+        $ArchivePath,
+        [IO.Compression.ZipArchiveMode]::Create
+    )
+    try {
+        foreach ($fileName in $FileNames) {
+            $sourcePath = Join-Path $SourceDirectory $fileName
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $zip,
+                $sourcePath,
+                $fileName.Replace("\", "/"),
+                [IO.Compression.CompressionLevel]::Fastest
+            ) | Out-Null
+        }
+    } finally {
+        $zip.Dispose()
+    }
+}
+
 function Get-Sha256([string]$Path) {
     $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     $algorithm = [Security.Cryptography.SHA256]::Create()
@@ -92,6 +112,7 @@ if ($VerifyOnly) {
         throw "Provider bundle manifest was not found: $bundleManifestPath"
     }
     $bundleManifest = Get-Content -LiteralPath $bundleManifestPath -Raw | ConvertFrom-Json
+    $bundledEntries = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($archive in @($bundleManifest.archives)) {
         $archivePath = Join-Path $BundleRoot ([string]$archive.fileName)
         if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
@@ -100,6 +121,32 @@ if ($VerifyOnly) {
         $actualHash = Get-Sha256 $archivePath
         if ($actualHash -ne [string]$archive.sha256) {
             throw "Provider bundle checksum mismatch: $archivePath"
+        }
+        $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
+        try {
+            foreach ($entry in $zip.Entries) {
+                [void]$bundledEntries.Add($entry.FullName.Replace("\", "/"))
+            }
+        } finally {
+            $zip.Dispose()
+        }
+    }
+    foreach ($requiredEntry in "manifest.json", "checksums.json") {
+        if (-not $bundledEntries.Contains($requiredEntry)) {
+            throw "Provider bundles do not contain required root metadata: $requiredEntry"
+        }
+    }
+    $providerManifest = Get-Content -LiteralPath (Join-Path $DestinationRoot "manifest.json") -Raw | ConvertFrom-Json
+    foreach ($provider in @($providerManifest.providers)) {
+        $providerPath = ([string]$provider.path).Replace("\", "/")
+        if ([string]::IsNullOrWhiteSpace($providerPath) -or $providerPath -match "(^/|\.\.)") {
+            throw "Provider manifest contains an unsafe path: $providerPath"
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $DestinationRoot $providerPath) -PathType Leaf)) {
+            throw "Staged provider executable is missing: $providerPath"
+        }
+        if (-not $bundledEntries.Contains($providerPath)) {
+            throw "Provider bundles do not contain declared executable: $providerPath"
         }
     }
     Write-Host "Verified staged providers: $DestinationRoot"
@@ -132,7 +179,18 @@ if (Test-Path -LiteralPath $BundleRoot) {
     Remove-Item -LiteralPath $BundleRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Path $BundleRoot -Force | Out-Null
-$archives = @()
+$rootMetadata = @("manifest.json", "checksums.json")
+if (Test-Path -LiteralPath (Join-Path $DestinationRoot "README.md") -PathType Leaf) {
+    $rootMetadata += "README.md"
+}
+$coreArchiveName = "providers-core.zip"
+$coreArchivePath = Join-Path $BundleRoot $coreArchiveName
+Write-Host "Compressing provider root metadata"
+Compress-ProviderRootFiles $DestinationRoot $coreArchivePath $rootMetadata
+$archives = @([pscustomobject]@{
+    fileName = $coreArchiveName
+    sha256 = Get-Sha256 $coreArchivePath
+})
 foreach ($providerDirectory in @(Get-ChildItem -LiteralPath $DestinationRoot -Directory -Force | Sort-Object Name)) {
     $archiveName = "providers-$($providerDirectory.Name).zip"
     $archivePath = Join-Path $BundleRoot $archiveName

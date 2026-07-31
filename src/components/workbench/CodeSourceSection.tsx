@@ -27,7 +27,7 @@ export function CodeSourceSection({
   const showCodeOperationMessage = Boolean(
     workspaceControls.codeError ||
       workspaceControls.codeIndexing ||
-      (!hasCodeInventory && workspaceControls.codeStatus),
+      ((!hasCodeInventory || codeInventory?.partial) && workspaceControls.codeStatus),
   );
   const nextAction = codeNextAction(workspaceControls, hasWorkspace, hasCodeInventory);
   const sourceSettings = (

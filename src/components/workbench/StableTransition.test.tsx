@@ -275,6 +275,51 @@ describe("stable mode transitions", () => {
     expect(onToggleSourceManager).toHaveBeenCalledOnce();
   });
 
+  it("does not present a partial provider result as complete", () => {
+    const controls = workspaceControls();
+    render(
+      <WorkbenchTopBar
+        sourceManagerOpen={false}
+        onToggleSourceManager={vi.fn()}
+        workspaceControls={{
+          ...controls,
+          initialized: true,
+          busy: false,
+          workspaces: [controls.currentWorkspace!],
+          operationStatus: { phase: "idle", label: "작업 없음", message: "실행 중인 작업 없음" },
+          openWorkspace: vi.fn(),
+          codeInventory: {
+            ...controls.codeInventory!,
+            partial: true,
+            relationGaps: [{
+              kind: "code-provider-diagnostic",
+              from: "provider:java",
+              to: "backend",
+              message: "Java provider를 실행하지 못했습니다",
+            }],
+          },
+        } as WorkspaceControls}
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={{
+          searchQuery: "",
+          searchGroups: [],
+          snapshotStaleReasons: [],
+          setSearchQuery: vi.fn(),
+          openSearchPopover: vi.fn(),
+          closeSearchPopover: vi.fn(),
+          runSearch: vi.fn(),
+          selectSearchResult: vi.fn(),
+        } as unknown as VisualMapControls}
+      />,
+    );
+
+    expect(screen.getByRole("status", { name: /부분 완료/ })).toHaveAttribute(
+      "title",
+      "Java provider를 실행하지 못했습니다",
+    );
+    expect(screen.queryByText("읽기 완료")).not.toBeInTheDocument();
+  });
+
   it("does not activate background search while source management is open", () => {
     const openSearchPopover = vi.fn();
     render(

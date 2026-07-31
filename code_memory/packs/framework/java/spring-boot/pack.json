@@ -10,13 +10,10 @@
     "@RestController"
   ],
   "outputs": [
-    "HTTP_ROUTE",
-    "HANDLES",
     "SERVICE",
     "DEPENDENCY"
   ],
   "rule_sets": [
-    "HTTP_ROUTE",
     "SERVICE",
     "DEPENDENCY"
   ]

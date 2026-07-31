@@ -1,12 +1,25 @@
 [CmdletBinding()]
 param(
     [string]$EnginePath,
-    [switch]$KeepFixture
+    [switch]$KeepFixture,
+    [switch]$RequireJavaProvider,
+    [switch]$UseProviderBundles
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
+
+function Get-Sha256([string]$Path) {
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace("-", "")
+    } finally {
+        $algorithm.Dispose()
+        $stream.Dispose()
+    }
+}
 if ([string]::IsNullOrWhiteSpace($EnginePath)) {
     $EnginePath = Join-Path $repoRoot "src-tauri\engines\code-memory-language.exe"
 }
@@ -15,21 +28,52 @@ if (-not (Test-Path -LiteralPath $EnginePath -PathType Leaf)) {
     throw "Code engine not found: $EnginePath"
 }
 $engineRoot = Split-Path -Parent $EnginePath
-$bundledPacks = Join-Path $engineRoot "packs"
-if (Test-Path -LiteralPath (Join-Path $bundledPacks "framework") -PathType Container) {
-    $env:CODE_MEMORY_PACKS_ROOT = $bundledPacks
-}
-$bundledProviders = Join-Path $engineRoot "providers"
-if (Test-Path -LiteralPath $bundledProviders -PathType Container) {
-    $env:CODE_MEMORY_PROVIDERS_ROOT = $bundledProviders
-}
-
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $fixtureRoot = Join-Path $tempBase ("backend-visual-map-code-contract-" + [guid]::NewGuid().ToString("N"))
 $sourceRoot = Join-Path $fixtureRoot "repo"
 $cacheRoot = Join-Path $fixtureRoot "cache"
 $sidecarRunner = Join-Path $PSScriptRoot "run-sidecar-json.mjs"
 New-Item -ItemType Directory -Path $sourceRoot,$cacheRoot -Force | Out-Null
+
+$bundledPacks = Join-Path $engineRoot "packs"
+if (Test-Path -LiteralPath (Join-Path $bundledPacks "framework") -PathType Container) {
+    $env:CODE_MEMORY_PACKS_ROOT = $bundledPacks
+}
+$bundledProviders = Join-Path $engineRoot "providers"
+if (-not $UseProviderBundles -and (Test-Path -LiteralPath $bundledProviders -PathType Container)) {
+    $env:CODE_MEMORY_PROVIDERS_ROOT = $bundledProviders
+} elseif ($RequireJavaProvider -or $UseProviderBundles) {
+    $bundleRoot = Join-Path $engineRoot "provider-bundles"
+    $bundleManifestPath = Join-Path $bundleRoot "providers-manifest.json"
+    if (-not (Test-Path -LiteralPath $bundleManifestPath -PathType Leaf)) {
+        throw "Managed provider bundle manifest not found: $bundleManifestPath"
+    }
+    $providerRoot = Join-Path $fixtureRoot "providers"
+    New-Item -ItemType Directory -Path $providerRoot -Force | Out-Null
+    $bundleManifest = Get-Content -LiteralPath $bundleManifestPath -Raw | ConvertFrom-Json
+    foreach ($archiveName in "providers-core.zip", "providers-java.zip", "providers-node.zip") {
+        $archive = @($bundleManifest.archives) | Where-Object fileName -eq $archiveName | Select-Object -First 1
+        if ($null -eq $archive) {
+            throw "Managed provider bundle is missing: $archiveName"
+        }
+        $archivePath = Join-Path $bundleRoot $archiveName
+        if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+            throw "Managed provider archive not found: $archivePath"
+        }
+        $actualHash = Get-Sha256 $archivePath
+        if ($actualHash -ne [string]$archive.sha256) {
+            throw "Managed provider archive checksum mismatch: $archiveName"
+        }
+        Expand-Archive -LiteralPath $archivePath -DestinationPath $providerRoot -Force
+    }
+    foreach ($requiredProviderFile in "manifest.json", "checksums.json", "java\jdtls.cmd", "node\project-model.cjs", "node\runtime\node.exe") {
+        $requiredPath = Join-Path $providerRoot $requiredProviderFile
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "Extracted provider root is incomplete: $requiredProviderFile"
+        }
+    }
+    $env:CODE_MEMORY_PROVIDERS_ROOT = $providerRoot
+}
 
 function Invoke-CodeTool([string]$Tool, [hashtable]$Payload) {
     $json = $Payload | ConvertTo-Json -Compress -Depth 10
@@ -65,6 +109,78 @@ function Invoke-CodeTool([string]$Tool, [hashtable]$Payload) {
 }
 
 try {
+    $env:CBM_CACHE_DIR = $cacheRoot
+    if ($RequireJavaProvider) {
+        $javaRoot = Join-Path $fixtureRoot "java-repo"
+        $javaSourceRoot = Join-Path $javaRoot "src\main\java\fixture"
+        New-Item -ItemType Directory -Path $javaSourceRoot -Force | Out-Null
+        [IO.File]::WriteAllText(
+            (Join-Path $javaRoot "pom.xml"),
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>fixture</groupId><artifactId>provider-smoke</artifactId><version>1.0.0</version></project>',
+            [Text.UTF8Encoding]::new($false)
+        )
+        $javaSource = @'
+package fixture;
+
+@interface RequestMapping { String value() default ""; }
+@interface RestController {}
+@interface GetMapping { String value() default ""; }
+
+@RequestMapping("/api")
+@RestController
+class OwnerController {
+    private final OwnerService service = new OwnerService();
+
+    @GetMapping("/owners")
+    String owner() {
+        return service.findOwner();
+    }
+}
+
+class OwnerService {
+    String findOwner() {
+        return "owner";
+    }
+}
+'@
+        [IO.File]::WriteAllText(
+            (Join-Path $javaSourceRoot "OwnerController.java"),
+            $javaSource,
+            [Text.UTF8Encoding]::new($false)
+        )
+
+        $env:CBM_ALLOWED_ROOT = $javaRoot
+        $javaIndex = Invoke-CodeTool "index_repository" @{
+            repo_path = $javaRoot
+            mode = "full"
+            name = "backend-visual-map-java-provider-contract"
+            persistence = $false
+        }
+        $javaProject = [string]$javaIndex.project
+        $javaArchitecture = Invoke-CodeTool "get_architecture" @{ project = $javaProject }
+        $providerFailures = @(@($javaArchitecture.diagnostics) | Where-Object {
+            [string]$_.message -match "provider-missing|needs native LSP|jdtls.+not available|providers root is not configured"
+        })
+        if ($providerFailures.Count -gt 0) {
+            throw "Installed Java provider reported missing coverage: $($providerFailures[0].message)"
+        }
+        $javaCalls = Invoke-CodeTool "query_graph" @{
+            project = $javaProject
+            query = "MATCH (caller)-[rel:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target, rel.strategy AS strategy"
+        }
+        if (@($javaCalls.rows).Count -eq 0) {
+            throw "Installed Java provider returned no CALLS relationship."
+        }
+        $javaHandles = Invoke-CodeTool "query_graph" @{
+            project = $javaProject
+            query = "MATCH (handler)-[:HANDLES]->(route) RETURN handler.qualified_name AS source, route.qualified_name AS target"
+        }
+        if (@($javaHandles.rows).Count -eq 0) {
+            throw "Installed Java provider returned no HANDLES relationship."
+        }
+        Invoke-CodeTool "delete_project" @{ project = $javaProject } | Out-Null
+    }
+
     $fixtureSource = @'
 from fastapi import FastAPI
 
@@ -91,7 +207,6 @@ def create_order(request):
         [Text.UTF8Encoding]::new($false)
     )
 
-    $env:CBM_CACHE_DIR = $cacheRoot
     $env:CBM_ALLOWED_ROOT = $sourceRoot
     $index = Invoke-CodeTool "index_repository" @{
         repo_path = $sourceRoot
@@ -244,6 +359,7 @@ def create_order(request):
 finally {
     Remove-Item Env:CBM_CACHE_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:CBM_ALLOWED_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:CODE_MEMORY_PROVIDERS_ROOT -ErrorAction SilentlyContinue
     if (-not $KeepFixture) {
         $resolvedFixture = [IO.Path]::GetFullPath($fixtureRoot)
         if ($resolvedFixture.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {

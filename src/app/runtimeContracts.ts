@@ -48,6 +48,13 @@ export function validateCodeInventory(value: unknown): CodeInventory {
       expectString(item.route, "라우트 ID");
     });
   }
+  if (record.relationGaps !== undefined) {
+    expectArray(record.relationGaps, "코드 분석 공백").forEach((gap) => {
+      const item = expectRecord(gap, "코드 분석 공백");
+      expectString(item.kind, "분석 공백 종류");
+      expectString(item.message, "분석 공백 설명");
+    });
+  }
   return value as CodeInventory;
 }
 

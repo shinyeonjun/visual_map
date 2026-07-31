@@ -1003,7 +1003,10 @@ pub(crate) fn route_prefix(line: &str) -> Option<String> {
     {
         return None;
     }
-    first_route_path(line).map(|(path, _)| path)
+    java_route_paths(line)
+        .into_iter()
+        .next()
+        .or_else(|| first_route_path(line).map(|(path, _)| path))
 }
 
 pub(crate) fn has_http_method_annotation(line: &str) -> bool {
@@ -1029,17 +1032,24 @@ pub(crate) fn has_http_method_annotation(line: &str) -> bool {
 }
 
 pub(crate) fn combine_route_prefix(prefix: Option<&str>, route: &str) -> String {
+    let route = normalize_route_path(route);
     let Some(prefix) = prefix.filter(|value| !value.is_empty() && *value != "/") else {
-        return route.to_string();
+        return route;
     };
+    let prefix = normalize_route_path(prefix);
     if route == "/" {
-        return prefix.to_string();
+        return prefix;
     }
-    format!(
-        "{}{}",
-        prefix.trim_end_matches('/'),
-        format!("/{}", route.trim_start_matches('/'))
-    )
+    format!("{}{}", prefix.trim_end_matches('/'), route)
+}
+
+fn normalize_route_path(path: &str) -> String {
+    let path = path.trim();
+    if path.is_empty() || path == "/" {
+        "/".to_string()
+    } else {
+        format!("/{}", path.trim_start_matches('/'))
+    }
 }
 
 pub(crate) fn route_method(line: &str) -> Option<&'static str> {
@@ -1268,8 +1278,15 @@ pub(crate) fn first_route_path(line: &str) -> Option<(String, usize)> {
 }
 
 pub(crate) fn route_paths(line: &str) -> Vec<String> {
+    quoted_values(line)
+        .into_iter()
+        .filter(|value| value.starts_with('/'))
+        .collect()
+}
+
+fn quoted_values(line: &str) -> Vec<String> {
     let bytes = line.as_bytes();
-    let mut paths = Vec::new();
+    let mut values = Vec::new();
     let mut index = 0;
     while index < bytes.len() {
         let quote = bytes[index];
@@ -1282,12 +1299,10 @@ pub(crate) fn route_paths(line: &str) -> Vec<String> {
         };
         let end = index + 1 + offset;
         let value = &line[index + 1..end];
-        if value.starts_with('/') {
-            paths.push(value.to_string());
-        }
+        values.push(value.to_string());
         index = end + 1;
     }
-    paths
+    values
 }
 
 pub(crate) fn java_route_paths(line: &str) -> Vec<String> {
@@ -1349,7 +1364,7 @@ pub(crate) fn java_route_paths(line: &str) -> Vec<String> {
             || trimmed.starts_with("path") && trimmed[4..].trim_start().starts_with('=')
             || trimmed.starts_with("value") && trimmed[5..].trim_start().starts_with('=');
         if selected {
-            for path in route_paths(argument) {
+            for path in quoted_values(argument) {
                 if !paths.contains(&path) {
                     paths.push(path);
                 }

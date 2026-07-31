@@ -5,8 +5,8 @@
   "name": "Jakarta EE",
   "kind": "web",
   "signals": [
-    "import:jakarta.",
-    "@Path",
+    "import:jakarta.ws.rs",
+    "@Path(",
     "@GET"
   ],
   "outputs": [

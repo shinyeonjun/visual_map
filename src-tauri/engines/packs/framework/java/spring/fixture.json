@@ -14,13 +14,10 @@
   ],
   "expected": {
     "facts": [
-      "HTTP_ROUTE",
       "SERVICE",
       "MIDDLEWARE",
       "DEPENDENCY"
     ],
-    "relations": [
-      "HANDLES"
-    ]
+    "relations": []
   }
 }

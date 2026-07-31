@@ -10,14 +10,11 @@
     "@Service"
   ],
   "outputs": [
-    "HTTP_ROUTE",
-    "HANDLES",
     "SERVICE",
     "MIDDLEWARE",
     "DEPENDENCY"
   ],
   "rule_sets": [
-    "HTTP_ROUTE",
     "SERVICE",
     "MIDDLEWARE",
     "DEPENDENCY"

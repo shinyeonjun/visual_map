@@ -203,18 +203,20 @@ fn architecture_diagnostics(
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
+        .filter(|diagnostic| is_coverage_diagnostic(diagnostic))
         .map(|diagnostic| {
-            let language = diagnostic
-                .get("language")
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or("project");
             let message = diagnostic
                 .get("message")
                 .or_else(|| diagnostic.get("detail"))
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
                 .unwrap_or_else(|| diagnostic.to_string());
+            let language = diagnostic
+                .get("language")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| diagnostic_language(&message))
+                .unwrap_or("project");
             CodeInventoryGap {
                 kind: "code-provider-diagnostic".to_string(),
                 from: format!("provider:{language}"),
@@ -223,6 +225,46 @@ fn architecture_diagnostics(
             }
         })
         .collect()
+}
+
+fn is_coverage_diagnostic(diagnostic: &serde_json::Value) -> bool {
+    let kind = diagnostic
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let status = diagnostic
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let level = diagnostic
+        .get("level")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let message = diagnostic
+        .get("message")
+        .or_else(|| diagnostic.get("detail"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    kind == "missing"
+        || level == "error"
+        || status.contains("missing")
+        || status.contains("fail")
+        || message.contains("provider-missing")
+        || message.contains("providers root is not configured")
+        || message.contains("needs native lsp")
+        || message.contains("needs scip-")
+        || message.contains("project model unavailable")
+}
+
+fn diagnostic_language(message: &str) -> Option<&str> {
+    let (language, _) = message.split_once(':')?;
+    let language = language.trim();
+    (!language.is_empty() && !language.contains(char::is_whitespace)).then_some(language)
 }
 
 pub(crate) fn next_code_project_generation() -> String {
@@ -1000,5 +1042,21 @@ mod tests {
         assert_eq!(gaps[0].from, "provider:java");
         assert_eq!(gaps[0].to, "shop");
         assert_eq!(gaps[0].message, "jdtls is not available");
+    }
+
+    #[test]
+    fn compiler_warnings_do_not_mark_provider_coverage_partial() {
+        let gaps = architecture_diagnostics(
+            Some(&serde_json::json!({
+                "diagnostics": [{
+                    "kind": "provider",
+                    "path": "src/Owner.java",
+                    "message": "java:40: Temporal is deprecated"
+                }]
+            })),
+            "shop",
+        );
+
+        assert!(gaps.is_empty());
     }
 }

@@ -1208,6 +1208,103 @@ fn java_route_paths_ignore_non_path_annotation_values() {
         java_route_paths(r#"@GetMapping(value = "/owners", params = "/debug")"#),
         vec!["/owners".to_string()]
     );
+    assert_eq!(
+        java_route_paths(r#"@GetMapping(value = "owners/{ownerId}", params = "/debug")"#),
+        vec!["owners/{ownerId}".to_string()]
+    );
+}
+
+#[test]
+fn spring_routes_support_bare_and_relative_method_mappings() {
+    let pack = FrameworkPack {
+        id: "spring-mvc".to_string(),
+        language: "java".to_string(),
+        name: "Spring MVC".to_string(),
+        kind: "web".to_string(),
+        signals: vec!["@RequestMapping".to_string()],
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = r#"
+@RequestMapping("/owners")
+@RestController
+@Timed("petclinic.owner")
+class OwnerResource {
+    private static final Logger log = LoggerFactory.getLogger(OwnerResource.class);
+    private final OwnerRepository ownerRepository;
+
+    OwnerResource(OwnerRepository ownerRepository) {
+        this.ownerRepository = ownerRepository;
+    }
+
+    @PostMapping
+    void create() {}
+
+    @GetMapping("{ownerId}")
+    void get() {}
+}
+"#;
+    let mut facts = Vec::new();
+    extract_routes(
+        &pack,
+        "src/OwnerResource.java",
+        source,
+        &[],
+        None,
+        &mut facts,
+    );
+
+    assert_eq!(facts.len(), 2);
+    assert_eq!(facts[0].path.as_deref(), Some("/owners"));
+    assert_eq!(facts[1].path.as_deref(), Some("/owners/{ownerId}"));
+}
+
+#[test]
+fn spring_route_owner_uses_the_module_web_stack() {
+    let pack = |id: &str| FrameworkPack {
+        id: id.to_string(),
+        language: "java".to_string(),
+        name: id.to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let webflux = HashSet::from(["gateway".to_string()]);
+    let mvc = HashSet::from(["customers".to_string()]);
+
+    assert!(java_pack_owns_routes(
+        &pack("spring-webflux"),
+        "gateway/src/Api.java",
+        "@RestController class Api {}",
+        &webflux,
+        &mvc,
+    ));
+    assert!(!java_pack_owns_routes(
+        &pack("spring-webflux"),
+        "customers/src/Owners.java",
+        "@RestController class Owners {}",
+        &webflux,
+        &mvc,
+    ));
+    assert!(java_pack_owns_routes(
+        &pack("spring-mvc"),
+        "customers/src/Owners.java",
+        "@RestController class Owners {}",
+        &webflux,
+        &mvc,
+    ));
+    assert!(!java_pack_owns_routes(
+        &pack("spring-boot"),
+        "customers/src/Owners.java",
+        "@GetMapping(\"/owners\")",
+        &webflux,
+        &mvc,
+    ));
 }
 
 #[test]

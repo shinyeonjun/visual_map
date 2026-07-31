@@ -44,7 +44,10 @@ pub(crate) fn ensure_provider_root(
         .join("provider-bundles")
         .join("providers-manifest.json");
     if !manifest_path.is_file() {
-        return Ok(None);
+        return Err(format!(
+            "managed provider bundle manifest가 없습니다: {}",
+            manifest_path.display()
+        ));
     }
 
     let manifest_bytes = fs::read(&manifest_path)
@@ -106,6 +109,12 @@ pub(crate) fn ensure_provider_root(
             manifest_hash.as_bytes(),
         )
         .map_err(|error| format!("provider 캐시 검증 표식을 저장하지 못했습니다: {error}"))
+    })
+    .and_then(|()| {
+        let temporary_marker = temporary.join(PROVIDER_CACHE_MARKER);
+        cached_provider_root_is_usable(&temporary, &temporary_marker, &manifest_hash)
+            .then_some(())
+            .ok_or_else(|| "압축 해제된 provider bundle이 완전하지 않습니다".to_string())
     })
     .and_then(|()| {
         if destination.exists() {
@@ -270,6 +279,18 @@ fn is_sha256(value: &str) -> bool {
 mod tests {
     use super::*;
     use zip::{write::SimpleFileOptions, ZipWriter};
+
+    #[test]
+    fn missing_bundle_manifest_fails_closed() {
+        let root = std::env::temp_dir().join(format!(
+            "visual-map-provider-bundle-missing-test-{}",
+            std::process::id()
+        ));
+        let error = ensure_provider_root(&root.join("engines"), &root.join("cache"))
+            .expect_err("a managed provider run must not silently fall back");
+
+        assert!(error.contains("provider bundle manifest"));
+    }
 
     #[test]
     fn extracts_a_verified_provider_bundle_once() {

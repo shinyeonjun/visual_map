@@ -12,8 +12,32 @@ function Invoke-Checked([string]$Label, [scriptblock]$Command) {
   }
 }
 
+function Get-Sha256([string]$Path) {
+  $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try {
+    ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace("-", "")
+  } finally {
+    $algorithm.Dispose()
+    $stream.Dispose()
+  }
+}
+
 Push-Location $root
 try {
+  Invoke-Checked "integrated code engine source build" {
+    & cargo +1.96.1 build --locked --release --manifest-path .\code_memory\rust\Cargo.toml
+  }
+  $sourceCodeEngine = Join-Path $root "code_memory\rust\target\release\code-memory-language.exe"
+  $bundledCodeEngine = Join-Path $root "src-tauri\engines\code-memory-language.exe"
+  if (-not (Test-Path -LiteralPath $bundledCodeEngine -PathType Leaf)) {
+    throw "Bundled code engine is missing: $bundledCodeEngine"
+  }
+  $sourceCodeEngineHash = Get-Sha256 $sourceCodeEngine
+  $bundledCodeEngineHash = Get-Sha256 $bundledCodeEngine
+  if ($sourceCodeEngineHash -ne $bundledCodeEngineHash) {
+    throw "Bundled code engine is stale. Expected source build $sourceCodeEngineHash but found $bundledCodeEngineHash."
+  }
   if ($internal -and $env:BACKEND_VISUAL_MAP_SKIP_PROVIDER_RESOURCES -eq "1") {
     Write-Output "SKIP: managed language providers (internal CI build)"
   } elseif ($internal) {

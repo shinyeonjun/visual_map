@@ -47,7 +47,8 @@ export function WorkbenchTopBar({
     visualMapControls.searchQuery,
     visualMapControls.setSearchQuery,
   );
-  const freshness = sourceFreshness(workspaceControls, visualMapControls, hasInventory);
+  const partialDetail = sourcePartialDetail(workspaceControls, dbProfileControls);
+  const freshness = sourceFreshness(workspaceControls, visualMapControls, hasInventory, partialDetail);
   const FreshnessIcon = freshness.icon;
   const sourceManagerActive = sourceManagerOpen || (!hasWorkspace && workspaceControls.initialized);
 
@@ -171,6 +172,7 @@ function sourceFreshness(
   workspaceControls: WorkspaceControls,
   visualMapControls: VisualMapControls,
   hasInventory: boolean,
+  partialDetail: string | null,
 ): {
   label: string;
   detail: string;
@@ -200,6 +202,14 @@ function sourceFreshness(
       icon: TriangleAlert,
     };
   }
+  if (partialDetail) {
+    return {
+      label: "부분 완료",
+      detail: partialDetail,
+      tone: "stale",
+      icon: TriangleAlert,
+    };
+  }
   if (visualMapControls.snapshotSavedAt || hasInventory) {
     return {
       label: "읽기 완료",
@@ -214,4 +224,18 @@ function sourceFreshness(
     tone: "pending",
     icon: Clock3,
   };
+}
+
+function sourcePartialDetail(
+  workspaceControls: WorkspaceControls,
+  dbProfileControls: DbProfileControls,
+): string | null {
+  const code = workspaceControls.codeInventory;
+  if (code?.partial) {
+    return code.relationGaps?.[0]?.message ?? "일부 코드 관계를 확인하지 못했습니다. 소스 관리에서 진단을 확인하세요.";
+  }
+  if (dbProfileControls.inventory?.partial) {
+    return dbProfileControls.inventory.capabilityWarnings?.[0] ?? "일부 데이터베이스 구조를 확인하지 못했습니다.";
+  }
+  return null;
 }

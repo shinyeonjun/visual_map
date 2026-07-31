@@ -7,7 +7,8 @@
   "signals": [
     "import:org.springframework.web",
     "@RequestMapping",
-    "@GetMapping"
+    "@GetMapping",
+    "@RestController"
   ],
   "outputs": [
     "HTTP_ROUTE",

@@ -142,5 +142,6 @@ function codeInventoryStatus(inventory: CodeInventory, action: string): string {
   const routeCount = codeInventoryRouteCount(inventory);
   const routeText = routeCount > 0 ? `API ${routeCount}개` : "API 라우트 없음";
   const codeText = codeInventorySymbolCount(inventory) > 0 ? `코드 ${count}개` : `파일 ${codeInventoryFileCount(inventory)}개`;
-  return count > 0 ? `${codeText} ${action} · ${routeText}` : `코드 목록이 비어 있음`;
+  const completion = inventory.partial ? "부분 완료" : action;
+  return count > 0 ? `${codeText} ${completion} · ${routeText}` : `코드 목록이 비어 있음`;
 }

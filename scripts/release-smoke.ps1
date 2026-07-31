@@ -123,10 +123,20 @@ if ($ExerciseInstall) {
     }
     $app = Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter "backend-visual-map.exe" -File -Recurse | Select-Object -First 1
     if (-not $app) { throw "Installed application executable was not found." }
+    $installedEngines = @{}
     foreach ($engine in "code-memory-language.exe", "database-memory.exe") {
-      if (-not (Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter $engine -File -Recurse | Select-Object -First 1)) {
+      $installedEngine = Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter $engine -File -Recurse | Select-Object -First 1
+      if (-not $installedEngine) {
         throw "Installed resource is missing: $engine"
       }
+      $installedEngines[$engine] = $installedEngine.FullName
+    }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-code-engine-contract.ps1 `
+      -EnginePath $installedEngines["code-memory-language.exe"] `
+      -RequireJavaProvider `
+      -UseProviderBundles
+    if ($LASTEXITCODE -ne 0) {
+      throw "Installed Java provider contract failed with exit code $LASTEXITCODE."
     }
     $previousAppData = $env:BACKEND_VISUAL_MAP_APP_DATA_DIR
     $previousWebViewData = $env:WEBVIEW2_USER_DATA_FOLDER

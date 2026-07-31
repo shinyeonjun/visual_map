@@ -57,6 +57,22 @@ pub(crate) fn analyze_with_sources(
         }
     }
     let metadata_sources = collect_metadata_sources(project_root);
+    let java_webflux_modules = java_modules_with_markers(
+        project_sources,
+        &metadata_sources,
+        &[
+            "spring-boot-starter-webflux",
+            "spring-cloud-starter-gateway-server-webflux",
+            "org.springframework.web.reactive",
+            "reactor.core.publisher",
+            "RouterFunction",
+        ],
+    );
+    let java_mvc_modules = java_modules_with_markers(
+        project_sources,
+        &metadata_sources,
+        &["spring-boot-starter-webmvc", "spring-boot-starter-web"],
+    );
     let mut source_signal_cache = HashMap::<(String, String), bool>::new();
     let mut metadata_signal_cache = HashMap::<(String, String), bool>::new();
     let mut source_code_masks = HashMap::<String, String>::new();
@@ -192,7 +208,15 @@ pub(crate) fn analyze_with_sources(
         let fastapi_context =
             (pack.id == "fastapi").then(|| build_fastapi_route_context(&candidate_sources));
         for &(path, source) in &candidate_sources {
-            if pack.rules.iter().any(|value| value == "HTTP_ROUTE") {
+            if pack.rules.iter().any(|value| value == "HTTP_ROUTE")
+                && java_pack_owns_routes(
+                    &pack,
+                    path,
+                    source,
+                    &java_webflux_modules,
+                    &java_mvc_modules,
+                )
+            {
                 extract_routes_with_index(
                     &pack,
                     path,
@@ -351,6 +375,66 @@ fn dedupe_java_facts(frameworks: &mut [FrameworkOutput], relations: &mut Vec<Fra
                 relation.range.clone(),
             ))
     });
+}
+
+fn java_modules_with_markers(
+    sources: &[(String, String)],
+    metadata: &[(String, String)],
+    markers: &[&str],
+) -> HashSet<String> {
+    sources
+        .iter()
+        .chain(metadata.iter())
+        .filter(|(_, source)| markers.iter().any(|marker| source.contains(marker)))
+        .map(|(path, _)| java_module_root(path))
+        .collect()
+}
+
+fn java_module_root(path: &str) -> String {
+    path.split_once("/src/")
+        .map(|(root, _)| root.to_string())
+        .or_else(|| path.rsplit_once('/').map(|(root, _)| root.to_string()))
+        .unwrap_or_default()
+}
+
+fn java_pack_owns_routes(
+    pack: &FrameworkPack,
+    path: &str,
+    source: &str,
+    webflux_modules: &HashSet<String>,
+    mvc_modules: &HashSet<String>,
+) -> bool {
+    if pack.language != "java" {
+        return true;
+    }
+    let module = java_module_root(path);
+    let source_is_reactive = [
+        "org.springframework.web.reactive",
+        "reactor.core.publisher",
+        "RouterFunction",
+        "ServerResponse",
+    ]
+    .iter()
+    .any(|marker| source.contains(marker));
+    let module_is_webflux = webflux_modules.contains(&module);
+    let module_is_mvc = mvc_modules.contains(&module);
+    let use_webflux = source_is_reactive || module_is_webflux && !module_is_mvc;
+
+    match pack.id.as_str() {
+        // Spring and Spring Boot describe the component model. The concrete
+        // web stack owns route facts and their provenance.
+        "spring" | "spring-boot" => false,
+        "spring-webflux" => use_webflux,
+        "spring-mvc" => !use_webflux,
+        "jakarta-ee" => {
+            source.contains("jakarta.ws.rs")
+                || source.contains("@Path(")
+                    && ["@GET", "@POST", "@PUT", "@PATCH", "@DELETE"]
+                        .iter()
+                        .any(|annotation| source.contains(annotation))
+        }
+        _ => true,
+    }
 }
 
 fn has_route_syntax_candidate(source: &str, language: &str) -> bool {
@@ -590,8 +674,17 @@ fn source_mask(source: &str, language: &str, mask_strings: bool) -> String {
 }
 
 fn declares_type(line: &str) -> bool {
-    line.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-        .any(|token| matches!(token, "class" | "interface" | "record" | "struct"))
+    let tokens = line
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    tokens.windows(2).any(|tokens| {
+        matches!(tokens[0], "class" | "interface" | "record" | "struct")
+            && tokens[1]
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_alphabetic() || character == '_')
+    })
 }
 
 fn has_route_prefix_syntax(line: &str) -> bool {
@@ -649,7 +742,7 @@ fn extract_routes_with_index(
         }
         let mut route_line = (*line).to_string();
         let mut route_code = code_line.to_string();
-        while first_route_path(&route_line).is_none()
+        while (pack.language == "java" || first_route_path(&route_line).is_none())
             && route_code.contains('(')
             && route_code.matches('(').count() > route_code.matches(')').count()
         {
@@ -666,18 +759,34 @@ fn extract_routes_with_index(
         let Some(method) = route_method(&route_code) else {
             continue;
         };
-        let Some((route_path, end)) = first_route_path(&route_line) else {
-            continue;
-        };
-        let route_paths = if pack.language == "java" {
-            java_route_paths(&route_line)
+        let first_path = first_route_path(&route_line);
+        let (route_paths, end) = if pack.language == "java" && java_mapping_annotation(&route_code)
+        {
+            let paths = java_route_paths(&route_line);
+            let paths = if paths.is_empty() {
+                vec![String::new()]
+            } else {
+                paths
+            };
+            let end = first_path
+                .as_ref()
+                .map(|(_, end)| *end)
+                .or_else(|| route_line.find(')').map(|end| end + 1))
+                .unwrap_or(route_line.len());
+            (paths, end)
         } else {
-            route_paths(&route_line)
-        };
-        let route_paths = if route_paths.is_empty() {
-            vec![route_path]
-        } else {
-            route_paths
+            let Some((route_path, end)) = first_path else {
+                continue;
+            };
+            let paths = route_paths(&route_line);
+            (
+                if paths.is_empty() {
+                    vec![route_path]
+                } else {
+                    paths
+                },
+                end,
+            )
         };
         let functional_lambda = if pack.language != "java" {
             false
@@ -785,6 +894,21 @@ fn extract_routes_with_index(
             });
         }
     }
+}
+
+fn java_mapping_annotation(source: &str) -> bool {
+    [
+        "@RequestMapping",
+        "@GetMapping",
+        "@PostMapping",
+        "@PutMapping",
+        "@PatchMapping",
+        "@DeleteMapping",
+        "@OptionsMapping",
+        "@HeadMapping",
+    ]
+    .iter()
+    .any(|annotation| source.contains(annotation))
 }
 
 fn fastapi_handler_name(lines: &[&str], index: usize, trailing: &str) -> Option<String> {

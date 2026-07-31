@@ -14,12 +14,9 @@
   ],
   "expected": {
     "facts": [
-      "HTTP_ROUTE",
       "SERVICE",
       "DEPENDENCY"
     ],
-    "relations": [
-      "HANDLES"
-    ]
+    "relations": []
   }
 }

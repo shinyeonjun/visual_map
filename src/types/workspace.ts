@@ -257,7 +257,15 @@ export type CodeInventory = {
   architecture?: unknown;
   calls: CodeCall[];
   handles?: CodeHandle[];
+  relationGaps?: CodeInventoryGap[];
   partial?: boolean;
+};
+
+export type CodeInventoryGap = {
+  kind: string;
+  from: string;
+  to: string;
+  message: string;
 };
 
 export function codeInventoryItemCount(inventory: CodeInventory | null | undefined): number {
