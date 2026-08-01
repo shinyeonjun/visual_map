@@ -232,8 +232,8 @@ def create_order(request):
     $queries = @(
         @{
             Name = "NODES"
-            Query = "MATCH (node:Route|Function|Method|Class|Struct|Interface|Trait|Protocol|Record|Enum|Type|Constructor|Subroutine|Procedure|Decorator|Field|Variable|Module|Namespace|Package|Resource|File) RETURN labels(node) AS labels, node.name AS name, node.qualified_name AS qualified_name, node.file_path AS file_path, node.start_line AS start_line, node.start_column AS start_column, node.end_line AS end_line, node.end_column AS end_column, node.method AS method, node.source AS source, node.parent_qualified_name AS parent_qualified_name, node.parent_class AS parent_class, node.module AS module, node.namespace AS namespace, node.package AS package, node.route_path AS route_path, node.route_method AS route_method, node.signature AS signature, node.return_type AS return_type, node.is_test AS is_test LIMIT 100000"
-            Columns = @("labels", "name", "qualified_name", "file_path", "start_line", "start_column", "end_line", "end_column", "method", "source", "parent_qualified_name", "parent_class", "module", "namespace", "package", "route_path", "route_method", "signature", "return_type", "is_test")
+            Query = "MATCH (node:Route|Function|Method|Class|Struct|Interface|Trait|Protocol|Record|Enum|Type|Constructor|Subroutine|Procedure|Decorator|Field|Variable|Module|Namespace|Package|Resource|File) RETURN labels(node) AS labels, node.name AS name, node.qualified_name AS qualified_name, node.file_path AS file_path, node.start_line AS start_line, node.start_column AS start_column, node.end_line AS end_line, node.end_column AS end_column, node.method AS method, node.source AS source, node.parent_qualified_name AS parent_qualified_name, node.parent_class AS parent_class, node.module AS module, node.namespace AS namespace, node.package AS package, node.route_path AS route_path, node.route_method AS route_method, node.signature AS signature, node.return_type AS return_type, node.is_test AS is_test, node.properties AS properties LIMIT 100000"
+            Columns = @("labels", "name", "qualified_name", "file_path", "start_line", "start_column", "end_line", "end_column", "method", "source", "parent_qualified_name", "parent_class", "module", "namespace", "package", "route_path", "route_method", "signature", "return_type", "is_test", "properties")
         },
         @{
             Name = "CALLS"
@@ -260,7 +260,7 @@ def create_order(request):
                 }
             }
             $located = @($result.rows) | Where-Object {
-                $_.Count -eq 20 -and [string]$_[3] -eq "server.py" -and [int]$_[4] -gt 0
+                $_.Count -eq 21 -and [string]$_[3] -eq "server.py" -and [int]$_[4] -gt 0
             }
             if ($located.Count -eq 0) {
                 throw "NODES returned no positive line for server.py."
