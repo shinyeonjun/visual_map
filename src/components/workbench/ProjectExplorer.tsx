@@ -1,11 +1,11 @@
-import { Braces, ChevronDown, Code2, Database, Folder, GitBranch, Network, Search } from "lucide-react";
+import { Braces, ChevronDown, Code2, Database, FileCode2, Folder, GitBranch, Network, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useSearchHotkey } from "../../hooks/useSearchHotkey";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import { searchScopeText } from "../../visual/search";
 import { SearchResultsPopover, focusFirstSearchResult } from "../common/SearchResultsPopover";
-import { apiPathSegments, buildApiTree, buildTargetCatalog, type ApiTreeNode, type TargetCatalog, type TargetItem } from "./targetModel";
+import { apiPathSegments, buildApiTree, buildCodeTree, buildTargetCatalog, countCodeTreeItems, type ApiTreeNode, type CodeTreeNode, type TargetCatalog, type TargetItem } from "./targetModel";
 
 type ExplorerTab = "project" | "api" | "code" | "db";
 
@@ -16,6 +16,7 @@ const TABS: Array<{ id: ExplorerTab; label: string; icon: typeof Folder }> = [
   { id: "db", label: "DB", icon: Database },
 ];
 const API_TREE_DISPLAY_LIMIT = 500;
+const CODE_TREE_DISPLAY_LIMIT = 500;
 
 export function ProjectExplorer({
   workspaceControls,
@@ -185,7 +186,7 @@ function ProjectTree({
         <ApiTreeItems items={filteredItems(catalog, "api", query)} activeFocusIds={activeFocusIds} onSelect={onSelect} />
       </TreeSection>
       <TreeSection icon={<Code2 size={15} />} label="코드" count={catalog.code.length}>
-        <TargetTreeItems items={filteredItems(catalog, "code", query)} activeFocusIds={activeFocusIds} onSelect={onSelect} />
+        <CodeTreeItems items={filteredItems(catalog, "code", query)} activeFocusIds={activeFocusIds} onSelect={onSelect} />
       </TreeSection>
       <TreeSection icon={<Database size={15} />} label="DB" count={catalog.table.length}>
         <TargetTreeItems items={filteredItems(catalog, "table", query)} activeFocusIds={activeFocusIds} onSelect={onSelect} />
@@ -211,7 +212,7 @@ function TargetTree({
   return (
     <div className="explorer-tree-root">
       <TreeSection icon={kind === "api" ? <Braces size={15} /> : kind === "code" ? <Code2 size={15} /> : <Database size={15} />} label={label} count={items.length}>
-        {kind === "api" ? <ApiTreeItems items={items} activeFocusIds={activeFocusIds} onSelect={onSelect} /> : <TargetTreeItems items={items} activeFocusIds={activeFocusIds} onSelect={onSelect} />}
+        {kind === "api" ? <ApiTreeItems items={items} activeFocusIds={activeFocusIds} onSelect={onSelect} /> : kind === "code" ? <CodeTreeItems items={items} activeFocusIds={activeFocusIds} onSelect={onSelect} /> : <TargetTreeItems items={items} activeFocusIds={activeFocusIds} onSelect={onSelect} />}
         {items.length === 0 && emptyAction ? (
           <button className="explorer-empty-action" type="button" onClick={emptyAction}>DB 연결</button>
         ) : null}
@@ -278,6 +279,49 @@ function ApiEndpointItem({ item, active, onSelect }: { item: TargetItem; active:
 
 function countApiTreeItems(node: ApiTreeNode): number {
   return node.items.length + node.children.reduce((total, child) => total + countApiTreeItems(child), 0);
+}
+
+function CodeTreeItems({ items, activeFocusIds, onSelect }: { items: TargetItem[]; activeFocusIds: string[]; onSelect: (item: TargetItem) => void }) {
+  if (items.length === 0) return <p className="explorer-empty">표시할 코드가 없습니다.</p>;
+  const visibleItems = items.slice(0, CODE_TREE_DISPLAY_LIMIT);
+  return (
+    <div className="explorer-code-tree">
+      <CodeTreeNodes node={buildCodeTree(visibleItems)} activeFocusIds={activeFocusIds} onSelect={onSelect} />
+      {items.length > CODE_TREE_DISPLAY_LIMIT ? (
+        <p className="explorer-more">상위 {CODE_TREE_DISPLAY_LIMIT}개만 표시합니다. 검색으로 나머지 코드를 찾을 수 있습니다.</p>
+      ) : null}
+    </div>
+  );
+}
+
+function CodeTreeNodes({ node, activeFocusIds, onSelect }: { node: CodeTreeNode; activeFocusIds: string[]; onSelect: (item: TargetItem) => void }) {
+  return (
+    <div className="explorer-code-tree-branch">
+      {node.children.map((child) => <CodeTreeNodeView key={child.key} node={child} activeFocusIds={activeFocusIds} onSelect={onSelect} />)}
+    </div>
+  );
+}
+
+function CodeTreeNodeView({ node, activeFocusIds, onSelect }: { node: CodeTreeNode; activeFocusIds: string[]; onSelect: (item: TargetItem) => void }) {
+  const [open, setOpen] = useState(true);
+  const itemCount = countCodeTreeItems(node);
+  const Icon = node.isFile ? FileCode2 : Folder;
+  return (
+    <div className={`explorer-code-node ${node.isFile ? "file" : "folder"}`}>
+      <button className="explorer-code-folder" type="button" aria-label={`${node.label}, ${itemCount}개 코드 항목`} aria-expanded={open} onClick={() => setOpen((value) => !value)} title={`${node.label} · ${itemCount}개 코드 항목`}>
+        <ChevronDown size={13} className={open ? "" : "closed"} />
+        <Icon size={14} />
+        <strong>{node.label}</strong>
+        <small>{itemCount}</small>
+      </button>
+      {open ? (
+        <div className="explorer-code-children">
+          {node.items.length > 0 ? <TargetTreeItems items={node.items} activeFocusIds={activeFocusIds} onSelect={onSelect} /> : null}
+          <CodeTreeNodes node={node} activeFocusIds={activeFocusIds} onSelect={onSelect} />
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function TargetTreeItems({ items, activeFocusIds, onSelect }: { items: TargetItem[]; activeFocusIds: string[]; onSelect: (item: TargetItem) => void }) {

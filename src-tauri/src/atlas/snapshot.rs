@@ -38,7 +38,7 @@ const BACKUP_REINDEX_NOTE: &str =
     "주 스냅샷 대신 이전 백업을 복구했습니다. 다시 읽어 최신 상태를 확인하세요.";
 const BACKUP_CODE_REINDEX_NOTE: &str = "백업에서 복구한 코드 목록은 다시 읽어야 합니다.";
 const BACKUP_DB_REINDEX_NOTE: &str = "백업에서 복구한 DB 구조는 다시 읽어야 합니다.";
-const CODE_ADAPTER_VERSION: &str = "4";
+const CODE_ADAPTER_VERSION: &str = "5";
 const CONFIRMED_CODE_CALL_CONFIDENCE: u8 = 85;
 const CANDIDATE_CODE_CALL_CONFIDENCE: u8 = 70;
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
@@ -202,25 +202,28 @@ pub(crate) fn build_inventory_snapshot(
             }
             link
         }));
+        let code_item_ids = snapshot
+            .items
+            .iter()
+            .filter(|item| item.source == "code")
+            .map(|item| item.id.as_str())
+            .collect::<HashSet<_>>();
         snapshot
             .metadata
             .gaps
-            .extend(
-                code.relation_gaps
-                    .iter()
-                    .enumerate()
-                    .map(|(index, relation)| {
-                        gap(
-                            format!(
-                                "gap:code-relation:{}:{}->{}",
-                                index, relation.from, relation.to
-                            ),
-                            &relation.kind,
-                            &relation.message,
-                            vec![format!("code:{}", relation.from), relation.to.clone()],
-                        )
-                    }),
-            );
+            .extend(code.relation_gaps.iter().map(|relation| {
+                let related_ids = [relation.from.as_str(), relation.to.as_str()]
+                    .into_iter()
+                    .map(|endpoint| format!("code:{endpoint}"))
+                    .filter(|id| code_item_ids.contains(id.as_str()))
+                    .collect();
+                gap(
+                    relation.stable_id(),
+                    &relation.kind,
+                    &relation.message,
+                    related_ids,
+                )
+            }));
     }
 
     if let Some(db) = db {

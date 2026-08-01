@@ -5,7 +5,7 @@
   "name": "Axum",
   "kind": "web",
   "signals": [
-    "use axum",
+    "package:axum",
     "Router::new",
     ".route("
   ],

@@ -6,11 +6,9 @@ import {
   GitBranch,
   Layers3,
   List,
-  Network,
   Table2,
   Workflow,
 } from "lucide-react";
-import { useEffect, useState } from "react";
 import type { ComponentType, CSSProperties } from "react";
 import type { DbInventoryTable } from "../../types/workspace";
 import { dbInventoryTableKey, routeMethodFromIdentity } from "../../types/workspace";
@@ -24,6 +22,8 @@ import type {
 } from "../../types/visual-map";
 import { tableKeyFromDbNodeId } from "../../visual/nodeIds";
 import { buildApiConnectionModel } from "./apiConnectionModel";
+
+type ApiConnectionModel = ReturnType<typeof buildApiConnectionModel>;
 
 export type ApiReadingView = "connections" | "layers" | "list";
 
@@ -160,27 +160,15 @@ export function ApiConnectionView({
   onSelectNode: (node: VisualNode) => void;
   onSelectEdge: (edge: VisualEdge) => void;
 }) {
-  const [branchesOpen, setBranchesOpen] = useState(false);
-  useEffect(() => setBranchesOpen(false), [map.focus]);
   const model = buildApiConnectionModel(answer, map);
+  const graph = buildApiGraphLayout(answer, map, model);
   const method = answer.method ?? routeMethodFromIdentity(map.focus);
-  const visibleNodes = model.primaryDatabase
-    ? [...model.primaryPath, model.primaryDatabase]
-    : model.primaryPath;
   const gapVisible = Boolean(model.gap && model.primaryPath.length <= 1);
-  const slotCount = Math.max(2, visibleNodes.length + (gapVisible ? 1 : 0));
-  const width = CANVAS_PAD * 2 + slotCount * NODE_WIDTH + Math.max(0, slotCount - 1) * NODE_GAP;
-  const drawerHeight = branchesOpen && model.additionalEdges.length > 0 ? 178 : 0;
-  const height = 720 + drawerHeight;
-  const primaryDatabaseIndex = model.primaryDatabase ? visibleNodes.length - 1 : -1;
-  const databaseSourceIndex = model.primaryDatabase
-    ? model.primaryPath.findIndex(({ node }) => node.id === model.primaryDatabase?.edge.from)
-    : -1;
 
   return (
     <section className="api-connection-view" aria-label={`${answer.subject} 연결 지도`}>
-      <div className="api-connection-canvas" style={{ width, height }}>
-        <svg className="api-connection-lines" viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+      <div className="api-connection-canvas" style={{ width: graph.width, height: graph.height }}>
+        <svg className="api-connection-lines" viewBox={`0 0 ${graph.width} ${graph.height}`} aria-hidden="true">
           <defs>
             <marker id="api-confirmed-arrow" markerHeight="7" markerWidth="7" orient="auto" refX="6" refY="3.5">
               <path d="M0,0 L7,3.5 L0,7 Z" />
@@ -189,104 +177,50 @@ export function ApiConnectionView({
               <path d="M0,0 L7,3.5 L0,7 Z" />
             </marker>
           </defs>
-          {model.primaryEdges.map((edge, index) => {
-            const startX = nodeX(index) + NODE_WIDTH;
-            const endX = nodeX(index + 1);
-            const y = NODE_TOP + NODE_HEIGHT / 2;
-            return (
-              <path
-                className={`api-edge-line confirmed${selectedEdgeId === edge.id ? " selected" : ""}`}
-                d={`M ${startX} ${y} L ${endX} ${y}`}
-                markerEnd="url(#api-confirmed-arrow)"
-                key={edge.id}
-              />
-            );
-          })}
-          {model.primaryDatabase && databaseSourceIndex >= 0 ? (
+          {graph.edges.map(({ edge, from, to }) => (
             <path
-              className={`api-edge-line ${isCandidateEdge(model.primaryDatabase.edge) ? "candidate" : "confirmed"}${selectedEdgeId === model.primaryDatabase.edge.id ? " selected" : ""}`}
-              d={candidateCurve(databaseSourceIndex, primaryDatabaseIndex)}
-              markerEnd={isCandidateEdge(model.primaryDatabase.edge) ? "url(#api-candidate-arrow)" : "url(#api-confirmed-arrow)"}
+              className={`api-edge-line ${isCandidateEdge(edge) ? "candidate" : "confirmed"}${selectedEdgeId === edge.id ? " selected" : ""}`}
+              d={apiGraphEdgePath({ edge, from, to }, model.primaryDatabase?.edge.id ?? null)}
+              markerEnd={isCandidateEdge(edge) ? "url(#api-candidate-arrow)" : "url(#api-confirmed-arrow)"}
+              key={edge.id}
             />
-          ) : null}
+          ))}
         </svg>
 
-        {model.primaryPath.map(({ item, node }, index) => (
+        {graph.edges.map((connection) => (
+          <button
+            className={`api-edge-label ${isCandidateEdge(connection.edge) ? "candidate" : "confirmed"}${selectedEdgeId === connection.edge.id ? " selected" : ""}`}
+            style={apiGraphEdgeLabelStyle(connection, model.primaryDatabase?.edge.id ?? null)}
+            type="button"
+            data-edge-id={connection.edge.id}
+            aria-label={`${connection.from.node.title} ${relationLabel(connection.edge)} ${connection.to.node.title} 근거 보기`}
+            title={connection.edge.evidence[0]?.text ?? relationLabel(connection.edge)}
+            onClick={() => onSelectEdge(connection.edge)}
+            key={`label-${connection.edge.id}`}
+          >
+            {relationLabel(connection.edge)}
+          </button>
+        ))}
+
+        {graph.nodes.map(({ node, item, primaryIndex, x, y }) => (
           <ApiDiagramNode
             item={item}
             node={node}
-            method={index === 0 ? method : null}
+            method={primaryIndex === 0 ? method : null}
+            table={dbTableForNode(node, dbTables)}
             selected={selectedNodeId === node.id}
-            style={{ left: nodeX(index), top: NODE_TOP }}
+            style={{ left: x, top: y }}
             onSelect={() => onSelectNode(node)}
             key={node.id}
           />
         ))}
 
-        {model.primaryEdges.map((edge, index) => (
-          <button
-            className={`api-edge-label confirmed${selectedEdgeId === edge.id ? " selected" : ""}`}
-            style={{ left: nodeX(index) + NODE_WIDTH + 3, top: NODE_TOP + 38 }}
-            type="button"
-            data-edge-id={edge.id}
-            title={edge.evidence[0]?.text ?? relationLabel(edge)}
-            onClick={() => onSelectEdge(edge)}
-            key={`label-${edge.id}`}
-          >
-            {relationLabel(edge)}
-          </button>
-        ))}
-
-        {model.primaryDatabase ? (
-          <>
-            <ApiDiagramNode
-              item={model.primaryDatabase.item}
-              node={model.primaryDatabase.node}
-              table={dbTableForNode(model.primaryDatabase.node, dbTables)}
-              selected={selectedNodeId === model.primaryDatabase.node.id}
-              style={{ left: nodeX(primaryDatabaseIndex), top: NODE_TOP }}
-              onSelect={() => onSelectNode(model.primaryDatabase!.node)}
-            />
-            <button
-              className={`api-candidate-label${!isCandidateEdge(model.primaryDatabase.edge) ? " confirmed" : ""}${selectedEdgeId === model.primaryDatabase.edge.id ? " selected" : ""}`}
-              type="button"
-              data-edge-id={model.primaryDatabase.edge.id}
-              style={{ left: nodeX(databaseSourceIndex) + NODE_WIDTH / 2, top: NODE_TOP + NODE_HEIGHT + 82 }}
-              title={model.primaryDatabase.edge.evidence[0]?.text ?? relationLabel(model.primaryDatabase.edge)}
-              onClick={() => onSelectEdge(model.primaryDatabase!.edge)}
-            >
-              {relationLabel(model.primaryDatabase.edge)}
-            </button>
-          </>
-        ) : null}
-
         {gapVisible && model.gap ? (
-          <div className="api-gap-node" style={{ left: nodeX(1), top: NODE_TOP }}>
+          <div className="api-gap-node" style={{ left: graph.gapX, top: NODE_TOP }}>
             <GitBranch size={16} />
             <strong>{model.gap.title}</strong>
             <span>{model.gap.detail}</span>
           </div>
-        ) : null}
-
-        {model.additionalEdges.length > 0 ? (
-          <button
-            className="api-branch-toggle"
-            type="button"
-            aria-expanded={branchesOpen}
-            onClick={() => setBranchesOpen(!branchesOpen)}
-          >
-            <Network size={13} />
-            +{model.additionalEdges.length} 연결
-          </button>
-        ) : null}
-
-        {branchesOpen && model.additionalEdges.length > 0 ? (
-          <ApiBranchDrawer
-            edges={model.additionalEdges}
-            map={map}
-            selectedEdgeId={selectedEdgeId}
-            onSelectEdge={onSelectEdge}
-          />
         ) : null}
 
         <div className="api-connection-legend" aria-label="연결 지도 범례">
@@ -320,7 +254,7 @@ function ApiDiagramNode({
   style,
   onSelect,
 }: {
-  item: ApiReadingStep | ImpactReviewItem;
+  item?: ApiReadingStep | ImpactReviewItem;
   node: VisualNode;
   method?: string | null;
   table?: DbInventoryTable | null;
@@ -328,11 +262,12 @@ function ApiDiagramNode({
   style: CSSProperties;
   onSelect: () => void;
 }) {
-  const lane = "lane" in item ? item.lane : item.truthClass === "confirmed" ? "db-relation" : "db-candidate";
+  const lane = item ? ("lane" in item ? item.lane : item.truthClass === "confirmed" ? "db-relation" : "db-candidate") : visualNodeLane(node);
   const laneMeta = apiLaneMeta(lane);
   const NodeIcon = laneMeta.icon;
-  const inferred = "laneBasis" in item && item.laneBasis === "name-inferred";
-  const location = "lane" in item ? sourceLocationLabel(item.location) : node.subtitle;
+  const inferred = Boolean(item && "lane" in item && item.laneBasis === "name-inferred");
+  const location = item && "lane" in item ? sourceLocationLabel(item.location) : node.subtitle;
+  const title = item?.title ?? node.title;
 
   return (
     <button
@@ -341,7 +276,7 @@ function ApiDiagramNode({
       type="button"
       data-node-id={node.id}
       aria-pressed={selected}
-      aria-label={`${laneMeta.label} ${method ? `${method} ` : ""}${item.title} 선택`}
+      aria-label={`${laneMeta.label} ${method ? `${method} ` : ""}${title} 선택`}
       onClick={onSelect}
     >
       <span className="api-node-kind">
@@ -349,7 +284,7 @@ function ApiDiagramNode({
         {laneMeta.label}
         {inferred ? <em title="이 역할 이름은 심볼명으로 분류했습니다">역할 추정</em> : null}
       </span>
-      <strong>{method ? `${method} ${item.title}` : item.title}</strong>
+      <strong>{method ? `${method} ${title}` : title}</strong>
       {table?.columns.length ? (
         <span className="api-node-columns">
           {table.columns.slice(0, 3).map((column) => (
@@ -360,42 +295,6 @@ function ApiDiagramNode({
         <small title={location ?? undefined}>{location ?? node.subtitle ?? "위치 정보 없음"}</small>
       )}
     </button>
-  );
-}
-
-function ApiBranchDrawer({
-  edges,
-  map,
-  selectedEdgeId,
-  onSelectEdge,
-}: {
-  edges: VisualEdge[];
-  map: VisualMap;
-  selectedEdgeId: string | null;
-  onSelectEdge: (edge: VisualEdge) => void;
-}) {
-  return (
-    <section className="api-branch-drawer" aria-label="추가 연결">
-      <header>
-        <strong>추가 연결</strong>
-        <span>주 경로 밖의 실제 관계 {edges.length}개</span>
-      </header>
-      <div>
-        {edges.map((edge) => (
-          <button
-            className={`${isCandidateEdge(edge) ? "candidate" : "confirmed"}${selectedEdgeId === edge.id ? " selected" : ""}`}
-            type="button"
-            data-edge-id={edge.id}
-            onClick={() => onSelectEdge(edge)}
-            key={edge.id}
-          >
-            <code>{nodeTitle(edge.from, map)}</code>
-            <span>{relationLabel(edge)}</span>
-            <code>{nodeTitle(edge.to, map)}</code>
-          </button>
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -504,17 +403,209 @@ function ApiListView({
   );
 }
 
+type ApiGraphNode = {
+  node: VisualNode;
+  item?: ApiReadingStep | ImpactReviewItem;
+  x: number;
+  y: number;
+  primaryIndex?: number;
+};
+
+type ApiGraphEdge = {
+  edge: VisualEdge;
+  from: ApiGraphNode;
+  to: ApiGraphNode;
+};
+
+type ApiGraphLayout = {
+  nodes: ApiGraphNode[];
+  edges: ApiGraphEdge[];
+  width: number;
+  height: number;
+  gapX: number;
+};
+
+const BRANCH_START_GAP = 104;
+const BRANCH_ROW_GAP = 48;
+
+function buildApiGraphLayout(answer: ApiReadingAnswer, map: VisualMap, model: ApiConnectionModel): ApiGraphLayout {
+  const nodesById = new Map(map.nodes.map((node) => [node.id, node]));
+  const itemByNodeId = new Map<string, ApiReadingStep | ImpactReviewItem>();
+  for (const item of [...answer.steps, ...(answer.dbRelations ?? []), ...answer.dbCandidates]) {
+    if (item.nodeId) itemByNodeId.set(item.nodeId, item);
+  }
+  for (const { item, node } of model.primaryPath) itemByNodeId.set(node.id, item);
+  if (model.primaryDatabase) itemByNodeId.set(model.primaryDatabase.node.id, model.primaryDatabase.item);
+
+  const primaryEntries = [
+    ...model.primaryPath,
+    ...(model.primaryDatabase ? [model.primaryDatabase] : []),
+  ];
+  const primaryIndex = new Map(primaryEntries.map(({ node }, index) => [node.id, index]));
+  const edgeById = new Map<string, VisualEdge>();
+  for (const edge of [
+    ...model.primaryEdges,
+    ...(model.primaryDatabase ? [model.primaryDatabase.edge] : []),
+    ...model.additionalEdges,
+  ]) {
+    if (nodesById.has(edge.from) && nodesById.has(edge.to)) edgeById.set(edge.id, edge);
+  }
+  const edges = [...edgeById.values()];
+  const nodeIds = new Set<string>(primaryEntries.map(({ node }) => node.id));
+  for (const edge of edges) {
+    nodeIds.add(edge.from);
+    nodeIds.add(edge.to);
+  }
+
+  const outgoing = new Map<string, VisualEdge[]>();
+  for (const edge of edges) {
+    const bucket = outgoing.get(edge.from) ?? [];
+    bucket.push(edge);
+    outgoing.set(edge.from, bucket);
+  }
+  for (const bucket of outgoing.values()) bucket.sort((left, right) => left.id.localeCompare(right.id));
+
+  const columns = new Map<string, number>();
+  const depths = new Map<string, number>();
+  const primaryQueue = primaryEntries.map(({ node }, index) => {
+    columns.set(node.id, index);
+    depths.set(node.id, 0);
+    return node.id;
+  });
+  assignReachableColumns(primaryQueue, columns, depths, outgoing, primaryIndex);
+
+  let nextColumn = primaryEntries.length;
+  for (const nodeId of nodeIds) {
+    if (columns.has(nodeId)) continue;
+    columns.set(nodeId, nextColumn);
+    depths.set(nodeId, 1);
+    assignReachableColumns([nodeId], columns, depths, outgoing, primaryIndex);
+    nextColumn += 1;
+  }
+
+  const rawPositions = new Map<string, { x: number; y: number; primaryIndex?: number }>();
+  for (const { node } of primaryEntries) {
+    const index = primaryIndex.get(node.id) ?? 0;
+    rawPositions.set(node.id, { x: nodeX(index), y: NODE_TOP, primaryIndex: index });
+  }
+
+  const branchGroups = new Map<string, string[]>();
+  for (const nodeId of nodeIds) {
+    if (primaryIndex.has(nodeId)) continue;
+    const key = `${columns.get(nodeId) ?? 0}:${depths.get(nodeId) ?? 1}`;
+    const group = branchGroups.get(key) ?? [];
+    group.push(nodeId);
+    branchGroups.set(key, group);
+  }
+  for (const [key, group] of branchGroups) {
+    const [columnText, depthText] = key.split(":");
+    const column = Number(columnText);
+    const depth = Number(depthText);
+    group.sort((left, right) => (nodesById.get(left)?.title ?? left).localeCompare(nodesById.get(right)?.title ?? right, "ko-KR") || left.localeCompare(right));
+    group.forEach((nodeId, index) => {
+      rawPositions.set(nodeId, {
+        x: nodeX(column) + (index - (group.length - 1) / 2) * (NODE_WIDTH + NODE_GAP),
+        y: NODE_TOP + NODE_HEIGHT + BRANCH_START_GAP + (depth - 1) * (NODE_HEIGHT + BRANCH_ROW_GAP),
+      });
+    });
+  }
+
+  const minX = Math.min(...[...rawPositions.values()].map(({ x }) => x), CANVAS_PAD);
+  const shiftX = Math.max(0, CANVAS_PAD - minX);
+  const graphNodes = [...nodeIds].map((nodeId) => {
+    const node = nodesById.get(nodeId)!;
+    const position = rawPositions.get(nodeId) ?? { x: nodeX(0), y: NODE_TOP };
+    return {
+      node,
+      item: itemByNodeId.get(nodeId),
+      x: position.x + shiftX,
+      y: position.y,
+      primaryIndex: position.primaryIndex,
+    };
+  });
+  const graphNodesById = new Map(graphNodes.map((node) => [node.node.id, node]));
+  const graphEdges = edges.flatMap((edge) => {
+    const from = graphNodesById.get(edge.from);
+    const to = graphNodesById.get(edge.to);
+    return from && to ? [{ edge, from, to }] : [];
+  });
+  const maxRight = Math.max(...graphNodes.map(({ x }) => x + NODE_WIDTH), CANVAS_PAD);
+  const maxBottom = Math.max(...graphNodes.map(({ y }) => y + NODE_HEIGHT), NODE_TOP + NODE_HEIGHT);
+  const minimumWidth = CANVAS_PAD * 2 + Math.max(2, primaryEntries.length) * NODE_WIDTH + Math.max(0, Math.max(2, primaryEntries.length) - 1) * NODE_GAP;
+  const gapX = nodeX(1) + shiftX;
+
+  return {
+    nodes: graphNodes,
+    edges: graphEdges,
+    width: Math.max(minimumWidth, maxRight + CANVAS_PAD),
+    height: Math.max(720, maxBottom + 112),
+    gapX,
+  };
+}
+
+function assignReachableColumns(
+  starts: string[],
+  columns: Map<string, number>,
+  depths: Map<string, number>,
+  outgoing: Map<string, VisualEdge[]>,
+  primaryIndex: Map<string, number>,
+): void {
+  const queue = [...starts];
+  while (queue.length > 0) {
+    const from = queue.shift()!;
+    const column = columns.get(from) ?? 0;
+    const depth = depths.get(from) ?? 0;
+    for (const edge of outgoing.get(from) ?? []) {
+      if (primaryIndex.has(edge.to) || columns.has(edge.to)) continue;
+      columns.set(edge.to, column);
+      depths.set(edge.to, depth + 1);
+      queue.push(edge.to);
+    }
+  }
+}
+
 function nodeX(index: number): number {
   return CANVAS_PAD + index * (NODE_WIDTH + NODE_GAP);
 }
 
-function candidateCurve(sourceIndex: number, targetIndex: number): string {
-  const startX = nodeX(sourceIndex) + NODE_WIDTH / 2;
-  const startY = NODE_TOP + NODE_HEIGHT;
-  const endX = nodeX(targetIndex) + NODE_WIDTH / 2;
-  const endY = NODE_TOP + NODE_HEIGHT;
-  const curveY = startY + 104;
+function apiGraphEdgePath(connection: ApiGraphEdge, primaryDatabaseEdgeId: string | null): string {
+  const { edge, from, to } = connection;
+  if (edge.id === primaryDatabaseEdgeId && from.y === to.y) {
+    const startX = from.x + NODE_WIDTH / 2;
+    const endX = to.x + NODE_WIDTH / 2;
+    const bottom = from.y + NODE_HEIGHT;
+    const curveY = bottom + 104;
+    return `M ${startX} ${bottom} C ${startX} ${curveY}, ${endX} ${curveY}, ${endX} ${to.y + NODE_HEIGHT}`;
+  }
+  if (Math.abs(from.y - to.y) < 4) {
+    const forward = to.x >= from.x;
+    const startX = forward ? from.x + NODE_WIDTH : from.x;
+    const endX = forward ? to.x : to.x + NODE_WIDTH;
+    const y = from.y + NODE_HEIGHT / 2;
+    return `M ${startX} ${y} L ${endX} ${y}`;
+  }
+  const downward = to.y > from.y;
+  const startX = from.x + NODE_WIDTH / 2;
+  const endX = to.x + NODE_WIDTH / 2;
+  const startY = downward ? from.y + NODE_HEIGHT : from.y;
+  const endY = downward ? to.y : to.y + NODE_HEIGHT;
+  const curveY = (startY + endY) / 2;
   return `M ${startX} ${startY} C ${startX} ${curveY}, ${endX} ${curveY}, ${endX} ${endY}`;
+}
+
+function apiGraphEdgeLabelStyle(connection: ApiGraphEdge, primaryDatabaseEdgeId: string | null): CSSProperties {
+  const { edge, from, to } = connection;
+  if (edge.id === primaryDatabaseEdgeId && from.y === to.y) {
+    return { left: (from.x + to.x + NODE_WIDTH) / 2, top: from.y + NODE_HEIGHT + 82, transform: "translateX(-50%)" };
+  }
+  if (Math.abs(from.y - to.y) < 4) {
+    return { left: Math.min(from.x + NODE_WIDTH, to.x + NODE_WIDTH) + 3, top: from.y + 38 };
+  }
+  return {
+    left: (from.x + to.x + NODE_WIDTH) / 2,
+    top: (from.y + to.y + NODE_HEIGHT) / 2,
+    transform: "translate(-50%, -50%)",
+  };
 }
 
 function apiLaneMeta(lane: string): {
@@ -562,8 +653,13 @@ function dbTableForNode(node: VisualNode, tables: DbInventoryTable[]): DbInvento
   return tableKey ? tables.find((table) => dbInventoryTableKey(table) === tableKey) ?? null : null;
 }
 
-function nodeTitle(nodeId: string, map: VisualMap): string {
-  return map.nodes.find((node) => node.id === nodeId)?.title ?? nodeId;
+function visualNodeLane(node: VisualNode): string {
+  const kind = node.kind.toLowerCase();
+  if (node.layer === "db" || kind === "table") return "database";
+  if (node.layer === "api" || kind === "api" || kind === "route") return "route";
+  if (kind.includes("handler")) return "handler";
+  if (kind.includes("repository")) return "repository-query";
+  return "service-function";
 }
 
 function laneEmptyMessage(lane: string): string {

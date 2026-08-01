@@ -496,16 +496,7 @@ pub(crate) fn merge_language_analyses(
     }
     documents.sort_by(|left, right| left.path.cmp(&right.path));
     merge_duplicate_documents(&mut documents);
-    let mut unique_relations = HashSet::new();
-    relations.retain(|relation| {
-        unique_relations.insert((
-            relation.from.clone(),
-            relation.to.clone(),
-            relation.kind.clone(),
-            relation.path.clone(),
-            relation.range.clone(),
-        ))
-    });
+    dedupe_semantic_relations(&mut relations);
     relations.sort_by(|left, right| {
         (&left.path, &left.range, &left.from, &left.to, &left.kind).cmp(&(
             &right.path,
@@ -516,6 +507,58 @@ pub(crate) fn merge_language_analyses(
         ))
     });
     (languages, documents, relations, diagnostics)
+}
+
+fn dedupe_semantic_relations(relations: &mut Vec<RelationOutput>) {
+    let mut unique = Vec::with_capacity(relations.len());
+    for relation in relations.drain(..) {
+        let duplicate = unique.iter().position(|existing: &RelationOutput| {
+            existing.from == relation.from
+                && existing.to == relation.to
+                && existing.kind == relation.kind
+                && existing.path == relation.path
+                && (existing.range == relation.range
+                    || (relation.kind == "CALLS"
+                        && relation_ranges_overlap(&existing.range, &relation.range)))
+        });
+        if let Some(index) = duplicate {
+            if relation.kind == "CALLS"
+                && relation_range_size(&relation.range) < relation_range_size(&unique[index].range)
+            {
+                unique[index] = relation;
+            }
+        } else {
+            unique.push(relation);
+        }
+    }
+    *relations = unique;
+}
+
+fn relation_ranges_overlap(left: &[i32], right: &[i32]) -> bool {
+    let Some((left_start, left_end)) = relation_range_bounds(left) else {
+        return false;
+    };
+    let Some((right_start, right_end)) = relation_range_bounds(right) else {
+        return false;
+    };
+    left_start <= right_end && right_start <= left_end
+}
+
+fn relation_range_bounds(range: &[i32]) -> Option<((i32, i32), (i32, i32))> {
+    match range {
+        [line, start, end] => Some(((*line, *start), (*line, *end))),
+        [start_line, start_column, end_line, end_column] => {
+            Some(((*start_line, *start_column), (*end_line, *end_column)))
+        }
+        _ => None,
+    }
+}
+
+fn relation_range_size(range: &[i32]) -> i64 {
+    let Some((start, end)) = relation_range_bounds(range) else {
+        return i64::MAX;
+    };
+    i64::from(end.0 - start.0) * 1_000_000 + i64::from(end.1 - start.1)
 }
 
 fn merge_duplicate_documents(documents: &mut Vec<DocumentOutput>) {
@@ -574,5 +617,37 @@ fn merge_language_status(left: &'static str, right: &'static str) -> &'static st
         right
     } else {
         left
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(range: Vec<i32>) -> RelationOutput {
+        RelationOutput {
+            from: "handler".to_string(),
+            to: "service".to_string(),
+            kind: "CALLS".to_string(),
+            path: "src/routes.rs".to_string(),
+            range,
+            confidence: Some(1.0),
+            strategy: Some("test".to_string()),
+        }
+    }
+
+    #[test]
+    fn overlapping_call_ranges_keep_one_most_precise_relation() {
+        let mut relations = vec![call(vec![4, 4, 4, 25]), call(vec![4, 13, 4, 25])];
+        dedupe_semantic_relations(&mut relations);
+        assert_eq!(relations.len(), 1);
+        assert_eq!(relations[0].range, vec![4, 13, 4, 25]);
+    }
+
+    #[test]
+    fn separate_call_sites_to_the_same_target_remain_distinct() {
+        let mut relations = vec![call(vec![4, 4, 4, 12]), call(vec![8, 4, 8, 12])];
+        dedupe_semantic_relations(&mut relations);
+        assert_eq!(relations.len(), 2);
     }
 }

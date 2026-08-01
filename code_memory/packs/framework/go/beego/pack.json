@@ -5,7 +5,7 @@
   "name": "Beego",
   "kind": "web",
   "signals": [
-    "github.com/beego/beego",
+    "package:github.com/beego/beego",
     "beego.Router",
     "Controller"
   ],

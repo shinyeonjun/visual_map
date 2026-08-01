@@ -48,8 +48,8 @@ pub(crate) use db::{
 };
 #[cfg(test)]
 pub(crate) use model::{
-    CodeHandle, CodeInventorySummary, DbInventoryColumn, DbInventoryTable, FocusedCodeSearchTotals,
-    RepoSource, WorkspaceEngineCache,
+    CodeHandle, CodeInventoryGap, CodeInventorySummary, DbInventoryColumn, DbInventoryTable,
+    FocusedCodeSearchTotals, RepoSource, WorkspaceEngineCache,
 };
 #[cfg(test)]
 pub(crate) use store::{

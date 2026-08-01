@@ -5,7 +5,7 @@
   "name": "Crow",
   "kind": "web",
   "signals": [
-    "crow.h",
+    "include:crow.h",
     "CROW_ROUTE",
     "crow::SimpleApp"
   ],

@@ -217,12 +217,12 @@ fn architecture_diagnostics(
                 .filter(|value| !value.trim().is_empty())
                 .or_else(|| diagnostic_language(&message))
                 .unwrap_or("project");
-            CodeInventoryGap {
-                kind: "code-provider-diagnostic".to_string(),
-                from: format!("provider:{language}"),
-                to: project.to_string(),
+            CodeInventoryGap::new(
+                "code-provider-diagnostic",
+                format!("provider:{language}"),
+                project,
                 message,
-            }
+            )
         })
         .collect()
 }
@@ -433,12 +433,12 @@ pub(super) fn extract_code_calls_with_gaps(
         if !known_from || !known_to {
             let key = (call.from.clone(), call.to.clone());
             if seen_gaps.insert(key) {
-                gaps.push(CodeInventoryGap {
-                    kind: "unresolved-call".to_string(),
-                    from: call.from.clone(),
-                    to: call.to.clone(),
-                    message: "codebase-memory CALLS 관계의 한쪽 또는 양쪽 끝점을 제품 인벤토리에서 찾지 못했습니다.".to_string(),
-                });
+                gaps.push(CodeInventoryGap::new(
+                    "unresolved-call",
+                    call.from.clone(),
+                    call.to.clone(),
+                    "codebase-memory CALLS 관계의 한쪽 또는 양쪽 끝점을 제품 인벤토리에서 찾지 못했습니다.",
+                ));
             }
             continue;
         }
@@ -548,12 +548,12 @@ fn extract_code_handles_with_gaps(
             if !known_handler || !known_route {
                 let key = (edge.from.clone(), edge.to.clone());
                 if seen_gaps.insert(key) {
-                    gaps.push(CodeInventoryGap {
-                        kind: "unresolved-handle".to_string(),
-                        from: edge.from,
-                        to: edge.to,
-                        message: "codebase-memory HANDLES 관계의 handler 또는 route를 제품 인벤토리에서 찾지 못했습니다.".to_string(),
-                    });
+                    gaps.push(CodeInventoryGap::new(
+                        "unresolved-handle",
+                        edge.from,
+                        edge.to,
+                        "codebase-memory HANDLES 관계의 handler 또는 route를 제품 인벤토리에서 찾지 못했습니다.",
+                    ));
                 }
                 return None;
             }

@@ -5,7 +5,7 @@
   "name": "Rocket",
   "kind": "web",
   "signals": [
-    "use rocket",
+    "package:rocket",
     "#[get",
     "#[launch]"
   ],

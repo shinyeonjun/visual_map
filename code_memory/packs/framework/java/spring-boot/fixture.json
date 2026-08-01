@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "src/fixture.java",
-      "source": "@SpringBootApplication @RestController @GetMapping('/fixture') void handler() {}\n@Service class UserService {}\n@Autowired UserService service;"
+      "source": "@SpringBootApplication @RestController @GetMapping('/fixture') void handler() {}\n@Service class UserService {}\n@Autowired\nUserService service;"
     },
     {
       "path": "pom.xml",

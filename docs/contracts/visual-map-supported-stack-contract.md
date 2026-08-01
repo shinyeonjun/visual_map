@@ -11,7 +11,9 @@
 
 ## 1. 지원 언어
 
-지원 언어는 다음 14개로 고정한다.
+현재 active 지원 언어는 12개로 고정한다. Kotlin과 Swift는 제품 목표(target)
+목록에는 남기되, provider·framework pack·동일한 uniform core gate가 준비되기
+전까지 active 지원으로 표시하지 않는다.
 
 | 언어 | 비고 |
 | --- | --- |
@@ -19,13 +21,13 @@
 | JavaScript | JSX 포함 |
 | Python | 동기·비동기 코드 포함 |
 | Java | JVM 서버·기업 애플리케이션 중심 |
-| Kotlin | JVM·Android·서버 코드 포함 |
+| Kotlin | target — provider·pack·uniform gate 준비 전 |
 | C# | .NET 코드 포함 |
 | C | 네이티브·시스템 코드 중심 |
 | C++ | 네이티브·시스템·게임 코드 중심 |
 | Go | 서버·도구 코드 중심 |
 | Rust | 서버·시스템·도구 코드 중심 |
-| Swift | Apple 플랫폼·서버 Swift 포함 |
+| Swift | target — provider·pack·uniform gate 준비 전 |
 | PHP | 웹 애플리케이션 중심 |
 | Ruby | 웹 애플리케이션 중심 |
 | Dart | Flutter·서버 Dart 포함 |
@@ -45,13 +47,13 @@ D, Lua, R, MATLAB, Perl, Haskell 등 현재 grammar에 존재하는 다른 언�
 | JavaScript | React, Next.js, Angular, Vue, Nuxt, SvelteKit, Express, Fastify, NestJS, Koa |
 | Python | Django, Flask, FastAPI, Starlette, Sanic |
 | Java | Spring, Spring Boot, Spring MVC, Spring WebFlux, Jakarta EE, Quarkus, Micronaut, Play |
-| Kotlin | Spring Boot, Ktor, Micronaut, Android, Jetpack Compose |
+| Kotlin | target — Spring Boot, Ktor, Micronaut, Android, Jetpack Compose |
 | C# | ASP.NET Core, ASP.NET MVC, ASP.NET Web API, Minimal API, Blazor, .NET MAUI |
 | C | GTK/GLib, Qt, libuv, libevent, gRPC |
 | C++ | Qt, MFC, Boost.Asio, POCO, Unreal Engine, Drogon, Crow, gRPC |
 | Go | net/http, Gin, Echo, Fiber, Chi, Beego, gRPC |
 | Rust | Axum, Actix Web, Rocket, Warp, Poem, Tokio, Tonic |
-| Swift | SwiftUI, UIKit, Vapor, Hummingbird, SwiftNIO |
+| Swift | target — SwiftUI, UIKit, Vapor, Hummingbird, SwiftNIO |
 | PHP | Laravel, Symfony, CodeIgniter, Laminas, Slim, CakePHP, API Platform |
 | Ruby | Rails, Sinatra, Hanami, Rack, Grape, Roda |
 | Dart | Flutter, Shelf, Serverpod, Dart Frog |
@@ -68,13 +70,13 @@ ORM은 코드의 객체·모델·엔티티를 DB의 테이블·행·컬럼에 �
 | JavaScript | Prisma, Sequelize, Drizzle, Mongoose, Knex |
 | Python | SQLAlchemy, Django ORM, SQLModel, Tortoise ORM, Peewee |
 | Java | Hibernate, JPA, Spring Data JPA, EclipseLink, MyBatis, jOOQ |
-| Kotlin | Exposed, Room, SQLDelight, Hibernate, JPA |
+| Kotlin | target — Exposed, Room, SQLDelight, Hibernate, JPA |
 | C# | Entity Framework Core, Dapper, NHibernate, linq2db |
 | C | ODBC, SQLite API, QtSql, SOCI |
 | C++ | SQLite, SOCI, sqlpp11, ODBC |
 | Go | GORM, Ent, Bun, sqlx, sqlc, SQLBoiler |
 | Rust | Diesel, SeaORM, SQLx, rbatis |
-| Swift | SwiftData, Core Data, Fluent, GRDB, SQLite.swift |
+| Swift | target — SwiftData, Core Data, Fluent, GRDB, SQLite.swift |
 | PHP | Eloquent, Doctrine ORM, Propel, Cycle ORM |
 | Ruby | ActiveRecord, Sequel, ROM-rb, Mongoid |
 | Dart | Drift, Floor, Realm, Isar, Hive |
@@ -159,6 +161,18 @@ CMake, Makefile, Meson, Dockerfile
 7. 이 목록은 UI의 확정·추정·모름 표시가 아니라 엔진이 책임지는 분석 범위 계약이다.
 
 ## 8. 완료 기준
+
+분석 결과의 상태 표현은 다음을 구분한다.
+
+```text
+not-assessed  runtime 도달성 분석을 아직 실행하지 않음
+unknown       runtime 도달성 분석은 시도했지만 동적 entrypoint·설정으로 결론 불가
+excluded      의존성·컴파일 문맥 등 선행조건 부족으로 해당 범위를 의도적으로 제외
+```
+
+`excluded`는 반드시 `exclusion_scope`로 언어·파일·근거 범위를 구분한다. 현재
+route fact의 `runtime_reachability` 기본값은 `not-assessed`이며, 분석을 시도하지
+않은 route를 `unknown`으로 표시하지 않는다.
 
 각 공식 지원 스택마다 최소한 다음 fixture를 가져야 한다.
 

@@ -457,10 +457,14 @@ pub(crate) fn read_scip(
                             }
                         }))
                         || (!matches!(fallback_language, "typescript" | "javascript")
-                            && is_call_occurrence(
+                            && (is_call_occurrence(
                                 source_cache.get(&document_path).map(String::as_str),
                                 &occurrence.range,
-                            ))
+                            ) || (fallback_language == "ruby"
+                                && is_ruby_member_call_occurrence(
+                                    source_cache.get(&document_path).map(String::as_str),
+                                    &occurrence.range,
+                                ))))
                     {
                         "CALLS"
                     } else if matches!(fallback_language, "c" | "cpp")
@@ -804,6 +808,38 @@ pub(crate) fn is_call_occurrence(source: Option<&str>, range: &[i32]) -> bool {
     line.get(end_character.max(0) as usize..)
         .map(|suffix| suffix.trim_start().starts_with('('))
         .unwrap_or(false)
+}
+
+pub(crate) fn is_ruby_member_call_occurrence(source: Option<&str>, range: &[i32]) -> bool {
+    let Some(source) = source else {
+        return false;
+    };
+    let Some((line_number, start, end_line, end)) = range_parts(range) else {
+        return false;
+    };
+    if end_line != line_number {
+        return false;
+    }
+    let Some(line) = source.lines().nth(line_number.max(0) as usize) else {
+        return false;
+    };
+    let start = start.max(0) as usize;
+    let end = end.max(0) as usize;
+    let Some(prefix) = line.get(..start) else {
+        return false;
+    };
+    let Some(token) = line.get(start..end) else {
+        return false;
+    };
+    if token.is_empty()
+        || !token.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '!' | '?' | '=')
+        })
+    {
+        return false;
+    }
+    let prefix = prefix.trim_end();
+    prefix.ends_with('.') || prefix.ends_with("&.") || prefix.ends_with("::")
 }
 
 pub(crate) fn find_source_owner(

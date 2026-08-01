@@ -1398,7 +1398,8 @@ pub(crate) fn lsp_session_timeout(large_workspace: bool) -> Duration {
 }
 
 pub(crate) fn lsp_reference_enrichment_enabled(language: &str) -> bool {
-    language == "ruby" || env::var("CODE_MEMORY_LSP_REFERENCES").as_deref() == Ok("1")
+    matches!(language, "ruby" | "rust")
+        || env::var("CODE_MEMORY_LSP_REFERENCES").as_deref() == Ok("1")
 }
 
 fn large_map_enrichment_language(language: &str) -> bool {
@@ -2646,7 +2647,8 @@ pub(crate) fn find_lsp_symbol_at_range<'a>(
 mod tests {
     use super::{
         bundled_java_home, java_home_is_usable, java_language_server_settings,
-        lsp_message_length_allowed, symbol_string, uri_to_relative_path, MAX_LSP_MESSAGE_BYTES,
+        lsp_message_length_allowed, lsp_reference_enrichment_enabled, symbol_string,
+        uri_to_relative_path, MAX_LSP_MESSAGE_BYTES,
     };
     use std::fs;
     use std::path::Path;
@@ -2668,6 +2670,13 @@ mod tests {
             symbol_string("src/Client.java", "getOwner(int)", 3, 8),
             "lsp . . . src.Client.java#getOwner(int)@3:8"
         );
+    }
+
+    #[test]
+    fn rust_reference_enrichment_is_enabled_by_default() {
+        assert!(lsp_reference_enrichment_enabled("rust"));
+        assert!(lsp_reference_enrichment_enabled("ruby"));
+        assert!(!lsp_reference_enrichment_enabled("typescript"));
     }
 
     #[cfg(windows)]

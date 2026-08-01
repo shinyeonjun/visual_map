@@ -48,9 +48,13 @@ pub(crate) fn analyze_with_sources(
     let project_sources = &snapshot.files;
     let mut source_indexes: HashMap<String, Vec<usize>> = HashMap::new();
     for (index, (path, _)) in project_sources.iter().enumerate() {
-        if let Some(language) = LANGUAGES
+        // Shared headers (`.h`, `.inc`) can belong to both C and C++.
+        // Keep provider ownership singular, but let framework discovery see
+        // the header from every matching language so declarations are not
+        // silently hidden by catalog order.
+        for language in LANGUAGES
             .iter()
-            .find(|item| path_matches_language(path, item.extensions))
+            .filter(|item| path_matches_language(path, item.extensions))
         {
             source_indexes
                 .entry(language.id.to_string())
@@ -212,8 +216,16 @@ pub(crate) fn analyze_with_sources(
             .collect();
 
         let mut facts = Vec::new();
-        let fastapi_context =
-            (pack.id == "fastapi").then(|| build_fastapi_route_context(&candidate_sources));
+        let route_context = (pack.id == "fastapi" || pack.id == "minimal-api").then(|| {
+            let mut context = FastApiRouteContext::default();
+            if pack.id == "fastapi" {
+                context.prefixes = build_fastapi_route_context(&sources).prefixes;
+            }
+            if pack.id == "minimal-api" {
+                context.minimal_prefixes = build_minimal_api_route_context(&sources);
+            }
+            context
+        });
         let javascript_route_context =
             (pack.id == "express").then(|| JavascriptRouteContext::build(&sources));
         for &(path, source) in &candidate_sources {
@@ -237,7 +249,7 @@ pub(crate) fn analyze_with_sources(
                     &pack,
                     path,
                     source,
-                    fastapi_context.as_ref(),
+                    route_context.as_ref(),
                     &symbol_index,
                     &mut facts,
                 );
@@ -275,6 +287,19 @@ pub(crate) fn analyze_with_sources(
             extract_generic_facts_with_index(&pack, path, source, &symbol_index, &mut facts);
         }
         for fact in &mut facts {
+            if fact.kind == "HTTP_ROUTE" {
+                fact.properties
+                    .entry("runtime_reachability".to_string())
+                    .or_insert_with(|| "not-assessed".to_string());
+            }
+            if source_path_is_test(&fact.source_file) {
+                fact.properties
+                    .entry("source_scope".to_string())
+                    .or_insert_with(|| "test".to_string());
+                fact.properties
+                    .entry("isTest".to_string())
+                    .or_insert_with(|| "true".to_string());
+            }
             if fact.symbol.is_none() {
                 let resolution = if fact.properties.contains_key("target") {
                     "framework_alias"
@@ -452,6 +477,18 @@ fn pack_owns_routes(
     mvc_modules: &HashSet<String>,
     quarkus_modules: &HashSet<String>,
 ) -> bool {
+    if pack.language == "ruby" && pack.id == "rack" {
+        // Rack is often present in config.ru as the host for Rails/Sinatra.
+        // That activation must not make Rack claim the application's route DSL.
+        return source.contains("Rack::Builder")
+            || source.lines().map(str::trim_start).any(|line| {
+                line.strip_prefix("run ")
+                    .is_some_and(|rest| !rest.trim_start().starts_with('#'))
+                    || line
+                        .strip_prefix("map ")
+                        .is_some_and(|rest| rest.trim_start().starts_with(['"', '\'', '/']))
+            });
+    }
     if pack.language == "csharp" {
         let legacy_web_api = source.contains("System.Web.Http")
             || source.contains("IHttpActionResult")
@@ -513,6 +550,52 @@ fn pack_owns_routes(
         "jakarta-ee" => !module_is_quarkus && source_is_jax_rs,
         _ => true,
     }
+}
+
+fn build_minimal_api_route_context(sources: &[(&str, &str)]) -> HashMap<String, String> {
+    let has_endpoint_group_discovery = sources.iter().any(|(_, source)| {
+        source.contains("GetProperty")
+            && source.contains("IEndpointGroup")
+            && source.contains("MapGroup(")
+    });
+    if !has_endpoint_group_discovery {
+        return HashMap::new();
+    }
+
+    let default_template = sources.iter().find_map(|(_, source)| {
+        source.lines().find_map(|line| {
+            (line.contains("groupName") && line.contains("??"))
+                .then(|| first_quoted_value(line))
+                .flatten()
+        })
+    });
+    let mut prefixes = HashMap::new();
+    for &(path, source) in sources {
+        if !path.ends_with(".cs") {
+            continue;
+        }
+        let Some(class_name) = source.lines().find_map(|line| {
+            (line.contains("class ") && line.contains("IEndpointGroup"))
+                .then(|| declared_type_name(line))
+                .flatten()
+        }) else {
+            continue;
+        };
+        let custom_prefix = source.lines().find_map(|line| {
+            (line.contains("RoutePrefix") && line.contains("=>"))
+                .then(|| first_quoted_value(line))
+                .flatten()
+        });
+        let prefix = custom_prefix.or_else(|| {
+            default_template
+                .as_deref()
+                .map(|template| template.replace("{groupName}", &class_name))
+        });
+        if let Some(prefix) = prefix {
+            prefixes.insert(path.to_string(), prefix);
+        }
+    }
+    prefixes
 }
 
 fn has_route_syntax_candidate(source: &str, language: &str) -> bool {
@@ -634,6 +717,22 @@ fn has_route_syntax_candidate(source: &str, language: &str) -> bool {
 
 fn source_code_mask(source: &str, language: &str) -> String {
     source_mask(source, language, true)
+}
+
+fn source_path_is_test(path: &str) -> bool {
+    let components = path
+        .split(['/', '\\'])
+        .map(|component| component.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    components.iter().any(|component| {
+        matches!(
+            component.as_str(),
+            "test" | "tests" | "spec" | "specs" | "__tests__"
+        ) || component.contains(".test.")
+            || component.contains(".spec.")
+            || component.ends_with("_test.go")
+            || component.starts_with("test_")
+    })
 }
 
 fn source_without_comments(source: &str, language: &str) -> String {
@@ -816,7 +915,9 @@ fn extract_routes_with_index(
     facts: &mut Vec<FrameworkFact>,
 ) {
     let lines: Vec<&str> = source.lines().collect();
-    let code = source_code_mask(source, &pack.language);
+    // Keep string templates (for example Vue's `@click` markup) visible, but
+    // remove comments so prose such as "mail service" cannot become a fact.
+    let code = source_without_comments(source, &pack.language);
     let code_lines: Vec<&str> = code.lines().collect();
     let mut annotation_prefix: Option<String> = None;
     let mut annotation_type: Option<String> = None;
@@ -973,11 +1074,16 @@ fn extract_routes_with_index(
             (pack.language == "java")
                 .then(|| enclosing_java_method(&lines, index))
                 .flatten()
+        } else if pack.id == "nestjs" {
+            nestjs_handler_name(&lines, index, &route_line)
         } else if pack.id == "fastapi" {
             fastapi_handler_name(&lines, index, &route_line[end..])
+        } else if pack.id == "minimal-api" {
+            minimal_api_route_call(&route_line).and_then(|(_, handler, _)| handler)
         } else {
             config_route_handler(&route_line)
                 .or_else(|| macro_registration_handler(&route_line))
+                .or_else(|| route_registration_handler(&pack.id, &route_line))
                 .or_else(|| annotation_handler_name(&route_line))
                 .or_else(|| {
                     let rest = &route_line[end..];
@@ -997,7 +1103,22 @@ fn extract_routes_with_index(
                     (pack.language.as_str(), pack.adapter.as_str()),
                     ("javascript" | "typescript", "registration-routing")
                 ) {
-                    resolve_symbol_in_file_indexed(symbol_index, path, name, index)
+                    if pack.id == "nestjs" {
+                        resolve_symbol_indexed(symbol_index, path, name).or_else(|| {
+                            resolve_symbol_in_file_indexed(symbol_index, path, name, index)
+                        })
+                    } else {
+                        resolve_symbol_in_file_indexed(symbol_index, path, name, index)
+                    }
+                } else if pack.id == "minimal-api" {
+                    resolve_symbol_indexed(symbol_index, path, name)
+                        .or_else(|| resolve_symbol_at_indexed(symbol_index, path, name, index))
+                } else if pack.language == "go" {
+                    go_registration_receiver_type(source, index)
+                        .and_then(|receiver_type| {
+                            resolve_go_method_indexed(symbol_index, name, &receiver_type)
+                        })
+                        .or_else(|| resolve_symbol_at_indexed(symbol_index, path, name, index))
                 } else {
                     resolve_symbol_at_indexed(symbol_index, path, name, index)
                         .or_else(|| resolve_symbol_indexed(symbol_index, path, name))
@@ -1009,6 +1130,11 @@ fn extract_routes_with_index(
             let route_path = if pack.id == "fastapi" {
                 combine_route_prefix(
                     fastapi_context.and_then(|context| context.prefix_for(path, line)),
+                    &route_path,
+                )
+            } else if pack.id == "minimal-api" {
+                combine_route_prefix(
+                    fastapi_context.and_then(|context| context.minimal_prefix_for(path)),
                     &route_path,
                 )
             } else {
@@ -1115,6 +1241,11 @@ fn framework_route_paths(
     }
 
     if pack.language == "csharp" {
+        if pack.id == "minimal-api" {
+            if let Some((path, _, end)) = minimal_api_route_call(route_line) {
+                return Some((vec![path], end));
+            }
+        }
         let method_paths = annotation_route_paths(
             route_line,
             &[
@@ -1162,6 +1293,18 @@ fn framework_route_paths(
         }
     }
 
+    if matches!(
+        (pack.language.as_str(), pack.adapter.as_str()),
+        ("javascript" | "typescript", "registration-routing")
+    ) {
+        if let Some((path, end)) = javascript_registration_route_path(route_line) {
+            return Some((vec![path], end));
+        }
+        if javascript_registration_marker(route_line) {
+            return None;
+        }
+    }
+
     let (route_path, end) = first_route_path(route_line)?;
     let paths = route_paths(route_line);
     Some((
@@ -1172,6 +1315,106 @@ fn framework_route_paths(
         },
         end,
     ))
+}
+
+fn javascript_registration_route_path(line: &str) -> Option<(String, usize)> {
+    let code = source_code_mask(line, "javascript");
+    for marker in [
+        "route(",
+        ".get(",
+        ".GET(",
+        ".post(",
+        ".POST(",
+        ".put(",
+        ".PUT(",
+        ".patch(",
+        ".PATCH(",
+        ".delete(",
+        ".DELETE(",
+        ".head(",
+        ".HEAD(",
+        ".options(",
+        ".OPTIONS(",
+        "MapGet(",
+        "MapPost(",
+        "MapPut(",
+        "MapPatch(",
+        "MapDelete(",
+        "Route(",
+        "GET(",
+        "POST(",
+        "PUT(",
+        "PATCH(",
+        "DELETE(",
+        "HEAD(",
+        "OPTIONS(",
+    ] {
+        let mut search_start = 0usize;
+        while let Some(offset) = code[search_start..].find(marker) {
+            let open = search_start + offset + marker.len() - 1;
+            let close = matching_parenthesis(line, open)?;
+            let arguments = &line[open + 1..close];
+            let first_argument = javascript_first_argument(arguments);
+            if let Some((path, consumed)) = first_route_path(first_argument) {
+                return Some((path, open + 1 + consumed));
+            }
+            search_start = close + 1;
+        }
+    }
+    None
+}
+
+fn javascript_registration_marker(line: &str) -> bool {
+    [
+        "route(",
+        ".get(",
+        ".GET(",
+        ".post(",
+        ".POST(",
+        ".put(",
+        ".PUT(",
+        ".patch(",
+        ".PATCH(",
+        ".delete(",
+        ".DELETE(",
+        ".head(",
+        ".HEAD(",
+        ".options(",
+        ".OPTIONS(",
+        "MapGet(",
+        "MapPost(",
+        "MapPut(",
+        "MapPatch(",
+        "MapDelete(",
+    ]
+    .iter()
+    .any(|marker| line.contains(marker))
+}
+
+fn javascript_first_argument(arguments: &str) -> &str {
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, value) in arguments.char_indices() {
+        if let Some(current) = quote {
+            if escaped {
+                escaped = false;
+            } else if value == '\\' {
+                escaped = true;
+            } else if value == current {
+                quote = None;
+            }
+            continue;
+        }
+        match value {
+            '\'' | '"' => quote = Some(value),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => return &arguments[..index],
+            _ => {}
+        }
+    }
+    arguments
 }
 
 fn declared_type_name(line: &str) -> Option<String> {
@@ -1433,7 +1676,12 @@ fn extract_generic_facts_with_index(
     facts: &mut Vec<FrameworkFact>,
 ) {
     let lines: Vec<&str> = source.lines().collect();
+    let code = source_code_mask(source, &pack.language);
+    let code_lines: Vec<&str> = code.lines().collect();
+    let comment_free = source_without_comments(source, &pack.language);
+    let comment_free_lines: Vec<&str> = comment_free.lines().collect();
     for (index, line) in lines.iter().enumerate() {
+        let code_line = code_lines.get(index).copied().unwrap_or_default();
         for output in &pack.rules {
             if matches!(output.as_str(), "HTTP_ROUTE" | "HANDLES") {
                 continue;
@@ -1444,10 +1692,9 @@ fn extract_generic_facts_with_index(
             {
                 let dependencies = java_constructor_dependency_types(&lines, index);
                 if !dependencies.is_empty() {
-                    let handler_name = nearby_handler(&lines, index);
-                    let handler = handler_name
+                    let handler = java_enclosing_type(&lines, index)
                         .as_deref()
-                        .and_then(|name| resolve_symbol_at_indexed(symbol_index, path, name, index))
+                        .and_then(|name| resolve_java_type_indexed(symbol_index, path, name))
                         .filter(|symbol| project_symbol_is_defined_indexed(symbol_index, symbol));
                     for target in dependencies {
                         let mut properties = BTreeMap::new();
@@ -1477,7 +1724,14 @@ fn extract_generic_facts_with_index(
                     continue;
                 }
             }
-            let Some(evidence) = output_evidence(pack, output, line) else {
+            let evidence_line = if matches!(pack.id.as_str(), "vue" | "blazor" | "dotnet-maui")
+                && output == "EVENT_HANDLER"
+            {
+                comment_free_lines.get(index).copied().unwrap_or_default()
+            } else {
+                code_line
+            };
+            let Some(evidence) = output_evidence(pack, output, evidence_line) else {
                 continue;
             };
             let dependency_context = (pack.language == "java" && output == "DEPENDENCY")
@@ -1496,7 +1750,9 @@ fn extract_generic_facts_with_index(
                     if pack.language == "java" && matches!(output.as_str(), "SERVICE" | "COMPONENT")
                     {
                         resolve_java_type_indexed(symbol_index, path, name)
-                    } else if matches!(pack.language.as_str(), "javascript" | "typescript") {
+                    } else if matches!(pack.language.as_str(), "javascript" | "typescript")
+                        && !matches!(output.as_str(), "COMPONENT" | "SERVICE")
+                    {
                         resolve_symbol_on_line_indexed(symbol_index, path, name, index)
                     } else {
                         resolve_symbol_at_indexed(symbol_index, path, name, index)
@@ -1627,7 +1883,8 @@ fn java_constructor_is_injection(lines: &[&str], index: usize, framework: &str) 
         return false;
     };
     for line in lines.iter().take(type_index).rev().take(8) {
-        if line.trim().is_empty() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
             continue;
         }
         if [
@@ -1643,7 +1900,9 @@ fn java_constructor_is_injection(lines: &[&str], index: usize, framework: &str) 
         {
             return true;
         }
-        break;
+        if !trimmed.starts_with('@') {
+            break;
+        }
     }
     false
 }

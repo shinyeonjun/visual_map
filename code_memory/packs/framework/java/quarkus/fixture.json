@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "src/fixture.java",
-      "source": "@ApplicationScoped\n@Path(\"fixture\")\npublic class FixtureResource {\n    @GET\n    public void handler() {}\n    @Autowired UserService service;\n}"
+      "source": "import io.quarkus.runtime.annotations.RegisterForReflection;\n@ApplicationScoped\n@Path(\"fixture\")\npublic class FixtureResource {\n    @GET\n    public void handler() {}\n    @Autowired UserService service;\n}"
     },
     {
       "path": "pom.xml",

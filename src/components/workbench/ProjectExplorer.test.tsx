@@ -29,6 +29,34 @@ describe("ProjectExplorer", () => {
     expect(onShowAnswers).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "관계 연결" })).not.toBeInTheDocument();
   });
+
+  it("renders code targets under source folders and keeps selection behavior", () => {
+    const showMode = vi.fn();
+    const codeInventory = inventory();
+    codeInventory.functions = [{
+      id: "function-load-orders",
+      kind: "function",
+      name: "loadOrders",
+      filePath: "src/orders/service.ts",
+      line: 23,
+      detail: null,
+    }];
+    codeInventory.summary.functions = 1;
+
+    render(
+      <ProjectExplorer
+        workspaceControls={{ ...workspaceControls(), codeInventory } as WorkspaceControls}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={visualControls(showMode)}
+        onOpenDatabase={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "src, 1개 코드 항목" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "service.ts, 1개 코드 항목" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /loadOrders/ }));
+    expect(showMode).toHaveBeenCalledWith("search-focus", "code:function-load-orders");
+  });
 });
 
 function workspaceControls(): WorkspaceControls {

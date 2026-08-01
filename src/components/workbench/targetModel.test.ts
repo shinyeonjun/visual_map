@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CodeInventory, DbInventory } from "../../types/workspace";
-import { apiPathSegments, buildApiTree, buildTargetCatalog, firstAvailableTargetKind, targetKindForMode } from "./targetModel";
+import { apiPathSegments, buildApiTree, buildCodeTree, buildTargetCatalog, codePathSegments, firstAvailableTargetKind, targetKindForMode } from "./targetModel";
 
 describe("targetModel", () => {
   it("maps each target type to its automatic answer mode", () => {
@@ -121,6 +121,24 @@ describe("targetModel", () => {
     const v1 = api?.children.find((node) => node.label === "v1");
     expect(v1?.children.map((node) => node.label)).toEqual(["auth", "sessions"]);
     expect(apiPathSegments("fastapi: DELETE /api/v1/sessions/{session_id}")).toEqual(["api", "v1", "sessions", "{session_id}"]);
+  });
+
+  it("builds code folders from source paths without language-specific mapping", () => {
+    const catalog = buildTargetCatalog({
+      ...codeInventory(),
+      functions: [
+        { ...codeInventory().functions[0], filePath: "server/orders/service.ts" },
+        { ...codeInventory().functions[0], id: "function-list-orders", name: "listOrders", filePath: "server/orders/query.ts" },
+      ],
+    }, null);
+    const tree = buildCodeTree(catalog.code);
+    const server = tree.children.find((node) => node.label === "server");
+    const orders = server?.children.find((node) => node.label === "orders");
+
+    expect(orders?.children.map((node) => node.label)).toEqual(["query.ts", "service.ts"]);
+    expect(orders?.children[0]?.items[0]?.title).toBe("listOrders");
+    expect(codePathSegments("D:\\repo\\server\\routes\\auth.py")).toEqual(["repo", "server", "routes", "auth.py"]);
+    expect(codePathSegments(null)).toEqual(["소스 위치 없음"]);
   });
 });
 

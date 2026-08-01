@@ -5,7 +5,7 @@
   "name": "Gin",
   "kind": "web",
   "signals": [
-    "github.com/gin-gonic/gin",
+    "package:github.com/gin-gonic/gin",
     "gin.Default",
     "router.GET"
   ],

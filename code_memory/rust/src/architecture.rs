@@ -52,6 +52,12 @@ pub(crate) fn build_with_sources(
                 Some(line) => format!("{}:{}: {}", diagnostic.language, line, diagnostic.message),
                 None => format!("{}: {}", diagnostic.language, diagnostic.message),
             },
+            exclusion_reason: diagnostic_exclusion_reason(&diagnostic.message),
+            exclusion_scope: Some(if diagnostic.path.is_some() {
+                "file".to_string()
+            } else {
+                "language".to_string()
+            }),
         });
     }
     for coverage in &output.coverage {
@@ -64,6 +70,11 @@ pub(crate) fn build_with_sources(
                     .as_deref()
                     .unwrap_or("not-indexed")
                     .to_string(),
+                exclusion_reason: coverage
+                    .reason
+                    .as_deref()
+                    .and_then(coverage_exclusion_reason),
+                exclusion_scope: Some("file".to_string()),
             });
         }
     }
@@ -75,5 +86,86 @@ pub(crate) fn build_with_sources(
     builder.emit_source_boundaries();
     builder.emit_call_boundaries(output);
     builder.emit_framework_boundaries(output);
-    builder.finish()
+    let mut architecture = builder.finish();
+    architecture.languages = output
+        .languages
+        .iter()
+        .map(|language| ArchitectureLanguageSummary {
+            id: language.id.clone(),
+            name: language.name.clone(),
+            provider: language.provider.to_string(),
+            files_found: language.files_found,
+            files_indexed: language.files_indexed,
+            files_excluded: language.files_excluded,
+            files_missing: language.files_missing,
+            status: language.status.to_string(),
+            exclusion_reason: language_exclusion_reason(
+                &language.id,
+                language.status,
+                &output.diagnostics,
+            ),
+            exclusion_scope: (language.status == "excluded").then(|| "language".to_string()),
+        })
+        .collect();
+    architecture.frameworks = output
+        .frameworks
+        .iter()
+        .map(|framework| ArchitectureFrameworkSummary {
+            id: framework.id.clone(),
+            language: framework.language.clone(),
+            name: framework.name.clone(),
+            adapter: framework.adapter.clone(),
+            status: framework.status.clone(),
+            fact_count: framework.facts.len(),
+            relation_count: output
+                .framework_relations
+                .iter()
+                .filter(|relation| relation.framework == framework.id)
+                .count(),
+        })
+        .collect();
+    architecture
+}
+
+fn language_exclusion_reason(
+    language: &str,
+    status: &str,
+    diagnostics: &[crate::Diagnostic],
+) -> Option<String> {
+    if status != "excluded" {
+        return None;
+    }
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.language == language)
+        .find_map(|diagnostic| diagnostic_exclusion_reason(&diagnostic.message))
+}
+
+fn diagnostic_exclusion_reason(message: &str) -> Option<String> {
+    let message = message.to_ascii_lowercase();
+    if message.contains("composer")
+        || message.contains("dependency metadata")
+        || message.contains("package metadata")
+    {
+        Some("missing-dependency".to_string())
+    } else if message.contains("compile context")
+        || message.contains("unavailable legacy sdk")
+        || message.contains("unavailable external tool")
+    {
+        Some("missing-compile-context".to_string())
+    } else if message.contains("unsupported framework") {
+        Some("unsupported-framework".to_string())
+    } else if message.contains("runtime reachability") {
+        Some("runtime-reachability-unknown".to_string())
+    } else {
+        None
+    }
+}
+
+fn coverage_exclusion_reason(reason: &str) -> Option<String> {
+    match reason {
+        "no-compile-context" => Some("missing-compile-context".to_string()),
+        "provider-excluded" => Some("missing-dependency".to_string()),
+        _ => None,
+    }
 }

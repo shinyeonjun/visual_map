@@ -8,6 +8,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
 $bundledProviders = Join-Path $Root 'providers'
 if ([string]::IsNullOrWhiteSpace($ProvidersRoot) -and (Test-Path $bundledProviders)) {
     $ProvidersRoot = $bundledProviders
@@ -88,13 +91,12 @@ app.get("/fixture", handler);
                 path = "src/fixture.$extension"
                 source = @"
 import fastify from "fastify";
-const app = fastify();
 export async function plugin() {}
 export async function handler() { return "ok"; }
 export function authMiddleware(_req: unknown, _res: unknown, next: () => void) { next(); }
-app.register(plugin);
-app.addHook("onRequest", authMiddleware);
-app.get("/fixture", handler);
+fastify.register(plugin);
+fastify.addHook("onRequest", authMiddleware);
+fastify.get("/fixture", handler);
 "@
             }
         }
@@ -274,7 +276,8 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 class FixtureController {
     @GetMapping("/fixture") public void handler() {}
-    @Autowired UserService service;
+    @Autowired
+    UserService service;
 }
 @Service class UserService {}
 "@
@@ -319,6 +322,7 @@ class UserService {}
             'quarkus' {
                 @"
 package fixture;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.ws.rs.*;
 import jakarta.enterprise.context.ApplicationScoped;
 @ApplicationScoped
@@ -1033,10 +1037,11 @@ function Write-Project {
     if (Test-Path $Path) {
         Remove-Item -LiteralPath $Path -Recurse -Force
     }
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     foreach ($file in @($Files)) {
         $target = Join-Path $Path ($file.path -replace '/', '\')
         New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
-        Set-Content -LiteralPath $target -Value $file.source -NoNewline
+        [System.IO.File]::WriteAllText($target, [string]$file.source, $utf8NoBom)
     }
 }
 
@@ -1064,6 +1069,14 @@ foreach ($languageId in $languages) {
         $out = Join-Path $gateRoot "$languageId-$($packRef.id).json"
         $files = New-ProjectFiles -Language $languageId -Framework $packRef.id -PackFixture $packFixture
         Write-Project -Path $project -Files $files
+        if ($languageId -eq 'dart') {
+            # The bundled analyzer intentionally refuses to start without resolved
+            # package metadata. This fixture has no dependency installation step,
+            # so provide the smallest valid local-only package config.
+            $dartTool = Join-Path $project '.dart_tool'
+            New-Item -ItemType Directory -Force -Path $dartTool | Out-Null
+            Set-Content -LiteralPath (Join-Path $dartTool 'package_config.json') -Value '{"configVersion":2,"packages":[]}' -NoNewline
+        }
         if ($languageId -eq 'php') {
             $vendorSource = Join-Path $Root 'tests\fixtures\scip-php\vendor'
             Copy-Item -LiteralPath $vendorSource -Destination (Join-Path $project 'vendor') -Recurse -Force
@@ -1075,8 +1088,12 @@ foreach ($languageId in $languages) {
         if (-not [string]::IsNullOrWhiteSpace($ProvidersRoot)) { $args += @('--providers-root',$ProvidersRoot) }
         # Provider stderr contains expected external-header diagnostics in C/C++
         # fixtures; the bridge status and resulting index are the gate signals.
-        & $bridgePath @args 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) { throw "Bridge failed for $languageId/$($packRef.id)" }
+        $bridgeErrorAction = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        & $bridgePath @args 2>&1 | Out-Null
+        $bridgeExitCode = $LASTEXITCODE
+        $ErrorActionPreference = $bridgeErrorAction
+        if ($bridgeExitCode -ne 0 -or -not (Test-Path $out)) { throw "Bridge failed for $languageId/$($packRef.id)" }
         $result = Get-Content $out -Raw | ConvertFrom-Json
         $languageResult = @($result.languages | Where-Object id -eq $languageId) | Select-Object -First 1
         if ($null -eq $languageResult -or $languageResult.status -ne 'indexed') {
@@ -1086,6 +1103,20 @@ foreach ($languageId in $languages) {
         if ($null -eq $pack -or $pack.status -ne 'detected') { throw "$languageId/$($packRef.id) was not detected" }
         foreach ($factKind in @($packFixture.expected.facts)) {
             $facts = @($pack.facts | Where-Object kind -eq $factKind)
+            if ($facts.Count -eq 0) {
+                # Java component packs intentionally canonicalize duplicate facts
+                # across Spring/Spring Boot. Accept the canonical owner only when
+                # its source file is one of this pack's detected files.
+                $facts = @(
+                    $result.frameworks |
+                        Where-Object { $_.language -eq $languageId } |
+                        ForEach-Object { $_.facts } |
+                        Where-Object {
+                            $_.kind -eq $factKind -and
+                            $pack.files -contains $_.source_file
+                        }
+                )
+            }
             if ($facts.Count -eq 0) { throw "$languageId/$($packRef.id) did not emit $factKind" }
             if ($factKind -eq 'HTTP_ROUTE' -and @($facts | Where-Object {
                     [string]::IsNullOrWhiteSpace([string]$_.method) -or

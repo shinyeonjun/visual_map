@@ -125,10 +125,39 @@ pub(crate) struct EdgeDraft {
 pub(crate) struct ArchitectureOutput {
     pub(crate) schema: &'static str,
     pub(crate) project_root: String,
+    pub(crate) languages: Vec<ArchitectureLanguageSummary>,
+    pub(crate) frameworks: Vec<ArchitectureFrameworkSummary>,
     pub(crate) nodes: Vec<ArchitectureNode>,
     pub(crate) edges: Vec<ArchitectureEdge>,
     pub(crate) flows: Vec<ArchitectureFlow>,
     pub(crate) diagnostics: Vec<ArchitectureDiagnostic>,
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct ArchitectureLanguageSummary {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) provider: String,
+    pub(crate) files_found: usize,
+    pub(crate) files_indexed: usize,
+    pub(crate) files_excluded: usize,
+    pub(crate) files_missing: usize,
+    pub(crate) status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) exclusion_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) exclusion_scope: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct ArchitectureFrameworkSummary {
+    pub(crate) id: String,
+    pub(crate) language: String,
+    pub(crate) name: String,
+    pub(crate) adapter: String,
+    pub(crate) status: String,
+    pub(crate) fact_count: usize,
+    pub(crate) relation_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -183,4 +212,8 @@ pub(crate) struct ArchitectureDiagnostic {
     pub(crate) kind: String,
     pub(crate) path: Option<String>,
     pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) exclusion_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) exclusion_scope: Option<String>,
 }

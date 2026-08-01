@@ -307,6 +307,43 @@
   font-size: 9.5px;
   font-weight: 850;
 }
+
+.code-quality-details {
+  margin: 8px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-inset);
+  color: var(--ink-3);
+  font-size: 11px;
+}
+.code-quality-details.ready { border-color: color-mix(in srgb, var(--green) 30%, var(--line)); }
+.code-quality-details.warn { border-color: color-mix(in srgb, var(--orange) 42%, var(--line)); }
+.code-quality-details summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  cursor: pointer;
+  list-style: none;
+}
+.code-quality-details summary::-webkit-details-marker { display: none; }
+.code-quality-details summary b { color: var(--ink-2); }
+.code-quality-details summary span { text-align: right; color: var(--ink-4); }
+.code-quality-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 9px 8px;
+}
+.code-quality-list span {
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--ink-3);
+}
+.code-quality-list span.ready { color: var(--green); }
+.code-quality-list span.warn { color: var(--orange); }
+.code-quality-list span.excluded { color: var(--blue-ink); }
 .source-stat-grid em {
   font-family: var(--mono);
   font-size: 10.5px;

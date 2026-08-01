@@ -1,6 +1,7 @@
 import { Code2, RefreshCw } from "lucide-react";
 import { useEffect, useRef } from "react";
 import {
+  codeInventoryAnalysisQuality,
   codeInventoryFileCount,
   codeInventoryItemCount,
   codeInventoryRouteCount,
@@ -21,6 +22,11 @@ export function CodeSourceSection({
     code: codeInventorySymbolCount(codeInventory),
     files: codeInventoryFileCount(codeInventory),
   };
+  const analysisQuality = codeInventoryAnalysisQuality(codeInventory);
+  const qualityWarning = Boolean(
+    analysisQuality &&
+      (analysisQuality.partialLanguages > 0 || analysisQuality.failedLanguages > 0 || codeInventory?.partial),
+  );
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
   const hasCodeInventory = Boolean(codeInventory);
   const hasCodeItems = codeInventoryItemCount(codeInventory) > 0;
@@ -85,6 +91,38 @@ export function CodeSourceSection({
           </span>
         </div>
       )}
+      {analysisQuality && (
+        <details className={`code-quality-details ${qualityWarning ? "warn" : "ready"}`} data-code-quality>
+          <summary>
+            <b>분석 품질</b>
+            <span>
+              언어 {analysisQuality.indexedLanguages}/{analysisQuality.languages.length} · 프레임워크 {analysisQuality.detectedFrameworks}/{analysisQuality.frameworks.length}
+            </span>
+          </summary>
+          <div className="code-quality-list">
+            {analysisQuality.languages.map((language) => {
+              const tone = language.status === "indexed"
+                ? "ready"
+                : language.status === "excluded"
+                  ? "excluded"
+                  : "warn";
+              const reason = language.exclusionReason ? analysisReasonLabel(language.exclusionReason) : undefined;
+              const scope = language.exclusionScope ? analysisScopeLabel(language.exclusionScope) : undefined;
+              const detail = [analysisStatusLabel(language.status), scope, reason].filter(Boolean).join(" · ");
+              return (
+                <span key={language.id} className={tone} title={detail}>
+                  {language.name} · {detail}
+                </span>
+              );
+            })}
+            {analysisQuality.frameworks.map((framework) => (
+              <span key={framework.id} className={framework.status === "detected" ? "ready" : "warn"}>
+                {framework.name} · {analysisStatusLabel(framework.status)} · 근거 {framework.factCount}
+              </span>
+            ))}
+          </div>
+        </details>
+      )}
       {!hasWorkspace ? null : (
         <>
           {hasCodeItems ? (
@@ -115,6 +153,50 @@ export function CodeSourceSection({
       )}
     </section>
   );
+}
+
+function analysisStatusLabel(status: string): string {
+  switch (status) {
+    case "indexed":
+    case "detected":
+      return "정상";
+    case "indexed-partial":
+      return "부분";
+    case "excluded":
+      return "제외";
+    default:
+      return status || "확인 필요";
+  }
+}
+
+function analysisReasonLabel(reason: string): string {
+  switch (reason) {
+    case "test-only":
+      return "테스트 전용";
+    case "missing-dependency":
+      return "의존성 메타데이터 없음";
+    case "missing-compile-context":
+      return "컴파일 정보 없음";
+    case "unsupported-framework":
+      return "지원되지 않는 프레임워크";
+    case "runtime-reachability-unknown":
+      return "실행 경로 확인 불가";
+    default:
+      return `제외 사유: ${reason}`;
+  }
+}
+
+function analysisScopeLabel(scope: string): string {
+  switch (scope) {
+    case "language":
+      return "언어 범위";
+    case "file":
+      return "파일 범위";
+    case "fact":
+      return "근거 범위";
+    default:
+      return `범위: ${scope}`;
+  }
 }
 
 function codeNextAction(

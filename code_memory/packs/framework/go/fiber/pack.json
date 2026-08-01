@@ -5,7 +5,7 @@
   "name": "Fiber",
   "kind": "web",
   "signals": [
-    "github.com/gofiber/fiber",
+    "package:github.com/gofiber/fiber",
     "fiber.New",
     "app.Get"
   ],

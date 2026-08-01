@@ -2,6 +2,24 @@ use super::*;
 use crate::{DocumentOutput, OccurrenceOutput};
 
 #[test]
+fn angular_service_evidence_does_not_promote_component_decorators() {
+    let pack = FrameworkPack {
+        id: "angular".to_string(),
+        language: "javascript".to_string(),
+        name: "Angular".to_string(),
+        kind: "web".to_string(),
+        signals: vec![],
+        outputs: vec!["SERVICE".to_string()],
+        rules: vec!["SERVICE".to_string()],
+        adapter: "component-events".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+
+    assert!(output_evidence(&pack, "SERVICE", "@Component({ selector: 'app-root' })").is_none());
+    assert!(output_evidence(&pack, "SERVICE", "export class UserService {}").is_some());
+}
+
+#[test]
 fn route_parser_covers_registration_and_annotation_shapes() {
     let pack = FrameworkPack {
         id: "test".to_string(),
@@ -36,6 +54,8 @@ fn route_parser_covers_registration_and_annotation_shapes() {
         ("routes = [Route(\"/x\", handler)]", "ANY"),
         ("router.route(\"/x\", get(handler));", "GET"),
         ("CROW_ROUTE(app, \"/x\");", "ANY"),
+        ("ADD_METHOD_TO(handler, \"/x\", Get);", "GET"),
+        ("METHOD_ADD(handler, \"/x\", Post);", "POST"),
         ("get \"/x\", to: \"health\"", "GET"),
         ("@GetMapping(\"/x\") void health() {}", "GET"),
         ("#[get(\"/x\")] fn health() {}", "GET"),
@@ -50,6 +70,46 @@ fn route_parser_covers_registration_and_annotation_shapes() {
         assert_eq!(facts[0].method.as_deref(), Some(method));
         assert_eq!(facts[0].path.as_deref(), Some("/x"));
     }
+}
+
+#[test]
+fn csharp_minimal_api_accepts_handler_first_extension_overloads() {
+    assert_eq!(
+        minimal_api_route_call("groupBuilder.MapPost(CreateTodoList, \"{id}\");"),
+        Some(("{id}".to_string(), Some("CreateTodoList".to_string()), 44,))
+    );
+    assert_eq!(
+        minimal_api_route_call("groupBuilder.MapGet(GetWeatherForecasts);"),
+        Some((String::new(), Some("GetWeatherForecasts".to_string()), 40,))
+    );
+    assert_eq!(
+        minimal_api_route_call("builder.MapGet(pattern, handler);"),
+        None
+    );
+}
+
+#[test]
+fn csharp_minimal_api_group_prefix_requires_explicit_discovery_convention() {
+    let sources = [
+        (
+            "src/Web/Infrastructure/WebApplicationExtensions.cs",
+            "type.GetProperty(nameof(IEndpointGroup.RoutePrefix))?.GetValue(null) as string ?? $\"/api/{groupName}\";\nlet group = app.MapGroup(routePrefix);",
+        ),
+        (
+            "src/Web/Endpoints/TodoLists.cs",
+            "public class TodoLists : IEndpointGroup { public static void Map(RouteGroupBuilder groupBuilder) {} }",
+        ),
+    ];
+    let refs = sources
+        .iter()
+        .map(|(path, source)| (*path, *source))
+        .collect::<Vec<_>>();
+    let context = build_minimal_api_route_context(&refs);
+
+    assert_eq!(
+        context.get("src/Web/Endpoints/TodoLists.cs"),
+        Some(&"/api/TodoLists".to_string())
+    );
 }
 
 #[test]
@@ -83,6 +143,36 @@ app.get(
     assert_eq!(facts[0].path.as_deref(), Some("/real"));
     assert_eq!(facts[0].source_line, 7);
     assert_eq!(facts[0].source_end_line, 10);
+}
+
+#[test]
+fn javascript_router_get_path_is_preserved_after_string_filtering() {
+    let pack = FrameworkPack {
+        id: "express".to_string(),
+        language: "typescript".to_string(),
+        name: "Express".to_string(),
+        kind: "web".to_string(),
+        signals: vec![],
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "registration-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = r#"
+const example = "router.get('/string-only', handler)";
+const router = Router();
+router.get("/users/:id", handler);
+"#;
+    let mut facts = Vec::new();
+    extract_routes(&pack, "src/routes.ts", source, &[], None, &mut facts);
+
+    let routes = facts
+        .iter()
+        .filter(|fact| fact.kind == "HTTP_ROUTE")
+        .collect::<Vec<_>>();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].method.as_deref(), Some("GET"));
+    assert_eq!(routes[0].path.as_deref(), Some("/users/:id"));
 }
 
 #[test]
@@ -248,6 +338,38 @@ fn fastapi_nested_router_prefix_and_handler_resolve() {
     assert_eq!(
         facts[0].symbol.as_deref(),
         Some("lsp . . . context.catalog.py#list_accounts@2:4")
+    );
+}
+
+#[test]
+fn fastapi_package_router_import_and_static_mount_prefix_resolve() {
+    let sources = [
+        (
+            "app/main.py".to_string(),
+            "from app.api.main import api_router\nfrom app.core.config import settings\napp.include_router(api_router, prefix=settings.API_V1_STR)\n".to_string(),
+        ),
+        (
+            "app/api/main.py".to_string(),
+            "from app.api.routes import items\napi_router = APIRouter()\napi_router.include_router(items.router)\n".to_string(),
+        ),
+        (
+            "app/api/routes/items.py".to_string(),
+            "router = APIRouter(prefix=\"/items\")\n@router.get(\"/\")\ndef list_items(): pass\n".to_string(),
+        ),
+        (
+            "app/core/config.py".to_string(),
+            "class Settings:\n    API_V1_STR: str = \"/api/v1\"\nsettings = Settings()\n".to_string(),
+        ),
+    ];
+    let source_refs: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect();
+    let context = build_fastapi_route_context(&source_refs);
+
+    assert_eq!(
+        context.prefix_for("app/api/routes/items.py", "@router.get(\"/\")"),
+        Some("/api/v1/items")
     );
 }
 
@@ -787,6 +909,92 @@ fn registration_handler_reference_uses_the_rightmost_provider_target() {
 }
 
 #[test]
+fn indexed_method_resolution_ignores_typescript_parameter_symbols() {
+    let method = "scip-typescript npm app 1.0.0 src/auth.controller.ts/AuthController#login().";
+    let parameter =
+        "scip-typescript npm app 1.0.0 src/auth.controller.ts/AuthController#login().(loginDto)";
+    let documents = vec![DocumentOutput {
+        language: "typescript".to_string(),
+        path: "src/auth.controller.ts".to_string(),
+        symbols: Vec::new(),
+        occurrences: vec![
+            OccurrenceOutput {
+                symbol: method.to_string(),
+                range: vec![42, 9, 42, 14],
+                enclosing_range: Vec::new(),
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            },
+            OccurrenceOutput {
+                symbol: parameter.to_string(),
+                range: vec![42, 23, 42, 31],
+                enclosing_range: Vec::new(),
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            },
+        ],
+    }];
+    let index = build_framework_symbol_index(&documents);
+
+    assert_eq!(
+        resolve_symbol_indexed(&index, "src/auth.controller.ts", "login").as_deref(),
+        Some(method)
+    );
+    assert_eq!(
+        resolve_symbol_in_file_indexed(&index, "src/auth.controller.ts", "login", 42).as_deref(),
+        Some(method)
+    );
+}
+
+#[test]
+fn go_registration_resolves_receiver_method_over_generated_name_collision() {
+    let source = "package api\n\nfunc (server *Server) setupRouter() {\n\trouter.POST(\"/users\", server.createUser)\n}\n";
+    assert_eq!(
+        go_registration_receiver_type(source, 3).as_deref(),
+        Some("Server")
+    );
+    let documents = vec![
+        DocumentOutput {
+            language: "go".to_string(),
+            path: "api/user.go".to_string(),
+            symbols: Vec::new(),
+            occurrences: vec![OccurrenceOutput {
+                symbol: "lsp . . . api.user.go#(*Server).createUser@10:22".to_string(),
+                range: vec![9, 0, 12, 1],
+                enclosing_range: Vec::new(),
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            }],
+        },
+        DocumentOutput {
+            language: "go".to_string(),
+            path: "db/sqlc/user.sql.go".to_string(),
+            symbols: Vec::new(),
+            occurrences: vec![OccurrenceOutput {
+                symbol: "lsp . . . db.sqlc.user.sql.go#createUser@31:6".to_string(),
+                range: vec![30, 0, 30, 1],
+                enclosing_range: Vec::new(),
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            }],
+        },
+    ];
+    let index = build_framework_symbol_index(&documents);
+    assert_eq!(
+        resolve_go_method_indexed(&index, "createUser", "Server").as_deref(),
+        Some("lsp . . . api.user.go#(*Server).createUser@10:22")
+    );
+}
+
+#[test]
 fn ambiguous_cross_file_name_does_not_create_a_framework_target() {
     let documents = vec![
         DocumentOutput {
@@ -1266,6 +1474,119 @@ module.exports = router;
 }
 
 #[test]
+fn framework_facts_mark_test_scope_without_hiding_it() {
+    let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-framework-test-scope-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("tests")).unwrap();
+    fs::write(
+        root.join("package.json"),
+        r#"{"dependencies":{"express":"4.21.0"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/routes.js"),
+        "const express = require('express');\nconst app = express();\napp.get('/live', handler);\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("tests/routes.test.js"),
+        "const express = require('express');\nconst app = express();\napp.get('/fixture', handler);\nconst testUrl = 'href=\\\"https://example.test/url-only\\\"' + configUtils.config.get('url');\n",
+    )
+    .unwrap();
+
+    let analysis = analyze(&root, &[], pack_root).unwrap();
+    let express = analysis
+        .frameworks
+        .iter()
+        .find(|item| item.id == "express")
+        .expect("Express framework");
+    let production = express
+        .facts
+        .iter()
+        .find(|fact| fact.source_file == "src/routes.js")
+        .expect("production route");
+    let test = express
+        .facts
+        .iter()
+        .find(|fact| fact.source_file == "tests/routes.test.js")
+        .expect("test route");
+    assert!(!production.properties.contains_key("isTest"));
+    assert_eq!(
+        test.properties.get("source_scope").map(String::as_str),
+        Some("test")
+    );
+    assert_eq!(
+        test.properties.get("isTest").map(String::as_str),
+        Some("true")
+    );
+    assert!(express
+        .facts
+        .iter()
+        .all(|fact| fact.path.as_deref() != Some("/url-only")));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn rack_does_not_claim_rails_route_files() {
+    let pack = FrameworkPack {
+        id: "rack".to_string(),
+        language: "ruby".to_string(),
+        name: "Rack".to_string(),
+        kind: "web".to_string(),
+        signals: vec![],
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "registration-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let empty = HashSet::new();
+    assert!(!pack_owns_routes(
+        &pack,
+        "config/routes.rb",
+        "get '/users', to: 'users#index'",
+        &empty,
+        &empty,
+        &empty,
+    ));
+    assert!(pack_owns_routes(
+        &pack,
+        "config.ru",
+        "require 'rack'\nrun App",
+        &empty,
+        &empty,
+        &empty,
+    ));
+    assert!(!pack_owns_routes(
+        &pack,
+        "app/controller.rb",
+        "map = DEFAULT_PAGES\ndef run\n  work\nend",
+        &empty,
+        &empty,
+        &empty,
+    ));
+
+    let source = "require 'rack'\nmap '/users' do\n  run UsersApp\nend\n";
+    assert!(pack_owns_routes(
+        &pack,
+        "config.ru",
+        source,
+        &empty,
+        &empty,
+        &empty,
+    ));
+    let mut facts = Vec::new();
+    extract_routes(&pack, "config.ru", source, &[], None, &mut facts);
+    assert!(facts
+        .iter()
+        .any(|fact| fact.kind == "HTTP_ROUTE" && fact.path.as_deref() == Some("/users")));
+}
+
+#[test]
 fn framework_signals_inside_comments_do_not_activate_a_pack() {
     let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let temp = std::env::temp_dir().join(format!(
@@ -1419,6 +1740,35 @@ fn every_declared_shared_rule_has_an_evidence_pattern() {
 }
 
 #[test]
+fn go_grpc_rpc_endpoint_requires_registration_shape() {
+    let pack = FrameworkPack {
+        id: "grpc".to_string(),
+        language: "go".to_string(),
+        name: "gRPC".to_string(),
+        kind: "rpc".to_string(),
+        signals: vec!["package:google.golang.org/grpc".to_string()],
+        outputs: vec!["RPC_ENDPOINT".to_string()],
+        rules: vec!["RPC_ENDPOINT".to_string()],
+        adapter: "rpc-service".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    assert!(output_evidence(
+        &pack,
+        "RPC_ENDPOINT",
+        "pb.RegisterSimpleBankServer(grpcServer, server)",
+    )
+    .is_some());
+    assert!(output_evidence(
+        &pack,
+        "RPC_ENDPOINT",
+        "server_builder.RegisterService(&service)",
+    )
+    .is_some());
+    assert!(output_evidence(&pack, "RPC_ENDPOINT", "grpcServer := grpc.NewServer()").is_none());
+    assert!(output_evidence(&pack, "RPC_ENDPOINT", "reflection.Register(grpcServer)").is_none());
+}
+
+#[test]
 fn every_declared_pack_has_an_executable_shared_rule() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let packs = load_packs(root).expect("framework packs should load");
@@ -1433,6 +1783,10 @@ fn every_declared_pack_has_an_executable_shared_rule() {
                     "await invoke(\"command\")"
                 } else if pack.id == "tauri" && pack.language == "rust" && rule == "RPC_ENDPOINT" {
                     "#[tauri::command]"
+                } else if pack.id == "grpc" && pack.language == "go" && rule == "RPC_ENDPOINT" {
+                    "server_builder.RegisterService(&service)"
+                } else if pack.id == "api-platform" && rule == "SCHEMA" {
+                    "#[ApiResource] class UserResource {}"
                 } else {
                     representative_line(rule)
                 };
@@ -1734,6 +2088,43 @@ export class CatsController {
 }
 
 #[test]
+fn nestjs_route_handler_binds_to_the_next_controller_method() {
+    let lines = vec![
+        "@Post('email/register')",
+        "@HttpCode(HttpStatus.NO_CONTENT)",
+        "async register(dto: RegisterDto): Promise<void> {",
+        "  return this.service.register(dto);",
+        "}",
+    ];
+    assert_eq!(
+        nestjs_handler_name(
+            &lines,
+            0,
+            "@Post('email/register')\n@HttpCode(HttpStatus.NO_CONTENT)"
+        ),
+        Some("register".to_string())
+    );
+    assert_eq!(
+        nestjs_handler_name(&["@Get() handler() {}"], 0, "@Get() handler() {}"),
+        Some("handler".to_string())
+    );
+    assert_eq!(
+        nestjs_handler_name(
+            &[
+                "@Post('email/login')",
+                "@ApiOkResponse({",
+                "  type: LoginResponseDto,",
+                "})",
+                "public login(dto: LoginDto) {}",
+            ],
+            0,
+            "@Post('email/login')",
+        ),
+        Some("login".to_string())
+    );
+}
+
+#[test]
 fn django_and_rails_routes_accept_framework_native_relative_paths() {
     let route_pack = |id: &str, language: &str| FrameworkPack {
         id: id.to_string(),
@@ -1762,6 +2153,14 @@ fn django_and_rails_routes_accept_framework_native_relative_paths() {
             .filter_map(|fact| fact.path.as_deref())
             .collect::<Vec<_>>(),
         vec!["/", "/users/<int:user_id>/"]
+    );
+    assert_eq!(
+        route_registration_handler("django", "path(\"/fixture\", handler)"),
+        Some("handler".to_string())
+    );
+    assert_eq!(
+        route_registration_handler("starlette", "Route(\"/fixture\", handler)"),
+        Some("handler".to_string())
     );
 
     let mut rails = Vec::new();
@@ -1931,6 +2330,57 @@ fn java_dependency_facts_require_injection_context() {
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(dependencies, vec!["WebClient".to_string()]);
+}
+
+#[test]
+fn java_rest_controller_constructor_with_multiple_dependencies_is_detected() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let spring = load_packs(root)
+        .expect("framework packs should load")
+        .into_iter()
+        .find(|pack| pack.id == "spring")
+        .expect("spring pack");
+    let source = "@RequestMapping(\"/owners\")\n@RestController\n@Timed(\"petclinic.owner\")\nclass OwnerResource {\n    private final OwnerRepository ownerRepository;\n    private final OwnerEntityMapper ownerEntityMapper;\n\n    OwnerResource(OwnerRepository ownerRepository, OwnerEntityMapper ownerEntityMapper) {\n        this.ownerRepository = ownerRepository;\n        this.ownerEntityMapper = ownerEntityMapper;\n    }\n}\n";
+    let class_symbol = "lsp . . . src.OwnerResource.java#OwnerResource@3:6";
+    let documents = vec![DocumentOutput {
+        language: "java".to_string(),
+        path: "src/OwnerResource.java".to_string(),
+        symbols: Vec::new(),
+        occurrences: vec![OccurrenceOutput {
+            symbol: class_symbol.to_string(),
+            range: vec![2, 0, 2, 20],
+            enclosing_range: Vec::new(),
+            definition: true,
+            import: false,
+            read: false,
+            write: false,
+        }],
+    }];
+    let mut facts = Vec::new();
+    extract_generic_facts(
+        &spring,
+        "src/OwnerResource.java",
+        source,
+        &documents,
+        &mut facts,
+    );
+    let dependencies = facts
+        .iter()
+        .filter(|fact| fact.kind == "DEPENDENCY")
+        .filter_map(|fact| fact.properties.get("target"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        dependencies,
+        vec![
+            "OwnerRepository".to_string(),
+            "OwnerEntityMapper".to_string(),
+        ]
+    );
+    assert!(facts
+        .iter()
+        .filter(|fact| fact.kind == "DEPENDENCY")
+        .all(|fact| fact.symbol.as_deref() == Some(class_symbol)));
 }
 
 #[test]

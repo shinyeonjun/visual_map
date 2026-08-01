@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import type { ApiReadingAnswer, ApiReadingStep, VisualMap, VisualNode } from "../../types/visual-map";
+import { ApiConnectionView } from "./ApiReadingPath";
 import { buildApiConnectionModel } from "./apiConnectionModel";
 
 describe("buildApiConnectionModel", () => {
@@ -16,6 +18,54 @@ describe("buildApiConnectionModel", () => {
     expect(model.primaryDatabase?.node.id).toBe("db:table:public.sessions");
     expect(model.primaryDatabase?.edge.from).toBe("code:repository");
     expect(model.additionalEdges.map((edge) => edge.id)).toEqual(["calls-side"]);
+  });
+
+  it("renders additional relationships as selectable source-to-target connections", () => {
+    const onSelectNode = vi.fn();
+    const onSelectEdge = vi.fn();
+    render(
+      <ApiConnectionView
+        answer={answer}
+        map={map}
+        selectedNodeId={null}
+        selectedEdgeId={null}
+        dbTables={[]}
+        onSelectNode={onSelectNode}
+        onSelectEdge={onSelectEdge}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "/api/v1/sessions 연결 지도" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Service / Function auditSessionRead 선택" }));
+    expect(onSelectNode).toHaveBeenCalledWith(nodes[4]);
+
+    fireEvent.click(screen.getByRole("button", { name: "listSessions CALLS auditSessionRead 근거 보기" }));
+    expect(onSelectEdge).toHaveBeenCalledWith(map.edges[3]);
+  });
+
+  it("lays multiple fan-out relationships into the same connection canvas", () => {
+    const secondBranch = node("code:side-two", "emitAuditEvent", "function");
+    const fanoutMap: VisualMap = {
+      ...map,
+      nodes: [...map.nodes, secondBranch],
+      edges: [...map.edges, edge("calls-side-two", "code:handler", "code:side-two", "code_call")],
+    };
+
+    render(
+      <ApiConnectionView
+        answer={answer}
+        map={fanoutMap}
+        selectedNodeId={null}
+        selectedEdgeId={null}
+        dbTables={[]}
+        onSelectNode={vi.fn()}
+        onSelectEdge={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Service / Function auditSessionRead 선택" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Service / Function emitAuditEvent 선택" })).toBeInTheDocument();
+    expect(document.querySelectorAll(".api-edge-line.confirmed")).toHaveLength(5);
   });
 });
 

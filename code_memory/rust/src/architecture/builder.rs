@@ -781,6 +781,9 @@ impl ArchitectureBuilder {
                 let mut properties = fact.properties.clone();
                 properties.insert("framework".to_string(), framework.id.clone());
                 if fact.kind == "HTTP_ROUTE" {
+                    properties
+                        .entry("runtime_reachability".to_string())
+                        .or_insert_with(|| "not-assessed".to_string());
                     if let Some(method) = &fact.method {
                         properties.insert("method".to_string(), method.clone());
                         properties.insert("routeMethod".to_string(), method.clone());
@@ -892,8 +895,10 @@ impl ArchitectureBuilder {
     pub(crate) fn finish(self) -> ArchitectureOutput {
         let flows = self.build_flows();
         ArchitectureOutput {
-            schema: "code-memory.architecture-index.v1",
+            schema: "code-memory.architecture-index.v2",
             project_root: self.root,
+            languages: Vec::new(),
+            frameworks: Vec::new(),
             nodes: self.nodes.into_values().collect(),
             edges: self.edges.into_values().collect(),
             flows,

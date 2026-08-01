@@ -5,7 +5,7 @@
   "name": "gRPC",
   "kind": "rpc",
   "signals": [
-    "google.golang.org/grpc",
+    "package:google.golang.org/grpc",
     "grpc.NewServer",
     "Register"
   ],

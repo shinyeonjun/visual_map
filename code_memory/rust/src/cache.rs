@@ -83,7 +83,7 @@ pub(crate) fn architecture_cache_key(
     // Bump this whenever architecture projection behavior changes. The
     // serialized language index can stay identical while the Visual Map
     // projection changes (for example, preserving an unresolved route node).
-    checksum_update(&mut hash, b"code-memory-architecture-cache.v17");
+    checksum_update(&mut hash, b"code-memory-architecture-cache.v20");
     hash_current_executable(&mut hash, b"architecture-executable");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, pack_root.to_string_lossy().as_bytes());

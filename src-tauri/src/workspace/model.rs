@@ -1,5 +1,6 @@
 use crate::engine;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -203,10 +204,56 @@ pub(crate) struct CodeHandle {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodeInventoryGap {
+    #[serde(default)]
+    pub id: String,
     pub kind: String,
     pub from: String,
     pub to: String,
     pub message: String,
+}
+
+impl CodeInventoryGap {
+    pub(crate) fn new(
+        kind: impl Into<String>,
+        from: impl Into<String>,
+        to: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        let kind = kind.into();
+        let from = from.into();
+        let to = to.into();
+        let message = message.into();
+        let mut digest = sha2::Sha256::new();
+        digest.update(kind.as_bytes());
+        digest.update([0]);
+        digest.update(from.as_bytes());
+        digest.update([0]);
+        digest.update(to.as_bytes());
+        digest.update([0]);
+        digest.update(message.as_bytes());
+        let digest = format!("{:x}", digest.finalize());
+        Self {
+            id: format!("gap:code-relation:{kind}:{from}->{to}:{}", &digest[..12]),
+            kind,
+            from,
+            to,
+            message,
+        }
+    }
+
+    pub(crate) fn stable_id(&self) -> String {
+        if self.id.trim().is_empty() {
+            Self::new(
+                self.kind.clone(),
+                self.from.clone(),
+                self.to.clone(),
+                self.message.clone(),
+            )
+            .id
+        } else {
+            self.id.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

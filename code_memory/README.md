@@ -72,6 +72,7 @@ declared packs with:
 ```powershell
 .\tests\gates\run-framework-pack-gate.ps1
 .\tests\gates\run-framework-semantic-gate.ps1
+.\tests\gates\run-uniform-core-quality-gate.ps1
 .\tests\gates\compare-index-to-source.ps1 -ProjectRoot D:\meeting-overlay-assistant
 cargo run --manifest-path rust\Cargo.toml -- framework-packs --root .
 cargo run --manifest-path rust\Cargo.toml -- framework-packs --root . --self-test

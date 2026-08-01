@@ -261,7 +261,98 @@ export type CodeInventory = {
   partial?: boolean;
 };
 
+type CodeAnalysisLanguage = {
+  id: string;
+  name: string;
+  provider: string;
+  filesFound: number;
+  filesIndexed: number;
+  filesExcluded: number;
+  filesMissing: number;
+  status: string;
+  exclusionReason?: string;
+  exclusionScope?: string;
+};
+
+type CodeAnalysisFramework = {
+  id: string;
+  language: string;
+  name: string;
+  adapter: string;
+  status: string;
+  factCount: number;
+  relationCount: number;
+};
+
+type CodeAnalysisQuality = {
+  languages: CodeAnalysisLanguage[];
+  frameworks: CodeAnalysisFramework[];
+  indexedLanguages: number;
+  partialLanguages: number;
+  failedLanguages: number;
+  detectedFrameworks: number;
+};
+
+export function codeInventoryAnalysisQuality(inventory: CodeInventory | null | undefined): CodeAnalysisQuality | null {
+  const architecture = inventory?.architecture;
+  if (!architecture || typeof architecture !== "object") {
+    return null;
+  }
+  const record = architecture as Record<string, unknown>;
+  const languages = readQualityArray(record.languages).map((value) => ({
+    id: readString(value, "id"),
+    name: readString(value, "name"),
+    provider: readString(value, "provider"),
+    filesFound: readNumber(value, "filesFound", "files_found"),
+    filesIndexed: readNumber(value, "filesIndexed", "files_indexed"),
+    filesExcluded: readNumber(value, "filesExcluded", "files_excluded"),
+    filesMissing: readNumber(value, "filesMissing", "files_missing"),
+    status: readString(value, "status"),
+    exclusionReason: readString(value, "exclusionReason", "exclusion_reason", "reason") || undefined,
+    exclusionScope: readString(value, "exclusionScope", "exclusion_scope") || undefined,
+  })).filter((language) => language.id && language.name);
+  const frameworks = readQualityArray(record.frameworks).map((value) => ({
+    id: readString(value, "id"),
+    language: readString(value, "language"),
+    name: readString(value, "name"),
+    adapter: readString(value, "adapter"),
+    status: readString(value, "status"),
+    factCount: readNumber(value, "factCount", "fact_count"),
+    relationCount: readNumber(value, "relationCount", "relation_count"),
+  })).filter((framework) => framework.id && framework.name);
+  if (languages.length === 0 && frameworks.length === 0) {
+    return null;
+  }
+  return {
+    languages,
+    frameworks,
+    indexedLanguages: languages.filter((language) => language.status === "indexed").length,
+    partialLanguages: languages.filter((language) => language.status === "indexed-partial").length,
+    failedLanguages: languages.filter((language) => !["indexed", "indexed-partial", "excluded"].includes(language.status)).length,
+    detectedFrameworks: frameworks.filter((framework) => framework.status === "detected").length,
+  };
+}
+
+function readQualityArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
+}
+
+function readString(value: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    if (typeof value[key] === "string") return value[key] as string;
+  }
+  return "";
+}
+
+function readNumber(value: Record<string, unknown>, ...keys: string[]): number {
+  for (const key of keys) {
+    if (typeof value[key] === "number" && Number.isFinite(value[key])) return value[key] as number;
+  }
+  return 0;
+}
+
 export type CodeInventoryGap = {
+  id?: string;
   kind: string;
   from: string;
   to: string;

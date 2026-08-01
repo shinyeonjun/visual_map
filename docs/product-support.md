@@ -14,9 +14,13 @@ Backend Visual Map separates three different claims:
 ## Code Support
 
 The bundled code engine is `code-memory-language 0.1.0`, with contract version
-`1`. Its supported language providers cover the product's fixed language set,
-but this product does not claim equal API, handler, and call-chain quality for
-every framework or project configuration.
+`1`. The active product language set is TypeScript, JavaScript, Python, Java,
+C#, C, C++, Go, Rust, PHP, Ruby, and Dart. Kotlin and Swift are target
+languages, not active supported languages, until their provider, framework pack,
+uniform core gate, and failure semantics are implemented together. The active
+set has one common core-quality gate, but framework/ORM end-to-end quality is
+still certified capability by capability rather than claimed for every project
+configuration.
 
 | Product validation set | Pinned fixture | Validated product fields |
 | --- | --- | --- |
@@ -58,14 +62,17 @@ created only when all of these are true:
 2. the inspected file is at most 2 MiB and the code range is at most 240 lines;
 3. a static SQL literal is the complete first argument to a recognized
    execution call, or is assigned to a local variable used as that complete
-   first argument;
+   first argument; the bounded C native calls `sqlite3_exec`,
+   `sqlite3_prepare_v2`, `mysql_query`, and `PQexec` use their documented
+   second SQL argument;
 4. the operation is `SELECT`, `INSERT`, `UPDATE`, `DELETE`, or `MERGE`;
 5. the referenced table resolves to exactly one indexed DB table;
 6. a column edge is emitted only for an explicit indexed column identifier.
 
 Recognized method calls must use a bounded DB receiver name such as
 `connection`, `cursor`, `jdbcTemplate`, `entityManager`, `session`, `client`,
-`pool`, `sequelize`, `prisma`, `knex`, or `sql`. MyBatis SQL annotations and
+`pool`, `sequelize`, `prisma`, `knex`, `pdo`, `mysqli`, `dbal`, or `sql`.
+MyBatis SQL annotations and
 `sqlx::query` are handled as explicit framework forms. Common explicit-SQL
 forms include Dapper query/execute methods, EF Core raw-SQL methods, Spring
 `JdbcTemplate`, and SQLAlchemy `session.execute(text("..."))`. Generic

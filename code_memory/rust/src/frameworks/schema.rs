@@ -30,6 +30,7 @@ pub(crate) struct FrameworkFixtureFile {
 #[derive(Default)]
 pub(crate) struct FastApiRouteContext {
     pub(crate) prefixes: HashMap<(String, String), String>,
+    pub(crate) minimal_prefixes: HashMap<String, String>,
 }
 
 impl FastApiRouteContext {
@@ -41,6 +42,10 @@ impl FastApiRouteContext {
         self.prefixes
             .get(&(path.to_string(), receiver.to_string()))
             .map(String::as_str)
+    }
+
+    pub(crate) fn minimal_prefix_for(&self, path: &str) -> Option<&str> {
+        self.minimal_prefixes.get(path).map(String::as_str)
     }
 }
 

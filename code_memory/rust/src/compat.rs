@@ -450,7 +450,9 @@ fn add_architecture_nodes(
             properties.get("routePath").and_then(Value::as_str),
             properties.get("routeMethod").and_then(Value::as_str),
             properties.get("signature").and_then(Value::as_str),
-            properties.get("isTest").and_then(Value::as_bool),
+            properties
+                .get("isTest")
+                .and_then(|value| value.as_bool().or_else(|| value.as_str()?.parse().ok())),
             None,
             None,
         ));

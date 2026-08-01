@@ -2,9 +2,9 @@ use super::*;
 use crate::{
     engine::{EngineAvailability, EngineRegistry, EngineRuntimeMode},
     workspace::{
-        CodeCall, CodeHandle, CodeInventory, CodeInventoryItem, CodeInventorySummary, DbConstraint,
-        DbDependentObject, DbForeignKey, DbIndex, DbInventory, DbInventoryColumn, DbInventoryTable,
-        DbProfile, DbSource, Workspace, WorkspaceEngineCache,
+        CodeCall, CodeHandle, CodeInventory, CodeInventoryGap, CodeInventoryItem,
+        CodeInventorySummary, DbConstraint, DbDependentObject, DbForeignKey, DbIndex, DbInventory,
+        DbInventoryColumn, DbInventoryTable, DbProfile, DbSource, Workspace, WorkspaceEngineCache,
     },
 };
 use std::{
@@ -477,6 +477,66 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
 }
 
 #[test]
+fn code_relation_gaps_keep_stable_ids_and_known_related_endpoints() {
+    let route = code_test_item(
+        "shop.routes.create_order",
+        "Route",
+        "POST /orders",
+        "src/routes/orders.rs",
+        12,
+        12,
+    );
+    let code = CodeInventory {
+        project: "shop".to_string(),
+        routes: vec![route],
+        services: Vec::new(),
+        files: Vec::new(),
+        handlers: Vec::new(),
+        repositories: Vec::new(),
+        functions: Vec::new(),
+        classes: Vec::new(),
+        modules: Vec::new(),
+        unknown: Vec::new(),
+        summary: CodeInventorySummary {
+            routes: 1,
+            handlers: 0,
+            services: 0,
+            repositories: 0,
+            functions: 0,
+            classes: 0,
+            modules: 0,
+            files: 0,
+            unknown: 0,
+        },
+        architecture: None,
+        calls: Vec::new(),
+        handles: Vec::new(),
+        relation_gaps: vec![CodeInventoryGap::new(
+            "unresolved-call",
+            "shop.routes.create_order",
+            "shop.services.missing",
+            "service endpoint was not indexed",
+        )],
+        partial: true,
+    };
+
+    let first = build_inventory_snapshot("workspace-1".to_string(), Some(&code), None);
+    let second = build_inventory_snapshot("workspace-1".to_string(), Some(&code), None);
+    let first_gap = first.metadata.gaps.first().unwrap();
+    let second_gap = second.metadata.gaps.first().unwrap();
+
+    assert_eq!(first_gap.id, second_gap.id);
+    assert_eq!(
+        first_gap.related_ids,
+        vec!["code:shop.routes.create_order".to_string()]
+    );
+    assert!(!first_gap
+        .related_ids
+        .iter()
+        .any(|id| id == "code:shop.services.missing"));
+}
+
+#[test]
 fn canonical_builder_splits_legacy_collapsed_route_bindings() {
     let route = code_test_item("__route__GET__/", "Route", "/", "", 1, 1);
     let first_handler = code_test_item(
@@ -589,7 +649,7 @@ fn snapshot_with_metadata_records_code_source() {
     assert_eq!(code.source_path.as_deref(), Some(r"D:\repo\shop-api"));
     assert_eq!(code.source_type, "local-folder");
     assert_eq!(code.engine_version.as_deref(), Some("0.1.0"));
-    assert_eq!(code.adapter_version.as_deref(), Some("4"));
+    assert_eq!(code.adapter_version.as_deref(), Some("5"));
     assert!(snapshot.stale_reasons.is_empty());
 }
 
@@ -3526,6 +3586,12 @@ fn api_flow_surfaces_snapshot_coverage_risks_and_reindex_action() {
             message: "unrelated item unavailable".to_string(),
             related_ids: vec!["code:function:unrelated".to_string()],
         },
+        super::model::SnapshotGap {
+            id: "global-provider-gap".to_string(),
+            kind: "code-provider-diagnostic".to_string(),
+            message: "Rust provider coverage is incomplete".to_string(),
+            related_ids: Vec::new(),
+        },
     ]);
     snapshot.metadata.db = Some(super::model::SnapshotSourceMetadata {
         saved_at: "1".to_string(),
@@ -3564,6 +3630,10 @@ fn api_flow_surfaces_snapshot_coverage_risks_and_reindex_action() {
     assert!(kinds.contains("stale"));
     assert!(kinds.contains("reindex"));
     assert!(kinds.contains("code-inventory-gap"));
+    assert!(answer
+        .unknowns
+        .iter()
+        .any(|item| item.detail.contains("Rust provider coverage is incomplete")));
     assert!(kinds.contains("db-inventory-truncated"));
     assert!(kinds.contains("db-limit-clamped"));
     assert!(!answer

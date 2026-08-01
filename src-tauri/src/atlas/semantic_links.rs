@@ -1301,6 +1301,11 @@ const EXECUTION_CALLS: &[&str] = &[
     ".fromsql",
     ".rawquery",
     ".raw",
+    "->query",
+    "sqlite3_exec",
+    "sqlite3_prepare_v2",
+    "mysql_query",
+    "pqexec",
     ".$executeraw",
     ".$queryraw",
     "sqlx::query",
@@ -1348,7 +1353,7 @@ fn direct_execution_call_accepts_literal(source: &str, literal: &StaticLiteral) 
             }
             match call_depth_at(&lower, open, literal_start) {
                 Some(1) => {
-                    lower[open + 1..literal_start].trim().is_empty()
+                    literal_is_execution_argument(&lower, open, literal_start, marker)
                         && literal_ends_as_direct_argument(&lower, literal_end, close)
                 }
                 Some(2) => static_sql_wrapper_accepts_literal(
@@ -1478,7 +1483,20 @@ fn trusted_execution_marker(source: &str, marker_start: usize, marker: &str) -> 
     if marker.starts_with('@') || marker.starts_with("sqlx::") {
         return true;
     }
-    let Some(receiver) = execution_receiver(source, marker_start) else {
+    if matches!(
+        marker,
+        "sqlite3_exec" | "sqlite3_prepare_v2" | "mysql_query" | "pqexec"
+    ) {
+        return source[..marker_start]
+            .chars()
+            .next_back()
+            .is_none_or(|character| {
+                !(character.is_ascii_alphanumeric()
+                    || matches!(character, '_' | '$' | '.' | ':' | '>'))
+            });
+    }
+    let receiver = execution_receiver(source, marker_start);
+    let Some(receiver) = receiver else {
         return false;
     };
     let receiver = receiver
@@ -1505,7 +1523,39 @@ fn trusted_execution_marker(source: &str, marker_start: usize, marker: &str) -> 
             | "prisma"
             | "knex"
             | "sql"
+            | "pdo"
+            | "mysqli"
+            | "dbal"
+            | "doctrine"
     )
+}
+
+fn literal_is_execution_argument(
+    source: &str,
+    call_open: usize,
+    literal_start: usize,
+    marker: &str,
+) -> bool {
+    let prefix = &source[call_open + 1..literal_start];
+    let mut depth = 0usize;
+    let mut commas = 0usize;
+    let bytes = prefix.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b'\'' | b'"' | b'`' => index = skip_quoted(bytes, index, bytes.len()),
+            b',' if depth == 0 => commas += 1,
+            _ => {}
+        }
+        index += 1;
+    }
+    let expected = usize::from(matches!(
+        marker,
+        "sqlite3_exec" | "sqlite3_prepare_v2" | "mysql_query" | "pqexec"
+    ));
+    commas == expected && (expected > 0 || prefix.trim().is_empty())
 }
 
 fn execution_receiver(source: &str, marker_start: usize) -> Option<&str> {
@@ -2135,6 +2185,120 @@ mod tests {
     }
 
     #[test]
+    fn confirms_static_sql_for_every_active_language_shape() {
+        let cases = [
+            ("typescript", r#"db.query("SELECT id FROM orders")"#),
+            ("javascript", r#"db.query("SELECT id FROM orders")"#),
+            (
+                "python",
+                r#"session.execute(text("SELECT id FROM orders"))"#,
+            ),
+            (
+                "java",
+                r#"jdbcTemplate.queryForObject("SELECT id FROM orders", mapper);"#,
+            ),
+            (
+                "csharp",
+                r#"connection.QuerySingleAsync<Order>("SELECT id FROM orders");"#,
+            ),
+            (
+                "c",
+                r#"sqlite3_exec(db, "SELECT id FROM orders", callback, 0, error);"#,
+            ),
+            (
+                "cpp",
+                r#"sqlite3_exec(db, "SELECT id FROM orders", callback, 0, error);"#,
+            ),
+            ("go", r#"db.Query("SELECT id FROM orders")"#),
+            ("rust", r##"sqlx::query!(r#"SELECT id FROM orders"#);"##),
+            ("php", r#"$pdo->query("SELECT id FROM orders");"#),
+            ("ruby", r#"connection.query("SELECT id FROM orders")"#),
+            ("dart", r#"db.query("SELECT id FROM orders");"#),
+        ];
+
+        let root = std::env::temp_dir().join(format!(
+            "backend-map-language-db-shapes-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+
+        for (language, source) in cases {
+            let result = analyze_source(source, "orders", None, &["id"], false);
+            assert_eq!(
+                result.len(),
+                1,
+                "static SQL should be confirmed for {language}: {source}"
+            );
+            assert_eq!(result[0].operation, QueryOperation::Select);
+            assert_eq!(result[0].columns, BTreeSet::from(["id".to_string()]));
+
+            let path = format!("src/{language}.source");
+            std::fs::write(root.join(&path), source).unwrap();
+            let code_id = format!("code:{language}:load");
+            let table_id = format!("db:table:{language}:orders");
+            let column_id = format!("db:column:{language}:orders:id");
+            let mut snapshot = InventorySnapshot {
+                schema_version: 2,
+                workspace_id: format!("workspace-{language}"),
+                saved_at: "1".to_string(),
+                metadata: Default::default(),
+                stale_reasons: Vec::new(),
+                links: Vec::new(),
+                items: vec![
+                    inventory_item(
+                        &code_id,
+                        "function",
+                        "load",
+                        "code",
+                        None,
+                        Some(&path),
+                        None,
+                    ),
+                    inventory_item(&table_id, "table", "orders", "db", None, None, None),
+                    inventory_item(
+                        &column_id,
+                        "column",
+                        "id",
+                        "db",
+                        Some(&table_id),
+                        None,
+                        None,
+                    ),
+                ],
+            };
+            snapshot.items[0].location = Some(super::super::model::SourceLocation {
+                path: path.clone(),
+                line: Some(1),
+                column: None,
+                end_line: Some(1),
+                end_column: None,
+            });
+            let count = apply_explicit_query_evidence_for_code(
+                &mut snapshot,
+                root.to_str().unwrap(),
+                std::slice::from_ref(&code_id),
+            );
+            assert_eq!(
+                count, 1,
+                "exact table join should be confirmed for {language}"
+            );
+            assert!(snapshot.links.iter().any(|link| {
+                link.from == code_id
+                    && link.to == table_id
+                    && link.kind == "code_db_read"
+                    && link.truth_class == "confirmed"
+            }));
+            assert!(snapshot.links.iter().any(|link| {
+                link.from == code_id
+                    && link.to == column_id
+                    && link.kind == "code_db_uses_column"
+                    && link.truth_class == "confirmed"
+            }));
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn rejects_dynamic_or_commented_sql() {
         assert!(analyze_source(
             r#"cursor.execute(f"SELECT id FROM {table_name}")"#,
@@ -2275,6 +2439,14 @@ mod tests {
     fn rejects_generic_receivers_and_reassigned_query_variables() {
         assert!(analyze_source(
             r#"logger.raw("SELECT id FROM orders")"#,
+            "orders",
+            None,
+            &["id"],
+            false,
+        )
+        .is_empty());
+        assert!(analyze_source(
+            r#"logger->query("SELECT id FROM orders")"#,
             "orders",
             None,
             &["id"],

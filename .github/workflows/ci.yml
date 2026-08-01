@@ -67,6 +67,18 @@ jobs:
       - name: Build integrated code engine candidate
         run: cargo +1.96.1 build --locked --release --manifest-path code_memory/rust/Cargo.toml
 
+      - name: Verify uniform language core quality
+        shell: pwsh
+        run: .\code_memory\tests\gates\run-uniform-core-quality-gate.ps1 -Bridge .\code_memory\rust\target\release\code-memory-language.exe
+
+      - name: Verify framework provider conformance
+        shell: pwsh
+        run: .\code_memory\tests\gates\run-framework-provider-gate.ps1 -Bridge .\code_memory\rust\target\release\code-memory-language.exe
+
+      - name: Verify framework flow conformance
+        shell: pwsh
+        run: .\code_memory\tests\gates\run-framework-flow-gate.ps1 -Bridge .\code_memory\rust\target\release\code-memory-language.exe
+
       - name: Build integrated database engine candidate
         run: cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path db_memory/Cargo.toml
 

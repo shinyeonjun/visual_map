@@ -20,6 +20,7 @@ export type TargetItem = {
   badge: string;
   title: string;
   meta: string;
+  sourcePath?: string | null;
   group?: string;
   focusId: string;
   mode: "api-flow" | "search-focus" | "table-usage" | "column-impact";
@@ -32,6 +33,14 @@ export type ApiTreeNode = {
   label: string;
   children: ApiTreeNode[];
   items: TargetItem[];
+};
+
+export type CodeTreeNode = {
+  key: string;
+  label: string;
+  children: CodeTreeNode[];
+  items: TargetItem[];
+  isFile: boolean;
 };
 
 const CODE_TARGET_RANK: Record<string, number> = {
@@ -86,6 +95,7 @@ export function buildTargetCatalog(
       badge: codeKindChip(item.kind),
       title: item.name,
       meta: sourceLocation(item.filePath, item.line),
+      sourcePath: item.filePath,
       group: CODE_TARGET_GROUP[item.kind.toLowerCase()] ?? "기타",
       focusId: `code:${item.id}`,
       mode: "search-focus",
@@ -138,6 +148,45 @@ export function buildApiTree(items: TargetItem[]): ApiTreeNode {
   return root;
 }
 
+export function buildCodeTree(items: TargetItem[]): CodeTreeNode {
+  const root: CodeTreeNode = { key: "root", label: "", children: [], items: [], isFile: false };
+
+  for (const item of items) {
+    let node = root;
+    const segments = codePathSegments(item.sourcePath);
+    segments.forEach((segment, index) => {
+      let child = node.children.find((candidate) => candidate.label === segment);
+      if (!child) {
+        child = {
+          key: `${node.key}/${segment}`,
+          label: segment,
+          children: [],
+          items: [],
+          isFile: index === segments.length - 1,
+        };
+        node.children.push(child);
+      }
+      node = child;
+    });
+    node.items.push(item);
+  }
+
+  sortCodeTree(root);
+  return root;
+}
+
+export function codePathSegments(filePath: string | null | undefined): string[] {
+  const value = filePath?.trim().replace(/\\/g, "/") ?? "";
+  if (!value) return ["소스 위치 없음"];
+  const segments = value.split("/").filter((segment) => segment && segment !== ".");
+  if (/^[A-Za-z]:$/.test(segments[0] ?? "")) segments.shift();
+  return segments.length > 0 ? segments : ["소스 위치 없음"];
+}
+
+export function countCodeTreeItems(node: CodeTreeNode): number {
+  return node.items.length + node.children.reduce((total, child) => total + countCodeTreeItems(child), 0);
+}
+
 export function apiPathSegments(title: string): string[] {
   const value = title.trim();
   const slashIndex = value.indexOf("/");
@@ -150,6 +199,15 @@ function sortApiTree(node: ApiTreeNode): void {
   node.children.sort((left, right) => left.label.localeCompare(right.label, "ko-KR", { numeric: true }));
   node.items.sort((left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
   for (const child of node.children) sortApiTree(child);
+}
+
+function sortCodeTree(node: CodeTreeNode): void {
+  node.children.sort((left, right) => Number(left.isFile) - Number(right.isFile)
+    || left.label.localeCompare(right.label, "ko-KR", { numeric: true }));
+  node.items.sort((left, right) => left.title.localeCompare(right.title, "ko-KR", { numeric: true })
+    || left.meta.localeCompare(right.meta, "ko-KR", { numeric: true })
+    || left.id.localeCompare(right.id));
+  for (const child of node.children) sortCodeTree(child);
 }
 
 function compareApiTargets(left: CodeInventory["routes"][number], right: CodeInventory["routes"][number]): number {

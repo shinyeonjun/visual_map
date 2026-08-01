@@ -470,6 +470,19 @@ fn semantic_call_detection_uses_source_range() {
 }
 
 #[test]
+fn ruby_member_call_detection_supports_implicit_parentheses() {
+    let source = "OrderService.new.create_order\n";
+    assert!(is_ruby_member_call_occurrence(
+        Some(source),
+        &[0, 17, 0, 29]
+    ));
+    assert!(!is_ruby_member_call_occurrence(
+        Some("create_order\n"),
+        &[0, 0, 0, 12]
+    ));
+}
+
+#[test]
 fn scip_numeric_language_uses_worker_language() {
     assert_eq!(normalize_scip_language("19", "php"), "php");
     assert_eq!(normalize_scip_language("", "rust"), "rust");

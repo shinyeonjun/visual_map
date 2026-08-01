@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    DocumentOutput, FileRelationOutput, IndexOutput, LanguageOutput, OccurrenceOutput,
+    Diagnostic, DocumentOutput, FileRelationOutput, IndexOutput, LanguageOutput, OccurrenceOutput,
     RelationOutput, SymbolOutput,
 };
 use std::collections::BTreeMap;
@@ -52,6 +52,74 @@ fn sample_output() -> IndexOutput {
         timings: Vec::new(),
         analysis_units: Vec::new(),
     }
+}
+
+#[test]
+fn excluded_language_reason_is_stable_for_ui_consumers() {
+    let diagnostics = vec![Diagnostic {
+        language: "php".to_string(),
+        level: "warning",
+        message:
+            "PHP semantic analysis skipped because Composer dependency metadata is unavailable"
+                .to_string(),
+        path: None,
+        line: None,
+    }];
+    assert_eq!(
+        language_exclusion_reason("php", "excluded", &diagnostics).as_deref(),
+        Some("missing-dependency")
+    );
+    assert_eq!(
+        language_exclusion_reason("php", "indexed", &diagnostics),
+        None
+    );
+}
+
+#[test]
+fn architecture_exposes_language_and_framework_quality_summary() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-architecture-quality-summary-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let mut output = sample_output();
+    output.frameworks.push(crate::frameworks::FrameworkOutput {
+        id: "fastapi".to_string(),
+        language: "python".to_string(),
+        name: "FastAPI".to_string(),
+        kind: "web".to_string(),
+        adapter: "registration-routing".to_string(),
+        status: "detected".to_string(),
+        matched_signals: vec!["app.get".to_string()],
+        files: vec!["app/routes.py".to_string()],
+        facts: vec![crate::frameworks::FrameworkFact {
+            id: "route:fastapi:app/routes.py:1:/health".to_string(),
+            kind: "HTTP_ROUTE".to_string(),
+            framework: "fastapi".to_string(),
+            symbol: None,
+            method: Some("GET".to_string()),
+            path: Some("/health".to_string()),
+            source_file: "app/routes.py".to_string(),
+            source_line: 1,
+            source_end_line: 1,
+            source_range: vec![0, 0, 0, 20],
+            evidence: vec!["app.get".to_string()],
+            properties: BTreeMap::new(),
+        }],
+    });
+
+    let architecture = build(&root, &output);
+
+    assert_eq!(architecture.schema, "code-memory.architecture-index.v2");
+    assert_eq!(architecture.languages[0].id, "python");
+    assert_eq!(architecture.languages[0].status, "indexed");
+    assert_eq!(architecture.frameworks[0].id, "fastapi");
+    assert_eq!(architecture.frameworks[0].fact_count, 1);
+    assert_eq!(architecture.frameworks[0].relation_count, 0);
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -120,6 +188,13 @@ fn unresolved_framework_route_is_kept_as_an_endpoint() {
             .get("handler_resolution")
             .map(String::as_str),
         Some("unresolved")
+    );
+    assert_eq!(
+        endpoint
+            .properties
+            .get("runtime_reachability")
+            .map(String::as_str),
+        Some("not-assessed")
     );
     assert!(!result.edges.iter().any(|edge| edge.kind == "ENTRYPOINT_TO"));
     let _ = fs::remove_dir_all(root);

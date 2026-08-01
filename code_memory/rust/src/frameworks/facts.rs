@@ -124,6 +124,25 @@ fn select_indexed_symbol(
     Some(best_symbol.clone())
 }
 
+fn select_indexed_definition(
+    index: &FrameworkSymbolIndex,
+    symbols: Option<&Vec<String>>,
+) -> Option<String> {
+    let symbols = symbols?;
+    // SCIP TypeScript emits parameter definitions as child symbols such as
+    // `login().(loginDto)`. They are not competing method implementations.
+    let method_symbols = symbols
+        .iter()
+        .filter(|symbol| !symbol.contains("().("))
+        .cloned()
+        .collect::<Vec<_>>();
+    if method_symbols.is_empty() {
+        select_indexed_symbol(index, Some(symbols))
+    } else {
+        select_indexed_symbol(index, Some(&method_symbols))
+    }
+}
+
 pub(crate) fn project_symbol_is_defined_indexed(
     index: &FrameworkSymbolIndex,
     symbol: &str,
@@ -137,7 +156,7 @@ pub(crate) fn resolve_symbol_indexed(
     name: &str,
 ) -> Option<String> {
     let short_name = symbol_short_name(name).to_string();
-    if let Some(symbol) = select_indexed_symbol(
+    if let Some(symbol) = select_indexed_definition(
         index,
         index
             .definitions_by_file_name
@@ -153,7 +172,7 @@ pub(crate) fn resolve_symbol_indexed(
     ) {
         return Some(symbol);
     }
-    select_indexed_symbol(index, index.definitions_by_name.get(&short_name))
+    select_indexed_definition(index, index.definitions_by_name.get(&short_name))
 }
 
 pub(crate) fn resolve_symbol_at_indexed(
@@ -163,7 +182,7 @@ pub(crate) fn resolve_symbol_at_indexed(
     source_line: usize,
 ) -> Option<String> {
     let short_name = symbol_short_name(name).to_string();
-    if let Some(symbol) = select_indexed_symbol(
+    if let Some(symbol) = select_indexed_definition(
         index,
         index.definitions_by_file_line_name.get(&(
             path.to_string(),
@@ -201,7 +220,7 @@ pub(crate) fn resolve_symbol_in_file_indexed(
     ) {
         return Some(symbol);
     }
-    if let Some(symbol) = select_indexed_symbol(
+    if let Some(symbol) = select_indexed_definition(
         index,
         index.definitions_by_file_line_name.get(&(
             path.to_string(),
@@ -219,7 +238,7 @@ pub(crate) fn resolve_symbol_in_file_indexed(
     ) {
         return Some(symbol);
     }
-    select_indexed_symbol(
+    select_indexed_definition(
         index,
         index
             .definitions_by_file_name
@@ -243,13 +262,37 @@ pub(crate) fn resolve_symbol_on_line_indexed(
         )),
     )
     .or_else(|| {
-        select_indexed_symbol(
+        select_indexed_definition(
             index,
             index
                 .definitions_by_file_line_name
                 .get(&(path.to_string(), source_line, short_name)),
         )
     })
+}
+
+pub(crate) fn resolve_go_method_indexed(
+    index: &FrameworkSymbolIndex,
+    name: &str,
+    receiver_type: &str,
+) -> Option<String> {
+    let short_name = symbol_short_name(name);
+    let candidates = index
+        .definitions_by_name
+        .get(short_name)?
+        .iter()
+        .filter(|symbol| go_method_receiver_type(symbol).as_deref() == Some(receiver_type))
+        .cloned()
+        .collect::<Vec<_>>();
+    select_indexed_symbol(index, Some(&candidates))
+}
+
+fn go_method_receiver_type(symbol: &str) -> Option<String> {
+    let (_, suffix) = symbol.rsplit_once('#')?;
+    let open = suffix.find('(')?;
+    let close = suffix[open..].find(").")? + open;
+    let receiver = suffix[open + 1..close].trim().trim_start_matches('*');
+    (!receiver.is_empty()).then(|| receiver.to_string())
 }
 
 pub(crate) fn project_definition_for_symbol_indexed(
@@ -297,6 +340,24 @@ pub(crate) fn output_evidence(pack: &FrameworkPack, output: &str, line: &str) ->
     if pack.id == "react" && output == "COMPONENT" {
         return react_component_evidence(line);
     }
+    if pack.id == "angular" && output == "SERVICE" {
+        // Angular components are not services. Keep the service fact tied to
+        // an actual service-shaped declaration so decorator-only lines cannot
+        // publish unresolved SERVICE facts.
+        return service_name_marker(line);
+    }
+    if pack.id == "vue" && output == "RENDERS" {
+        // defineComponent declares a component; it is not render evidence
+        // unless the line contains a template/render body.
+        return first_marker(line, &["template:", "render(", "return <"]);
+    }
+    if pack.id == "api-platform" && output == "SCHEMA" {
+        // API Platform schema facts require its resource declaration; a
+        // generic PHP \`Entity\` type is not an API Platform resource.
+        return line
+            .contains("ApiResource")
+            .then_some("ApiResource".to_string());
+    }
     if pack.id == "tauri" && output == "ASYNC_CALLS" {
         return line.contains("invoke(").then_some("invoke(".to_string());
     }
@@ -327,6 +388,17 @@ pub(crate) fn output_evidence(pack: &FrameworkPack, output: &str, line: &str) ->
     }
     if output == "RPC_ENDPOINT" && line.contains("func (") && line.contains("RegisterService(") {
         return None;
+    }
+    if pack.id == "grpc" && pack.language == "go" && output == "RPC_ENDPOINT" {
+        return (line.contains("RegisterService(")
+            || line.contains("Register") && line.contains("Server("))
+        .then(|| {
+            if line.contains("RegisterService(") {
+                "RegisterService".to_string()
+            } else {
+                "Register".to_string()
+            }
+        });
     }
     let marker = match output {
         "COMPONENT" => first_marker(
@@ -1191,6 +1263,9 @@ pub(crate) fn route_method(line: &str) -> Option<&'static str> {
     if let Some(method) = configured_route_method(line) {
         return Some(method);
     }
+    if let Some(method) = cpp_macro_route_method(line) {
+        return Some(method);
+    }
     let methods: &[(&[&str], &str)] = &[
         (
             &[
@@ -1411,6 +1486,29 @@ pub(crate) fn route_method(line: &str) -> Option<&'static str> {
     None
 }
 
+fn cpp_macro_route_method(line: &str) -> Option<&'static str> {
+    let marker = if line.contains("ADD_METHOD_TO(") {
+        "ADD_METHOD_TO("
+    } else if line.contains("METHOD_ADD(") {
+        "METHOD_ADD("
+    } else {
+        return None;
+    };
+    let open = line.find(marker)? + marker.len() - 1;
+    let close = matching_parenthesis(line, open)?;
+    let method = top_level_argument(&line[open + 1..close], 2)?.1.trim();
+    match method.to_ascii_uppercase().as_str() {
+        "GET" => Some("GET"),
+        "POST" => Some("POST"),
+        "PUT" => Some("PUT"),
+        "PATCH" => Some("PATCH"),
+        "DELETE" => Some("DELETE"),
+        "HEAD" => Some("HEAD"),
+        "OPTIONS" => Some("OPTIONS"),
+        _ => None,
+    }
+}
+
 pub(crate) fn configured_route_method(line: &str) -> Option<&'static str> {
     let lower = line.to_ascii_lowercase();
     if !(lower.contains("methods")
@@ -1508,6 +1606,40 @@ pub(crate) fn first_route_path(line: &str) -> Option<(String, usize)> {
             let rest_start = line.len() - rest.len();
             return Some((path.to_string(), rest_start + consumed));
         }
+    }
+    None
+}
+
+pub(crate) fn minimal_api_route_call(line: &str) -> Option<(String, Option<String>, usize)> {
+    for method in ["MapGet(", "MapPost(", "MapPut(", "MapPatch(", "MapDelete("] {
+        let Some(open) = line.find(method).map(|start| start + method.len() - 1) else {
+            continue;
+        };
+        let close = matching_parenthesis(line, open)?;
+        let arguments = &line[open + 1..close];
+        let first = top_level_argument(arguments, 0)?.1.trim();
+        let first_is_path = first.starts_with(['\"', '\'']);
+        let second = top_level_argument(arguments, 1);
+        if !first_is_path
+            && second.is_some_and(|(_, value)| !value.trim().starts_with(['\"', '\'']))
+        {
+            return None;
+        }
+        let (path, handler) = if first_is_path {
+            (
+                first.trim_matches(['\"', '\'']).to_string(),
+                second.and_then(|(_, value)| handler_name_from_expression(value)),
+            )
+        } else {
+            (
+                second
+                    .filter(|(_, value)| value.trim().starts_with(['\"', '\'']))
+                    .map(|(_, value)| value.trim().trim_matches(['\"', '\'']).to_string())
+                    .unwrap_or_default(),
+                handler_name_from_expression(first),
+            )
+        };
+        return Some((path, handler, close + 1));
     }
     None
 }
@@ -1760,6 +1892,107 @@ pub(crate) fn registration_handler(rest: &str) -> Option<String> {
     handler_name_from_expression(candidate)
 }
 
+pub(crate) fn route_registration_handler(pack_id: &str, line: &str) -> Option<String> {
+    let markers: &[&str] = match pack_id {
+        "django" => &["path(", "re_path("],
+        "starlette" => &["Route("],
+        _ => return None,
+    };
+    for marker in markers {
+        let open = line.find(marker)? + marker.len() - 1;
+        let close = matching_parenthesis(line, open)?;
+        let arguments = &line[open + 1..close];
+        if let Some((_, candidate)) = top_level_argument(arguments, 1) {
+            if let Some(handler) = handler_name_from_expression(candidate) {
+                return Some(handler);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn go_registration_receiver_type(source: &str, line_index: usize) -> Option<String> {
+    let lines = source.lines().collect::<Vec<_>>();
+    let line = lines.get(line_index)?;
+    let method_markers = [
+        ".GET(",
+        ".POST(",
+        ".PUT(",
+        ".PATCH(",
+        ".DELETE(",
+        ".HEAD(",
+        ".OPTIONS(",
+    ];
+    let (open, close) = method_markers.iter().find_map(|marker| {
+        let open = line.find(marker)? + marker.len() - 1;
+        Some((open, matching_parenthesis(line, open)?))
+    })?;
+    let (_, candidate) = last_top_level_argument(&line[open + 1..close])?;
+    let dot = candidate.rfind('.')?;
+    let receiver = candidate[..dot]
+        .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
+        .find(|value| !value.is_empty())?;
+    for declaration in lines[..=line_index].iter().rev() {
+        let Some(open) = declaration.find("func (") else {
+            continue;
+        };
+        let open = open + "func ".len();
+        let Some(close) = matching_parenthesis(declaration, open) else {
+            continue;
+        };
+        let receiver_declaration = declaration[open + 1..close].split_whitespace();
+        let mut tokens = receiver_declaration;
+        if tokens.next() != Some(receiver) {
+            continue;
+        }
+        if let Some(receiver_type) = tokens.last().map(|value| value.trim_start_matches('*')) {
+            if !receiver_type.is_empty() {
+                return Some(receiver_type.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn top_level_argument(input: &str, wanted: usize) -> Option<(usize, &str)> {
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut argument = 0usize;
+    for (index, value) in input.char_indices() {
+        if let Some(current_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if value == '\\' {
+                escaped = true;
+            } else if value == current_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match value {
+            '"' | '\'' | '`' => quote = Some(value),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                if argument == wanted {
+                    let candidate = input[start..index].trim();
+                    return (!candidate.is_empty()).then_some((start, candidate));
+                }
+                argument += 1;
+                start = index + value.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if argument == wanted {
+        let candidate = input[start..].trim();
+        return (!candidate.is_empty()).then_some((start, candidate));
+    }
+    None
+}
+
 fn last_top_level_argument(input: &str) -> Option<(usize, &str)> {
     let mut start = 0usize;
     let mut depth = 0usize;
@@ -1922,6 +2155,69 @@ pub(crate) fn config_route_handler(line: &str) -> Option<String> {
         .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
         .next()?;
     (!name.is_empty()).then(|| name.to_string())
+}
+
+pub(crate) fn nestjs_handler_name(
+    lines: &[&str],
+    index: usize,
+    route_line: &str,
+) -> Option<String> {
+    // Nest decorators can be stacked above a method, or written inline as
+    // `@Get() handler() {}`. Resolve the declaration immediately below the
+    // decorator block; searching the whole file can select a service method
+    // with the same short name instead.
+    for line in route_line.lines() {
+        let candidate = line.trim();
+        if let Some(close) = candidate.find(')') {
+            if let Some(name) = nestjs_method_name(&candidate[close + 1..]) {
+                return Some(name);
+            }
+        }
+    }
+    for line in lines.iter().skip(index + 1).take(32) {
+        let candidate = line.trim();
+        if nestjs_route_annotation(candidate) {
+            break;
+        }
+        if candidate.is_empty()
+            || candidate.starts_with('@')
+            || candidate.starts_with("//")
+            || candidate.starts_with("/*")
+            || candidate.starts_with('*')
+        {
+            continue;
+        }
+        if let Some(name) = nestjs_method_name(candidate) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn nestjs_route_annotation(line: &str) -> bool {
+    [
+        "@Get", "@Post", "@Put", "@Patch", "@Delete", "@Head", "@Options",
+    ]
+    .iter()
+    .any(|marker| line.starts_with(marker))
+}
+
+fn nestjs_method_name(line: &str) -> Option<String> {
+    let open = line.find('(')?;
+    let before = line[..open].trim_end();
+    let name = before
+        .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
+        .next()
+        .unwrap_or_default();
+    if name.is_empty()
+        || matches!(
+            name,
+            "async" | "public" | "private" | "protected" | "static" | "get" | "set"
+        )
+    {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 pub(crate) fn annotation_handler_name(line: &str) -> Option<String> {

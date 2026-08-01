@@ -5,7 +5,7 @@
   "name": "Echo",
   "kind": "web",
   "signals": [
-    "github.com/labstack/echo",
+    "package:github.com/labstack/echo",
     "echo.New",
     "e.GET"
   ],

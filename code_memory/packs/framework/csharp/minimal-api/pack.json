@@ -10,7 +10,8 @@
     "app.MapPost",
     "app.MapPut",
     "app.MapPatch",
-    "app.MapDelete"
+    "app.MapDelete",
+    "MapGroup"
   ],
   "outputs": [
     "HTTP_ROUTE",

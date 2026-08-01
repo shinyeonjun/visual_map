@@ -190,6 +190,14 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             "Dart semantic analysis skipped because resolved package metadata is unavailable; local structure remains available and packages remain external",
         );
     }
+    if lang.id == "php" && php_dependency_metadata_gap(root) {
+        return language_excluded(
+            lang,
+            "scip",
+            files,
+            "PHP semantic analysis skipped because Composer dependency metadata is unavailable; structural map remains available",
+        );
+    }
     let use_clangd_fallback =
         matches!(lang.id, "c" | "cpp") && find_tool(lang.tool, providers_root).is_none();
     if use_clangd_fallback && !has_compile_context_for_files(root, files) {
@@ -490,6 +498,16 @@ fn rust_workspace_root(root: &Path) -> PathBuf {
         })
         .map(Path::to_path_buf)
         .unwrap_or_else(|| root.to_path_buf())
+}
+
+fn php_dependency_metadata_gap(root: &Path) -> bool {
+    root.join("composer.json").is_file()
+        && (!root.join("vendor").join("autoload.php").is_file()
+            || !root
+                .join("vendor")
+                .join("composer")
+                .join("installed.php")
+                .is_file())
 }
 
 pub(crate) fn language_excluded(
