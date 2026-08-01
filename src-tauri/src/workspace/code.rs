@@ -7,6 +7,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use super::client_requests::extract_client_requests;
 use super::codebase_memory::{CodebaseMemoryAdapter, CodebaseMemoryInventory, CODE_NODE_LABELS};
 use super::model::{
     CodeCall, CodeHandle, CodeIndexResult, CodeInventory, CodeInventoryGap, CodeInventoryItem,
@@ -189,6 +190,31 @@ fn code_inventory_from_adapter(
     attach_code_handles(&result.handles, &mut inventory);
     super::fastapi_routes::enrich_fastapi_evidence(repo_path, &mut inventory);
     super::fastendpoints_routes::enrich_fastendpoints_routes(repo_path, &mut inventory);
+    match extract_client_requests(repo_path, &inventory) {
+        Ok(requests) => {
+            let unknown_count = requests
+                .iter()
+                .filter(|request| request.resolution == "unknown")
+                .count();
+            inventory.client_requests = requests;
+            if unknown_count > 0 {
+                inventory.relation_gaps.push(CodeInventoryGap::new(
+                    "client-request-unresolved",
+                    format!("provider:{}", inventory.project),
+                    inventory.project.clone(),
+                    format!(
+                        "클라이언트 요청 {unknown_count}개는 URL 또는 method를 정적으로 해석하지 못해 서버 API에 연결하지 않았습니다."
+                    ),
+                ));
+            }
+        }
+        Err(error) => inventory.relation_gaps.push(CodeInventoryGap::new(
+            "client-request-scan",
+            format!("provider:{}", inventory.project),
+            inventory.project.clone(),
+            error,
+        )),
+    }
     downgrade_unverified_routes(&mut inventory);
     inventory.partial = !inventory.relation_gaps.is_empty();
     Ok(inventory)
@@ -363,7 +389,7 @@ pub(crate) fn extract_code_inventory(
         .cloned()
         .collect::<Vec<_>>();
     let summary = CodeInventorySummary {
-        routes: routes.len(),
+        routes: routes.iter().filter(|item| !code_item_is_ui(item)).count(),
         handlers: handlers.len(),
         services: normalized_services.len(),
         repositories: repositories.len(),
@@ -390,6 +416,7 @@ pub(crate) fn extract_code_inventory(
         calls: Vec::new(),
         handles: Vec::new(),
         relation_gaps: Vec::new(),
+        client_requests: Vec::new(),
         partial: false,
     })
 }
@@ -969,6 +996,20 @@ fn code_item(project: &str, value: &serde_json::Value) -> Result<CodeInventoryIt
     let file_path = object_string(value, &["filePath", "file_path", "path"])
         .filter(|value| !value.trim().is_empty());
 
+    let mut detail = value.clone();
+    if let (Some(detail), Some(properties)) = (
+        detail.as_object_mut(),
+        value
+            .get("properties")
+            .and_then(serde_json::Value::as_object),
+    ) {
+        for (key, property) in properties {
+            detail
+                .entry(key.clone())
+                .or_insert_with(|| property.clone());
+        }
+    }
+
     Ok(CodeInventoryItem {
         id: qualified_name.clone(),
         kind: engine_label.clone(),
@@ -981,8 +1022,13 @@ fn code_item(project: &str, value: &serde_json::Value) -> Result<CodeInventoryIt
         column: positive_line(value, &["startColumn", "start_column", "column"]),
         end_line: positive_line(value, &["endLine", "end_line"]),
         end_column: positive_line(value, &["endColumn", "end_column"]),
-        detail: value.clone(),
+        detail,
     })
+}
+
+fn code_item_is_ui(item: &CodeInventoryItem) -> bool {
+    object_string(&item.detail, &["routeSurface", "route_surface"])
+        .is_some_and(|surface| surface == "ui-navigation")
 }
 
 fn positive_line(value: &serde_json::Value, keys: &[&str]) -> Option<u64> {

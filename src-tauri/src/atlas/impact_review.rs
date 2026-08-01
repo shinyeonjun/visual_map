@@ -174,7 +174,7 @@ fn impact_direct_items(
     }
 
     for link in snapshot.links.iter().filter(|link| {
-        link.truth_class == "confirmed"
+        link.is_confirmed()
             && matches!(
                 link.kind.as_str(),
                 "code_db_read" | "code_db_write" | "code_db_uses_column"
@@ -326,7 +326,7 @@ fn direct_object_review_item(
                 }),
         )
         .collect::<Vec<_>>();
-    let confirmed = links.iter().any(|link| link.truth_class == "confirmed");
+    let confirmed = links.iter().any(|link| link.is_confirmed());
     let evidence = links
         .iter()
         .flat_map(|link| link.evidence.iter().cloned())
@@ -1241,7 +1241,7 @@ fn api_reachable_code_ids(
     let mut visited = snapshot
         .items
         .iter()
-        .filter(|item| item.source == "code" && item.layer == "api")
+        .filter(|item| item.is_code() && item.layer == "api")
         .map(|item| item.id.clone())
         .collect::<HashSet<_>>();
     let mut queue = visited
@@ -1258,8 +1258,7 @@ fn api_reachable_code_ids(
             .into_iter()
             .flatten()
             .filter(|link| {
-                link.truth_class == "confirmed"
-                    && matches!(link.kind.as_str(), "code_handle" | "code_call")
+                link.is_confirmed() && matches!(link.kind.as_str(), "code_handle" | "code_call")
             })
         {
             if visited.insert(link.to.clone()) {

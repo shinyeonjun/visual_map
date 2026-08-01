@@ -295,8 +295,7 @@ fn normalize_selection(
 }
 
 fn composition_item_is_supported(item: &InventoryItem) -> bool {
-    item.source == "code"
-        || (item.source == "db" && matches!(item.kind.as_str(), "table" | "column"))
+    item.is_code() || (item.is_db() && matches!(item.kind.as_str(), "table" | "column"))
 }
 
 struct ScopedGraphEdges {
@@ -319,7 +318,7 @@ fn graph_edges(
             .iter()
             .take(MAX_GRAPH_SOURCE_LINKS)
             .filter(|link| {
-                link.truth_class == "confirmed"
+                link.is_confirmed()
                     && view.allows(&link.kind)
                     && scope.contains(&link.from)
                     && scope.contains(&link.to)
@@ -345,7 +344,7 @@ fn graph_edges(
             .filter(|id| {
                 item_by_id
                     .get(id.as_str())
-                    .is_some_and(|item| item.source == "code")
+                    .is_some_and(|item| item.is_code())
             })
             .cloned()
             .collect::<HashSet<_>>();
@@ -431,7 +430,7 @@ fn selected_confirmed_scope(
         .iter()
         .take(MAX_GRAPH_SOURCE_LINKS)
         .filter(|link| {
-            link.truth_class == "confirmed"
+            link.is_confirmed()
                 && view.allows(&link.kind)
                 && item_by_id.contains_key(link.from.as_str())
                 && item_by_id.contains_key(link.to.as_str())

@@ -402,6 +402,70 @@ fn filesystem_frameworks_create_routes_from_file_conventions() {
 }
 
 #[test]
+fn route_surface_separates_browser_navigation_from_backend_endpoints() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let packs = load_packs(root).expect("framework packs should load");
+    let pack = |language: &str, id: &str| {
+        packs
+            .iter()
+            .find(|pack| pack.language == language && pack.id == id)
+            .unwrap_or_else(|| panic!("missing {language}/{id} pack"))
+    };
+
+    assert_eq!(
+        route_surface(pack("typescript", "nextjs"), "frontend/pages/login.tsx"),
+        "ui-navigation"
+    );
+    assert_eq!(
+        route_surface(pack("typescript", "nextjs"), "frontend/pages/api/token.ts"),
+        "backend-api"
+    );
+    assert_eq!(
+        route_surface(
+            pack("typescript", "nextjs"),
+            "frontend/app/api/token/route.ts"
+        ),
+        "backend-api"
+    );
+    assert_eq!(
+        route_surface(pack("typescript", "nuxt"), "frontend/pages/login.vue"),
+        "ui-navigation"
+    );
+    assert_eq!(
+        route_surface(pack("typescript", "sveltekit"), "src/routes/login/+page.ts"),
+        "ui-navigation"
+    );
+    assert_eq!(
+        route_surface(pack("typescript", "sveltekit"), "src/routes/api/+server.ts"),
+        "backend-api"
+    );
+    assert_eq!(
+        route_surface(pack("python", "fastapi"), "server/routes/auth.py"),
+        "backend-api"
+    );
+}
+
+#[test]
+fn react_router_navigation_is_not_published_as_a_backend_api() {
+    let mut facts = Vec::new();
+    extract_react_navigation_routes(
+        "typescript",
+        "src/main.tsx",
+        "<Routes>\n  <Route\n    path=\"/login\"\n    element={<LoginPage />}\n  />\n</Routes>",
+        &mut facts,
+    );
+
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].method.as_deref(), Some("ANY"));
+    assert_eq!(facts[0].path.as_deref(), Some("/login"));
+    assert_eq!(
+        facts[0].properties.get("routeSurface").map(String::as_str),
+        Some("ui-navigation")
+    );
+    assert!(facts[0].symbol.is_none());
+}
+
+#[test]
 fn filesystem_routes_cover_exported_constants_groups_optional_catchalls_and_nuxt_suffixes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let packs = load_packs(root).expect("framework packs should load");
@@ -1618,6 +1682,63 @@ fn metadata_signals_are_limited_to_the_pack_language() {
     assert!(!metadata_matches_language("CMakeLists.txt", "javascript"));
     assert!(metadata_matches_language("Gemfile", "ruby"));
     assert!(!metadata_matches_language("CMakeLists.txt", "ruby"));
+}
+
+#[test]
+fn metadata_dependency_signals_are_exact_and_keep_nested_package_scope() {
+    let package = r#"{"dependencies":{"next":"15.0.0"},"devDependencies":{"vite":"6.0.0"}}"#;
+    assert!(metadata_signal_matches(
+        "docs/package.json",
+        package,
+        "import:next"
+    ));
+    assert!(!metadata_signal_matches(
+        "docs/package.json",
+        package,
+        "import:nuxt"
+    ));
+    assert_eq!(metadata_scope("docs/package.json"), "docs");
+    assert!(path_is_in_scope("docs/pages/login.tsx", "docs"));
+    assert!(!path_is_in_scope("frontend/pages/login.tsx", "docs"));
+}
+
+#[test]
+fn nested_next_package_does_not_claim_sibling_page_routes() {
+    let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-framework-package-scope-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("docs/pages")).unwrap();
+    fs::create_dir_all(root.join("frontend/pages")).unwrap();
+    fs::write(
+        root.join("docs/package.json"),
+        r#"{"dependencies":{"next":"15.0.0","app/router":"1.0.0","pages":"1.0.0"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/pages/index.tsx"),
+        "export default function Docs() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("frontend/pages/login.tsx"),
+        "export default function Login() {}\n",
+    )
+    .unwrap();
+
+    let analysis = analyze(&root, &[], pack_root).expect("analyze nested package fixture");
+    let next = analysis
+        .frameworks
+        .iter()
+        .find(|framework| framework.id == "nextjs")
+        .expect("nested Next.js package should be detected");
+    assert!(next
+        .facts
+        .iter()
+        .all(|fact| fact.source_file.starts_with("docs/")));
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

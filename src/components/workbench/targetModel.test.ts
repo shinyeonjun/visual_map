@@ -107,6 +107,26 @@ describe("targetModel", () => {
     expect(database.tables.map((table) => table.name)).toEqual(["users", "events"]);
   });
 
+  it("keeps UI navigation routes out of the API catalog", () => {
+    const inventory = codeInventory();
+    inventory.routes.push({
+      id: "ui-login",
+      kind: "Route",
+      name: "/login",
+      filePath: "frontend/pages/login.tsx",
+      line: 21,
+      detail: { routeSurface: "ui-navigation" },
+    });
+
+    const catalog = buildTargetCatalog(inventory, null);
+    expect(catalog.api.map((item) => item.title)).toEqual(["/api/orders"]);
+    expect(catalog.code.find((item) => item.id === "code:ui-login")).toMatchObject({
+      badge: "UI",
+      group: "화면 라우트",
+      mode: "search-focus",
+    });
+  });
+
   it("builds API folders from route paths without framework-specific mapping", () => {
     const catalog = buildTargetCatalog({
       ...codeInventory(),

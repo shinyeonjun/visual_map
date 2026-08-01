@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+pub(crate) const ITEM_SOURCE_CODE: &str = "code";
+pub(crate) const ITEM_SOURCE_DB: &str = "db";
+pub(crate) const LINK_TRUTH_CONFIRMED: &str = "confirmed";
+
 pub(super) const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 
 fn legacy_snapshot_schema_version() -> u32 {
@@ -123,8 +127,16 @@ pub(crate) struct InventoryItem {
 }
 
 impl InventoryItem {
+    pub(crate) fn is_code(&self) -> bool {
+        self.source == ITEM_SOURCE_CODE
+    }
+
+    pub(crate) fn is_db(&self) -> bool {
+        self.source == ITEM_SOURCE_DB
+    }
+
     pub(crate) fn is_project_code_item(&self) -> bool {
-        self.source == "code"
+        self.is_code()
             && !self
                 .path
                 .as_deref()
@@ -162,6 +174,12 @@ pub(crate) struct SnapshotLink {
     pub engine_edge_type: Option<String>,
     #[serde(default)]
     pub evidence: Vec<Evidence>,
+}
+
+impl SnapshotLink {
+    pub(crate) fn is_confirmed(&self) -> bool {
+        self.truth_class == LINK_TRUTH_CONFIRMED
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -204,6 +222,8 @@ pub(crate) struct ApiReadingAnswer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
     pub steps: Vec<ApiReadingStep>,
+    #[serde(default)]
+    pub client_requests: Vec<ImpactReviewItem>,
     #[serde(default)]
     pub db_relations: Vec<ImpactReviewItem>,
     #[serde(default)]

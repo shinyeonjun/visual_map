@@ -33,7 +33,7 @@ pub(super) fn atlas_overview(snapshot: &InventorySnapshot, mode: String) -> Visu
     let omitted_code_symbols = snapshot
         .items
         .iter()
-        .filter(|item| item.source == "code" && item.layer == "code")
+        .filter(|item| item.is_code() && item.layer == "code")
         .filter(|item| !architecture_member(item))
         .count();
     if omitted_code_symbols > 0 {
@@ -209,11 +209,7 @@ fn atlas_groups(
         item_group.insert(item.id.clone(), group_id);
     }
 
-    for link in snapshot
-        .links
-        .iter()
-        .filter(|link| link.truth_class == "confirmed")
-    {
+    for link in snapshot.links.iter().filter(|link| link.is_confirmed()) {
         let Some(from) = item_group.get(&link.from) else {
             continue;
         };
@@ -236,11 +232,7 @@ fn atlas_groups(
         .map(|item| (item.id.as_str(), item))
         .collect::<HashMap<_, _>>();
     let mut degrees = HashMap::<&str, usize>::new();
-    for link in snapshot
-        .links
-        .iter()
-        .filter(|link| link.truth_class == "confirmed")
-    {
+    for link in snapshot.links.iter().filter(|link| link.is_confirmed()) {
         *degrees.entry(link.from.as_str()).or_default() += 1;
         *degrees.entry(link.to.as_str()).or_default() += 1;
     }
@@ -351,7 +343,7 @@ fn atlas_group_seed(
     item: &InventoryItem,
     packages: &HashMap<String, String>,
 ) -> Option<AtlasGroupSeed> {
-    if !packages.is_empty() && item.source == "code" {
+    if !packages.is_empty() && item.is_code() {
         let package = structural_package(item, packages);
         let (key, label, evidence) = match package {
             Some(package) => (
@@ -378,7 +370,7 @@ fn atlas_group_seed(
             evidence,
         });
     }
-    if !packages.is_empty() && item.source == "db" && item.kind == "table" {
+    if !packages.is_empty() && item.is_db() && item.kind == "table" {
         let schema = item
             .path
             .as_deref()
@@ -392,7 +384,7 @@ fn atlas_group_seed(
             evidence: format!("DB 스키마 `{schema}` 경계 기준으로 묶었습니다"),
         });
     }
-    if item.source == "code" && item.layer == "api" {
+    if item.is_code() && item.layer == "api" {
         let label = route_domain(&item.name).unwrap_or_else(|| "root".to_string());
         return Some(AtlasGroupSeed {
             namespace: "domain",
@@ -404,7 +396,7 @@ fn atlas_group_seed(
             ),
         });
     }
-    if item.source == "code" && item.layer == "code" {
+    if item.is_code() && item.layer == "code" {
         let label = item
             .group_id
             .as_deref()
@@ -425,7 +417,7 @@ fn atlas_group_seed(
             evidence: format!("코드 경로/그룹 `{evidence_source}` 기준으로 묶었습니다"),
         });
     }
-    if item.source == "db" && item.kind == "table" {
+    if item.is_db() && item.kind == "table" {
         let schema = item.path.as_deref().filter(|schema| !schema.is_empty());
         let label = schema
             .filter(|schema| !is_default_schema(schema))
@@ -821,7 +813,7 @@ impl AtlasGroup {
         self.member_ids.push(item.id.clone());
         if item.layer == "api" {
             self.api_count += 1;
-        } else if item.source == "db" {
+        } else if item.is_db() {
             self.db_count += 1;
         } else {
             self.code_count += 1;
@@ -910,7 +902,7 @@ fn select_atlas_detail_members<'a>(
 fn atlas_member_order(item: &InventoryItem) -> (u8, u8) {
     let layer = if item.layer == "api" {
         0
-    } else if item.source == "code" {
+    } else if item.is_code() {
         1
     } else {
         2
@@ -938,8 +930,8 @@ fn atlas_top_titles(
         .filter_map(|id| item_by_id.get(id.as_str()).copied())
         .filter(|item| match bucket {
             "api" => item.layer == "api",
-            "code" => item.source == "code" && item.layer != "api",
-            "db" => item.source == "db" && item.kind == "table",
+            "code" => item.is_code() && item.layer != "api",
+            "db" => item.is_db() && item.kind == "table",
             _ => false,
         })
         .map(|item| item.name.replace('|', "/"))

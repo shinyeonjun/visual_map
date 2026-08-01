@@ -14,6 +14,7 @@ export type ApiReadingAnswer = {
   subject: string;
   method?: string | null;
   steps: ApiReadingStep[];
+  clientRequests?: ImpactReviewItem[];
   dbRelations?: ImpactReviewItem[];
   dbCandidates: ImpactReviewItem[];
   unknowns: ImpactReviewItem[];

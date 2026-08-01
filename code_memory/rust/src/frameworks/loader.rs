@@ -330,8 +330,48 @@ pub(crate) fn source_signal_matches(relative: &str, source: &str, signal: &str) 
     }
 }
 
-pub(crate) fn metadata_signal_matches(source: &str, signal: &str) -> bool {
-    source.contains(&signal_needle(signal))
+pub(crate) fn metadata_signal_matches(relative: &str, source: &str, signal: &str) -> bool {
+    let needle = signal_needle(signal);
+    let prefix = signal.split_once(':').map(|(prefix, _)| prefix);
+    if matches!(prefix, Some("import" | "require"))
+        && matches!(
+            Path::new(relative)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("package.json" | "package-lock.json")
+        )
+    {
+        return serde_json::from_str::<serde_json::Value>(source)
+            .ok()
+            .is_some_and(|value| package_declares_dependency(&value, &needle));
+    }
+    source.contains(&needle)
+}
+
+fn package_declares_dependency(value: &serde_json::Value, needle: &str) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+        "packages",
+    ]
+    .iter()
+    .any(|key| {
+        object
+            .get(*key)
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|dependencies| {
+                dependencies
+                    .keys()
+                    .any(|name| name == needle || name.ends_with(&format!("/{needle}")))
+            })
+    })
 }
 
 pub(crate) fn metadata_matches_language(relative: &str, language: &str) -> bool {
@@ -361,6 +401,17 @@ pub(crate) fn metadata_matches_language(relative: &str, language: &str) -> bool 
         "csharp" => file_name.ends_with(".csproj") || file_name.ends_with(".sln"),
         _ => false,
     }
+}
+
+pub(crate) fn metadata_scope(relative: &str) -> String {
+    Path::new(relative)
+        .parent()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default()
+}
+
+pub(crate) fn path_is_in_scope(path: &str, root: &str) -> bool {
+    root.is_empty() || path == root || path.starts_with(&format!("{root}/"))
 }
 
 pub(crate) fn collect_metadata_sources(root: &Path) -> Vec<(String, String)> {
@@ -412,7 +463,7 @@ pub(crate) fn cached_metadata_signal_match(
     if let Some(value) = cache.get(&key) {
         return *value;
     }
-    let value = metadata_signal_matches(text, signal);
+    let value = metadata_signal_matches(relative, text, signal);
     cache.insert(key, value);
     value
 }

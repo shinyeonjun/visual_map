@@ -137,6 +137,8 @@ pub(crate) struct CodeInventory {
     #[serde(default)]
     pub relation_gaps: Vec<CodeInventoryGap>,
     #[serde(default)]
+    pub client_requests: Vec<ClientRequest>,
+    #[serde(default)]
     pub partial: bool,
 }
 
@@ -192,6 +194,29 @@ pub(crate) struct CodeCall {
     pub path: Option<String>,
     #[serde(default)]
     pub range: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClientRequest {
+    pub id: String,
+    pub client: String,
+    #[serde(default)]
+    pub method: Option<String>,
+    pub raw_url: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    pub source_file: String,
+    pub line: u64,
+    #[serde(default)]
+    pub end_line: u64,
+    #[serde(default)]
+    pub caller_id: Option<String>,
+    pub resolution: String,
+    #[serde(default)]
+    pub confidence: Option<u8>,
+    #[serde(default)]
+    pub evidence: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

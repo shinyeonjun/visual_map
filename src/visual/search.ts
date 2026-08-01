@@ -8,9 +8,12 @@ import {
 import { codeInventoryItemFromSnapshot } from "../inventory/snapshotRestore";
 import {
   codeInventoryCodeItems,
+  codeInventoryBackendRoutes,
+  codeInventoryUiRoutes,
   codeRouteMethod,
   dbInventoryTableKey,
   isProjectCodeItem,
+  isUiRoute,
 } from "../types/workspace";
 import type { InventorySearchResult } from "../types/visual-map";
 import type {
@@ -185,7 +188,9 @@ export function collectSearchResults(
       addSearchResult(rankedGroups, counts, 1, score, {
         id: `code:${item.id}`,
         title: item.name,
-        subtitle: item.filePath ?? (item.kind.toLowerCase() === "unknown" ? "근거 미확인" : item.kind),
+        subtitle: isUiRoute(item)
+          ? `화면 라우트 · ${item.filePath ?? "위치 정보 없음"}`
+          : item.filePath ?? (item.kind.toLowerCase() === "unknown" ? "근거 미확인" : item.kind),
         focusId: `code:${item.id}`,
         codeItem: item,
       });
@@ -285,7 +290,8 @@ export function searchSummaryText(collection: SearchCollection): string {
 
 export function searchScopeText(codeInventory: CodeInventory | null, dbInventory: DbInventory | null): string {
   const scopes = [
-    codeInventory?.routes.some(isProjectCodeItem) ? "API" : null,
+    codeInventoryBackendRoutes(codeInventory).some(isProjectCodeItem) ? "API" : null,
+    codeInventoryUiRoutes(codeInventory).some(isProjectCodeItem) ? "화면 라우트" : null,
     codeInventoryCodeItems(codeInventory).some(isProjectCodeItem) ? "코드" : null,
     codeInventory?.files.some(isProjectCodeItem) ? "파일" : null,
     dbInventory?.tables.length ? "테이블" : null,
@@ -308,8 +314,11 @@ function codeSearchIndex(inventory: CodeInventory | null): CodeSearchIndex {
     return cached;
   }
   const index = {
-    routes: inventory.routes.filter(isProjectCodeItem).map(indexCodeItem),
-    code: codeInventoryCodeItems(inventory).filter(isProjectCodeItem).map(indexCodeItem),
+    routes: codeInventoryBackendRoutes(inventory).filter(isProjectCodeItem).map(indexCodeItem),
+    code: [
+      ...codeInventoryCodeItems(inventory),
+      ...codeInventoryUiRoutes(inventory),
+    ].filter(isProjectCodeItem).map(indexCodeItem),
     files: inventory.files.filter(isProjectCodeItem).map(indexCodeItem),
   };
   codeSearchIndexes.set(inventory, index);

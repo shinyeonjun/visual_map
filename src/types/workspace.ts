@@ -242,6 +242,36 @@ export function isProjectCodeItem(item: CodeInventoryItem): boolean {
   return !item.filePath?.trim().startsWith("<");
 }
 
+type CodeRouteSurface = "backend-api" | "ui-navigation" | "unknown";
+
+function codeRouteSurface(route: CodeInventoryItem): CodeRouteSurface {
+  if (route.kind.trim().toLowerCase() === "ui-route") return "ui-navigation";
+  const detail = route.detail;
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    const value = (detail as Record<string, unknown>).routeSurface
+      ?? (detail as Record<string, unknown>).route_surface;
+    if (value === "backend-api" || value === "ui-navigation") return value;
+  }
+  // Older snapshots predate the surface contract; their Route inventory was API-only.
+  return "backend-api";
+}
+
+export function isUiRoute(route: CodeInventoryItem): boolean {
+  return codeRouteSurface(route) === "ui-navigation";
+}
+
+function isBackendApiRoute(route: CodeInventoryItem): boolean {
+  return !isUiRoute(route);
+}
+
+export function codeInventoryBackendRoutes(inventory: CodeInventory | null | undefined): CodeInventoryItem[] {
+  return (inventory?.routes ?? []).filter(isBackendApiRoute);
+}
+
+export function codeInventoryUiRoutes(inventory: CodeInventory | null | undefined): CodeInventoryItem[] {
+  return (inventory?.routes ?? []).filter(isUiRoute);
+}
+
 export type CodeInventory = {
   project: string;
   routes: CodeInventoryItem[];
@@ -256,9 +286,25 @@ export type CodeInventory = {
   summary: CodeInventorySummary;
   architecture?: unknown;
   calls: CodeCall[];
+  clientRequests?: ClientRequest[];
   handles?: CodeHandle[];
   relationGaps?: CodeInventoryGap[];
   partial?: boolean;
+};
+
+export type ClientRequest = {
+  id: string;
+  client: string;
+  method?: string | null;
+  rawUrl: string;
+  path?: string | null;
+  sourceFile: string;
+  line: number;
+  endLine?: number;
+  callerId?: string | null;
+  resolution: "static-confirmed" | "runtime-confirmed" | "candidate" | "unknown" | "excluded" | string;
+  confidence?: number | null;
+  evidence: string[];
 };
 
 type CodeAnalysisLanguage = {
@@ -363,11 +409,12 @@ export function codeInventoryItemCount(inventory: CodeInventory | null | undefin
   if (!inventory) {
     return 0;
   }
-  return Object.values(inventory.summary).reduce((sum, count) => sum + count, 0);
+  return Object.values(inventory.summary).reduce((sum, count) => sum + count, 0)
+    + codeInventoryUiRoutes(inventory).length;
 }
 
 export function codeInventoryRouteCount(inventory: CodeInventory | null | undefined): number {
-  return inventory?.summary.routes ?? 0;
+  return codeInventoryBackendRoutes(inventory).length;
 }
 
 export function codeInventoryFileCount(inventory: CodeInventory | null | undefined): number {
@@ -405,7 +452,7 @@ export function codeInventoryDefaultRoute(
   inventory: CodeInventory | null | undefined,
   selectedId?: string | null,
 ): CodeInventoryItem | null {
-  const routes = inventory?.routes ?? [];
+  const routes = codeInventoryBackendRoutes(inventory);
   const selected = selectedId ? routes.find((route) => route.id === selectedId) ?? null : null;
   if (selected || routes.length === 0) {
     return selected;

@@ -12,13 +12,16 @@ type DiagramItem = {
   node: VisualNode;
 };
 
-type ApiConnectionModel = {
+export type ApiConnectionModel = {
   primaryPath: DiagramItem[];
   primaryEdges: VisualEdge[];
   primaryDatabase: (DiagramItem & { edge: VisualEdge }) | null;
   additionalEdges: VisualEdge[];
+  collapsedEdges: VisualEdge[];
   gap: ImpactReviewItem | null;
 };
+
+const VISIBLE_ADDITIONAL_EDGE_LIMIT = 6;
 
 export function buildApiConnectionModel(answer: ApiReadingAnswer, map: VisualMap): ApiConnectionModel {
   const nodesById = new Map(map.nodes.map((node) => [node.id, node]));
@@ -33,7 +36,7 @@ export function buildApiConnectionModel(answer: ApiReadingAnswer, map: VisualMap
     ? map.focus
     : answer.steps.find((step) => step.lane === "route")?.nodeId ?? answer.steps[0]?.nodeId ?? null;
   const pathIds = startId ? choosePrimaryPath(startId, confirmedEdges, stepsByNodeId, databaseEdges) : [];
-  const primaryPath = pathIds.flatMap((nodeId) => {
+  const primaryPath: DiagramItem[] = pathIds.flatMap((nodeId) => {
     const item = stepsByNodeId.get(nodeId);
     const node = nodesById.get(nodeId);
     return item && node ? [{ item, node }] : [];
@@ -43,6 +46,19 @@ export function buildApiConnectionModel(answer: ApiReadingAnswer, map: VisualMap
     const edge = confirmedEdges.find((candidate) => candidate.from === from && candidate.to === to);
     return edge ? [edge] : [];
   });
+  const clientRequestEdge = [...map.edges]
+    .filter((edge) => edge.kind === "client_request" && edge.to === primaryPath[0]?.node.id)
+    .sort((left, right) => Number(isCandidateEdge(left)) - Number(isCandidateEdge(right)) || left.id.localeCompare(right.id))[0];
+  const clientRequestItem = clientRequestEdge
+    ? answer.clientRequests?.find((item) => item.nodeId === clientRequestEdge.from)
+    : undefined;
+  if (clientRequestEdge && clientRequestItem) {
+    const node = nodesById.get(clientRequestEdge.from);
+    if (node) {
+      primaryPath.unshift({ item: clientRequestItem, node });
+      primaryEdges.unshift(clientRequestEdge);
+    }
+  }
   const pathIndex = new Map(pathIds.map((nodeId, index) => [nodeId, index]));
   const databaseItemsByNodeId = new Map(
     [...(answer.dbRelations ?? []), ...answer.dbCandidates]
@@ -69,10 +85,23 @@ export function buildApiConnectionModel(answer: ApiReadingAnswer, map: VisualMap
     ...primaryEdges.map((edge) => edge.id),
     ...(primaryDatabase ? [primaryDatabase.edge.id] : []),
   ]);
-  const additionalEdges = map.edges.filter((edge) => !usedEdgeIds.has(edge.id));
+  const remainingEdges = map.edges.filter((edge) => !usedEdgeIds.has(edge.id));
+  const primaryNodeIds = new Set([
+    ...primaryPath.map(({ node }) => node.id),
+    ...(primaryDatabase ? [primaryDatabase.node.id] : []),
+  ]);
+  const rankedRemainingEdges = [...remainingEdges].sort((left, right) => {
+    const leftPrimary = Number(primaryNodeIds.has(left.from));
+    const rightPrimary = Number(primaryNodeIds.has(right.from));
+    return rightPrimary - leftPrimary
+      || Number(isCandidateEdge(left)) - Number(isCandidateEdge(right))
+      || left.id.localeCompare(right.id);
+  });
+  const additionalEdges = rankedRemainingEdges.slice(0, VISIBLE_ADDITIONAL_EDGE_LIMIT);
+  const collapsedEdges = rankedRemainingEdges.slice(VISIBLE_ADDITIONAL_EDGE_LIMIT);
   const gap = answer.unknowns.find((item) => item.kind === "handler-gap") ?? null;
 
-  return { primaryPath, primaryEdges, primaryDatabase, additionalEdges, gap };
+  return { primaryPath, primaryEdges, primaryDatabase, additionalEdges, collapsedEdges, gap };
 }
 
 function choosePrimaryPath(
@@ -138,7 +167,7 @@ function isConfirmedApiEdge(edge: VisualEdge): boolean {
 }
 
 function isCandidateEdge(edge: VisualEdge): boolean {
-  return edge.kind.startsWith("candidate");
+  return edge.kind.startsWith("candidate") || edge.confidence === "candidate";
 }
 
 function isDirectDatabaseEdge(edge: VisualEdge): boolean {

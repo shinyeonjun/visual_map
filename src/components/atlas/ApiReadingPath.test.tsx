@@ -67,6 +67,19 @@ describe("buildApiConnectionModel", () => {
     expect(screen.getByRole("button", { name: "Service / Function emitAuditEvent 선택" })).toBeInTheDocument();
     expect(document.querySelectorAll(".api-edge-line.confirmed")).toHaveLength(5);
   });
+
+  it("collapses distant fan-out edges without losing their selectable evidence", () => {
+    const extraNodes = Array.from({ length: 7 }, (_, index) => node(`code:extra-${index}`, `extra${index}`, "function"));
+    const extraEdges = extraNodes.map((extra, index) => edge(`calls-extra-${index}`, "code:handler", extra.id, "code_call"));
+    const model = buildApiConnectionModel(answer, {
+      ...map,
+      nodes: [...map.nodes, ...extraNodes],
+      edges: [...map.edges, ...extraEdges],
+    });
+
+    expect(model.additionalEdges).toHaveLength(6);
+    expect(model.collapsedEdges.map((edge) => edge.id)).toEqual(["calls-extra-6", "calls-side"]);
+  });
 });
 
 const nodes: VisualNode[] = [

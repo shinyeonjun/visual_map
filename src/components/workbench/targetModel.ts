@@ -1,9 +1,11 @@
 import type { CodeInventory, DbInventory } from "../../types/workspace";
 import {
   codeInventoryCodeItems,
+  codeInventoryBackendRoutes,
   codeKindChip,
   codeRouteMethod,
   dbInventoryTableKey,
+  isUiRoute,
   isProjectCodeItem,
 } from "../../types/workspace";
 import {
@@ -76,8 +78,15 @@ export function buildTargetCatalog(
   const tables = [...(dbInventory?.tables ?? [])]
     .sort((left, right) => dbInventoryTableKey(left).localeCompare(dbInventoryTableKey(right)));
 
+  const uiRoutes = (codeInventory?.routes ?? []).filter(isUiRoute);
+  const codeItems = [
+    ...codeInventoryCodeItems(codeInventory),
+    ...uiRoutes,
+    ...(codeInventory?.files ?? []),
+  ];
+
   return {
-    api: [...(codeInventory?.routes ?? [])].filter(isProjectCodeItem).sort(compareApiTargets).map((route) => ({
+    api: codeInventoryBackendRoutes(codeInventory).filter(isProjectCodeItem).sort(compareApiTargets).map((route) => ({
       id: `api:${route.id}`,
       kind: "api",
       badge: codeRouteMethod(route) ?? "API",
@@ -86,17 +95,14 @@ export function buildTargetCatalog(
       focusId: `code:${route.id}`,
       mode: "api-flow",
     })),
-    code: [
-      ...codeInventoryCodeItems(codeInventory),
-      ...(codeInventory?.files ?? []),
-    ].filter(isProjectCodeItem).sort(compareCodeTargets).map((item) => ({
+    code: codeItems.filter(isProjectCodeItem).sort(compareCodeTargets).map((item) => ({
       id: `code:${item.id}`,
       kind: "code",
-      badge: codeKindChip(item.kind),
+      badge: isUiRoute(item) ? "UI" : codeKindChip(item.kind),
       title: item.name,
       meta: sourceLocation(item.filePath, item.line),
       sourcePath: item.filePath,
-      group: CODE_TARGET_GROUP[item.kind.toLowerCase()] ?? "기타",
+      group: isUiRoute(item) ? "화면 라우트" : CODE_TARGET_GROUP[item.kind.toLowerCase()] ?? "기타",
       focusId: `code:${item.id}`,
       mode: "search-focus",
     })),

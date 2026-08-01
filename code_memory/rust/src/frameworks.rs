@@ -109,6 +109,7 @@ pub(crate) fn analyze_with_sources(
             .collect();
         let mut matched_signals = HashSet::new();
         let mut matched_files = HashSet::new();
+        let mut matched_metadata_roots = HashSet::new();
         for &(relative, text) in &sources {
             let code = source_code_masks
                 .entry(relative.to_string())
@@ -142,6 +143,7 @@ pub(crate) fn analyze_with_sources(
                 {
                     matched_signals.insert(signal.clone());
                     matched_files.insert(relative.clone());
+                    matched_metadata_roots.insert(metadata_scope(relative));
                 }
             }
         }
@@ -206,8 +208,13 @@ pub(crate) fn analyze_with_sources(
             .copied()
             .filter(|(path, source)| {
                 if has_route_rules {
-                    has_route_syntax_candidate(source, &pack.language)
-                        || file_system_route(&pack, path, source).is_some()
+                    let in_metadata_scope = matched_metadata_roots.is_empty()
+                        || matched_metadata_roots
+                            .iter()
+                            .any(|root| path_is_in_scope(path, root));
+                    (has_route_syntax_candidate(source, &pack.language)
+                        || file_system_route(&pack, path, source).is_some())
+                        && in_metadata_scope
                         || source_signal_files.contains(path)
                 } else {
                     !restrict_to_signal_files || source_signal_files.contains(*path)
@@ -285,9 +292,15 @@ pub(crate) fn analyze_with_sources(
                 }
             }
             extract_generic_facts_with_index(&pack, path, source, &symbol_index, &mut facts);
+            if pack.id == "react" {
+                extract_react_navigation_routes(&pack.language, path, source, &mut facts);
+            }
         }
         for fact in &mut facts {
             if fact.kind == "HTTP_ROUTE" {
+                fact.properties
+                    .entry("routeSurface".to_string())
+                    .or_insert_with(|| route_surface(&pack, &fact.source_file));
                 fact.properties
                     .entry("runtime_reachability".to_string())
                     .or_insert_with(|| "not-assessed".to_string());
@@ -383,6 +396,110 @@ pub(crate) fn analyze_with_sources(
         frameworks,
         relations,
     })
+}
+
+fn route_surface(pack: &FrameworkPack, path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    match pack.id.as_str() {
+        "nextjs"
+            if filesystem_path_has_directory(&normalized, "pages")
+                || filesystem_path_has_directory(&normalized, "app") =>
+        {
+            let file_is_route_handler = normalized
+                .rsplit('/')
+                .next()
+                .is_some_and(|file| file.starts_with("route."));
+            if file_is_route_handler
+                || filesystem_path_has_directory(&normalized, "pages/api")
+                || filesystem_path_has_directory(&normalized, "app/api")
+            {
+                "backend-api".to_string()
+            } else {
+                "ui-navigation".to_string()
+            }
+        }
+        "nuxt" if filesystem_path_has_directory(&normalized, "pages") => {
+            "ui-navigation".to_string()
+        }
+        "nuxt" if filesystem_path_has_directory(&normalized, "server") => "backend-api".to_string(),
+        "sveltekit"
+            if normalized.contains("/src/routes/") || normalized.starts_with("src/routes/") =>
+        {
+            if normalized
+                .rsplit('/')
+                .next()
+                .is_some_and(|file| file.starts_with("+server."))
+            {
+                "backend-api".to_string()
+            } else {
+                "ui-navigation".to_string()
+            }
+        }
+        _ => "backend-api".to_string(),
+    }
+}
+
+fn extract_react_navigation_routes(
+    language: &str,
+    path: &str,
+    source: &str,
+    facts: &mut Vec<FrameworkFact>,
+) {
+    let comment_free = source_without_comments(source, language);
+    let lines = comment_free.lines().collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate() {
+        let route_source = lines[index..lines.len().min(index + 4)].join(" ");
+        let route_tag = line.find("<Route").is_some_and(|start| {
+            line[start + "<Route".len()..]
+                .chars()
+                .next()
+                .is_none_or(|value| value.is_whitespace() || value == '>')
+        });
+        if !route_tag || !route_source.contains("path=") {
+            continue;
+        }
+        let Some(path_value) = route_source
+            .split_once("path=")
+            .and_then(|(_, tail)| first_quoted_value(tail))
+        else {
+            continue;
+        };
+        let route_path = normalize_ui_route_path(&path_value);
+        let source_line = index + 1;
+        let id = format!("route:react:{}:{}:{}", path, source_line, route_path);
+        if facts.iter().any(|fact| fact.id == id) {
+            continue;
+        }
+        facts.push(FrameworkFact {
+            id,
+            kind: "HTTP_ROUTE".to_string(),
+            framework: "react".to_string(),
+            symbol: None,
+            method: Some("ANY".to_string()),
+            path: Some(route_path),
+            source_file: path.to_string(),
+            source_line,
+            source_end_line: source_line,
+            source_range: source_line_range(source, source_line),
+            evidence: vec!["react-router-navigation".to_string()],
+            properties: BTreeMap::from([("routeSurface".to_string(), "ui-navigation".to_string())]),
+        });
+    }
+}
+
+fn normalize_ui_route_path(path: &str) -> String {
+    let path = path.trim();
+    if path.is_empty() || path == "/" {
+        "/".to_string()
+    } else {
+        format!("/{}", path.trim_start_matches('/'))
+    }
+}
+
+fn filesystem_path_has_directory(path: &str, directory: &str) -> bool {
+    path == directory
+        || path.starts_with(&format!("{directory}/"))
+        || path.contains(&format!("/{directory}/"))
 }
 
 fn dedupe_java_facts(frameworks: &mut [FrameworkOutput], relations: &mut Vec<FrameworkRelation>) {

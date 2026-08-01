@@ -2270,6 +2270,7 @@
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16), 0 7px 20px rgba(15, 23, 42, 0.12);
 }
 .api-diagram-node.route { --node-tone: #8fb6ff; --node-strong: var(--blue); --node-ink: var(--blue-ink); --node-soft: var(--accent-soft); }
+.api-diagram-node.client-request { --node-tone: #f3b562; --node-strong: #d97706; --node-ink: #b45309; --node-soft: #fff7ed; }
 .api-diagram-node.handler { --node-tone: #80cdb8; --node-strong: #059669; --node-ink: #047857; --node-soft: #ecfdf5; }
 .api-diagram-node.service { --node-tone: #b6a4f6; --node-strong: #7c5ce0; --node-ink: #6545c5; --node-soft: #f2efff; }
 .api-diagram-node.repository { --node-tone: #71c7a3; --node-strong: #058c62; --node-ink: #047857; --node-soft: #ecfdf5; }

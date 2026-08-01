@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     engine::{EngineAvailability, EngineRegistry, EngineRuntimeMode},
     workspace::{
-        CodeCall, CodeHandle, CodeInventory, CodeInventoryGap, CodeInventoryItem,
+        ClientRequest, CodeCall, CodeHandle, CodeInventory, CodeInventoryGap, CodeInventoryItem,
         CodeInventorySummary, DbConstraint, DbDependentObject, DbForeignKey, DbIndex, DbInventory,
         DbInventoryColumn, DbInventoryTable, DbProfile, DbSource, Workspace, WorkspaceEngineCache,
     },
@@ -368,6 +368,7 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
             route: "shop.routes.create_order".to_string(),
         }],
         relation_gaps: Vec::new(),
+        client_requests: Vec::new(),
         partial: false,
     };
     let code_json = serde_json::to_value(code).unwrap();
@@ -517,6 +518,7 @@ fn code_relation_gaps_keep_stable_ids_and_known_related_endpoints() {
             "shop.services.missing",
             "service endpoint was not indexed",
         )],
+        client_requests: Vec::new(),
         partial: true,
     };
 
@@ -590,6 +592,7 @@ fn canonical_builder_splits_legacy_collapsed_route_bindings() {
             },
         ],
         relation_gaps: Vec::new(),
+        client_requests: Vec::new(),
         partial: false,
     };
 
@@ -649,7 +652,7 @@ fn snapshot_with_metadata_records_code_source() {
     assert_eq!(code.source_path.as_deref(), Some(r"D:\repo\shop-api"));
     assert_eq!(code.source_type, "local-folder");
     assert_eq!(code.engine_version.as_deref(), Some("0.1.0"));
-    assert_eq!(code.adapter_version.as_deref(), Some("5"));
+    assert_eq!(code.adapter_version.as_deref(), Some("7"));
     assert!(snapshot.stale_reasons.is_empty());
 }
 
@@ -715,6 +718,7 @@ fn empty_inventories_keep_source_provenance() {
         calls: Vec::new(),
         handles: Vec::new(),
         relation_gaps: Vec::new(),
+        client_requests: Vec::new(),
         partial: false,
     };
     let db = DbInventory {
@@ -5505,4 +5509,174 @@ fn test_registry() -> EngineRegistry {
             },
         ],
     }
+}
+
+#[test]
+fn snapshot_links_static_client_request_to_unique_backend_route() {
+    let route = code_test_item(
+        "backend.routes.token",
+        "Route",
+        "POST /token",
+        "backend/routes.py",
+        1,
+        1,
+    );
+    let caller = code_test_item(
+        "frontend.login",
+        "Function",
+        "performLogin",
+        "frontend/login.tsx",
+        1,
+        8,
+    );
+    let request = ClientRequest {
+        id: "client-request:frontend/login.tsx:4:test".to_string(),
+        client: "axios".to_string(),
+        method: Some("POST".to_string()),
+        raw_url: "\"/token\"".to_string(),
+        path: Some("/token".to_string()),
+        source_file: "frontend/login.tsx".to_string(),
+        line: 4,
+        end_line: 4,
+        caller_id: Some(caller.id.clone()),
+        resolution: "static-confirmed".to_string(),
+        confidence: Some(95),
+        evidence: vec!["url-static-value".to_string()],
+    };
+    let code = CodeInventory {
+        project: "bracket".to_string(),
+        routes: vec![route],
+        services: Vec::new(),
+        files: Vec::new(),
+        handlers: Vec::new(),
+        repositories: Vec::new(),
+        functions: vec![caller],
+        classes: Vec::new(),
+        modules: Vec::new(),
+        unknown: Vec::new(),
+        summary: CodeInventorySummary {
+            routes: 1,
+            handlers: 0,
+            services: 0,
+            repositories: 0,
+            functions: 1,
+            classes: 0,
+            modules: 0,
+            files: 0,
+            unknown: 0,
+        },
+        architecture: None,
+        calls: Vec::new(),
+        handles: Vec::new(),
+        relation_gaps: Vec::new(),
+        client_requests: vec![request],
+        partial: false,
+    };
+
+    let snapshot = build_inventory_snapshot("workspace-1".to_string(), Some(&code), None);
+    let link = snapshot
+        .links
+        .iter()
+        .find(|link| link.kind == "client_request")
+        .expect("static client request link");
+    assert_eq!(link.from, "code:frontend.login");
+    assert_eq!(link.to, "code:backend.routes.token");
+    assert_eq!(link.truth_class, "confirmed");
+    assert_eq!(link.engine_edge_type.as_deref(), Some("CLIENT_REQUEST"));
+
+    let mut ambiguous_code = code.clone();
+    ambiguous_code.routes.push(code_test_item(
+        "backend.routes.token_duplicate",
+        "Route",
+        "POST /token",
+        "backend/routes_alt.py",
+        1,
+        1,
+    ));
+    ambiguous_code.summary.routes = 2;
+    let ambiguous_snapshot = build_inventory_snapshot(
+        "workspace-ambiguous".to_string(),
+        Some(&ambiguous_code),
+        None,
+    );
+    let ambiguous_links = ambiguous_snapshot
+        .links
+        .iter()
+        .filter(|link| link.kind == "client_request")
+        .collect::<Vec<_>>();
+    assert_eq!(ambiguous_links.len(), 2);
+    assert!(ambiguous_links
+        .iter()
+        .all(|link| link.truth_class == "candidate"));
+}
+
+#[test]
+fn api_flow_keeps_client_request_as_a_separate_incoming_lane() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    let client = code_test_item(
+        "code:frontend.login",
+        "Function",
+        "performLogin",
+        "frontend/login.tsx",
+        1,
+        8,
+    );
+    snapshot.items.push(InventoryItem {
+        id: client.id,
+        kind: client.kind,
+        name: client.name,
+        layer: "code".to_string(),
+        source: "code".to_string(),
+        parent_id: None,
+        path: Some("frontend/login.tsx".to_string()),
+        qualified_name: Some("performLogin".to_string()),
+        engine_label: Some("Function".to_string()),
+        project_id: None,
+        group_id: None,
+        location: Some(super::model::SourceLocation {
+            path: "frontend/login.tsx".to_string(),
+            line: Some(4),
+            column: None,
+            end_line: Some(4),
+            end_column: None,
+        }),
+        is_primary_key: false,
+        is_foreign_key: false,
+        nullable: None,
+    });
+    let route_id = "code:route:orders:create";
+    snapshot.links.push(super::model::SnapshotLink {
+        id: "client-request:frontend.login->orders.create".to_string(),
+        from: "code:frontend.login".to_string(),
+        to: route_id.to_string(),
+        kind: "client_request".to_string(),
+        label: Some("REQUESTS".to_string()),
+        truth_class: "confirmed".to_string(),
+        direction: "outbound".to_string(),
+        engine_edge_type: Some("CLIENT_REQUEST".to_string()),
+        evidence: vec![super::model::Evidence {
+            kind: "client-request".to_string(),
+            text: "POST /orders".to_string(),
+        }],
+    });
+
+    let map = visual_map(
+        &snapshot,
+        Some(route_id.to_string()),
+        "api-flow".to_string(),
+    );
+    assert!(map
+        .nodes
+        .iter()
+        .any(|node| node.id == "code:frontend.login"));
+    assert!(map.edges.iter().any(|edge| {
+        edge.kind == "client_request" && edge.from == "code:frontend.login" && edge.to == route_id
+    }));
+    assert!(map
+        .api_reading
+        .as_ref()
+        .is_some_and(|answer| answer.client_requests.iter().any(|request| {
+            request.kind == "client-request"
+                && request.node_id.as_deref() == Some("code:frontend.login")
+        })));
 }

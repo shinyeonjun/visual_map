@@ -33,6 +33,7 @@ pub(super) fn api_flow_map(
         API_CODE_NODE_LIMIT,
         API_EDGE_LIMIT,
     );
+    let client_request_links = client_request_links_for_route(snapshot, route.id.as_str());
     let has_confirmed_handler = traversal
         .links
         .iter()
@@ -46,12 +47,12 @@ pub(super) fn api_flow_map(
         .links
         .iter()
         .filter(|link| {
-            link.truth_class == "confirmed"
+            link.is_confirmed()
                 && matches!(link.kind.as_str(), "code_db_read" | "code_db_write")
                 && reachable_code_ids.contains(link.from.as_str())
                 && item_by_id
                     .get(link.to.as_str())
-                    .is_some_and(|item| item.source == "db" && item.kind == "table")
+                    .is_some_and(|item| item.is_db() && item.kind == "table")
         })
         .collect::<Vec<_>>();
     db_relations.sort_by(|left, right| {
@@ -87,7 +88,7 @@ pub(super) fn api_flow_map(
             .filter(|link| {
                 item_by_id
                     .get(link.to.as_str())
-                    .is_some_and(|item| item.source == "db" && item.kind == "table")
+                    .is_some_and(|item| item.is_db() && item.kind == "table")
             })
             .cloned()
             .collect::<Vec<_>>()
@@ -136,6 +137,7 @@ pub(super) fn api_flow_map(
 
     let mut included_ids = vec![route.id.clone()];
     included_ids.extend(traversal.node_order.iter().cloned());
+    included_ids.extend(client_request_links.iter().map(|link| link.from.clone()));
     included_ids.extend(db_relations.iter().map(|link| link.to.clone()));
     included_ids.extend(candidates.iter().map(|link| link.to.clone()));
     let mut seen_nodes = HashSet::new();
@@ -160,6 +162,11 @@ pub(super) fn api_flow_map(
         .collect::<Vec<_>>();
     edges.extend(
         db_relations
+            .iter()
+            .map(|link| confirmed_link_edge(link, &item_by_id)),
+    );
+    edges.extend(
+        client_request_links
             .iter()
             .map(|link| confirmed_link_edge(link, &item_by_id)),
     );
@@ -188,6 +195,7 @@ pub(super) fn api_flow_map(
             hidden_candidates,
             candidate_cap_reached: candidate_linker_cap_reached,
         },
+        &client_request_links,
         &item_by_id,
     );
 
@@ -224,6 +232,7 @@ const API_CODE_NODE_LIMIT: usize = 24;
 const API_EDGE_LIMIT: usize = 32;
 const API_DB_RELATION_LIMIT: usize = 8;
 const API_DB_CANDIDATE_LIMIT: usize = 8;
+const API_CLIENT_REQUEST_LIMIT: usize = 4;
 
 struct ApiFlowTraversal<'a> {
     links: Vec<&'a SnapshotLink>,
@@ -417,7 +426,7 @@ fn reachable_api_flow_links<'a>(
 }
 
 fn trusted_api_edge(link: &SnapshotLink, kind: &str, engine_edge_type: &str) -> bool {
-    link.truth_class == "confirmed"
+    link.is_confirmed()
         && link.kind == kind
         && link.engine_edge_type.as_deref() == Some(engine_edge_type)
 }
@@ -433,11 +442,34 @@ fn record_hidden_api_edge(
     }
 }
 
+fn client_request_links_for_route<'a>(
+    snapshot: &'a InventorySnapshot,
+    route_id: &str,
+) -> Vec<&'a SnapshotLink> {
+    let mut links = snapshot
+        .links
+        .iter()
+        .filter(|link| {
+            link.kind == "client_request"
+                && link.to == route_id
+                && matches!(link.truth_class.as_str(), "confirmed" | "candidate")
+        })
+        .collect::<Vec<_>>();
+    links.sort_by(|left, right| {
+        (left.truth_class != "confirmed")
+            .cmp(&(right.truth_class != "confirmed"))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    links.truncate(API_CLIENT_REQUEST_LIMIT);
+    links
+}
+
 fn api_reading_answer(
     snapshot: &InventorySnapshot,
     route: &InventoryItem,
     traversal: &ApiFlowTraversal<'_>,
     db_projection: ApiDatabaseProjection<'_>,
+    client_request_links: &[&SnapshotLink],
     item_by_id: &HashMap<&str, &InventoryItem>,
 ) -> ApiReadingAnswer {
     let ApiDatabaseProjection {
@@ -463,6 +495,48 @@ fn api_reading_answer(
         item_by_id,
         &route_mount_evidence,
     )];
+    let mut client_requests = client_request_links
+        .iter()
+        .filter_map(|link| {
+            let source = item_by_id.get(link.from.as_str()).copied()?;
+            let request = link
+                .evidence
+                .iter()
+                .find(|evidence| evidence.kind == "client-request")
+                .map(|evidence| evidence.text.as_str())
+                .unwrap_or("클라이언트 요청");
+            Some(ImpactReviewItem {
+                id: format!("api-client-request:{}", link.id),
+                node_id: Some(source.id.clone()),
+                kind: "client-request".to_string(),
+                title: request.to_string(),
+                detail: safe_text(&format!(
+                    "{}에서 {} API를 요청합니다. 정적 연결 상태: {}.",
+                    source.name,
+                    route.name,
+                    if link.is_confirmed() {
+                        "확정"
+                    } else {
+                        "후보"
+                    }
+                )),
+                truth_class: if link.is_confirmed() {
+                    "confirmed".to_string()
+                } else {
+                    "candidate".to_string()
+                },
+                confidence: Some(if link.is_confirmed() {
+                    "high".to_string()
+                } else {
+                    "medium".to_string()
+                }),
+                rank: 0,
+                evidence: safe_evidence(&link.evidence),
+                location: source.location.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    assign_review_ranks(&mut client_requests);
     for node_id in &traversal.node_order {
         let Some(item) = item_by_id.get(node_id.as_str()).copied() else {
             continue;
@@ -860,6 +934,7 @@ fn api_reading_answer(
         subject,
         method,
         steps,
+        client_requests,
         db_relations,
         db_candidates,
         unknowns,

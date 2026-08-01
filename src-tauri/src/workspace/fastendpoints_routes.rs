@@ -550,6 +550,7 @@ mod tests {
             calls: Vec::new(),
             handles: Vec::new(),
             relation_gaps: Vec::new(),
+            client_requests: Vec::new(),
             partial: false,
         }
     }

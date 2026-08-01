@@ -359,7 +359,7 @@ fn is_identifier_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '_'
 }
 
-fn inventory_columns() -> [&'static str; 20] {
+fn inventory_columns() -> [&'static str; 21] {
     [
         "labels",
         "name",
@@ -381,6 +381,7 @@ fn inventory_columns() -> [&'static str; 20] {
         "signature",
         "return_type",
         "is_test",
+        "properties",
     ]
 }
 
@@ -455,6 +456,7 @@ fn add_architecture_nodes(
                 .and_then(|value| value.as_bool().or_else(|| value.as_str()?.parse().ok())),
             None,
             None,
+            Some(&properties),
         ));
     }
 }
@@ -539,6 +541,7 @@ fn add_document_symbols(
                 None,
                 Some(&source_range),
                 symbol.get("enclosing_symbol").and_then(Value::as_str),
+                None,
             ));
         }
     }
@@ -579,6 +582,7 @@ fn inventory_row(
     is_test: Option<bool>,
     source_range: Option<&[i32]>,
     parent_qualified_name: Option<&str>,
+    properties: Option<&Value>,
 ) -> Value {
     let source_location = source_range.and_then(crate::range_parts);
     let start_line = source_location
@@ -610,6 +614,7 @@ fn inventory_row(
         signature,
         Value::Null,
         is_test,
+        properties.cloned().unwrap_or(Value::Null),
     ])
 }
 

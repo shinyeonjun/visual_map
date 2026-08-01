@@ -1,7 +1,7 @@
-import { Cog, FileText, LoaderCircle, Maximize2, Minus, MousePointer2, Plus, Table2, Unlink, X } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode, WheelEvent } from "react";
-import { codeInventoryCodeItems, codeKindChip, dbInventoryTableKey } from "../../types/workspace";
+import { Cog, FileText, LoaderCircle, Maximize2, Minus, MousePointer2, Plus, Table2, X } from "lucide-react";
+import { useState } from "react";
+import type { CSSProperties, KeyboardEvent } from "react";
+import { codeInventoryBackendRoutes, codeInventoryCodeItems, codeKindChip, dbInventoryTableKey } from "../../types/workspace";
 import type { CodeInventory, CodeInventoryItem } from "../../types/workspace";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import type { VisualEdge, VisualMap, VisualNode } from "../../types/visual-map";
@@ -20,6 +20,8 @@ import {
 import { focusDbProfileSetup } from "../common/focusSourceSetup";
 import { ApiReadingHeader, ApiReadingPath } from "./ApiReadingPath";
 import type { ApiReadingView } from "./ApiReadingPath";
+import { Band, DisconnectedCodeFocus, RelationBeams, RelationLedger } from "./AtlasCanvasParts";
+import { useCanvasViewport } from "./useCanvasViewport";
 import { ArchitectureMap, CompositionMap, RelationBadge } from "./ArchitectureMap";
 import { ImpactReviewBoard } from "./ImpactReviewBoard";
 import { SetupChecklist } from "./SetupChecklist";
@@ -38,7 +40,6 @@ import {
   atlasCodeKindRank,
   buildRelationBeams,
   buildRelationCounts,
-  clamp,
   codeIdsFromNodeIds,
   columnMeta,
   columnNamesForTableFromNodeIds,
@@ -59,9 +60,6 @@ import {
   tableKeyFromFocusedTable,
   tableKeysFromNodeIds,
   takeWithPinned,
-  type RelationBeam,
-  type RelationLedgerRow,
-  type RelationTone,
 } from "./atlasRelations";
 
 type FocusStripState = {
@@ -70,19 +68,6 @@ type FocusStripState = {
   meta: string;
   hint: string;
   tone: "code" | "db" | "edge" | "neutral";
-};
-
-type CanvasViewState = {
-  zoom: number;
-  left: number;
-  top: number;
-};
-
-const RELATION_ACTION_LABEL: Record<RelationTone, string> = {
-  confirmed: "1차 근거",
-  typed: "구조 근거",
-  candidate: "검증 필요",
-  inferred: "이름 단서",
 };
 
 export function AtlasCanvas({
@@ -111,11 +96,18 @@ export function AtlasCanvas({
   const needsTarget = visualMapControls.currentMap?.focus === "narrow-focus" && !visualMapControls.focusId;
   const projectionOnlyMode = architectureMode || Boolean(impactBoard) || Boolean(apiReading);
   const architectureDetail = Boolean(architectureMap?.focus.startsWith("group:"));
-  const stageRef = useRef<HTMLDivElement | null>(null);
-  const panRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
-  const zoomRef = useRef(1);
-  const viewStatesRef = useRef(new Map<string, CanvasViewState>());
-  const [atlasZoom, setAtlasZoom] = useState(1);
+  const {
+    stageRef,
+    atlasZoom,
+    startPan,
+    movePan,
+    stopPan,
+    handleWheel,
+    zoomAtlas,
+    resetAtlasView,
+    resetAtlasZoom,
+    rememberCanvasView,
+  } = useCanvasViewport(mode);
   const [apiReadingView, setApiReadingView] = useState<ApiReadingView>("connections");
   const pendingFocus = visualMapControls.loading && visualMapControls.currentMap
     ? transitionFocusState(
@@ -125,17 +117,6 @@ export function AtlasCanvas({
         dbProfileControls,
       )
     : null;
-
-  useLayoutEffect(() => {
-    const saved = viewStatesRef.current.get(mode) ?? { zoom: 1, left: 0, top: 0 };
-    zoomRef.current = saved.zoom;
-    setAtlasZoom(saved.zoom);
-    window.requestAnimationFrame(() => {
-      if (!stageRef.current) return;
-      stageRef.current.scrollLeft = saved.left;
-      stageRef.current.scrollTop = saved.top;
-    });
-  }, [mode]);
 
   if (visualMapControls.loading && !visualMapControls.currentMap) {
     return (
@@ -147,7 +128,7 @@ export function AtlasCanvas({
       />
     );
   }
-  const routes = projectionOnlyMode ? [] : workspaceControls.codeInventory?.routes ?? [];
+  const routes = projectionOnlyMode ? [] : codeInventoryBackendRoutes(workspaceControls.codeInventory);
   const codeItems = projectionOnlyMode ? [] : codeInventoryCodeItems(workspaceControls.codeInventory);
   const fileItems = projectionOnlyMode ? [] : workspaceControls.codeInventory?.files ?? [];
   const allTables = projectionOnlyMode ? [] : dbProfileControls.inventory?.tables ?? [];
@@ -813,60 +794,7 @@ export function AtlasCanvas({
     </main>
   );
 
-  function startPan(event: PointerEvent<HTMLDivElement>) {
-    const target = event.target instanceof Element ? event.target : null;
-    if (event.button !== 0 || target?.closest("button, [role='button']")) {
-      return;
-    }
-    if (visualMapControls.selectedEdge || visualMapControls.selectedNode) {
-      visualMapControls.clearSelection();
-    }
-    const stage = stageRef.current;
-    if (!stage) {
-      return;
-    }
-    panRef.current = { x: event.clientX, y: event.clientY, left: stage.scrollLeft, top: stage.scrollTop };
-    stage.setPointerCapture(event.pointerId);
-    stage.classList.add("panning");
-  }
 
-  function movePan(event: PointerEvent<HTMLDivElement>) {
-    const stage = stageRef.current;
-    const pan = panRef.current;
-    if (!stage || !pan) {
-      return;
-    }
-    stage.scrollLeft = pan.left - (event.clientX - pan.x);
-    stage.scrollTop = pan.top - (event.clientY - pan.y);
-  }
-
-  function stopPan(event: PointerEvent<HTMLDivElement>) {
-    if (!panRef.current) {
-      return;
-    }
-    panRef.current = null;
-    stageRef.current?.classList.remove("panning");
-    try {
-      stageRef.current?.releasePointerCapture(event.pointerId);
-    } catch {
-      // Pointer capture may already be released by the WebView.
-    }
-  }
-
-  function handleWheel(event: WheelEvent<HTMLDivElement>) {
-    const stage = stageRef.current;
-    if (!stage) {
-      return;
-    }
-    if (!event.ctrlKey && !event.metaKey) {
-      event.preventDefault();
-      stage.scrollLeft += event.deltaX;
-      stage.scrollTop += event.deltaY;
-      return;
-    }
-    event.preventDefault();
-    zoomAtlas(event.deltaY < 0 ? 0.08 : -0.08, { clientX: event.clientX, clientY: event.clientY });
-  }
 
   function handleStageKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== "Escape" || (!visualMapControls.selectedEdge && !visualMapControls.selectedNode)) {
@@ -876,61 +804,6 @@ export function AtlasCanvas({
     visualMapControls.clearSelection();
   }
 
-  function zoomAtlas(delta: number, origin?: { clientX: number; clientY: number }) {
-    setAtlasZoom((current) => {
-      const next = clamp(current + delta, 0.55, 1.65);
-      zoomRef.current = next;
-      const stage = stageRef.current;
-      if (origin && stage && next !== current) {
-        const rect = stage.getBoundingClientRect();
-        const x = origin.clientX - rect.left;
-        const y = origin.clientY - rect.top;
-        const ratio = next / current;
-        window.requestAnimationFrame(() => {
-          stage.scrollLeft = (stage.scrollLeft + x) * ratio - x;
-          stage.scrollTop = (stage.scrollTop + y) * ratio - y;
-          rememberCanvasView();
-        });
-      }
-      viewStatesRef.current.set(mode, {
-        zoom: next,
-        left: stage?.scrollLeft ?? 0,
-        top: stage?.scrollTop ?? 0,
-      });
-      return next;
-    });
-  }
-
-  function resetAtlasView() {
-    zoomRef.current = 1;
-    setAtlasZoom(1);
-    if (stageRef.current) {
-      stageRef.current.scrollLeft = 0;
-      stageRef.current.scrollTop = 0;
-    }
-    viewStatesRef.current.set(mode, { zoom: 1, left: 0, top: 0 });
-  }
-
-  function resetAtlasZoom() {
-    zoomRef.current = 1;
-    setAtlasZoom(1);
-    const stage = stageRef.current;
-    viewStatesRef.current.set(mode, {
-      zoom: 1,
-      left: stage?.scrollLeft ?? 0,
-      top: stage?.scrollTop ?? 0,
-    });
-  }
-
-  function rememberCanvasView() {
-    const stage = stageRef.current;
-    if (!stage) return;
-    viewStatesRef.current.set(mode, {
-      zoom: zoomRef.current,
-      left: stage.scrollLeft,
-      top: stage.scrollTop,
-    });
-  }
 
   function isSelectedEdgeEndpoint(nodeId: string): boolean {
     const edge = visualMapControls.selectedEdge;
@@ -1074,50 +947,6 @@ export function AtlasCanvas({
   }
 }
 
-function DisconnectedCodeFocus({
-  item,
-  hiddenNearbyCount,
-}: {
-  item: CodeInventoryItem;
-  hiddenNearbyCount: number;
-}) {
-  const isFile = item.kind.trim().toLowerCase() === "file";
-  const source = compactPath(item.filePath) ?? "소스 위치 없음";
-  return (
-    <section className="at-disconnected-focus" aria-label={`${item.name} 연결 없음`}>
-      <div className="at-disconnected-side incoming">
-        <span>들어오는 연결</span>
-        <strong>0</strong>
-        <small>현재 스냅샷에서 확인되지 않음</small>
-      </div>
-      <article className="at-disconnected-target">
-        <header>
-          {isFile ? <FileText size={16} /> : <Cog size={16} />}
-          <span>{codeKindChip(item.kind)}</span>
-        </header>
-        <strong title={item.name}>{item.name}</strong>
-        <small title={item.filePath ?? undefined}>{source}{item.line ? `:${item.line}` : ""}</small>
-      </article>
-      <div className="at-disconnected-side outgoing">
-        <span>나가는 연결</span>
-        <strong>0</strong>
-        <small>현재 스냅샷에서 확인되지 않음</small>
-      </div>
-      <p>
-        <Unlink size={15} aria-hidden="true" />
-        <span>
-          <strong>확인된 직접 관계가 없습니다</strong>
-          <small>
-            {hiddenNearbyCount > 0
-              ? `같은 분석 범위의 ${hiddenNearbyCount.toLocaleString("ko-KR")}개 항목은 관계 근거가 없어 지도에서 분리했습니다.`
-              : "오른쪽에서 소스 위치와 다음 확인 항목을 볼 수 있습니다."}
-          </small>
-        </span>
-      </p>
-    </section>
-  );
-}
-
 function architectureCanvasFacts(map: VisualMap | null): string {
   if (!map) {
     return "구조 projection 대기";
@@ -1135,126 +964,6 @@ function showWorkbenchDbSetup(openSourceManager: () => void, dbProfileControls: 
   window.requestAnimationFrame(() => focusDbProfileSetup(dbProfileControls));
 }
 
-function RelationBeams({ beams, onSelect }: { beams: RelationBeam[]; onSelect: (edge: VisualEdge) => void }) {
-  return (
-    <svg className="at-relation-beams" aria-label="관계선">
-      <defs>
-        <marker id="at-beam-arrow" markerHeight="6" markerWidth="6" orient="auto" refX="5" refY="3">
-          <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke" />
-        </marker>
-      </defs>
-      {beams.map((beam) => (
-        <line
-          aria-label={beam.label}
-          className={`at-beam ${beam.tone} ${beam.active ? "active" : ""}`}
-          key={beam.edge.id}
-          markerEnd="url(#at-beam-arrow)"
-          role="button"
-          tabIndex={0}
-          x1={beam.x1}
-          x2={beam.x2}
-          y1={`${beam.y1}%`}
-          y2={`${beam.y2}%`}
-          onClick={() => onSelect(beam.edge)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              onSelect(beam.edge);
-            }
-          }}
-        />
-      ))}
-    </svg>
-  );
-}
-
-function RelationLedger({
-  rows,
-  selectedEdgeId,
-  selectedNode,
-  hasSelectedTarget,
-  emptyReason,
-  total,
-  onSelect,
-}: {
-  rows: RelationLedgerRow[];
-  selectedEdgeId: string | null;
-  selectedNode: VisualNode | null;
-  hasSelectedTarget: boolean;
-  emptyReason?: string;
-  total: number;
-  onSelect: (edge: VisualEdge) => void;
-}) {
-  const title = selectedEdgeId ? "선택한 관계" : hasSelectedTarget ? "먼저 볼 관계" : "관계 우선순위";
-  const hint = selectedEdgeId
-    ? "근거와 양끝 항목 확인"
-    : hasSelectedTarget
-      ? "확정/구조 우선 · 후보 검증"
-      : "확정/구조 우선 · 후보/이름 단서 검증";
-  const hintTitle = "확정=읽은 근거, 구조=DB/FK/호출 구조, 후보/이름 단서=검증 필요";
-  const emptyText = emptyReason ?? (hasSelectedTarget ? "이 대상과 연결된 관계가 없습니다." : "아직 표시할 관계가 없습니다.");
-  const emptyNext = relationEmptyNextStep(emptyReason, hasSelectedTarget);
-  const hidden = Math.max(0, total - rows.length);
-  const countText = hidden > 0 ? `${rows.length}개 표시 · +${hidden}` : `${rows.length}개 전체`;
-
-  return (
-    <div className="at-edge-ledger" aria-label={title}>
-      <div className="at-edge-ledger-head">
-        <strong>{title}</strong>
-        <span title={hintTitle}>{hint}</span>
-        <em title={`${rows.length}개 표시 / 전체 ${total}개`}>{countText}</em>
-      </div>
-      {rows.length > 0 && (
-        <div className="at-edge-columns" aria-hidden="true">
-          <span>관계</span>
-          <span>기준</span>
-          <span />
-          <span>연결 대상</span>
-          <span>왜 연결됐나</span>
-          <span>판단</span>
-        </div>
-      )}
-      {rows.map((row) => (
-        <button
-          className={`at-edge-row ${row.tone} ${row.edge.id === selectedEdgeId ? "selected" : ""}${edgeTouchesNode(row.edge, selectedNode) ? " node-related" : ""}`}
-          aria-pressed={row.edge.id === selectedEdgeId}
-          key={row.edge.id}
-          type="button"
-          aria-label={`${row.label} 관계. 기준: ${row.fromTitle}. 연결 대상: ${row.toTitle}. 판단: ${relationLedgerAction(row.tone)}. 근거: ${row.evidence}`}
-          title={`${row.label} · ${row.fromTitle} → ${row.toTitle} · ${relationLedgerAction(row.tone)} · ${row.evidence}`}
-          onClick={() => onSelect(row.edge)}
-        >
-          <span className="at-edge-tone">{row.label}</span>
-          <code data-label="기준" title={row.fromTitle}>{row.from}</code>
-          <i aria-hidden="true" />
-          <code data-label="연결 대상" title={row.toTitle}>{row.to}</code>
-          <small>{row.evidence}</small>
-          <b className="at-edge-action">{row.edge.id === selectedEdgeId ? "선택됨" : relationLedgerAction(row.tone)}</b>
-        </button>
-      ))}
-      {rows.length === 0 && (
-        <span className="at-edge-empty">
-          <b>{emptyText}</b>
-          <small>{emptyNext}</small>
-        </span>
-      )}
-    </div>
-  );
-}
-
-function relationLedgerAction(tone: RelationTone): string {
-  return RELATION_ACTION_LABEL[tone];
-}
-
-function relationEmptyNextStep(emptyReason: string | undefined, hasSelectedTarget: boolean): string {
-  if (emptyReason?.includes("컬럼 구조") || emptyReason?.includes("컬럼을 읽으면")) {
-    return "DB 카드에서 컬럼을 보강하면 FK와 영향 근거를 확인할 수 있습니다.";
-  }
-  if (hasSelectedTarget) {
-    return "다른 카드나 상단 검색으로 범위를 넓혀 주변 관계를 다시 확인하세요.";
-  }
-  return "카드를 선택하거나 상단 검색으로 API, 코드, 테이블, 컬럼을 먼저 좁히세요.";
-}
 
 function CanvasTransitionState({
   mode,
@@ -1685,36 +1394,4 @@ function focusFromNode(node: VisualNode, map: VisualMap | null): FocusStripState
     hint: node.kind === "column" ? "컬럼 근거는 직접/후보로 나눠 봅니다." : "오른쪽 대상 근거에서 관계를 확인합니다.",
     tone: node.source === "db" ? "db" : node.source === "code" ? "code" : "neutral",
   };
-}
-
-
-
-
-function Band({
-  num,
-  label,
-  total,
-  shown,
-  last,
-  children,
-}: {
-  num: string;
-  label: string;
-  total: number;
-  shown: number;
-  last?: boolean;
-  children: ReactNode;
-}) {
-  const hidden = Math.max(0, total - shown);
-  const countText = hidden > 0 ? `${shown}개 표시 · +${hidden}` : `${shown}개 전체`;
-  return (
-    <section className={`at-band ${last ? "last" : ""}`}>
-      <div className="at-gutter">
-        <span className="at-num">{num}</span>
-        <h3>{label}</h3>
-        <small title={`${shown}개 표시 / 전체 ${total}개`}>{countText}</small>
-      </div>
-      <div className="at-cards">{children}</div>
-    </section>
-  );
 }

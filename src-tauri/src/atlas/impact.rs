@@ -533,7 +533,7 @@ fn column_reference_candidates(
         snapshot
             .items
             .iter()
-            .filter(|item| item.source == "code")
+            .filter(|item| item.is_code())
             .filter_map(|item| {
                 let terms = identifier_terms(&format!(
                     "{} {}",

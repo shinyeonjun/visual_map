@@ -1212,6 +1212,7 @@ mod tests {
                 route: route_id,
             }],
             relation_gaps: Vec::new(),
+            client_requests: Vec::new(),
             partial: false,
         }
     }

@@ -55,7 +55,7 @@ pub(crate) fn inventory_bootstrap(snapshot: &InventorySnapshot) -> InventoryBoot
     let retained_db_table_ids = snapshot
         .items
         .iter()
-        .filter(|item| item.source == "db" && item.kind == "table")
+        .filter(|item| item.is_db() && item.kind == "table")
         .take(BOOTSTRAP_DB_TABLES)
         .map(|item| item.id.clone())
         .collect::<HashSet<_>>();
@@ -65,7 +65,7 @@ pub(crate) fn inventory_bootstrap(snapshot: &InventorySnapshot) -> InventoryBoot
             .items
             .iter()
             .filter(|item| {
-                item.source == "db"
+                item.is_db()
                     && !matches!(item.kind.as_str(), "view" | "trigger" | "routine")
                     && item
                         .parent_id
@@ -92,7 +92,7 @@ pub(crate) fn inventory_bootstrap(snapshot: &InventorySnapshot) -> InventoryBoot
             .items
             .iter()
             .filter(|item| {
-                item.source == "db"
+                item.is_db()
                     && item.kind == "trigger"
                     && item
                         .parent_id
@@ -111,7 +111,7 @@ pub(crate) fn inventory_bootstrap(snapshot: &InventorySnapshot) -> InventoryBoot
         .items
         .iter()
         .filter(|item| {
-            if item.source == "db" {
+            if item.is_db() {
                 let retained = retained_db_item_ids.contains(&item.id);
                 if retained {
                     retained_ids.insert(item.id.clone());
@@ -169,7 +169,7 @@ pub(crate) fn search_inventory(snapshot: &InventorySnapshot, query: &str) -> Inv
     let mut counts = BTreeMap::<String, usize>::new();
     let mut ranked = BTreeMap::<String, Vec<(u16, &InventoryItem)>>::new();
     for item in &snapshot.items {
-        if item.source == "code" && !item.is_project_code_item() {
+        if item.is_code() && !item.is_project_code_item() {
             continue;
         }
         let Some(group) = search_group(item) else {
@@ -220,7 +220,7 @@ fn inventory_summary(
 ) -> InventorySummary {
     let mut sources = BTreeMap::<String, InventorySourceSummary>::new();
     for item in &snapshot.items {
-        let (source, group) = if item.source == "code" {
+        let (source, group) = if item.is_code() {
             ("code", code_group(item, handler_ids))
         } else {
             (item.source.as_str(), item.kind.clone())
@@ -277,7 +277,7 @@ fn code_group(item: &InventoryItem, handler_ids: &HashSet<String>) -> String {
 }
 
 fn search_group(item: &InventoryItem) -> Option<&'static str> {
-    if item.source == "code" {
+    if item.is_code() {
         if item.layer == "api" {
             Some("api")
         } else if item.kind == "file" {
@@ -285,11 +285,11 @@ fn search_group(item: &InventoryItem) -> Option<&'static str> {
         } else {
             Some("code")
         }
-    } else if item.source == "db" && item.kind == "table" {
+    } else if item.is_db() && item.kind == "table" {
         Some("table")
-    } else if item.source == "db" && item.kind == "column" {
+    } else if item.is_db() && item.kind == "column" {
         Some("column")
-    } else if item.source == "db" && matches!(item.kind.as_str(), "view" | "trigger" | "routine") {
+    } else if item.is_db() && matches!(item.kind.as_str(), "view" | "trigger" | "routine") {
         Some("db-object")
     } else {
         None

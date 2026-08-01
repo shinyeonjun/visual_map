@@ -1,9 +1,11 @@
+mod client_requests;
 mod code;
 mod codebase_memory;
 mod database_memory;
 mod db;
 mod fastapi_routes;
 mod fastendpoints_routes;
+mod limits;
 mod model;
 mod provider_bundle;
 mod store;
@@ -16,6 +18,7 @@ pub(crate) use code::{
 pub(crate) use db::{
     db_inventory, delete_db_profile, index_db_profile_without_persisting, save_db_profile,
 };
+pub(crate) use limits::{bounded_code_inventory, bounded_db_inventory};
 pub(crate) use model::{
     CodeCall, CodeIndexResult, CodeInventory, CreateWorkspaceRequest, DbConstraint,
     DbDependentObject, DbForeignKey, DbIndex, DbIndexResult, DbInventory, IndexCodeRequest,
@@ -23,6 +26,7 @@ pub(crate) use model::{
 };
 pub(crate) use model::{CodeInventoryItem, DbProfile, DbSource};
 pub(crate) use model::{FocusedCodeSearch, FocusedCodeSearchMatch};
+
 pub(crate) use store::{
     create_workspace, delete_workspace, list_workspaces, open_workspace, refresh_github_workspace,
     repair_workspace_from_backup, validate_workspace_id, workspace_recovery_warnings,
@@ -48,8 +52,8 @@ pub(crate) use db::{
 };
 #[cfg(test)]
 pub(crate) use model::{
-    CodeHandle, CodeInventoryGap, CodeInventorySummary, DbInventoryColumn, DbInventoryTable,
-    FocusedCodeSearchTotals, RepoSource, WorkspaceEngineCache,
+    ClientRequest, CodeHandle, CodeInventoryGap, CodeInventorySummary, DbInventoryColumn,
+    DbInventoryTable, FocusedCodeSearchTotals, RepoSource, WorkspaceEngineCache,
 };
 #[cfg(test)]
 pub(crate) use store::{

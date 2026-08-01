@@ -185,8 +185,11 @@ function ProjectTree({
       <TreeSection icon={<Braces size={15} />} label="API" count={catalog.api.length}>
         <ApiTreeItems items={filteredItems(catalog, "api", query)} activeFocusIds={activeFocusIds} onSelect={onSelect} />
       </TreeSection>
-      <TreeSection icon={<Code2 size={15} />} label="코드" count={catalog.code.length}>
-        <CodeTreeItems items={filteredItems(catalog, "code", query)} activeFocusIds={activeFocusIds} onSelect={onSelect} />
+      <TreeSection icon={<Code2 size={15} />} label="코드" count={catalog.code.filter((item) => item.group !== "화면 라우트").length}>
+        <CodeTreeItems items={filteredItems(catalog, "code", query).filter((item) => item.group !== "화면 라우트")} activeFocusIds={activeFocusIds} onSelect={onSelect} />
+      </TreeSection>
+      <TreeSection icon={<GitBranch size={15} />} label="화면 라우트" count={catalog.code.filter((item) => item.group === "화면 라우트").length}>
+        <CodeTreeItems items={filteredItems(catalog, "code", query).filter((item) => item.group === "화면 라우트")} activeFocusIds={activeFocusIds} onSelect={onSelect} />
       </TreeSection>
       <TreeSection icon={<Database size={15} />} label="DB" count={catalog.table.length}>
         <TargetTreeItems items={filteredItems(catalog, "table", query)} activeFocusIds={activeFocusIds} onSelect={onSelect} />

@@ -5,6 +5,7 @@ import {
   codeInventoryFileCount,
   codeInventoryItemCount,
   codeInventoryRouteCount,
+  codeInventoryUiRoutes,
   codeInventorySymbolCount,
 } from "../../types/workspace";
 import type { WorkspaceControls } from "../../types/controls";
@@ -257,6 +258,9 @@ function codeNextAction(
   const fileCount = codeInventoryFileCount(workspaceControls.codeInventory);
   const summary = [
     hasRoutes ? `API ${codeInventoryRouteCount(workspaceControls.codeInventory)}개` : null,
+    codeInventoryUiRoutes(workspaceControls.codeInventory).length > 0
+      ? `화면 라우트 ${codeInventoryUiRoutes(workspaceControls.codeInventory).length}개`
+      : null,
     codeCount > 0 ? `코드 ${codeCount}개` : null,
     fileCount > 0 ? `파일 ${fileCount}개` : null,
   ]

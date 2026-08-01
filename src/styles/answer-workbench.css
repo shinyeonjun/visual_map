@@ -350,6 +350,13 @@
 .answer-flow-map-intro small { color: var(--ink-4); font-size: 9.5px; }
 .answer-flow-map .api-connection-view { min-width: 0; overflow-x: auto; }
 .answer-flow-map .api-connection-canvas { min-width: 620px; }
+.answer-flow-map .api-collapsed-relations { margin: 8px 12px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg-raised); }
+.answer-flow-map .api-collapsed-relations > summary { padding: 9px 11px; color: var(--ink-3); font-size: 10px; font-weight: 760; cursor: pointer; }
+.answer-flow-map .api-collapsed-relations > div { display: grid; gap: 5px; padding: 0 8px 8px; }
+.answer-flow-map .api-collapsed-relations button { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; align-items: center; min-width: 0; padding: 7px 8px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--bg-panel); color: var(--ink-2); text-align: left; font: inherit; cursor: pointer; }
+.answer-flow-map .api-collapsed-relations button:hover, .answer-flow-map .api-collapsed-relations button:focus-visible { border-color: var(--blue); outline: 0; }
+.answer-flow-map .api-collapsed-relations button strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.answer-flow-map .api-collapsed-relations button span { color: var(--ink-4); font: 800 9px/1 var(--mono); }
 .answer-flow-details { margin-top: 10px; border-top: 1px solid var(--line); }
 .answer-flow-details > summary {
   min-height: 38px;

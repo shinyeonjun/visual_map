@@ -248,7 +248,7 @@ fn map_search_match(
         .iter()
         .enumerate()
         .filter(|(_, item)| {
-            item.source == "code"
+            item.is_code()
                 && item.qualified_name.as_deref() == Some(search_match.qualified_name.as_str())
         })
         .map(|(index, _)| index)
@@ -258,7 +258,7 @@ fn map_search_match(
     }
 
     let mut candidates = snapshot.items.iter().enumerate().filter(|(_, item)| {
-        item.source == "code"
+        item.is_code()
             && item
                 .qualified_name
                 .as_deref()
@@ -445,7 +445,7 @@ fn compute_candidate_links(
         .items
         .iter()
         .take(item_limit)
-        .filter(|item| item.source == "code")
+        .filter(|item| item.is_code())
         .filter(|item| code_ids.is_none_or(|ids| ids.contains(&item.id)))
     {
         let name_terms = identifier_terms(&code.name);
@@ -498,7 +498,7 @@ fn compute_candidate_links(
         .links
         .iter()
         .take(link_limit)
-        .filter(|link| link.truth_class == "confirmed")
+        .filter(|link| link.is_confirmed())
         .filter_map(|link| match link.kind.as_str() {
             "code_db_read" | "code_db_write" | "code_db_uses_column" => {
                 Some((link.from.as_str(), link.to.as_str()))

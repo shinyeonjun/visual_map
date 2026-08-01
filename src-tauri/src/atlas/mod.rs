@@ -1,6 +1,7 @@
 mod api_flow;
 mod architecture;
 mod composition;
+mod evidence;
 mod impact;
 mod impact_review;
 mod inventory_query;
@@ -12,6 +13,12 @@ mod snapshot;
 mod visual_map;
 
 pub(crate) use composition::{composition_map, validate_composition_request};
+#[cfg(test)]
+pub(crate) use evidence::{api_code_evidence_target_ids, focused_code_path_filter};
+pub(crate) use evidence::{
+    enrich_composition_code_evidence, enrich_integrated_snapshot_code_evidence,
+    enrich_snapshot_code_evidence, normalized_change_intent,
+};
 pub(crate) use inventory_query::{
     inventory_bootstrap, search_inventory, InventoryBootstrap, InventorySearchResult,
 };

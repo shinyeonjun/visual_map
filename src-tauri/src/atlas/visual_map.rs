@@ -379,6 +379,10 @@ pub(super) fn confirmed_link_edge(
             "code-handle",
             format!("{from_name} Route를 {to_name} handler가 처리합니다"),
         ),
+        "client_request" => (
+            "client-request",
+            format!("{from_name} 클라이언트가 {to_name} API를 요청합니다"),
+        ),
         "code_db_read" => (
             "code-db-read",
             format!("{from_name} 코드가 {to_name} 테이블을 정적 SQL로 조회합니다"),
@@ -426,7 +430,7 @@ pub(super) fn confirmed_link_edge(
         from: link.from.clone(),
         to: link.to.clone(),
         kind: link.kind.clone(),
-        confidence: None,
+        confidence: (link.truth_class == "candidate").then(|| "candidate".to_string()),
         evidence,
     }
 }
