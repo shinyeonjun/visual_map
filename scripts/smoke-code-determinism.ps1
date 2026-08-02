@@ -58,6 +58,11 @@ try {
         "import { add } from './callee';`nexport function total(): number { return add(1, 2); }`n",
         [Text.UTF8Encoding]::new($false)
     )
+    [IO.File]::WriteAllText(
+        (Join-Path $sourceRoot "tsconfig.json"),
+        '{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","strict":true},"include":["src/**/*.ts"]}',
+        [Text.UTF8Encoding]::new($false)
+    )
 
     function Invoke-Index([string]$CacheRoot, [string]$OutputPath, [string]$ArchitecturePath) {
         $env:CODE_MEMORY_CACHE_ROOT = $CacheRoot
