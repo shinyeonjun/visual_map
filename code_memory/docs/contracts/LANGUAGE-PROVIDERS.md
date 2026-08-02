@@ -17,7 +17,12 @@ code-memory-language supports exactly these twelve Windows language IDs:
 
 The Rust bridge starts native LSP servers directly over JSON-RPC. It does not
 depend on the separately installed lsp-to-scip executable. Both SCIP and LSP
-results are normalized into code-memory.language-index.v1.
+results are normalized into code-memory.language-index.v2.
+
+Every index also records `provider_provenance`: the selected tool, whether it
+came from the managed provider pack or the machine PATH, and the provider
+version when the managed manifest declares one. A PATH result is valid but
+unmanaged and must not be presented as byte-for-byte reproducible.
 
 ## Commands
 

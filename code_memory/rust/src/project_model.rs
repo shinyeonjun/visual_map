@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::{
     project_cache_root, provider_timeout, terminate_process_tree, tool_command, Diagnostic,
-    FileRelationOutput,
+    DiagnosticCode, FileRelationOutput,
 };
 
 const MAX_PROJECT_MODEL_STREAM_BYTES: usize = 128 * 1024 * 1024;
@@ -93,6 +93,7 @@ pub(crate) fn analyze_typescript_project(
                 "warning" => "warning",
                 _ => "info",
             },
+            code: DiagnosticCode::ProviderDiagnostic,
             message: diagnostic.message,
             path: None,
             line: None,

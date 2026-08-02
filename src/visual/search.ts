@@ -36,6 +36,7 @@ const SEARCH_GROUPS = [
 ] as const;
 
 const SEARCH_GROUP_LIMIT = 4;
+export const SEARCH_WORKER_THRESHOLD = 1_000;
 
 type RankedSearchResult = { score: number; result: SearchResult };
 
@@ -150,9 +151,46 @@ export function searchCollectionFromInventoryResult(result: InventorySearchResul
   };
 }
 
-export function prepareSearchIndex(codeInventory: CodeInventory | null, dbInventory: DbInventory | null) {
+function prepareSearchIndex(codeInventory: CodeInventory | null, dbInventory: DbInventory | null) {
+  if (searchInventorySize(codeInventory, dbInventory) >= SEARCH_WORKER_THRESHOLD) {
+    return;
+  }
   codeSearchIndex(codeInventory);
   dbSearchIndex(dbInventory);
+}
+
+export function scheduleSearchIndex(codeInventory: CodeInventory | null, dbInventory: DbInventory | null): () => void {
+  let cancelled = false;
+  const prepare = () => {
+    if (!cancelled) {
+      prepareSearchIndex(codeInventory, dbInventory);
+    }
+  };
+  const idleWindow =
+    typeof window === "undefined"
+      ? null
+      : (window as unknown as {
+          requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+          cancelIdleCallback?: (handle: number) => void;
+        });
+  if (idleWindow?.requestIdleCallback) {
+    const handle = idleWindow.requestIdleCallback(prepare, { timeout: 250 });
+    return () => {
+      cancelled = true;
+      idleWindow.cancelIdleCallback?.(handle);
+    };
+  }
+  if (!idleWindow) {
+    prepare();
+    return () => {
+      cancelled = true;
+    };
+  }
+  const handle = window.setTimeout(prepare, 0);
+  return () => {
+    cancelled = true;
+    window.clearTimeout(handle);
+  };
 }
 
 export function collectSearchResults(
@@ -190,7 +228,7 @@ export function collectSearchResults(
         title: item.name,
         subtitle: isUiRoute(item)
           ? `화면 라우트 · ${item.filePath ?? "위치 정보 없음"}`
-          : item.filePath ?? (item.kind.toLowerCase() === "unknown" ? "근거 미확인" : item.kind),
+          : (item.filePath ?? (item.kind.toLowerCase() === "unknown" ? "근거 미확인" : item.kind)),
         focusId: `code:${item.id}`,
         codeItem: item,
       });
@@ -315,10 +353,9 @@ function codeSearchIndex(inventory: CodeInventory | null): CodeSearchIndex {
   }
   const index = {
     routes: codeInventoryBackendRoutes(inventory).filter(isProjectCodeItem).map(indexCodeItem),
-    code: [
-      ...codeInventoryCodeItems(inventory),
-      ...codeInventoryUiRoutes(inventory),
-    ].filter(isProjectCodeItem).map(indexCodeItem),
+    code: [...codeInventoryCodeItems(inventory), ...codeInventoryUiRoutes(inventory)]
+      .filter(isProjectCodeItem)
+      .map(indexCodeItem),
     files: inventory.files.filter(isProjectCodeItem).map(indexCodeItem),
   };
   codeSearchIndexes.set(inventory, index);
@@ -424,6 +461,27 @@ function emptySearchCollection(): SearchCollection {
     counts: SEARCH_GROUPS.map(() => 0),
     truncated: false,
   };
+}
+
+export function searchInventorySize(codeInventory: CodeInventory | null, dbInventory: DbInventory | null): number {
+  if (!codeInventory && !dbInventory) {
+    return 0;
+  }
+  const codeSize = codeInventory
+    ? codeInventory.routes.length +
+      codeInventory.services.length +
+      codeInventory.files.length +
+      codeInventory.handlers.length +
+      codeInventory.repositories.length +
+      codeInventory.functions.length +
+      codeInventory.classes.length +
+      codeInventory.modules.length +
+      codeInventory.unknown.length
+    : 0;
+  const dbSize = dbInventory
+    ? dbInventory.tables.reduce((sum, table) => sum + 1 + table.columns.length + (table.dependents?.length ?? 0), 0)
+    : 0;
+  return codeSize + dbSize;
 }
 
 function searchScore(name: string, qualifiedName: string, path: string, query: string): number {

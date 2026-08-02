@@ -47,11 +47,20 @@ jobs:
       - name: Typecheck frontend
         run: npm run typecheck
 
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Check frontend formatting
+        run: npm run format:check
+
       - name: Check dead frontend code
         run: npm run deadcode
 
       - name: Test frontend
         run: npm test
+
+      - name: Measure frontend coverage
+        run: npm run test:coverage
 
       - name: Build frontend
         run: npm run build
@@ -69,6 +78,9 @@ jobs:
 
       - name: Build integrated database engine candidate
         run: cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path db_memory/Cargo.toml
+
+      - name: Test database core contract and golden replay
+        run: cargo +1.96.1 test --locked -p database-memory-core --manifest-path db_memory/Cargo.toml
 
       - name: Stage pinned engine candidates
         shell: pwsh
@@ -113,7 +125,15 @@ jobs:
 
       - name: Smoke code engine JSON contract
         shell: pwsh
+        env:
+          CODE_MEMORY_REQUIRE_MANAGED_PROVIDERS: "1"
         run: .\scripts\smoke-code-engine-contract.ps1
+
+      - name: Smoke code engine determinism
+        shell: pwsh
+        env:
+          CODE_MEMORY_REQUIRE_MANAGED_PROVIDERS: "1"
+        run: .\scripts\smoke-code-determinism.ps1
 
       - name: Smoke code evidence golden and negative fixtures
         shell: pwsh

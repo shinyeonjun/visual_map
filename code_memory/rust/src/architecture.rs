@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::{DocumentOutput, IndexOutput, SourceSnapshot};
+use crate::{DiagnosticCode, DocumentOutput, IndexOutput, SourceSnapshot};
 mod builder;
 mod helpers;
 mod model;
@@ -47,12 +47,13 @@ pub(crate) fn build_with_sources(
     for diagnostic in &output.diagnostics {
         builder.diagnostics.push(ArchitectureDiagnostic {
             kind: "provider".to_string(),
+            code: diagnostic.code,
             path: diagnostic.path.clone(),
             message: match diagnostic.line {
                 Some(line) => format!("{}:{}: {}", diagnostic.language, line, diagnostic.message),
                 None => format!("{}: {}", diagnostic.language, diagnostic.message),
             },
-            exclusion_reason: diagnostic_exclusion_reason(&diagnostic.message),
+            exclusion_reason: diagnostic.code.exclusion_reason().map(str::to_string),
             exclusion_scope: Some(if diagnostic.path.is_some() {
                 "file".to_string()
             } else {
@@ -64,6 +65,7 @@ pub(crate) fn build_with_sources(
         if coverage.status != "indexed" {
             builder.diagnostics.push(ArchitectureDiagnostic {
                 kind: coverage.status.to_string(),
+                code: DiagnosticCode::PartialCoverage,
                 path: Some(coverage.path.clone()),
                 message: coverage
                     .reason
@@ -87,6 +89,7 @@ pub(crate) fn build_with_sources(
     builder.emit_call_boundaries(output);
     builder.emit_framework_boundaries(output);
     let mut architecture = builder.finish();
+    architecture.provider_provenance = output.provider_provenance.clone();
     architecture.languages = output
         .languages
         .iter()
@@ -138,28 +141,7 @@ fn language_exclusion_reason(
     diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.language == language)
-        .find_map(|diagnostic| diagnostic_exclusion_reason(&diagnostic.message))
-}
-
-fn diagnostic_exclusion_reason(message: &str) -> Option<String> {
-    let message = message.to_ascii_lowercase();
-    if message.contains("composer")
-        || message.contains("dependency metadata")
-        || message.contains("package metadata")
-    {
-        Some("missing-dependency".to_string())
-    } else if message.contains("compile context")
-        || message.contains("unavailable legacy sdk")
-        || message.contains("unavailable external tool")
-    {
-        Some("missing-compile-context".to_string())
-    } else if message.contains("unsupported framework") {
-        Some("unsupported-framework".to_string())
-    } else if message.contains("runtime reachability") {
-        Some("runtime-reachability-unknown".to_string())
-    } else {
-        None
-    }
+        .find_map(|diagnostic| diagnostic.code.exclusion_reason().map(str::to_string))
 }
 
 fn coverage_exclusion_reason(reason: &str) -> Option<String> {

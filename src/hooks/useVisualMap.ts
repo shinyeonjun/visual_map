@@ -1,20 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useReducer, useRef } from "react";
 import { commandErrorCode, toUserError } from "../app/operationStatus";
-import {
-  validateInventoryBootstrap,
-  validateInventorySearchResult,
-  validateVisualMap,
-} from "../app/runtimeContracts";
+import { validateInventoryBootstrap, validateInventorySearchResult, validateVisualMap } from "../app/runtimeContracts";
 import { hasTauriRuntime } from "../app/tauriRuntime";
 import {
-  collectSearchResults,
   groupSearchResults,
   searchCollectionFromInventoryResult,
   searchScopeText,
   searchSummaryText,
   type SearchCollection,
 } from "../visual/search";
+import { collectSearchResultsAsync } from "../visual/searchWorkerClient";
 import { resetMapContext, saveMapContext, savedMapContext } from "../visual/mapContext";
 import {
   compositionSearchResultIsSupported,
@@ -30,14 +26,9 @@ import {
 } from "../visual/visualMapModel";
 import type { CodeInventory, CodeInventoryItem, DbInventory } from "../types/workspace";
 import type { SearchResult, SearchResultGroup } from "../types/controls";
-import type {
-  AnalysisCoverage,
-  ChangeIntent,
-  InventorySnapshot,
-  VisualEdge,
-  VisualMap,
-  VisualNode,
-} from "../types/visual-map";
+import type { ChangeIntent, InventorySnapshot, VisualEdge, VisualMap, VisualNode } from "../types/visual-map";
+import { createVisualMapUiState, DEFAULT_CHANGE_INTENT, visualMapUiReducer } from "./visualMapUiState";
+import { useVisualMapState } from "./useVisualMapState";
 
 type SearchContext = {
   codeInventory: CodeInventory | null;
@@ -46,7 +37,6 @@ type SearchContext = {
   selectDbTable: (tableKey: string) => void;
 };
 
-const DEFAULT_CHANGE_INTENT: ChangeIntent = { kind: "rename", value: null };
 export function useVisualMap({
   currentWorkspaceId,
   bootstrapReady = true,
@@ -56,31 +46,61 @@ export function useVisualMap({
   bootstrapReady?: boolean;
   onOperation?: (action: string) => void;
 }) {
-  const [visualMap, setVisualMap] = useState<VisualMap | null>(null);
-  const [visualMapLoading, setVisualMapLoading] = useState(false);
-  const [visualMapEnriching, setVisualMapEnriching] = useState(false);
-  const [visualMapStatus, setVisualMapStatus] = useState<string | null>(null);
-  const [visualMapError, setVisualMapError] = useState<string | null>(null);
-  const [visualMapErrorDetail, setVisualMapErrorDetail] = useState<string | null>(null);
-  const [snapshotSavedAt, setSnapshotSavedAt] = useState<string | null>(null);
-  const [snapshotStaleReasons, setSnapshotStaleReasons] = useState<string[]>([]);
-  const [snapshotSourceSummary, setSnapshotSourceSummary] = useState<string | null>(null);
-  const [analysisCoverage, setAnalysisCoverage] = useState<AnalysisCoverage | null>(null);
-  const [snapshotWorkspaceId, setSnapshotWorkspaceId] = useState<string | null>(null);
-  const [projectionElapsedMs, setProjectionElapsedMs] = useState<number | null>(null);
-  const [visualStateWorkspaceId, setVisualStateWorkspaceId] = useState<string | null>(currentWorkspaceId);
-  const [visualTargetKey, setVisualTargetKey] = useState<string | null>(null);
-  const [visualMapKey, setVisualMapKey] = useState<string | null>(null);
-  const [mapMode, setMapMode] = useState("atlas");
-  const [compositionFocusIds, setCompositionFocusIds] = useState<string[]>([]);
-  const [relationView, setRelationViewState] = useState<RelationView>("connections");
-  const [changeIntent, setChangeIntentState] = useState<ChangeIntent>(DEFAULT_CHANGE_INTENT);
-  const [searchQuery, setSearchQueryValue] = useState("");
-  const [searchPopoverOpen, setSearchPopoverOpen] = useState(false);
-  const [searchSummary, setSearchSummary] = useState<string | null>(null);
-  const [searchGroups, setSearchGroups] = useState<SearchResultGroup[]>([]);
-  const [selectedVisualNode, setSelectedVisualNode] = useState<VisualNode | null>(null);
-  const [selectedVisualEdge, setSelectedVisualEdge] = useState<VisualEdge | null>(null);
+  const {
+    visualMap,
+    setVisualMap,
+    visualMapLoading,
+    setVisualMapLoading,
+    visualMapEnriching,
+    setVisualMapEnriching,
+    visualMapStatus,
+    setVisualMapStatus,
+    visualMapError,
+    setVisualMapError,
+    visualMapErrorDetail,
+    setVisualMapErrorDetail,
+    snapshotSavedAt,
+    setSnapshotSavedAt,
+    snapshotStaleReasons,
+    setSnapshotStaleReasons,
+    snapshotSourceSummary,
+    setSnapshotSourceSummary,
+    analysisCoverage,
+    setAnalysisCoverage,
+    snapshotWorkspaceId,
+    setSnapshotWorkspaceId,
+    projectionElapsedMs,
+    setProjectionElapsedMs,
+    visualStateWorkspaceId,
+    setVisualStateWorkspaceId,
+    visualTargetKey,
+    setVisualTargetKey,
+    visualMapKey,
+    setVisualMapKey,
+  } = useVisualMapState(currentWorkspaceId);
+  const [uiState, dispatchUi] = useReducer(visualMapUiReducer, undefined, createVisualMapUiState);
+  const {
+    mapMode,
+    compositionFocusIds,
+    relationView,
+    changeIntent,
+    searchQuery,
+    searchPopoverOpen,
+    searchSummary,
+    searchGroups,
+    selectedVisualNode,
+    selectedVisualEdge,
+  } = uiState;
+  const setMapMode = (value: string) => dispatchUi({ type: "set-map-mode", value });
+  const setCompositionFocusIds = (value: string[]) => dispatchUi({ type: "set-composition-focus-ids", value });
+  const setRelationViewState = (value: RelationView) => dispatchUi({ type: "set-relation-view", value });
+  const setChangeIntentState = (value: ChangeIntent) => dispatchUi({ type: "set-change-intent", value });
+  const setSearchQueryValue = (value: string) => dispatchUi({ type: "set-search-query", value });
+  const setSearchPopoverOpen = (value: boolean) => dispatchUi({ type: "set-search-popover-open", value });
+  const setSearchSummary = (value: string | null) => dispatchUi({ type: "set-search-summary", value });
+  const setSearchGroups = (value: SearchResultGroup[]) => dispatchUi({ type: "set-search-groups", value });
+  const setSelectedVisualNode = (value: VisualNode | null) => dispatchUi({ type: "set-selected-node", value });
+  const setSelectedVisualEdge = (value: VisualEdge | null) => dispatchUi({ type: "set-selected-edge", value });
   const selectedVisualNodeRef = useRef<VisualNode | null>(null);
   const selectedVisualEdgeRef = useRef<VisualEdge | null>(null);
   const currentWorkspaceIdRef = useRef<string | null>(currentWorkspaceId);
@@ -139,6 +159,8 @@ export function useVisualMap({
     clearVisualSelection();
     setMapMode(context.mode);
     void loadVisualMap(context.focusId, context.mode, currentWorkspaceId);
+    // This effect is scoped to workspace/bootstrap transitions; local helper identities change per render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrapReady, currentWorkspaceId]);
 
   async function loadVisualMap(
@@ -156,14 +178,7 @@ export function useVisualMap({
     const requestId = ++visualMapRequestRef.current;
     const startedAt = performance.now();
     const requestChangeIntent = mode === "column-impact" ? { ...changeIntentRef.current } : null;
-    const targetKey = mapRequestKey(
-      workspaceId,
-      mode,
-      focusId,
-      requestChangeIntent,
-      focusIds,
-      requestedRelationView,
-    );
+    const targetKey = mapRequestKey(workspaceId, mode, focusId, requestChangeIntent, focusIds, requestedRelationView);
     visualTargetRef.current = {
       workspaceId,
       mode,
@@ -198,7 +213,9 @@ export function useVisualMap({
       setVisualMapKey(targetKey);
       setProjectionElapsedMs(0);
       syncVisualSelection(cachedMap);
-      setVisualMapStatus(cachedMap.nodes.length > 0 ? `캔버스 항목 ${cachedMap.nodes.length}개 표시` : "캔버스 항목 없음");
+      setVisualMapStatus(
+        cachedMap.nodes.length > 0 ? `캔버스 항목 ${cachedMap.nodes.length}개 표시` : "캔버스 항목 없음",
+      );
       return cachedMap;
     }
 
@@ -245,9 +262,7 @@ export function useVisualMap({
           mode,
           changeIntent: requestChangeIntent,
           enrichCodeEvidence: false,
-          composition: mode === "composition"
-            ? { focusIds, relationView: requestedRelationView }
-            : null,
+          composition: mode === "composition" ? { focusIds, relationView: requestedRelationView } : null,
           operationId,
         }).then(validateVisualMap);
         visualMapRequestsRef.current.set(cacheKey, request);
@@ -463,13 +478,7 @@ export function useVisualMap({
       prepareCompositionSelection();
       return;
     }
-    void loadVisualMap(
-      null,
-      "composition",
-      currentWorkspaceIdRef.current,
-      next,
-      relationViewRef.current,
-    );
+    void loadVisualMap(null, "composition", currentWorkspaceIdRef.current, next, relationViewRef.current);
   }
 
   function clearCompositionFocus() {
@@ -484,13 +493,7 @@ export function useVisualMap({
     relationViewRef.current = view;
     setRelationViewState(view);
     if (compositionFocusIdsRef.current.length >= 2) {
-      void loadVisualMap(
-        null,
-        "composition",
-        currentWorkspaceIdRef.current,
-        compositionFocusIdsRef.current,
-        view,
-      );
+      void loadVisualMap(null, "composition", currentWorkspaceIdRef.current, compositionFocusIdsRef.current, view);
     }
   }
 
@@ -498,14 +501,7 @@ export function useVisualMap({
     visualMapRequestRef.current += 1;
     const workspaceId = currentWorkspaceIdRef.current;
     const targetKey = workspaceId
-      ? mapRequestKey(
-          workspaceId,
-          "composition",
-          null,
-          null,
-          compositionFocusIdsRef.current,
-          relationViewRef.current,
-        )
+      ? mapRequestKey(workspaceId, "composition", null, null, compositionFocusIdsRef.current, relationViewRef.current)
       : null;
     visualTargetRef.current = workspaceId
       ? {
@@ -525,9 +521,7 @@ export function useVisualMap({
     setVisualMapError(null);
     setVisualMapErrorDetail(null);
     setVisualMapStatus(
-      compositionFocusIdsRef.current.length === 0
-        ? "관계를 볼 대상 2~8개를 선택하세요"
-        : "대상을 1개 더 선택하세요",
+      compositionFocusIdsRef.current.length === 0 ? "관계를 볼 대상 2~8개를 선택하세요" : "대상을 1개 더 선택하세요",
     );
   }
 
@@ -575,33 +569,37 @@ export function useVisualMap({
       setSearchGroups([]);
       return;
     }
-    const collection = collectSearchResults(query, context.codeInventory, context.dbInventory);
-    presentSearchCollection(collection);
-    if (
-      (!context.codeInventory?.partial && !context.dbInventory?.partial) ||
-      !currentWorkspaceIdRef.current ||
-      !hasTauriRuntime()
-    ) {
-      onResolved?.(collection);
-      return;
-    }
+    void collectSearchResultsAsync(query, context.codeInventory, context.dbInventory).then((collection) => {
+      if (searchRequestRef.current !== requestId) {
+        return;
+      }
+      presentSearchCollection(collection);
+      if (
+        (!context.codeInventory?.partial && !context.dbInventory?.partial) ||
+        !currentWorkspaceIdRef.current ||
+        !hasTauriRuntime()
+      ) {
+        onResolved?.(collection);
+        return;
+      }
 
-    const workspaceId = currentWorkspaceIdRef.current;
-    void invoke<unknown>("search_inventory", { workspaceId, query })
-      .then(validateInventorySearchResult)
-      .then((result) => {
-        if (searchRequestRef.current === requestId && currentWorkspaceIdRef.current === workspaceId) {
-          const resolved = searchCollectionFromInventoryResult(result);
-          presentSearchCollection(resolved);
-          onResolved?.(resolved);
-        }
-      })
-      .catch(() => {
-        // The bounded local index remains usable when a background full search fails.
-        if (searchRequestRef.current === requestId && currentWorkspaceIdRef.current === workspaceId) {
-          onResolved?.(collection);
-        }
-      });
+      const workspaceId = currentWorkspaceIdRef.current;
+      void invoke<unknown>("search_inventory", { workspaceId, query })
+        .then(validateInventorySearchResult)
+        .then((result) => {
+          if (searchRequestRef.current === requestId && currentWorkspaceIdRef.current === workspaceId) {
+            const resolved = searchCollectionFromInventoryResult(result);
+            presentSearchCollection(resolved);
+            onResolved?.(resolved);
+          }
+        })
+        .catch(() => {
+          // The bounded local index remains usable when a background full search fails.
+          if (searchRequestRef.current === requestId && currentWorkspaceIdRef.current === workspaceId) {
+            onResolved?.(collection);
+          }
+        });
+    });
   }
 
   function presentSearchCollection(collection: SearchCollection) {
@@ -644,8 +642,6 @@ export function useVisualMap({
       return;
     }
 
-    const collection = collectSearchResults(query, codeInventory, dbInventory);
-    const grouped = groupSearchResults(collection.results);
     if (query.length < 2) {
       setSearchSummary("두 글자 이상 입력하면 더 정확합니다.");
       setSearchGroups([]);
@@ -654,21 +650,18 @@ export function useVisualMap({
       }
       return;
     }
-    if (collection.truncated) {
-      setSearchSummary(`${searchSummaryText(collection)} 그룹별 상위 결과만 보여줍니다.`);
-      setSearchGroups(grouped);
-      if (mapMode !== "composition") {
-        showMapMode("search-focus", null, true);
+    refreshSearchResults(query, searchContextRef.current, (collection) => {
+      const grouped = groupSearchResults(collection.results);
+      if (collection.truncated) {
+        setSearchSummary(`${searchSummaryText(collection)} 그룹별 상위 결과만 보여줍니다.`);
+        setSearchGroups(grouped);
+        return;
       }
-      return;
-    }
-    setSearchSummary(searchSummaryText(collection));
-    setSearchGroups(grouped);
-    const firstResult = grouped[0]?.results[0] ?? null;
-    if (firstResult) {
-      selectSearchResult(firstResult);
-      return;
-    }
+      const firstResult = grouped[0]?.results[0] ?? null;
+      if (firstResult) {
+        selectSearchResult(firstResult);
+      }
+    });
     if (mapMode !== "composition") {
       showMapMode("search-focus", null, true);
     }
@@ -714,7 +707,9 @@ export function useVisualMap({
   function openSearchPopover() {
     const query = searchQuery.trim().toLowerCase();
     if (!query) {
-      setSearchSummary(`검색어를 입력하면 ${searchScopeText(searchContextRef.current?.codeInventory ?? null, searchContextRef.current?.dbInventory ?? null)}을 함께 찾습니다.`);
+      setSearchSummary(
+        `검색어를 입력하면 ${searchScopeText(searchContextRef.current?.codeInventory ?? null, searchContextRef.current?.dbInventory ?? null)}을 함께 찾습니다.`,
+      );
       setSearchGroups([]);
       setSearchPopoverOpen(true);
       return;
@@ -817,12 +812,12 @@ export function useVisualMap({
 
   function syncVisualSelection(map: VisualMap) {
     const edge = selectedVisualEdgeRef.current
-      ? map.edges.find((item) => item.id === selectedVisualEdgeRef.current?.id) ?? null
+      ? (map.edges.find((item) => item.id === selectedVisualEdgeRef.current?.id) ?? null)
       : null;
     const node = edge
       ? null
       : selectedVisualNodeRef.current
-        ? map.nodes.find((item) => item.id === selectedVisualNodeRef.current?.id) ?? null
+        ? (map.nodes.find((item) => item.id === selectedVisualNodeRef.current?.id) ?? null)
         : null;
     selectedVisualNodeRef.current = node;
     selectedVisualEdgeRef.current = edge;
@@ -850,17 +845,15 @@ export function useVisualMap({
       ? visualMap
       : null;
   const currentFocusId =
-    visualTargetRef.current?.workspaceId === currentWorkspaceId
-      ? visualTargetRef.current.focusId
-      : null;
+    visualTargetRef.current?.workspaceId === currentWorkspaceId ? visualTargetRef.current.focusId : null;
   const workspaceStateMatches = visualStateWorkspaceId === currentWorkspaceId;
   const snapshotMatches = snapshotWorkspaceId === currentWorkspaceId;
   const visibleSelectedNode = selectedVisualNode
-    ? currentVisualMap?.nodes.find((node) => node.id === selectedVisualNode.id) ??
-      (currentVisualMap?.focus === selectedVisualNode.id ? selectedVisualNode : null)
+    ? (currentVisualMap?.nodes.find((node) => node.id === selectedVisualNode.id) ??
+      (currentVisualMap?.focus === selectedVisualNode.id ? selectedVisualNode : null))
     : null;
   const visibleSelectedEdge = selectedVisualEdge
-    ? currentVisualMap?.edges.find((edge) => edge.id === selectedVisualEdge.id) ?? null
+    ? (currentVisualMap?.edges.find((edge) => edge.id === selectedVisualEdge.id) ?? null)
     : null;
   const transitioning = Boolean(currentWorkspaceId && visualMapLoading);
 

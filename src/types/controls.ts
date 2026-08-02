@@ -134,10 +134,10 @@ export type SearchResult = {
 export function dbProfileWorkStarted(dbProfileControls: DbProfileControls): boolean {
   return Boolean(
     dbProfileControls.inventory ||
-      dbProfileControls.activeProfile ||
-      dbProfileControls.canSaveProfile ||
-      dbProfileControls.profileName.trim() ||
-      dbProfileControls.profilePath.trim() ||
-      dbProfileControls.connectionString.trim(),
+    dbProfileControls.activeProfile ||
+    dbProfileControls.canSaveProfile ||
+    dbProfileControls.profileName.trim() ||
+    dbProfileControls.profilePath.trim() ||
+    dbProfileControls.connectionString.trim(),
   );
 }

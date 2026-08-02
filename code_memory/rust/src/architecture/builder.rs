@@ -895,8 +895,9 @@ impl ArchitectureBuilder {
     pub(crate) fn finish(self) -> ArchitectureOutput {
         let flows = self.build_flows();
         ArchitectureOutput {
-            schema: "code-memory.architecture-index.v2",
+            schema: "code-memory.architecture-index.v3",
             project_root: self.root,
+            provider_provenance: Vec::new(),
             languages: Vec::new(),
             frameworks: Vec::new(),
             nodes: self.nodes.into_values().collect(),

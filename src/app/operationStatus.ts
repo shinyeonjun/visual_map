@@ -63,7 +63,11 @@ export function toUserError(error: unknown, fallback: string): UserError {
   if (details.includes("최신이 아닙니다") || lower.includes("stale")) {
     return { message: `${fallback}: 코드/DB 읽기 결과가 최신이 아닙니다`, details };
   }
-  if (details.includes("코드/DB 읽기 결과") || lower.includes("inventory snapshot") || (lower.includes("source") && lower.includes("snapshot"))) {
+  if (
+    details.includes("코드/DB 읽기 결과") ||
+    lower.includes("inventory snapshot") ||
+    (lower.includes("source") && lower.includes("snapshot"))
+  ) {
     return { message: `${fallback}: 코드 또는 DB 목록을 불러온 뒤 다시 시도하세요`, details };
   }
 

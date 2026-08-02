@@ -62,7 +62,10 @@ export function useCodeInventory({
         if (result.run.ok) {
           clearCodeInventory();
           if (!result.inventory) {
-            const uiError = toUserError(result.inventoryError ?? "코드 inventory가 없습니다", "코드 목록을 불러오지 못했습니다");
+            const uiError = toUserError(
+              result.inventoryError ?? "코드 inventory가 없습니다",
+              "코드 목록을 불러오지 못했습니다",
+            );
             setCodeStatus("코드 구조 읽기 완료");
             setCodeError(uiError.message);
             setCodeErrorDetail(uiError.details);
@@ -141,7 +144,8 @@ function codeInventoryStatus(inventory: CodeInventory, action: string): string {
   const count = codeInventoryItemCount(inventory);
   const routeCount = codeInventoryRouteCount(inventory);
   const routeText = routeCount > 0 ? `API ${routeCount}개` : "API 라우트 없음";
-  const codeText = codeInventorySymbolCount(inventory) > 0 ? `코드 ${count}개` : `파일 ${codeInventoryFileCount(inventory)}개`;
+  const codeText =
+    codeInventorySymbolCount(inventory) > 0 ? `코드 ${count}개` : `파일 ${codeInventoryFileCount(inventory)}개`;
   const completion = inventory.partial ? "부분 완료" : action;
   return count > 0 ? `${codeText} ${completion} · ${routeText}` : `코드 목록이 비어 있음`;
 }

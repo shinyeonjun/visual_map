@@ -12,7 +12,7 @@ use std::time::Duration;
 use crate::{
     find_tool, prepare_clangd_compile_database, project_cache_root, provider_timeout,
     providers::scip::terminate_process_tree, range_parts, range_span, tool_command, Diagnostic,
-    LanguageSpec,
+    DiagnosticCode, LanguageSpec,
 };
 
 fn bundled_java_home(jdtls_path: &Path) -> Option<PathBuf> {
@@ -78,6 +78,7 @@ fn run_native_lsp_with_server_mode(
             startup_diagnostics.push(Diagnostic {
                 language: lang.id.to_string(),
                 level: "warning",
+                code: DiagnosticCode::DependencyMetadataGap,
                 message: format!(
                     "{reason}; using a temporary local-only package map and leaving unavailable packages external"
                 ),
@@ -848,6 +849,7 @@ fn run_native_lsp_with_server_mode(
         diagnostics.push(Diagnostic {
             language: lang.id.to_string(),
             level: "warning",
+            code: DiagnosticCode::ProviderTimeout,
             message: format!(
                 "{} semantic provider reached its time/resource limit; indexed {} of {} source documents. {} ({reason})",
                 lang.name,
@@ -867,6 +869,7 @@ fn run_native_lsp_with_server_mode(
         diagnostics.push(Diagnostic {
             language: lang.id.to_string(),
             level: "warning",
+            code: DiagnosticCode::LargeWorkspacePartial,
             message: format!(
                 "large Java workspace reused the provider workspace-symbol index for {} of {} source documents; remaining files were queried individually",
                 document_symbol_files.len(), semantic_file_count
@@ -886,6 +889,7 @@ fn run_native_lsp_with_server_mode(
         diagnostics.push(Diagnostic {
             language: lang.id.to_string(),
             level: "warning",
+            code: DiagnosticCode::LargeWorkspacePartial,
             message: format!(
                 "large-workspace semantic enrichment limited for {} source files; declarations and imports retained, {} skipped",
                 semantic_files.len(), omitted
@@ -897,6 +901,7 @@ fn run_native_lsp_with_server_mode(
             diagnostics.push(Diagnostic {
                 language: lang.id.to_string(),
                 level: "warning",
+                code: DiagnosticCode::LargeWorkspacePartial,
                 message: format!(
                     "large Dart workspace opened {} documents as editor buffers; remaining files were queried from the workspace index",
                     limit.min(semantic_files.len())
@@ -1286,6 +1291,7 @@ fn compact_dart_synthetic_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagn
         output.push(Diagnostic {
             language: "dart".to_string(),
             level: "warning",
+            code: DiagnosticCode::ProviderDiagnostic,
             message: format!(
                 "{suppressed} Dart provider diagnostics were collapsed because local-only package analysis cannot resolve external package symbols"
             ),
@@ -1318,6 +1324,7 @@ fn compact_large_workspace_diagnostics(
         output.push(Diagnostic {
             language: language.to_string(),
             level: "warning",
+            code: DiagnosticCode::LargeWorkspacePartial,
             message: format!(
                 "{suppressed} repeated Java provider diagnostics were collapsed for the large-workspace view"
             ),
@@ -1440,12 +1447,23 @@ fn diagnostic_language(path: &str, fallback: &str) -> String {
 }
 
 pub(crate) fn is_fatal_lsp_error(error: &str) -> bool {
-    error.contains("native LSP session timeout")
+    lsp_failure_code(error).is_some()
+}
+
+pub(crate) fn lsp_failure_code(error: &str) -> Option<DiagnosticCode> {
+    if error.contains("native LSP session timeout")
         || error.contains("native LSP response timeout")
         || error.contains("native LSP request budget exceeded")
-        || error.contains("native LSP closed stdout")
+    {
+        Some(DiagnosticCode::ProviderTimeout)
+    } else if error.contains("native LSP closed stdout")
         || error.contains("Broken pipe")
         || error.contains("pipe is being closed")
+    {
+        Some(DiagnosticCode::ProviderStopped)
+    } else {
+        None
+    }
 }
 
 fn is_recoverable_lsp_query_error(error: &str) -> bool {

@@ -88,10 +88,7 @@ describe("DB error guidance", () => {
   });
 
   it("explains fail-closed contract errors without presenting partial data", () => {
-    const error = toDbUserError(
-      "DB inventory가 완전하지 않습니다: expected 20 tables, got 10",
-      "DB 읽기 실패",
-    );
+    const error = toDbUserError("DB inventory가 완전하지 않습니다: expected 20 tables, got 10", "DB 읽기 실패");
 
     expect(error.message).toBe("DB 읽기 실패: 완전한 DB 구조를 확인하지 못했습니다. DB를 다시 읽으세요");
     expect(error.details).toContain("expected 20 tables");

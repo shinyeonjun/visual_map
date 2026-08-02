@@ -1,5 +1,6 @@
 use serde::Serialize;
 use serde_json::Value;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -346,6 +347,36 @@ fn doctor(providers_root: Option<&Path>) -> Result<(), String> {
     Ok(())
 }
 
+fn enforce_managed_provider_policy(
+    provenance: &[ProviderProvenance],
+    discovered_files: &[(String, PathBuf)],
+) -> Result<(), String> {
+    if env::var("CODE_MEMORY_REQUIRE_MANAGED_PROVIDERS").as_deref() != Ok("1") {
+        return Ok(());
+    }
+    let unmanaged: Vec<String> = provenance
+        .iter()
+        // `discovered_files` includes structural sources such as Vue SFCs.
+        // Checking the final discovery list keeps the policy aligned with the
+        // files that actually participate in project-model analysis.
+        .filter(|item| {
+            discovered_files
+                .iter()
+                .any(|(language, _)| language == &item.language)
+        })
+        .filter(|item| item.origin != "managed-manifest")
+        .map(|item| format!("{}={} ({})", item.language, item.tool, item.origin))
+        .collect();
+    if unmanaged.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "managed provider policy rejected unmanaged providers: {}",
+            unmanaged.join(", ")
+        ))
+    }
+}
+
 pub(crate) fn index_project(
     root: &Path,
     out: &Path,
@@ -363,8 +394,13 @@ pub(crate) fn index_project(
         .canonicalize()
         .unwrap_or_else(|_| pack_root.to_path_buf());
     let mut output = IndexOutput {
-        schema: "code-memory.language-index.v1",
+        schema: "code-memory.language-index.v2",
         project_root: root.to_string_lossy().into_owned(),
+        provider_provenance: LANGUAGES
+            .iter()
+            .copied()
+            .map(|lang| provider_provenance(lang, providers_root))
+            .collect(),
         languages: Vec::new(),
         coverage: Vec::new(),
         documents: Vec::new(),
@@ -450,6 +486,7 @@ pub(crate) fn index_project(
             .cloned()
             .map(|path| ("typescript".to_string(), path)),
     );
+    enforce_managed_provider_policy(&output.provider_provenance, &discovered_files)?;
 
     let project_model_started = Instant::now();
     let mut typescript_units = Vec::new();
@@ -501,6 +538,7 @@ pub(crate) fn index_project(
             Err(error) => output.diagnostics.push(Diagnostic {
                 language: "typescript".to_string(),
                 level: "warning",
+                code: DiagnosticCode::IndexerFailed,
                 message: format!("TypeScript project model unavailable: {error}"),
                 path: None,
                 line: None,
@@ -599,6 +637,7 @@ pub(crate) fn index_project(
                     diagnostics: vec![Diagnostic {
                         language: lang.id.to_string(),
                         level: "error",
+                        code: DiagnosticCode::ProviderMissing,
                         message: missing_tool_message(lang),
                         path: None,
                         line: None,
@@ -644,9 +683,12 @@ pub(crate) fn index_project(
                     &cached.documents,
                 );
                 let cached_partial = cached.diagnostics.iter().any(|diagnostic| {
-                    diagnostic
-                        .message
-                        .contains("semantic provider reached its time/resource limit")
+                    matches!(
+                        diagnostic.code,
+                        DiagnosticCode::ProviderTimeout
+                            | DiagnosticCode::LargeWorkspacePartial
+                            | DiagnosticCode::JavaSourceFallback
+                    )
                 });
                 let status = if cached_partial && status == "indexed" {
                     "indexed-partial"
@@ -660,6 +702,7 @@ pub(crate) fn index_project(
                         "info" => "info",
                         _ => "warning",
                     },
+                    code: diagnostic.code,
                     message: diagnostic.message,
                     path: diagnostic.path,
                     line: diagnostic.line,
@@ -830,6 +873,7 @@ pub(crate) fn index_project(
                 Err(error) => output.diagnostics.push(Diagnostic {
                     language: "framework".to_string(),
                     level: "error",
+                    code: DiagnosticCode::Internal,
                     message: error,
                     path: None,
                     line: None,
@@ -848,6 +892,7 @@ pub(crate) fn index_project(
         output.framework_relations.len(),
         output.diagnostics.len()
     );
+    canonicalize_index_output(&mut output);
 
     write_index_outputs(
         &root,
@@ -865,6 +910,193 @@ pub(crate) fn index_project(
         eprintln!("source manifest cache unavailable: {error}");
     }
     Ok(())
+}
+
+/// Canonicalize every semantic collection at the serialization boundary.
+/// Provider arrival order is allowed to vary; the public index is not.
+fn canonicalize_index_output(output: &mut IndexOutput) {
+    output
+        .provider_provenance
+        .sort_by(|left, right| left.language.cmp(&right.language));
+    output
+        .languages
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    output.coverage.sort_by(|left, right| {
+        (&left.language, &left.path, left.status, &left.reason).cmp(&(
+            &right.language,
+            &right.path,
+            right.status,
+            &right.reason,
+        ))
+    });
+    for document in &mut output.documents {
+        for symbol in &mut document.symbols {
+            symbol.documentation.sort();
+        }
+        document.symbols.sort_by(|left, right| {
+            (
+                &left.symbol,
+                &left.kind,
+                &left.display_name,
+                &left.documentation,
+                &left.signature,
+                &left.enclosing_symbol,
+            )
+                .cmp(&(
+                    &right.symbol,
+                    &right.kind,
+                    &right.display_name,
+                    &right.documentation,
+                    &right.signature,
+                    &right.enclosing_symbol,
+                ))
+        });
+        document.occurrences.sort_by(|left, right| {
+            (
+                &left.range,
+                &left.symbol,
+                &left.enclosing_range,
+                left.definition,
+                left.import,
+                left.read,
+                left.write,
+            )
+                .cmp(&(
+                    &right.range,
+                    &right.symbol,
+                    &right.enclosing_range,
+                    right.definition,
+                    right.import,
+                    right.read,
+                    right.write,
+                ))
+        });
+    }
+    output
+        .documents
+        .sort_by(|left, right| (&left.language, &left.path).cmp(&(&right.language, &right.path)));
+    output.relations.sort_by(|left, right| {
+        let order = (&left.from, &left.to, &left.kind, &left.path, &left.range).cmp(&(
+            &right.from,
+            &right.to,
+            &right.kind,
+            &right.path,
+            &right.range,
+        ));
+        if order != Ordering::Equal {
+            return order;
+        }
+        compare_optional_f64(left.confidence, right.confidence)
+            .then_with(|| left.strategy.cmp(&right.strategy))
+    });
+    output.file_relations.sort_by(|left, right| {
+        (
+            &left.from,
+            &left.to,
+            &left.kind,
+            &left.path,
+            &left.range,
+            &left.properties,
+        )
+            .cmp(&(
+                &right.from,
+                &right.to,
+                &right.kind,
+                &right.path,
+                &right.range,
+                &right.properties,
+            ))
+    });
+    output.project_model_files.sort();
+    output.project_model_files.dedup();
+    output.frameworks.sort_by(|left, right| {
+        (&left.id, &left.language, &left.name).cmp(&(&right.id, &right.language, &right.name))
+    });
+    for framework in &mut output.frameworks {
+        framework.matched_signals.sort();
+        framework.matched_signals.dedup();
+        framework.files.sort();
+        framework.files.dedup();
+        for fact in &mut framework.facts {
+            fact.evidence.sort();
+        }
+        framework.facts.sort_by(|left, right| {
+            (
+                &left.id,
+                &left.kind,
+                &left.source_file,
+                left.source_line,
+                left.source_end_line,
+                &left.source_range,
+                &left.symbol,
+                &left.method,
+                &left.path,
+                &left.evidence,
+                &left.properties,
+            )
+                .cmp(&(
+                    &right.id,
+                    &right.kind,
+                    &right.source_file,
+                    right.source_line,
+                    right.source_end_line,
+                    &right.source_range,
+                    &right.symbol,
+                    &right.method,
+                    &right.path,
+                    &right.evidence,
+                    &right.properties,
+                ))
+        });
+    }
+    for relation in &mut output.framework_relations {
+        relation.evidence.sort();
+    }
+    output.framework_relations.sort_by(|left, right| {
+        (
+            &left.from,
+            &left.to,
+            &left.kind,
+            &left.framework,
+            &left.path,
+            &left.range,
+            &left.evidence,
+        )
+            .cmp(&(
+                &right.from,
+                &right.to,
+                &right.kind,
+                &right.framework,
+                &right.path,
+                &right.range,
+                &right.evidence,
+            ))
+    });
+    output.diagnostics.sort_by(|left, right| {
+        (
+            &left.language,
+            left.level,
+            left.code.as_str(),
+            &left.path,
+            &left.line,
+            &left.message,
+        )
+            .cmp(&(
+                &right.language,
+                right.level,
+                right.code.as_str(),
+                &right.path,
+                &right.line,
+                &right.message,
+            ))
+    });
+    output
+        .analysis_units
+        .sort_by(|left, right| (&left.language, &left.id).cmp(&(&right.language, &right.id)));
+}
+
+fn compare_optional_f64(left: Option<f64>, right: Option<f64>) -> Ordering {
+    left.map(f64::to_bits).cmp(&right.map(f64::to_bits))
 }
 
 fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
@@ -1039,6 +1271,7 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
                     member.lang,
                     "native-lsp",
                     &member.files,
+                    DiagnosticCode::MissingCompileContext,
                     "C/C++ semantic analysis skipped because no usable compile context was found; structural map remains available",
                 )
             })
@@ -1147,14 +1380,18 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
             let provider = if is_clangd_job { "native-lsp" } else { "scip" };
             let provider_stopped = provider == "native-lsp"
                 && documents.is_empty()
-                && provider_diagnostics
-                    .iter()
-                    .any(|diagnostic| is_fatal_lsp_error(&diagnostic.message));
+                && provider_diagnostics.iter().any(|diagnostic| {
+                    matches!(
+                        diagnostic.code,
+                        DiagnosticCode::ProviderTimeout | DiagnosticCode::ProviderStopped
+                    )
+                });
             let mut analysis = if provider_stopped {
                 language_excluded(
                     member.lang,
                     provider,
                     &member.files,
+                    DiagnosticCode::ProviderStopped,
                     &format!(
                         "{} semantic provider stopped; structural map remains available",
                         member.lang.name

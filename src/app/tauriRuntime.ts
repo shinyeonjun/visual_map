@@ -9,4 +9,3 @@ export function hasTauriRuntime(): boolean {
 }
 
 export const tauriUnavailableMessage = "데스크톱 앱에서 실행하면 사용할 수 있습니다";
-

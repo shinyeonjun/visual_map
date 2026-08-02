@@ -9,7 +9,8 @@ use std::time::{Duration, SystemTime};
 
 use crate::{compile_database_dirs, find_tool, is_excluded_source_dir};
 use crate::{
-    Diagnostic, DocumentOutput, IndexOutput, LanguageSpec, RelationOutput, SourceSnapshot,
+    Diagnostic, DiagnosticCode, DocumentOutput, IndexOutput, LanguageSpec, RelationOutput,
+    SourceSnapshot,
 };
 
 #[derive(Clone)]
@@ -67,6 +68,8 @@ pub(crate) struct CachedLanguageResult {
 pub(crate) struct CachedDiagnostic {
     pub(crate) language: String,
     pub(crate) level: String,
+    #[serde(default)]
+    pub(crate) code: DiagnosticCode,
     pub(crate) message: String,
     pub(crate) path: Option<String>,
     pub(crate) line: Option<u32>,
@@ -148,6 +151,7 @@ pub(crate) fn architecture_cache_key(
     for diagnostic in &output.diagnostics {
         checksum_update(&mut hash, diagnostic.language.as_bytes());
         checksum_update(&mut hash, diagnostic.level.as_bytes());
+        checksum_update(&mut hash, diagnostic.code.as_str().as_bytes());
         checksum_update(&mut hash, diagnostic.message.as_bytes());
         if let Some(path) = &diagnostic.path {
             checksum_update(&mut hash, path.as_bytes());
@@ -224,7 +228,8 @@ fn hash_pack_files(root: &Path, hash: &mut u64) {
     }
 }
 pub(crate) fn cache_root(root: &Path) -> PathBuf {
-    let base = env::var_os("LOCALAPPDATA")
+    let base = env::var_os("CODE_MEMORY_CACHE_ROOT")
+        .or_else(|| env::var_os("LOCALAPPDATA"))
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join(".code_memory"));
     base.join("VisualMap").join("cache").join("code-memory")
@@ -552,7 +557,7 @@ pub(crate) fn language_cache_key(
     let mut hash = 0xcbf29ce484222325u64;
     // Provider output is normalized by this executable, so a new build must
     // not reuse semantic data produced by an older normalization contract.
-    checksum_update(&mut hash, b"code-memory-language-cache.v148");
+    checksum_update(&mut hash, b"code-memory-language-cache.v149");
     hash_current_executable(&mut hash, b"normalizer-executable");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, lang.id.as_bytes());
@@ -652,7 +657,7 @@ pub(crate) fn load_language_cache(
 ) -> Option<CachedLanguageResult> {
     let value = fs::read(language_cache_path(root, lang, key)).ok()?;
     let cached: CachedLanguageResult = serde_json::from_slice(&value).ok()?;
-    (cached.schema == "code-memory.language-cache.v2"
+    (cached.schema == "code-memory.language-cache.v3"
         && cached.key == key
         && !cached.documents.is_empty())
     .then_some(cached)
@@ -670,7 +675,7 @@ pub(crate) fn write_language_cache(
         return;
     }
     let cached = CachedLanguageResult {
-        schema: "code-memory.language-cache.v2".to_string(),
+        schema: "code-memory.language-cache.v3".to_string(),
         key: key.to_string(),
         documents: documents.to_vec(),
         relations: relations.to_vec(),
@@ -678,16 +683,17 @@ pub(crate) fn write_language_cache(
             .iter()
             .filter(|diagnostic| {
                 diagnostic.path.is_some()
-                    || diagnostic
-                        .message
-                        .contains("semantic provider reached its time/resource limit")
-                    || diagnostic
-                        .message
-                        .contains("large-workspace semantic enrichment")
+                    || matches!(
+                        diagnostic.code,
+                        DiagnosticCode::ProviderTimeout
+                            | DiagnosticCode::LargeWorkspacePartial
+                            | DiagnosticCode::JavaSourceFallback
+                    )
             })
             .map(|diagnostic| CachedDiagnostic {
                 language: diagnostic.language.clone(),
                 level: diagnostic.level.to_string(),
+                code: diagnostic.code,
                 message: diagnostic.message.clone(),
                 path: diagnostic.path.clone(),
                 line: diagnostic.line,

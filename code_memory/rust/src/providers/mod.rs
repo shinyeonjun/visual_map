@@ -14,10 +14,12 @@ pub(crate) use analysis::{
 pub(crate) use command::{
     active_c_family_files, compile_database_dirs, compile_database_files_for_scope, find_tool,
     has_compile_context_for_files, missing_tool_message, prepare_clangd_compile_database,
-    provider_ready, tool_command,
+    provider_provenance, provider_ready, tool_command,
 };
 #[cfg(test)]
-pub(crate) use command::{compile_database_dir, has_compile_context, managed_provider_root};
+pub(crate) use command::{
+    compile_database_dir, has_compile_context, managed_provider_root, resolve_tool,
+};
 pub(crate) use lsp::*;
 pub(crate) use scheduler::{
     combined_job_files, max_parallel_providers, max_provider_weight, merge_provider_jobs,

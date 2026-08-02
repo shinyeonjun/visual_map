@@ -16,6 +16,14 @@ This tier includes pure unit tests and local contract tests for the canonical
 model, certification, graph persistence, CLI, and MCP surfaces. Live database
 tests appear as `ignored` in the result and are not counted as passing tests.
 
+It also includes golden-style replay coverage for the Oracle and SQL Server
+adapter contracts. A certified payload is serialized, deserialized, and
+verified without a live database, so adapter refactors still exercise canonical
+ordering, completeness reconciliation, and capability proof. The same replay
+helper accepts checked-in fixtures or captured adapter output when those are
+available. Live database tests remain necessary for vendor query compatibility;
+replay is the always-on regression layer, not a replacement for them.
+
 The optional ODBC build has its own deterministic contract run:
 
 ```powershell

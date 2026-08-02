@@ -146,7 +146,6 @@ const COMPOSITION_LANE_LABEL: Record<ArchitectureLane, string> = {
 const COMPOSITION_CARD_WIDTH = 236;
 const COMPOSITION_ROW_STEP = 92;
 const COMPOSITION_CARD_TOP = 54;
-const COMPOSITION_NODE_LIMIT = 10;
 
 export function CompositionMap({
   map,
@@ -172,8 +171,7 @@ export function CompositionMap({
   const visibleNodes = COMPOSITION_LANES.flatMap((lane) => {
     const nodes = nodesByLane.get(lane) ?? [];
     return nodes
-      .sort((left, right) => Number(selected.has(right.id)) - Number(selected.has(left.id)) || left.title.localeCompare(right.title))
-      .slice(0, COMPOSITION_NODE_LIMIT);
+      .sort((left, right) => Number(selected.has(right.id)) - Number(selected.has(left.id)) || left.title.localeCompare(right.title));
   });
   const positions = new Map<string, { lane: ArchitectureLane; x: number; y: number }>();
   COMPOSITION_LANES.forEach((lane) => {
@@ -188,8 +186,7 @@ export function CompositionMap({
       const to = positions.get(edge.to);
       return from && to && from.lane !== to.lane;
     })
-    .sort((left, right) => Number(edgeTouchesSelection(right, selected)) - Number(edgeTouchesSelection(left, selected)))
-    .slice(0, 48);
+    .sort((left, right) => Number(edgeTouchesSelection(right, selected)) - Number(edgeTouchesSelection(left, selected)));
 
   return (
     <section className="at-architecture at-composition" aria-label="선택 대상 연결 지도">
@@ -332,8 +329,10 @@ function ArchitectureOverviewMap({
   const positions = layoutOverviewNodes(nodes);
   const connections = groupOverviewConnections(map, positions);
   const visibleConnections = connections.slice(0, OVERVIEW_CONNECTION_LIMIT);
-  const visibleEdgeCount = visibleConnections.reduce((sum, connection) => sum + connection.edges.length, 0);
-  const hiddenEdgeCount = Math.max(0, map.edges.length - visibleEdgeCount);
+  const visibleEdgeIds = new Set(visibleConnections.flatMap((connection) => connection.edges.map((edge) => edge.id)));
+  const hiddenEdges = map.edges.filter((edge) => !visibleEdgeIds.has(edge.id));
+  const visibleEdgeCount = visibleEdgeIds.size;
+  const hiddenEdgeCount = hiddenEdges.length;
   const rows = Math.max(1, ...architectureLanes.map((lane) => positions.filter((position) => position.lane === lane).length));
   const mapHeight = ARCHITECTURE_CARD_TOP + rows * ARCHITECTURE_ROW_STEP + (visibleConnections.length === 0 ? 58 : 12);
 
@@ -457,6 +456,20 @@ function ArchitectureOverviewMap({
             </button>
           )}
         </div>
+      )}
+      {hiddenEdgeCount > 0 && (
+        <details className="at-architecture-hidden-relations">
+          <summary>표시하지 않은 영역 관계 {hiddenEdgeCount.toLocaleString("ko-KR")}개 보기</summary>
+          <div>
+            {hiddenEdges.map((edge) => (
+              <button type="button" key={edge.id} onClick={() => onSelectEdge(edge)}>
+                <strong>{map.nodes.find((node) => node.id === edge.from)?.title ?? edge.from}</strong>
+                <span>{architectureEdgeToneLabel(edge)}</span>
+                <strong>{map.nodes.find((node) => node.id === edge.to)?.title ?? edge.to}</strong>
+              </button>
+            ))}
+          </div>
+        </details>
       )}
     </>
   );
@@ -796,6 +809,11 @@ function architectureConnectionLabel(connection: ArchitectureConnection): string
   return connection.edges.length > 1
     ? `${toneLabel} 관계 ${connection.edges.length.toLocaleString("ko-KR")}개 묶음`
     : `${toneLabel} 관계`;
+}
+
+function architectureEdgeToneLabel(edge: VisualEdge): string {
+  const tone = architectureEdgeTone(edge);
+  return tone === "confirmed" ? "확정 관계" : tone === "typed" ? "구조 관계" : tone === "candidate" ? "후보 관계" : "이름 단서";
 }
 
 function architectureEdgeTone(edge: VisualEdge): ArchitectureConnection["tone"] {

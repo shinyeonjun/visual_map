@@ -28,8 +28,8 @@ if ($badRelations.Count -gt 0) { throw 'large fixture emitted estimated relation
 
 $sourceCount = ($languages | Measure-Object -Property files_found -Sum).Sum
 if ($sourceCount -lt 250) { throw "fixture is not large enough for the large-map gate: files=$sourceCount" }
-$failedWithoutContext = @($languages | Where-Object status -eq 'indexer-failed').Count -gt 0 -and
-    @($result.diagnostics | Where-Object message -match 'no compile context').Count -gt 0
+$failedWithoutContext = @($languages | Where-Object status -eq 'excluded').Count -gt 0 -and
+    @($result.diagnostics | Where-Object code -eq 'missing-compile-context').Count -gt 0
 if ($failedWithoutContext) {
     Write-Host "PASS large C/C++ safety gate: $sourceCount files rejected without compiler context"
     exit 0

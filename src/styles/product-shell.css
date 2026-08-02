@@ -2502,3 +2502,64 @@
     color: var(--ink);
   }
 }
+
+/* ---- Project tab overview (프로젝트 탭 대시보드) ---- */
+.explorer-overview { display: grid; gap: 12px; align-content: start; padding: 12px; }
+.explorer-overview-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 780;
+}
+.explorer-overview-guide { margin: 0; color: var(--ink-3); font-size: 10.5px; line-height: 1.55; }
+.explorer-overview-stats { display: grid; gap: 7px; }
+.explorer-overview-stats > button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "kind count" "question count";
+  gap: 2px 10px;
+  align-items: center;
+  padding: 10px 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.explorer-overview-stats > button:hover,
+.explorer-overview-stats > button:focus-visible { border-color: var(--blue); outline: 0; }
+.explorer-overview-kind {
+  grid-area: kind;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 780;
+}
+.explorer-overview-stats > button > strong {
+  grid-area: count;
+  color: var(--blue-ink);
+  font-size: 15px;
+  font-weight: 760;
+}
+.explorer-overview-stats > button > small { grid-area: question; color: var(--ink-4); font-size: 9.5px; }
+.explorer-overview-extra {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line-2);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-3);
+  text-align: left;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.explorer-overview-extra:hover,
+.explorer-overview-extra:focus-visible { border-color: var(--blue); color: var(--ink-2); outline: 0; }

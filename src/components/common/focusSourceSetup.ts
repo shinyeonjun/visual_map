@@ -63,7 +63,9 @@ function sourceSetupTarget(
 }
 
 function dbProfileSetupTarget(dbProfileControls: DbProfileControls): HTMLElement | null {
-  return document.getElementById(dbProfileControls.profileName.trim() ? "db-profile-target-input" : "db-profile-name-input");
+  return document.getElementById(
+    dbProfileControls.profileName.trim() ? "db-profile-target-input" : "db-profile-name-input",
+  );
 }
 
 function workspaceSetupTarget(workspaceControls: WorkspaceControls): HTMLElement | null {

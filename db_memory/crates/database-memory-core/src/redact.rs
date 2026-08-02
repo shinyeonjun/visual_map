@@ -119,27 +119,40 @@ fn push_redacted_ado_segment(output: &mut String, segment: &str) {
 fn redact_oracle_passwords(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut cursor = 0;
-    let mut search_from = 0;
+    let mut token_start = 0;
+    let mut token_end = 0;
 
-    while let Some(relative_at) = value[search_from..].find('@') {
-        let at_index = search_from + relative_at;
-        let token_start = value[..at_index]
-            .rfind(|ch: char| ch.is_whitespace() || ch == '\'' || ch == '"')
-            .map(|index| index + 1)
-            .unwrap_or(0);
-        let token = &value[token_start..at_index];
+    for (index, character) in value
+        .char_indices()
+        .chain(std::iter::once((value.len(), ' ')))
+    {
+        if !character.is_whitespace() && character != '\'' && character != '"' {
+            token_end = index + character.len_utf8();
+            continue;
+        }
 
-        if let Some(slash_index) = token.find('/') {
-            let user = &token[..slash_index];
-            let password = &token[slash_index + 1..];
-            if !user.is_empty() && !password.is_empty() && !user.contains(':') {
-                output.push_str(&value[cursor..token_start + slash_index + 1]);
-                output.push_str(REDACTION);
-                cursor = at_index;
+        if token_start < token_end {
+            let token = &value[token_start..token_end];
+            if let Some(slash_index) = token.find('/') {
+                if let Some(at_index) = token.rfind('@') {
+                    let user = &token[..slash_index];
+                    let password = &token[slash_index + 1..at_index];
+                    if !user.is_empty()
+                        && !password.is_empty()
+                        && !user.contains(':')
+                        && slash_index < at_index
+                    {
+                        output.push_str(&value[cursor..token_start + slash_index + 1]);
+                        output.push_str(REDACTION);
+                        output.push_str(&value[token_start + at_index..token_end]);
+                        cursor = token_end;
+                    }
+                }
             }
         }
 
-        search_from = at_index + 1;
+        token_start = index + character.len_utf8();
+        token_end = token_start;
     }
 
     output.push_str(&value[cursor..]);
@@ -188,6 +201,16 @@ mod redact_tests {
             redact_connection_string("scott/tiger@localhost:1521/FREEPDB1"),
             "scott/***@localhost:1521/FREEPDB1"
         );
+        assert_eq!(
+            redact_connection_string("backend/pa/ss@word@127.0.0.1:1521/FREEPDB1"),
+            "backend/***@127.0.0.1:1521/FREEPDB1"
+        );
+        assert_eq!(
+            redact_connection_string(
+                "backend/secret@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=db.example)(PORT=1522))(CONNECT_DATA=(SERVICE_NAME=FREEPDB1)))"
+            ),
+            "backend/***@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=db.example)(PORT=1522))(CONNECT_DATA=(SERVICE_NAME=FREEPDB1)))"
+        );
     }
 
     #[test]
@@ -199,6 +222,15 @@ mod redact_tests {
                 connection_string
             ),
             "failed to connect with postgres://app:***@db.example/app"
+        );
+
+        let connection_string = "backend/pa/ss@word@127.0.0.1:1521/FREEPDB1";
+        assert_eq!(
+            redact_error_with_connection_string(
+                format!("ORA-01017: {connection_string}"),
+                connection_string
+            ),
+            "ORA-01017: backend/***@127.0.0.1:1521/FREEPDB1"
         );
     }
 }

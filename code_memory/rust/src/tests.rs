@@ -13,6 +13,7 @@ fn strict_gate_does_not_fail_explicit_source_exclusions() {
     let output = IndexOutput {
         schema: "test",
         project_root: String::new(),
+        provider_provenance: Vec::new(),
         languages: vec![LanguageOutput {
             id: "c".to_string(),
             name: "C".to_string(),
@@ -42,6 +43,7 @@ fn strict_gate_still_fails_provider_missing_files() {
     let output = IndexOutput {
         schema: "test",
         project_root: String::new(),
+        provider_provenance: Vec::new(),
         languages: vec![LanguageOutput {
             id: "dart".to_string(),
             name: "Dart".to_string(),
@@ -112,6 +114,58 @@ fn every_language_has_a_provider() {
     assert!(LANGUAGES
         .iter()
         .all(|lang| !lang.tool.is_empty() && !lang.extensions.is_empty()));
+}
+
+#[test]
+fn public_index_order_is_canonicalized_at_the_boundary() {
+    let document = |path: &str| DocumentOutput {
+        language: "python".to_string(),
+        path: path.to_string(),
+        symbols: Vec::new(),
+        occurrences: Vec::new(),
+    };
+    let mut output = IndexOutput {
+        schema: "test",
+        project_root: String::new(),
+        provider_provenance: Vec::new(),
+        languages: vec![
+            LanguageOutput {
+                id: "z".to_string(),
+                name: "Z".to_string(),
+                provider: "native-lsp",
+                files_found: 0,
+                files_indexed: 0,
+                files_excluded: 0,
+                files_missing: 0,
+                status: "indexed",
+            },
+            LanguageOutput {
+                id: "a".to_string(),
+                name: "A".to_string(),
+                provider: "native-lsp",
+                files_found: 0,
+                files_indexed: 0,
+                files_excluded: 0,
+                files_missing: 0,
+                status: "indexed",
+            },
+        ],
+        coverage: Vec::new(),
+        documents: vec![document("z.py"), document("a.py")],
+        relations: Vec::new(),
+        file_relations: Vec::new(),
+        project_model_files: Vec::new(),
+        frameworks: Vec::new(),
+        framework_relations: Vec::new(),
+        diagnostics: Vec::new(),
+        timings: Vec::new(),
+        analysis_units: Vec::new(),
+    };
+
+    canonicalize_index_output(&mut output);
+
+    assert_eq!(output.languages[0].id, "a");
+    assert_eq!(output.documents[0].path, "a.py");
 }
 
 #[test]
@@ -417,13 +471,16 @@ fn provider_manifest_resolves_a_different_directory_name() {
     fs::write(root.join("jdtls/bin/jdtls.cmd"), b"provider").expect("write provider");
     fs::write(
             root.join("manifest.json"),
-            r#"{"schema":"code-memory.provider-manifest.v1","providers":[{"command":"jdtls","path":"jdtls/bin/jdtls.cmd"}]}"#,
+            r#"{"schema":"code-memory.provider-manifest.v1","providers":[{"command":"jdtls","version":"test-1","path":"jdtls/bin/jdtls.cmd"}]}"#,
         )
         .expect("write provider manifest");
     assert_eq!(
         find_tool("jdtls", Some(&root)),
         Some(root.join("jdtls/bin/jdtls.cmd"))
     );
+    let resolution = resolve_tool("jdtls", Some(&root));
+    assert_eq!(resolution.origin, "managed-manifest");
+    assert_eq!(resolution.version.as_deref(), Some("test-1"));
     let _ = fs::remove_dir_all(root);
 }
 

@@ -29,7 +29,7 @@ export function buildApiConnectionModel(answer: ApiReadingAnswer, map: VisualMap
     answer.steps.flatMap((step) => (step.nodeId ? [[step.nodeId, step] as const] : [])),
   );
   const confirmedEdges = map.edges.filter(isConfirmedApiEdge);
-  const candidateEdges = map.edges.filter(isCandidateEdge);
+  const candidateEdges = map.edges.filter(isCandidateApiEdge);
   const directDatabaseEdges = map.edges.filter(isDirectDatabaseEdge);
   const databaseEdges = [...directDatabaseEdges, ...candidateEdges];
   const startId = stepsByNodeId.has(map.focus)
@@ -48,7 +48,7 @@ export function buildApiConnectionModel(answer: ApiReadingAnswer, map: VisualMap
   });
   const clientRequestEdge = [...map.edges]
     .filter((edge) => edge.kind === "client_request" && edge.to === primaryPath[0]?.node.id)
-    .sort((left, right) => Number(isCandidateEdge(left)) - Number(isCandidateEdge(right)) || left.id.localeCompare(right.id))[0];
+    .sort((left, right) => Number(isCandidateApiEdge(left)) - Number(isCandidateApiEdge(right)) || left.id.localeCompare(right.id))[0];
   const clientRequestItem = clientRequestEdge
     ? answer.clientRequests?.find((item) => item.nodeId === clientRequestEdge.from)
     : undefined;
@@ -67,7 +67,7 @@ export function buildApiConnectionModel(answer: ApiReadingAnswer, map: VisualMap
   const primaryDatabaseEdge = [...databaseEdges]
     .filter((edge) => pathIndex.has(edge.from) && databaseItemsByNodeId.has(edge.to) && nodesById.has(edge.to))
     .sort((left, right) => {
-      const truthOrder = Number(isCandidateEdge(left)) - Number(isCandidateEdge(right));
+      const truthOrder = Number(isCandidateApiEdge(left)) - Number(isCandidateApiEdge(right));
       const leftDepth = pathIndex.get(left.from) ?? -1;
       const rightDepth = pathIndex.get(right.from) ?? -1;
       const leftRank = databaseItemsByNodeId.get(left.to)?.rank ?? Number.MAX_SAFE_INTEGER;
@@ -94,7 +94,7 @@ export function buildApiConnectionModel(answer: ApiReadingAnswer, map: VisualMap
     const leftPrimary = Number(primaryNodeIds.has(left.from));
     const rightPrimary = Number(primaryNodeIds.has(right.from));
     return rightPrimary - leftPrimary
-      || Number(isCandidateEdge(left)) - Number(isCandidateEdge(right))
+      || Number(isCandidateApiEdge(left)) - Number(isCandidateApiEdge(right))
       || left.id.localeCompare(right.id);
   });
   const additionalEdges = rankedRemainingEdges.slice(0, VISIBLE_ADDITIONAL_EDGE_LIMIT);
@@ -162,14 +162,18 @@ function pathScore(path: string[], candidateSources: Set<string>): number {
   return (containsCandidateSource ? 1_000_000 : 0) + path.length * 10_000 + (lastHasCandidate ? 500 : 0);
 }
 
-function isConfirmedApiEdge(edge: VisualEdge): boolean {
+export function isConfirmedApiEdge(edge: VisualEdge): boolean {
   return edge.kind === "code_handle" || edge.kind === "code_call";
 }
 
-function isCandidateEdge(edge: VisualEdge): boolean {
+export function isCandidateApiEdge(edge: VisualEdge): boolean {
   return edge.kind.startsWith("candidate") || edge.confidence === "candidate";
 }
 
 function isDirectDatabaseEdge(edge: VisualEdge): boolean {
   return edge.kind === "code_db_read" || edge.kind === "code_db_write";
+}
+
+export function isDatabaseEdge(edge: VisualEdge): boolean {
+  return isCandidateApiEdge(edge) || isDirectDatabaseEdge(edge);
 }

@@ -14,10 +14,7 @@ describe("developer search", () => {
     const collection = collectSearchResults("sessions", inventory, null);
 
     expect(collection.total).toBe(2);
-    expect(collection.results.map((result) => result.title)).toEqual([
-      "GET /api/v1/sessions",
-      "POST /api/v1/sessions",
-    ]);
+    expect(collection.results.map((result) => result.title)).toEqual(["GET /api/v1/sessions", "POST /api/v1/sessions"]);
     expect(collection.results.map((result) => result.subtitle)).toEqual([
       "server/routes/sessions.ts:L18",
       "server/routes/admin.ts:L44",

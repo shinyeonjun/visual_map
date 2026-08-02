@@ -304,7 +304,7 @@ export function WorkspaceCard({ workspaceControls }: { workspaceControls: Worksp
       return;
     }
     const confirmed = window.confirm(
-      `\"${workspace.name}\" 프로젝트를 목록에서 제거할까요?\n\n로컬 원본 폴더는 삭제하지 않습니다. 앱이 만든 읽기 결과와 GitHub 복제본은 함께 제거됩니다.`,
+      `"${workspace.name}" 프로젝트를 목록에서 제거할까요?\n\n로컬 원본 폴더는 삭제하지 않습니다. 앱이 만든 읽기 결과와 GitHub 복제본은 함께 제거됩니다.`,
     );
     if (confirmed) {
       workspaceControls.deleteWorkspace(workspace.id);

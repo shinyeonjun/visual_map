@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
-use crate::{LanguageSpec, ProviderKind};
+use crate::{LanguageSpec, ProviderKind, ProviderProvenance};
 
 static COMPILE_DATABASE_FILES_CACHE: OnceLock<Mutex<HashMap<PathBuf, HashSet<PathBuf>>>> =
     OnceLock::new();
@@ -40,42 +40,74 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
 }
 
 pub(crate) fn find_tool(program: &str, providers_root: Option<&Path>) -> Option<PathBuf> {
+    resolve_tool(program, providers_root).path
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ProviderResolution {
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) origin: &'static str,
+    pub(crate) version: Option<String>,
+}
+
+pub(crate) fn resolve_tool(program: &str, providers_root: Option<&Path>) -> ProviderResolution {
     if let Some(root) = providers_root {
         if let Some(entry) = provider_manifest_entry(root, program) {
-            return Some(entry.path);
+            return ProviderResolution {
+                path: Some(entry.path),
+                origin: "managed-manifest",
+                version: entry.version,
+            };
         }
-        let root = managed_provider_root(root);
-        let candidates = if cfg!(windows) {
-            vec![
-                format!("{program}.exe"),
-                format!("{program}.cmd"),
-                format!("{program}.bat"),
-                program.to_string(),
-                format!("{program}.ps1"),
-            ]
-        } else {
-            vec![program.to_string()]
-        };
-        let bases = [
-            root.to_path_buf(),
-            root.join(program).join("bin"),
-            root.join(program),
-            root.join("bin"),
-        ];
-        for base in bases {
-            for candidate in &candidates {
-                let path = base.join(candidate);
-                if path.is_file() {
-                    return Some(path);
-                }
+        if let Some(path) = find_managed_tool(root, program) {
+            return ProviderResolution {
+                path: Some(path),
+                origin: "managed-root",
+                version: None,
+            };
+        }
+    }
+    let path = find_on_path(program);
+    ProviderResolution {
+        origin: if path.is_some() { "path" } else { "missing" },
+        path,
+        version: None,
+    }
+}
+
+fn find_managed_tool(root: &Path, program: &str) -> Option<PathBuf> {
+    let root = managed_provider_root(root);
+    let candidates = if cfg!(windows) {
+        vec![
+            format!("{program}.exe"),
+            format!("{program}.cmd"),
+            format!("{program}.bat"),
+            program.to_string(),
+            format!("{program}.ps1"),
+        ]
+    } else {
+        vec![program.to_string()]
+    };
+    let bases = [
+        root.to_path_buf(),
+        root.join(program).join("bin"),
+        root.join(program),
+        root.join("bin"),
+    ];
+    for base in bases {
+        for candidate in &candidates {
+            let path = base.join(candidate);
+            if path.is_file() {
+                return Some(path);
             }
         }
     }
-    find_on_path(program)
+    None
 }
 
 struct ProviderManifestEntry {
     path: PathBuf,
+    version: Option<String>,
     runtime_paths: Vec<PathBuf>,
     environment: Vec<(String, String)>,
 }
@@ -122,6 +154,10 @@ fn provider_manifest_entry(root: &Path, program: &str) -> Option<ProviderManifes
         .collect();
     Some(ProviderManifestEntry {
         path,
+        version: provider
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         runtime_paths,
         environment,
     })
@@ -220,6 +256,29 @@ fn apply_offline_environment(command: &mut Command) {
 pub(crate) fn provider_ready(lang: &LanguageSpec, providers_root: Option<&Path>) -> bool {
     find_tool(lang.tool, providers_root).is_some()
         || (matches!(lang.id, "c" | "cpp") && find_tool("clangd", providers_root).is_some())
+}
+
+pub(crate) fn provider_provenance(
+    lang: LanguageSpec,
+    providers_root: Option<&Path>,
+) -> ProviderProvenance {
+    let configured = resolve_tool(lang.tool, providers_root);
+    let (tool, resolution) = if configured.path.is_some() || !matches!(lang.id, "c" | "cpp") {
+        (lang.tool, configured)
+    } else {
+        ("clangd", resolve_tool("clangd", providers_root))
+    };
+    ProviderProvenance {
+        language: lang.id.to_string(),
+        tool: tool.to_string(),
+        origin: resolution.origin,
+        status: if resolution.path.is_some() {
+            "available"
+        } else {
+            "missing"
+        },
+        version: resolution.version,
+    }
 }
 
 pub(crate) fn has_compile_context(root: &Path) -> bool {

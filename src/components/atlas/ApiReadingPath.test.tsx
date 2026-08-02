@@ -36,6 +36,9 @@ describe("buildApiConnectionModel", () => {
     );
 
     expect(screen.getByRole("region", { name: "/api/v1/sessions 연결 지도" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "API 연결 지도 전체 맞춤" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "API 연결 지도 확대" }));
+    expect(screen.getByText("배율 110%")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Service / Function auditSessionRead 선택" }));
     expect(onSelectNode).toHaveBeenCalledWith(nodes[4]);
 

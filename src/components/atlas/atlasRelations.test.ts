@@ -3,6 +3,7 @@ import type { VisualEdge, VisualMap, VisualNode } from "../../types/visual-map";
 import {
   buildRelationCounts,
   filterCodeItemsByMap,
+  orderItemsByRelations,
   relationFocusIdFromMapFocus,
   relationLedgerRows,
   takeWithPinned,
@@ -22,6 +23,18 @@ function edge(id: string, kind: string, from: string, to: string, evidence = "")
     to,
     confidence: kind.startsWith("candidate") ? "high" : null,
     evidence: evidence ? [{ kind: "test", text: evidence }] : [],
+  };
+}
+
+function mapWithEdges(edges: VisualMap["edges"]): VisualMap {
+  return {
+    id: "map",
+    workspaceId: "workspace",
+    mode: "atlas",
+    focus: "",
+    nodes: [],
+    edges,
+    warnings: [],
   };
 }
 
@@ -88,5 +101,44 @@ describe("atlas relation policy", () => {
   it("keeps database object focus available to the relation ledger", () => {
     expect(relationFocusIdFromMapFocus("db:view:active-orders")).toBe("db:view:active-orders");
     expect(relationFocusIdFromMapFocus("group:package:app")).toBeNull();
+  });
+
+  it("puts a code call chain in source-to-target order", () => {
+    const items = [{ id: "query" }, { id: "handler" }, { id: "service" }];
+    const ordered = orderItemsByRelations(
+      items,
+      mapWithEdges([
+        edge("h-s", "code_call", "code:handler", "code:service"),
+        edge("s-q", "code_call", "code:service", "code:query"),
+      ]),
+      (item) => `code:${item.id}`,
+    );
+
+    expect(ordered.map((item) => item.id)).toEqual(["handler", "service", "query"]);
+  });
+
+  it("keeps disconnected items after the connected flow", () => {
+    const items = [{ id: "orphan" }, { id: "handler" }, { id: "service" }];
+    const ordered = orderItemsByRelations(
+      items,
+      mapWithEdges([edge("h-s", "code_call", "code:handler", "code:service")]),
+      (item) => `code:${item.id}`,
+    );
+
+    expect(ordered.map((item) => item.id)).toEqual(["handler", "service", "orphan"]);
+  });
+
+  it("does not let candidate edges reorder the confirmed flow", () => {
+    const items = [{ id: "candidate-target" }, { id: "handler" }, { id: "service" }];
+    const ordered = orderItemsByRelations(
+      items,
+      mapWithEdges([
+        edge("h-s", "code_call", "code:handler", "code:service"),
+        edge("h-candidate", "candidate_table", "code:handler", "code:candidate-target"),
+      ]),
+      (item) => `code:${item.id}`,
+    );
+
+    expect(ordered.map((item) => item.id)).toEqual(["handler", "service", "candidate-target"]);
   });
 });

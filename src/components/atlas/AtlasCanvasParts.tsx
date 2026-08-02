@@ -1,9 +1,6 @@
-import { Cog, FileText, Unlink } from "lucide-react";
 import type { ReactNode } from "react";
-import { codeKindChip, type CodeInventoryItem } from "../../types/workspace";
 import type { VisualEdge, VisualNode } from "../../types/visual-map";
 import {
-  compactPath,
   edgeTouchesNode,
   type RelationBeam,
   type RelationLedgerRow,
@@ -17,71 +14,36 @@ const RELATION_ACTION_LABEL: Record<RelationTone, string> = {
   inferred: "이름 단서",
 };
 
-export function DisconnectedCodeFocus({
-  item,
-  hiddenNearbyCount,
+export function RelationBeams({
+  beams,
+  viewBoxWidth,
+  onSelect,
 }: {
-  item: CodeInventoryItem;
-  hiddenNearbyCount: number;
+  beams: RelationBeam[];
+  viewBoxWidth: number;
+  onSelect: (edge: VisualEdge) => void;
 }) {
-  const isFile = item.kind.trim().toLowerCase() === "file";
-  const source = compactPath(item.filePath) ?? "소스 위치 없음";
   return (
-    <section className="at-disconnected-focus" aria-label={`${item.name} 연결 없음`}>
-      <div className="at-disconnected-side incoming">
-        <span>들어오는 연결</span>
-        <strong>0</strong>
-        <small>현재 스냅샷에서 확인되지 않음</small>
-      </div>
-      <article className="at-disconnected-target">
-        <header>
-          {isFile ? <FileText size={16} /> : <Cog size={16} />}
-          <span>{codeKindChip(item.kind)}</span>
-        </header>
-        <strong title={item.name}>{item.name}</strong>
-        <small title={item.filePath ?? undefined}>{source}{item.line ? `:${item.line}` : ""}</small>
-      </article>
-      <div className="at-disconnected-side outgoing">
-        <span>나가는 연결</span>
-        <strong>0</strong>
-        <small>현재 스냅샷에서 확인되지 않음</small>
-      </div>
-      <p>
-        <Unlink size={15} aria-hidden="true" />
-        <span>
-          <strong>확인된 직접 관계가 없습니다</strong>
-          <small>
-            {hiddenNearbyCount > 0
-              ? `같은 분석 범위의 ${hiddenNearbyCount.toLocaleString("ko-KR")}개 항목은 관계 근거가 없어 지도에서 분리했습니다.`
-              : "오른쪽에서 소스 위치와 다음 확인 항목을 볼 수 있습니다."}
-          </small>
-        </span>
-      </p>
-    </section>
-  );
-}
-
-
-export function RelationBeams({ beams, onSelect }: { beams: RelationBeam[]; onSelect: (edge: VisualEdge) => void }) {
-  return (
-    <svg className="at-relation-beams" aria-label="관계선">
+    <svg
+      className="at-relation-beams"
+      aria-label="관계선"
+      preserveAspectRatio="none"
+      viewBox={`0 0 ${viewBoxWidth} 100`}
+    >
       <defs>
         <marker id="at-beam-arrow" markerHeight="6" markerWidth="6" orient="auto" refX="5" refY="3">
           <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke" />
         </marker>
       </defs>
       {beams.map((beam) => (
-        <line
+        <path
           aria-label={beam.label}
           className={`at-beam ${beam.tone} ${beam.active ? "active" : ""}`}
           key={beam.edge.id}
           markerEnd="url(#at-beam-arrow)"
           role="button"
           tabIndex={0}
-          x1={beam.x1}
-          x2={beam.x2}
-          y1={`${beam.y1}%`}
-          y2={`${beam.y2}%`}
+          d={beam.path}
           onClick={() => onSelect(beam.edge)}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {

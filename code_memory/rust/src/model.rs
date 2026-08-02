@@ -109,6 +109,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
 pub(crate) struct IndexOutput {
     pub(crate) schema: &'static str,
     pub(crate) project_root: String,
+    pub(crate) provider_provenance: Vec<ProviderProvenance>,
     pub(crate) languages: Vec<LanguageOutput>,
     pub(crate) coverage: Vec<FileCoverageOutput>,
     pub(crate) documents: Vec<DocumentOutput>,
@@ -120,6 +121,16 @@ pub(crate) struct IndexOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) timings: Vec<StageTiming>,
     pub(crate) analysis_units: Vec<AnalysisUnitOutput>,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct ProviderProvenance {
+    pub(crate) language: String,
+    pub(crate) tool: String,
+    pub(crate) origin: &'static str,
+    pub(crate) status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) version: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -219,11 +230,76 @@ pub(crate) struct FileRelationOutput {
 pub(crate) struct Diagnostic {
     pub(crate) language: String,
     pub(crate) level: &'static str,
+    pub(crate) code: DiagnosticCode,
     pub(crate) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) line: Option<u32>,
+}
+
+/// Stable machine-readable diagnostic categories shared by the engine, the
+/// architecture projection, and the desktop client. The human message is
+/// intentionally not part of the classification contract.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DiagnosticCode {
+    ProviderMissing,
+    IndexerFailed,
+    InvalidOutput,
+    EmptySemantic,
+    MissingDependencyMetadata,
+    DependencyMetadataGap,
+    MissingCompileContext,
+    MissingExternalTool,
+    MissingLegacySdk,
+    ProviderTimeout,
+    ProviderStopped,
+    PartialCoverage,
+    LargeWorkspacePartial,
+    JavaSourceFallback,
+    JavaSourceFallbackFailed,
+    RubyBundleWarning,
+    ProviderDiagnostic,
+    #[default]
+    Internal,
+}
+
+impl DiagnosticCode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderMissing => "provider-missing",
+            Self::IndexerFailed => "indexer-failed",
+            Self::InvalidOutput => "invalid-output",
+            Self::EmptySemantic => "empty-semantic",
+            Self::MissingDependencyMetadata => "missing-dependency-metadata",
+            Self::DependencyMetadataGap => "dependency-metadata-gap",
+            Self::MissingCompileContext => "missing-compile-context",
+            Self::MissingExternalTool => "missing-external-tool",
+            Self::MissingLegacySdk => "missing-legacy-sdk",
+            Self::ProviderTimeout => "provider-timeout",
+            Self::ProviderStopped => "provider-stopped",
+            Self::PartialCoverage => "partial-coverage",
+            Self::LargeWorkspacePartial => "large-workspace-partial",
+            Self::JavaSourceFallback => "java-source-fallback",
+            Self::JavaSourceFallbackFailed => "java-source-fallback-failed",
+            Self::RubyBundleWarning => "ruby-bundle-warning",
+            Self::ProviderDiagnostic => "provider-diagnostic",
+            Self::Internal => "internal",
+        }
+    }
+
+    pub(crate) const fn exclusion_reason(self) -> Option<&'static str> {
+        match self {
+            Self::MissingDependencyMetadata | Self::DependencyMetadataGap => {
+                Some("missing-dependency")
+            }
+            Self::MissingCompileContext | Self::MissingExternalTool | Self::MissingLegacySdk => {
+                Some("missing-compile-context")
+            }
+            _ => None,
+        }
+    }
 }
 
 pub(crate) struct LanguageAnalysis {

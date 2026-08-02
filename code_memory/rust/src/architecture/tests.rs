@@ -1,15 +1,16 @@
 use super::*;
 use crate::{
-    Diagnostic, DocumentOutput, FileRelationOutput, IndexOutput, LanguageOutput, OccurrenceOutput,
-    RelationOutput, SymbolOutput,
+    Diagnostic, DiagnosticCode, DocumentOutput, FileRelationOutput, IndexOutput, LanguageOutput,
+    OccurrenceOutput, RelationOutput, SymbolOutput,
 };
 use std::collections::BTreeMap;
 use std::fs;
 
 fn sample_output() -> IndexOutput {
     IndexOutput {
-        schema: "code-memory.language-index.v1",
+        schema: "code-memory.language-index.v2",
         project_root: "fixture".to_string(),
+        provider_provenance: Vec::new(),
         languages: vec![LanguageOutput {
             id: "python".to_string(),
             name: "Python".to_string(),
@@ -59,6 +60,7 @@ fn excluded_language_reason_is_stable_for_ui_consumers() {
     let diagnostics = vec![Diagnostic {
         language: "php".to_string(),
         level: "warning",
+        code: DiagnosticCode::MissingDependencyMetadata,
         message:
             "PHP semantic analysis skipped because Composer dependency metadata is unavailable"
                 .to_string(),
@@ -72,6 +74,23 @@ fn excluded_language_reason_is_stable_for_ui_consumers() {
     assert_eq!(
         language_exclusion_reason("php", "indexed", &diagnostics),
         None
+    );
+}
+
+#[test]
+fn diagnostic_code_does_not_depend_on_human_message_wording() {
+    let diagnostics = vec![Diagnostic {
+        language: "php".to_string(),
+        level: "warning",
+        code: DiagnosticCode::MissingDependencyMetadata,
+        message: "provider wording changed in a future release".to_string(),
+        path: None,
+        line: None,
+    }];
+
+    assert_eq!(
+        language_exclusion_reason("php", "excluded", &diagnostics).as_deref(),
+        Some("missing-dependency")
     );
 }
 
@@ -112,7 +131,7 @@ fn architecture_exposes_language_and_framework_quality_summary() {
 
     let architecture = build(&root, &output);
 
-    assert_eq!(architecture.schema, "code-memory.architecture-index.v2");
+    assert_eq!(architecture.schema, "code-memory.architecture-index.v3");
     assert_eq!(architecture.languages[0].id, "python");
     assert_eq!(architecture.languages[0].status, "indexed");
     assert_eq!(architecture.frameworks[0].id, "fastapi");

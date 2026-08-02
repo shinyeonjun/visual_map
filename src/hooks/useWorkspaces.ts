@@ -32,6 +32,8 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
 
   useEffect(() => {
     void refreshWorkspaces();
+    // Initial workspace hydration must run once; refreshWorkspaces is a local async helper.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function refreshWorkspaces(preferredWorkspaceId?: string) {

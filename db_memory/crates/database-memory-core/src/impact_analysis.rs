@@ -92,7 +92,8 @@ pub fn impact_analysis_bounded(
         let (edges, has_more_edges) =
             next_edges_bounded(store, snapshot_key, &node_key, direction, remaining_budget)?;
         if max_results != usize::MAX {
-            remaining_budget -= edges.len();
+            debug_assert!(edges.len() <= remaining_budget);
+            remaining_budget = remaining_budget.saturating_sub(edges.len());
         }
         truncated |= has_more_edges;
 

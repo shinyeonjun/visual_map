@@ -5,8 +5,30 @@ describe("codeInventoryAnalysisQuality", () => {
   it("normalizes engine quality summaries and preserves partial states", () => {
     const inventory = {
       architecture: {
-        languages: [{ id: "python", name: "Python", provider: "native-lsp", files_found: 3, files_indexed: 2, files_missing: 1, status: "indexed-partial", exclusion_reason: "missing-compile-context", exclusion_scope: "language" }],
-        frameworks: [{ id: "fastapi", language: "python", name: "FastAPI", adapter: "registration-routing", status: "detected", fact_count: 2, relation_count: 1 }],
+        languages: [
+          {
+            id: "python",
+            name: "Python",
+            provider: "native-lsp",
+            files_found: 3,
+            files_indexed: 2,
+            files_missing: 1,
+            status: "indexed-partial",
+            exclusion_reason: "missing-compile-context",
+            exclusion_scope: "language",
+          },
+        ],
+        frameworks: [
+          {
+            id: "fastapi",
+            language: "python",
+            name: "FastAPI",
+            adapter: "registration-routing",
+            status: "detected",
+            fact_count: 2,
+            relation_count: 1,
+          },
+        ],
       },
     } as unknown as CodeInventory;
 
@@ -15,7 +37,15 @@ describe("codeInventoryAnalysisQuality", () => {
       partialLanguages: 1,
       failedLanguages: 0,
       detectedFrameworks: 1,
-      languages: [{ filesFound: 3, filesIndexed: 2, filesMissing: 1, exclusionReason: "missing-compile-context", exclusionScope: "language" }],
+      languages: [
+        {
+          filesFound: 3,
+          filesIndexed: 2,
+          filesMissing: 1,
+          exclusionReason: "missing-compile-context",
+          exclusionScope: "language",
+        },
+      ],
       frameworks: [{ factCount: 2, relationCount: 1 }],
     });
   });

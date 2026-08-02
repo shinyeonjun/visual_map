@@ -124,6 +124,7 @@ try {
     $cacheRoot = Join-Path $matrixRoot ("cache-" + $entry.Name)
     New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
     $env:CBM_CACHE_DIR = $cacheRoot
+    $env:CODE_MEMORY_CACHE_ROOT = $cacheRoot
     $env:CBM_ALLOWED_ROOT = $sourceRoot
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $index = Invoke-CodeTool "index_repository" @{
@@ -341,6 +342,7 @@ try {
   Write-Output "PASS: pinned multi-language code field matrix completed."
 } finally {
   Remove-Item Env:CBM_CACHE_DIR -ErrorAction SilentlyContinue
+  Remove-Item Env:CODE_MEMORY_CACHE_ROOT -ErrorAction SilentlyContinue
   Remove-Item Env:CBM_ALLOWED_ROOT -ErrorAction SilentlyContinue
   Remove-Item Env:CODE_MEMORY_PROVIDERS_ROOT -ErrorAction SilentlyContinue
   Remove-Item Env:BACKEND_MAP_TEST_CODE_REPO -ErrorAction SilentlyContinue

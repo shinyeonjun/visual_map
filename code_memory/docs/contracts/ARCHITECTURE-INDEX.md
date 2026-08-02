@@ -7,7 +7,7 @@ tree, boundaries, relations, and user-visible flows.
 
 ## Output
 
-`code-memory.architecture-index.v1`
+`code-memory.architecture-index.v3`
 
 The Rust bridge writes it next to the normal index output:
 
@@ -37,6 +37,10 @@ language-index.architecture.json
 
 Every node has a stable `id`, display `label`, optional source `path`, and
 properties. External packages have `external: true`.
+
+`diagnostics[].code` is a stable kebab-case machine category. Consumers must
+branch on this field, not on the human-readable `message`. The same diagnostic
+also carries its evidence path when the gap is file-scoped.
 The default external-library label is `<package> 라이브러리` (for example,
 `pandas 라이브러리`). The stable node ID and the `name` property retain the
 machine package name.

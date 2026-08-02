@@ -125,6 +125,7 @@ pub(crate) struct EdgeDraft {
 pub(crate) struct ArchitectureOutput {
     pub(crate) schema: &'static str,
     pub(crate) project_root: String,
+    pub(crate) provider_provenance: Vec<crate::ProviderProvenance>,
     pub(crate) languages: Vec<ArchitectureLanguageSummary>,
     pub(crate) frameworks: Vec<ArchitectureFrameworkSummary>,
     pub(crate) nodes: Vec<ArchitectureNode>,
@@ -210,6 +211,7 @@ pub(crate) struct ArchitectureFlow {
 #[derive(Serialize)]
 pub(crate) struct ArchitectureDiagnostic {
     pub(crate) kind: String,
+    pub(crate) code: crate::DiagnosticCode,
     pub(crate) path: Option<String>,
     pub(crate) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]

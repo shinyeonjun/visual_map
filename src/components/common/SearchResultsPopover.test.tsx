@@ -11,16 +11,20 @@ describe("SearchResultsPopover", () => {
       searchQuery: "orders",
       searchPopoverOpen: true,
       searchSummary: "1개 결과",
-      searchGroups: [{
-        title: "DB 테이블",
-        results: [{
-          id: "table:public.orders",
-          title: "public.orders",
-          subtitle: "테이블",
-          focusId: "db:table:public.orders",
-          tableKey: "public.orders",
-        }],
-      }],
+      searchGroups: [
+        {
+          title: "DB 테이블",
+          results: [
+            {
+              id: "table:public.orders",
+              title: "public.orders",
+              subtitle: "테이블",
+              focusId: "db:table:public.orders",
+              tableKey: "public.orders",
+            },
+          ],
+        },
+      ],
       closeSearchPopover: vi.fn(),
       selectSearchResult,
     } as unknown as VisualMapControls;

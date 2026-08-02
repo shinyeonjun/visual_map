@@ -1,9 +1,5 @@
 import type { EngineRegistry } from "../types/engine";
-import type {
-  CodeInventory,
-  DbInventory,
-  Workspace,
-} from "../types/workspace";
+import type { CodeInventory, DbInventory, Workspace } from "../types/workspace";
 import type { InventoryBootstrap, InventorySearchResult, VisualMap } from "../types/visual-map";
 
 type RecordValue = Record<string, unknown>;

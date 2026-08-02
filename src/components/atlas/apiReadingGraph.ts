@@ -9,13 +9,13 @@ import type {
 } from "../../types/visual-map";
 import type { ApiConnectionModel } from "./apiConnectionModel";
 
-const NODE_WIDTH = 156;
-const NODE_HEIGHT = 126;
-const NODE_GAP = 48;
+export const API_GRAPH_NODE_WIDTH = 156;
+export const API_GRAPH_NODE_HEIGHT = 126;
+export const API_GRAPH_NODE_GAP = 48;
 const CANVAS_PAD = 24;
 export const API_GRAPH_NODE_TOP = 72;
-const BRANCH_START_GAP = 64;
-const BRANCH_ROW_GAP = 48;
+const BRANCH_START_GAP = 76;
+const BRANCH_ROW_GAP = 64;
 
 type ApiGraphNode = {
   node: VisualNode;
@@ -85,22 +85,14 @@ export function buildApiGraphLayout(
   }
   for (const bucket of outgoing.values()) bucket.sort((left, right) => left.id.localeCompare(right.id));
 
-  const columns = new Map<string, number>();
   const depths = new Map<string, number>();
-  const primaryQueue = primaryEntries.map(({ node }, index) => {
-    columns.set(node.id, index);
+  const primaryQueue = primaryEntries.map(({ node }) => {
     depths.set(node.id, 0);
     return node.id;
   });
-  assignReachableColumns(primaryQueue, columns, depths, outgoing, primaryIndex);
-
-  let nextColumn = primaryEntries.length;
+  assignReachableDepths(primaryQueue, depths, outgoing, primaryIndex);
   for (const nodeId of nodeIds) {
-    if (columns.has(nodeId)) continue;
-    columns.set(nodeId, nextColumn);
-    depths.set(nodeId, 1);
-    assignReachableColumns([nodeId], columns, depths, outgoing, primaryIndex);
-    nextColumn += 1;
+    if (!depths.has(nodeId)) depths.set(nodeId, 1);
   }
 
   const rawPositions = new Map<string, { x: number; y: number; primaryIndex?: number }>();
@@ -109,41 +101,33 @@ export function buildApiGraphLayout(
     rawPositions.set(node.id, { x: nodeX(index), y: API_GRAPH_NODE_TOP, primaryIndex: index });
   }
 
-  const branchGroups = new Map<string, string[]>();
-  for (const nodeId of nodeIds) {
-    if (primaryIndex.has(nodeId)) continue;
-    const key = `${columns.get(nodeId) ?? 0}:${depths.get(nodeId) ?? 1}`;
-    const group = branchGroups.get(key) ?? [];
-    group.push(nodeId);
-    branchGroups.set(key, group);
+  const incoming = new Map<string, string[]>();
+  for (const edge of edges) {
+    const parents = incoming.get(edge.to) ?? [];
+    parents.push(edge.from);
+    incoming.set(edge.to, parents);
   }
-  for (const [key, group] of branchGroups) {
-    const [columnText, depthText] = key.split(":");
-    const column = Number(columnText);
-    const depth = Number(depthText);
-    group.sort((left, right) => (nodesById.get(left)?.title ?? left).localeCompare(nodesById.get(right)?.title ?? right, "ko-KR") || left.localeCompare(right));
-    group.forEach((nodeId, index) => {
-      rawPositions.set(nodeId, {
-        x: nodeX(column) + (index - (group.length - 1) / 2) * (NODE_WIDTH + NODE_GAP),
-        y: API_GRAPH_NODE_TOP + NODE_HEIGHT + BRANCH_START_GAP + (depth - 1) * (NODE_HEIGHT + BRANCH_ROW_GAP),
-      });
-    });
+  const maxDepth = Math.max(1, ...[...depths.values()]);
+  const branchRows = new Map<number, string[]>();
+  for (let depth = 1; depth <= maxDepth; depth += 1) {
+    branchRows.set(
+      depth,
+      [...nodeIds].filter((nodeId) => !primaryIndex.has(nodeId) && depths.get(nodeId) === depth),
+    );
   }
 
-  const rowGroups = new Map<number, string[]>();
-  for (const [nodeId, position] of rawPositions) {
-    const row = rowGroups.get(position.y) ?? [];
-    row.push(nodeId);
-    rowGroups.set(position.y, row);
-  }
-  for (const group of rowGroups.values()) {
-    group.sort((left, right) => (rawPositions.get(left)?.x ?? 0) - (rawPositions.get(right)?.x ?? 0));
-    let right = Number.NEGATIVE_INFINITY;
-    for (const nodeId of group) {
-      const position = rawPositions.get(nodeId);
-      if (!position) continue;
-      position.x = Math.max(position.x, right + NODE_GAP);
-      right = position.x + NODE_WIDTH;
+  // A pair of forward/backward barycenter sweeps keeps branches readable when
+  // several parents share the same depth. The primary path remains fixed.
+  for (let sweep = 0; sweep < 2; sweep += 1) {
+    for (let depth = 1; depth <= maxDepth; depth += 1) {
+      const row = branchRows.get(depth) ?? [];
+      row.sort((left, right) => compareByAnchor(left, right, incoming, rawPositions, nodesById));
+      placeBranchRow(row, depth, incoming, rawPositions);
+    }
+    for (let depth = maxDepth - 1; depth >= 1; depth -= 1) {
+      const row = branchRows.get(depth) ?? [];
+      row.sort((left, right) => compareByAnchor(left, right, outgoing, rawPositions, nodesById));
+      placeBranchRow(row, depth, incoming, rawPositions);
     }
   }
 
@@ -166,24 +150,71 @@ export function buildApiGraphLayout(
     const to = graphNodesById.get(edge.to);
     return from && to ? [{ edge, from, to }] : [];
   });
-  const maxRight = Math.max(...graphNodes.map(({ x }) => x + NODE_WIDTH), CANVAS_PAD);
-  const maxBottom = Math.max(...graphNodes.map(({ y }) => y + NODE_HEIGHT), API_GRAPH_NODE_TOP + NODE_HEIGHT);
+  const maxRight = Math.max(...graphNodes.map(({ x }) => x + API_GRAPH_NODE_WIDTH), CANVAS_PAD);
+  const maxBottom = Math.max(...graphNodes.map(({ y }) => y + API_GRAPH_NODE_HEIGHT), API_GRAPH_NODE_TOP + API_GRAPH_NODE_HEIGHT);
   const primaryCount = Math.max(2, primaryEntries.length);
-  const minimumWidth = CANVAS_PAD * 2 + primaryCount * NODE_WIDTH + (primaryCount - 1) * NODE_GAP;
+  const minimumWidth = CANVAS_PAD * 2 + primaryCount * API_GRAPH_NODE_WIDTH + (primaryCount - 1) * API_GRAPH_NODE_GAP;
   const gapX = nodeX(1) + shiftX;
 
   return {
     nodes: graphNodes,
     edges: graphEdges,
     width: Math.max(minimumWidth, maxRight + CANVAS_PAD),
-    height: Math.max(560, maxBottom + 72),
+    height: Math.max(360, maxBottom + 104),
     gapX,
   };
 }
 
-function assignReachableColumns(
+function compareByAnchor(
+  left: string,
+  right: string,
+  neighbors: Map<string, VisualEdge[]> | Map<string, string[]>,
+  positions: Map<string, { x: number; y: number; primaryIndex?: number }>,
+  nodesById: Map<string, VisualNode>,
+): number {
+  const leftAnchor = nodeBarycenter(left, neighbors, positions);
+  const rightAnchor = nodeBarycenter(right, neighbors, positions);
+  return leftAnchor - rightAnchor
+    || (nodesById.get(left)?.title ?? left).localeCompare(nodesById.get(right)?.title ?? right, "ko-KR")
+    || left.localeCompare(right);
+}
+
+function placeBranchRow(
+  row: string[],
+  depth: number,
+  incoming: Map<string, string[]>,
+  positions: Map<string, { x: number; y: number; primaryIndex?: number }>,
+): void {
+  let right = Number.NEGATIVE_INFINITY;
+  for (const nodeId of row) {
+    const desiredX = nodeAnchor(nodeId, incoming, positions) - API_GRAPH_NODE_WIDTH / 2;
+    const x = Math.max(desiredX, right + API_GRAPH_NODE_GAP);
+    positions.set(nodeId, {
+      x,
+      y: API_GRAPH_NODE_TOP + API_GRAPH_NODE_HEIGHT + BRANCH_START_GAP + (depth - 1) * (API_GRAPH_NODE_HEIGHT + BRANCH_ROW_GAP),
+    });
+    right = x + API_GRAPH_NODE_WIDTH;
+  }
+}
+
+function nodeBarycenter(
+  nodeId: string,
+  neighbors: Map<string, VisualEdge[]> | Map<string, string[]>,
+  positions: Map<string, { x: number; y: number; primaryIndex?: number }>,
+): number {
+  const entries = neighbors.get(nodeId) ?? [];
+  const neighborIds = entries.map((entry) => typeof entry === "string" ? entry : entry.to);
+  const centers = neighborIds
+    .map((neighborId) => positions.get(neighborId))
+    .filter((position): position is { x: number; y: number; primaryIndex?: number } => Boolean(position))
+    .map((position) => position.x + API_GRAPH_NODE_WIDTH / 2);
+  return centers.length > 0
+    ? centers.reduce((sum, center) => sum + center, 0) / centers.length
+    : nodeX(0) + API_GRAPH_NODE_WIDTH / 2;
+}
+
+function assignReachableDepths(
   starts: string[],
-  columns: Map<string, number>,
   depths: Map<string, number>,
   outgoing: Map<string, VisualEdge[]>,
   primaryIndex: Map<string, number>,
@@ -191,44 +222,124 @@ function assignReachableColumns(
   const queue = [...starts];
   while (queue.length > 0) {
     const from = queue.shift()!;
-    const column = columns.get(from) ?? 0;
     const depth = depths.get(from) ?? 0;
     for (const edge of outgoing.get(from) ?? []) {
-      if (primaryIndex.has(edge.to) || columns.has(edge.to)) continue;
-      columns.set(edge.to, column);
-      depths.set(edge.to, depth + 1);
+      if (primaryIndex.has(edge.to)) continue;
+      const nextDepth = depth + 1;
+      const currentDepth = depths.get(edge.to);
+      if (currentDepth !== undefined && currentDepth <= nextDepth) continue;
+      depths.set(edge.to, nextDepth);
       queue.push(edge.to);
     }
   }
 }
 
+function nodeAnchor(
+  nodeId: string,
+  incoming: Map<string, string[]>,
+  positions: Map<string, { x: number; y: number; primaryIndex?: number }>,
+): number {
+  const parents = (incoming.get(nodeId) ?? []).filter((parent) => positions.has(parent));
+  if (parents.length === 0) return nodeX(0) + API_GRAPH_NODE_WIDTH / 2;
+  return parents.reduce((sum, parent) => {
+    const position = positions.get(parent)!;
+    return sum + position.x + API_GRAPH_NODE_WIDTH / 2;
+  }, 0) / parents.length;
+}
+
 function nodeX(index: number): number {
-  return CANVAS_PAD + index * (NODE_WIDTH + NODE_GAP);
+  return CANVAS_PAD + index * (API_GRAPH_NODE_WIDTH + API_GRAPH_NODE_GAP);
+}
+
+const SAME_ROW_ADJACENT_GAP = API_GRAPH_NODE_GAP + 14;
+
+type ApiGraphEdgeAnchors = {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  kind: "adjacent" | "same-row-arc" | "cross-row";
+};
+
+function isSameRow(from: ApiGraphNode, to: ApiGraphNode): boolean {
+  return Math.abs(from.y - to.y) < 4;
+}
+
+function sameRowFacingGap(from: ApiGraphNode, to: ApiGraphNode): number {
+  return to.x >= from.x
+    ? to.x - (from.x + API_GRAPH_NODE_WIDTH)
+    : from.x - (to.x + API_GRAPH_NODE_WIDTH);
+}
+
+function sameRowArcDepth(isPrimaryDatabase: boolean, span: number): number {
+  const depth = 24 + span * 0.03;
+  return isPrimaryDatabase ? Math.min(56, depth + 8) : Math.min(44, depth);
+}
+
+function fanOutX(from: ApiGraphNode, targetCenterX: number): number {
+  const center = from.x + API_GRAPH_NODE_WIDTH / 2;
+  const limit = API_GRAPH_NODE_WIDTH / 2 - 18;
+  const shift = Math.max(-limit, Math.min(limit, (targetCenterX - center) * 0.12));
+  return center + shift;
 }
 
 export function apiGraphEdgePath(connection: ApiGraphEdge, primaryDatabaseEdgeId: string | null): string {
   const { edge, from, to } = connection;
-  if (edge.id === primaryDatabaseEdgeId && from.y === to.y) {
-    const startX = from.x + NODE_WIDTH / 2;
-    const endX = to.x + NODE_WIDTH / 2;
-    const bottom = from.y + NODE_HEIGHT;
-    const curveY = bottom + 104;
-    return `M ${startX} ${bottom} C ${startX} ${curveY}, ${endX} ${curveY}, ${endX} ${to.y + NODE_HEIGHT}`;
+  const anchors = apiGraphEdgeAnchors(connection, primaryDatabaseEdgeId);
+  if (anchors.kind === "adjacent") {
+    return `M ${anchors.startX} ${anchors.startY} L ${anchors.endX} ${anchors.endY}`;
   }
-  if (Math.abs(from.y - to.y) < 4) {
-    const forward = to.x >= from.x;
-    const startX = forward ? from.x + NODE_WIDTH : from.x;
-    const endX = forward ? to.x : to.x + NODE_WIDTH;
-    const y = from.y + NODE_HEIGHT / 2;
-    return `M ${startX} ${y} L ${endX} ${y}`;
+  if (anchors.kind === "same-row-arc") {
+    const startX = anchors.startX;
+    const endX = anchors.endX;
+    const bottom = anchors.startY;
+    const isPrimaryDatabase = edge.id === primaryDatabaseEdgeId;
+    const curveY = bottom + sameRowArcDepth(isPrimaryDatabase, Math.abs(endX - startX));
+    return `M ${startX} ${bottom} C ${startX} ${curveY}, ${endX} ${curveY}, ${endX} ${anchors.endY}`;
+  }
+  const startX = anchors.startX;
+  const endX = anchors.endX;
+  const startY = anchors.startY;
+  const endY = anchors.endY;
+  const downward = to.y > from.y;
+  const pull = Math.min(120, Math.max(28, Math.abs(endY - startY) / 2)) * (downward ? 1 : -1);
+  return `M ${startX} ${startY} C ${startX} ${startY + pull}, ${endX} ${endY - pull}, ${endX} ${endY}`;
+}
+
+export function apiGraphEdgeAnchors(
+  connection: ApiGraphEdge,
+  primaryDatabaseEdgeId: string | null,
+): ApiGraphEdgeAnchors {
+  const { edge, from, to } = connection;
+  if (isSameRow(from, to)) {
+    const isPrimaryDatabase = edge.id === primaryDatabaseEdgeId;
+    if (!isPrimaryDatabase && sameRowFacingGap(from, to) <= SAME_ROW_ADJACENT_GAP) {
+      const forward = to.x >= from.x;
+      return {
+        startX: forward ? from.x + API_GRAPH_NODE_WIDTH : from.x,
+        startY: from.y + API_GRAPH_NODE_HEIGHT / 2,
+        endX: forward ? to.x : to.x + API_GRAPH_NODE_WIDTH,
+        endY: from.y + API_GRAPH_NODE_HEIGHT / 2,
+        kind: "adjacent",
+      };
+    }
+    return {
+      startX: from.x + API_GRAPH_NODE_WIDTH / 2,
+      startY: from.y + API_GRAPH_NODE_HEIGHT,
+      endX: to.x + API_GRAPH_NODE_WIDTH / 2,
+      endY: to.y + API_GRAPH_NODE_HEIGHT,
+      kind: "same-row-arc",
+    };
   }
   const downward = to.y > from.y;
-  const startX = from.x + NODE_WIDTH / 2;
-  const endX = to.x + NODE_WIDTH / 2;
-  const startY = downward ? from.y + NODE_HEIGHT : from.y;
-  const endY = downward ? to.y : to.y + NODE_HEIGHT;
-  const curveY = (startY + endY) / 2;
-  return `M ${startX} ${startY} C ${startX} ${curveY}, ${endX} ${curveY}, ${endX} ${endY}`;
+  const endX = to.x + API_GRAPH_NODE_WIDTH / 2;
+  return {
+    startX: fanOutX(from, endX),
+    startY: downward ? from.y + API_GRAPH_NODE_HEIGHT : from.y,
+    endX,
+    endY: downward ? to.y : to.y + API_GRAPH_NODE_HEIGHT,
+    kind: "cross-row",
+  };
 }
 
 export function apiGraphEdgeLabelStyle(
@@ -236,15 +347,25 @@ export function apiGraphEdgeLabelStyle(
   primaryDatabaseEdgeId: string | null,
 ): CSSProperties {
   const { edge, from, to } = connection;
-  if (edge.id === primaryDatabaseEdgeId && from.y === to.y) {
-    return { left: (from.x + to.x + NODE_WIDTH) / 2, top: from.y + NODE_HEIGHT + 82, transform: "translateX(-50%)" };
+  if (isSameRow(from, to)) {
+    const isPrimaryDatabase = edge.id === primaryDatabaseEdgeId;
+    if (!isPrimaryDatabase && sameRowFacingGap(from, to) <= SAME_ROW_ADJACENT_GAP) {
+      return { left: Math.min(from.x + API_GRAPH_NODE_WIDTH, to.x + API_GRAPH_NODE_WIDTH) + 3, top: from.y + 38 };
+    }
+    const startX = from.x + API_GRAPH_NODE_WIDTH / 2;
+    const endX = to.x + API_GRAPH_NODE_WIDTH / 2;
+    const depth = sameRowArcDepth(isPrimaryDatabase, Math.abs(endX - startX));
+    return {
+      left: (startX + endX) / 2,
+      top: from.y + API_GRAPH_NODE_HEIGHT + depth * 0.75,
+      transform: "translate(-50%, -50%)",
+    };
   }
-  if (Math.abs(from.y - to.y) < 4) {
-    return { left: Math.min(from.x + NODE_WIDTH, to.x + NODE_WIDTH) + 3, top: from.y + 38 };
-  }
+  const endX = to.x + API_GRAPH_NODE_WIDTH / 2;
+  const startX = fanOutX(from, endX);
   return {
-    left: (from.x + to.x + NODE_WIDTH) / 2,
-    top: (from.y + to.y + NODE_HEIGHT) / 2,
+    left: (startX + endX) / 2,
+    top: (from.y + to.y + API_GRAPH_NODE_HEIGHT) / 2,
     transform: "translate(-50%, -50%)",
   };
 }

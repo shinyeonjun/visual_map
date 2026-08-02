@@ -147,7 +147,7 @@ export function DatabaseSourceSection({
       return;
     }
     const confirmed = window.confirm(
-      `\"${profile.name}\" DB 연결을 삭제할까요?\n\n저장된 연결 정보와 로컬 구조 캐시만 삭제하며 DB 서버나 원본 파일은 변경하지 않습니다.`,
+      `"${profile.name}" DB 연결을 삭제할까요?\n\n저장된 연결 정보와 로컬 구조 캐시만 삭제하며 DB 서버나 원본 파일은 변경하지 않습니다.`,
     );
     if (confirmed) {
       dbProfileControls.deleteProfile();

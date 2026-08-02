@@ -15,7 +15,7 @@ import {
   Table2,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
 import type {
@@ -35,7 +35,12 @@ import {
 } from "../../types/workspace";
 import { visualEdgeKindLabel, visualEdgeTruthClass } from "../../visual/labels";
 import { columnRefFromNodeId, dbTableIdentityLabel, tableKeyFromDbNodeId } from "../../visual/nodeIds";
-import { ApiConnectionView } from "../atlas/ApiReadingPath";
+import { ApiConnectionView, ApiFlowGapView } from "../atlas/ApiReadingPath";
+import { CodeCallGraph } from "./CodeCallGraph";
+import { buildCodeCallGraphModel } from "./codeCallGraphModel";
+import { ColumnImpactCascade, TableErd } from "./DbAnswerVisuals";
+import { buildColumnImpactCascade } from "./columnImpactModel";
+import { buildTableErdModel } from "./tableErdModel";
 
 const ANSWER_MODES = new Set(["api-flow", "search-focus", "table-usage", "column-impact"]);
 
@@ -93,10 +98,14 @@ export function AnswerCanvas({
         visualMapControls={visualMapControls}
         onOpenSources={onOpenSources}
       />
-      {visibleMode === "api-flow" && map?.apiReading ? (
-        <ApiAnswer analysisBasis={analysisBasis} map={map} dbProfileControls={dbProfileControls} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
+      {visibleMode === "api-flow" ? (
+        map?.apiReading ? (
+          <ApiAnswer analysisBasis={analysisBasis} map={map} dbProfileControls={dbProfileControls} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
+        ) : map ? (
+          <ApiUnavailableAnswer analysisBasis={analysisBasis} map={map} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
+        ) : null
       ) : (visibleMode === "table-usage" || visibleMode === "column-impact") && map?.reviewBoard ? (
-        <ImpactAnswer analysisBasis={analysisBasis} map={map} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
+        <ImpactAnswer analysisBasis={analysisBasis} map={map} dbProfileControls={dbProfileControls} visualMapControls={visualMapControls} onOpenEvidence={onOpenEvidence} />
       ) : (
         <CodeAnswer
           analysisBasis={analysisBasis}
@@ -111,6 +120,40 @@ export function AnswerCanvas({
   );
 }
 
+function ApiUnavailableAnswer({
+  analysisBasis,
+  map,
+  visualMapControls,
+  onOpenEvidence,
+}: {
+  analysisBasis: string;
+  map: VisualMap;
+  visualMapControls: VisualMapControls;
+  onOpenEvidence: () => void;
+}) {
+  const route = map.nodes.find((node) => node.layer === "api" || node.kind === "route") ?? map.nodes.find((node) => node.id === map.focus);
+  return (
+    <>
+      <AnswerHeader
+        icon={<Braces size={18} />}
+        kicker="API 처리 흐름"
+        title={route?.title ?? map.focus}
+        analysisBasis={analysisBasis}
+        conclusion="확인된 Route 경계만 표시했습니다. 다음 호출은 아직 정적으로 확정하지 못했습니다."
+        confirmed={map.edges.filter((edge) => edge.evidence.length > 0).length}
+        candidates={map.edges.filter((edge) => edge.kind.startsWith("candidate")).length}
+        unknowns={1}
+        onOpenEvidence={onOpenEvidence}
+      />
+      <AnswerSection title="확인 필요 구간" count={map.edges.length} description="확인되지 않은 호출은 실제 코드 노드처럼 만들지 않습니다.">
+        <div className="answer-flow-map" aria-label="API 확인 필요 경로">
+          <ApiFlowGapView map={map} onSelectNode={visualMapControls.selectNode} onSelectEdge={visualMapControls.selectEdge} />
+        </div>
+      </AnswerSection>
+    </>
+  );
+}
+
 function AnswerHome({
   workspaceControls,
   dbProfileControls,
@@ -122,7 +165,10 @@ function AnswerHome({
   visualMapControls: VisualMapControls;
   onOpenSources: () => void;
 }) {
-  const hasInventory = codeInventoryItemCount(workspaceControls.codeInventory) > 0 || dbInventoryTableCount(dbProfileControls.inventory) > 0;
+  const codeCount = codeInventoryItemCount(workspaceControls.codeInventory);
+  const routeCount = workspaceControls.codeInventory?.routes.length ?? 0;
+  const tableCount = dbInventoryTableCount(dbProfileControls.inventory);
+  const hasInventory = codeCount > 0 || tableCount > 0;
 
   return (
     <main className="answer-canvas answer-home">
@@ -148,6 +194,13 @@ function AnswerHome({
           </span>
           {hasInventory ? <kbd>Ctrl K</kbd> : null}
         </button>
+        {hasInventory ? (
+          <div className="answer-home-stats" aria-label="분석 현황">
+            <span><Braces size={13} />API {routeCount}</span>
+            <span><Code2 size={13} />코드 항목 {codeCount}</span>
+            <span><Database size={13} />DB 테이블 {tableCount}</span>
+          </div>
+        ) : null}
       </section>
 
       {!hasInventory ? (
@@ -289,16 +342,27 @@ function ApiAnswer({
 function ImpactAnswer({
   analysisBasis,
   map,
+  dbProfileControls,
   visualMapControls,
   onOpenEvidence,
 }: {
   analysisBasis: string;
   map: VisualMap;
+  dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
   onOpenEvidence: () => void;
 }) {
   const board = map.reviewBoard!;
   const tableUsage = board.scope === "table";
+  const dbTables = dbProfileControls.inventory?.tables;
+  const erdModel = useMemo(
+    () => (tableUsage && dbTables?.length ? buildTableErdModel(map, dbTables) : null),
+    [tableUsage, map, dbTables],
+  );
+  const cascadeModel = useMemo(
+    () => (!tableUsage ? buildColumnImpactCascade(board) : null),
+    [tableUsage, board],
+  );
   const direct = board.lanes.find((lane) => lane.id === "direct") ?? board.lanes[0];
   const candidates = board.lanes.find((lane) => lane.id === "candidates");
   const unknowns = board.lanes.find((lane) => lane.id === "unknowns");
@@ -338,6 +402,28 @@ function ImpactAnswer({
       />
       {!tableUsage ? (
         <ChangeIntentBar intent={board.changeIntent ?? visualMapControls.changeIntent} onChange={visualMapControls.setChangeIntent} />
+      ) : null}
+      {erdModel ? (
+        <AnswerSection
+          title="테이블 구조 지도"
+          count={erdModel.inbound.length + erdModel.outbound.length}
+          description="FK로 직접 이어진 테이블과 코드 사용 근거"
+        >
+          <div className="answer-flow-map" aria-label={`${erdModel.tableLabel} 구조 지도`}>
+            <TableErd model={erdModel} visualMapControls={visualMapControls} />
+          </div>
+        </AnswerSection>
+      ) : null}
+      {cascadeModel ? (
+        <AnswerSection
+          title="영향 전파 지도"
+          count={cascadeModel.total}
+          description="확정·구조 근거를 DB 구조 → 코드 → API 순서로 배치"
+        >
+          <div className="answer-flow-map" aria-label={`${cascadeModel.subject} 영향 전파 지도`}>
+            <ColumnImpactCascade model={cascadeModel} map={map} visualMapControls={visualMapControls} />
+          </div>
+        </AnswerSection>
       ) : null}
       {tableUsage ? (
         <>
@@ -428,6 +514,7 @@ function CodeAnswer({
     : inventoryItem?.filePath
       ? sourceLabel(inventoryItem.filePath, inventoryItem.line)
       : null;
+  const callGraphModel = useMemo(() => buildCodeCallGraphModel(focusId, map), [focusId, map]);
   const edges = (map?.edges ?? []).filter((edge) => edge.from === focusId || edge.to === focusId);
   const confirmed = edges.filter((edge) => answerEdgeTruthClass(edge) === "confirmed");
   const structural = edges.filter((edge) => answerEdgeTruthClass(edge) === "structural");
@@ -453,6 +540,23 @@ function CodeAnswer({
         candidates={candidates.length}
         onOpenEvidence={map ? onOpenEvidence : undefined}
       />
+      {callGraphModel ? (
+        <AnswerSection
+          title="호출 지도"
+          count={callGraphModel.totalConnections}
+          description="왼쪽은 이 코드를 부르는 곳, 오른쪽은 이 코드가 부르는 대상, 아래는 닿는 데이터"
+        >
+          <div className="answer-flow-map" aria-label={`${title} 호출 지도`}>
+            <CodeCallGraph
+              model={callGraphModel}
+              selectedNodeId={visualMapControls.selectedNode?.id ?? null}
+              selectedEdgeId={visualMapControls.selectedEdge?.id ?? null}
+              onSelectNode={visualMapControls.selectNode}
+              onSelectEdge={visualMapControls.selectEdge}
+            />
+          </div>
+        </AnswerSection>
+      ) : null}
       <AnswerSection title="바로 연결" count={known.length} description="한 단계 이내의 확정 근거와 구조 관계">
         {known.length > 0 ? (
           <EdgeItems edges={known.slice(0, 5)} focusId={focusId} map={map} visualMapControls={visualMapControls} />

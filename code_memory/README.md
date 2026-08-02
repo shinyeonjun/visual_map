@@ -38,9 +38,9 @@ cargo run --manifest-path rust\Cargo.toml -- doctor --providers-root D:\VisualMa
 cargo run --manifest-path rust\Cargo.toml -- index --root D:\path\to\repo --providers-root D:\VisualMap\providers
 ```
 
-The output is `code-memory.language-index.v1`: documents, symbols,
+The output is `code-memory.language-index.v2`: documents, symbols,
 definition/reference occurrences, source ranges, detected framework packs,
-framework facts, provider status, and diagnostics. It is an interchange file
+framework facts, provider status, provider provenance, and diagnostics. It is an interchange file
 for the later Visual Map graph adapter, not the graph database itself.
 
 Indexing is precision-first: there is no separate fast mode. Each language is
@@ -58,7 +58,7 @@ not modified. Nested Rust projects are resolved from their nearest
 `Cargo.toml`, which allows monorepos to keep their existing layout.
 
 Every `index` run also writes a sibling `*.architecture.json` file using
-`code-memory.architecture-index.v1`. This is the Visual Map-oriented view:
+`code-memory.architecture-index.v3`. This is the Visual Map-oriented view:
 project/package/module/file tree, verified framework entrypoints, external
 library boundaries, database/file boundaries, module-level relations, and
 bounded entrypoint flows. Use `--architecture-out` to choose another path.

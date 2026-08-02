@@ -1,10 +1,5 @@
 import type { SearchResult } from "../types/controls";
-import type {
-  AnalysisCoverage,
-  ChangeIntent,
-  InventorySnapshot,
-  VisualMap,
-} from "../types/visual-map";
+import type { AnalysisCoverage, ChangeIntent, InventorySnapshot, VisualMap } from "../types/visual-map";
 
 export type RelationView = "connections" | "calls" | "data" | "impact";
 
@@ -21,8 +16,8 @@ export function sourceSummary(snapshot: InventorySnapshot): string | null {
       ? `${code.sourceRevisionLabel} · 원격 최신 여부 미확인`
       : `${code.sourceRevisionLabel} · 로컬 상태 확인`
     : null;
-  const labels = [codeLabel, snapshot.metadata?.db?.sourceRevisionLabel].filter(
-    (label): label is string => Boolean(label),
+  const labels = [codeLabel, snapshot.metadata?.db?.sourceRevisionLabel].filter((label): label is string =>
+    Boolean(label),
   );
   return labels.length > 0 ? labels.join(" · ") : null;
 }
@@ -63,11 +58,7 @@ export function mapRequestKey(
   return `${workspaceId}\u0000${mode}\u0000${focusId ?? ""}\u0000${changeIntent?.kind ?? ""}\u0000${changeIntent?.value ?? ""}\u0000${focusIds.join("\u001f")}\u0000${relationView}`;
 }
 
-export function visualMapCacheKey(
-  kind: "base" | "enriched",
-  targetKey: string,
-  generation: number,
-): string {
+export function visualMapCacheKey(kind: "base" | "enriched", targetKey: string, generation: number): string {
   return `${generation}\u0000${kind}\u0000${targetKey}`;
 }
 

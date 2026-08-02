@@ -74,7 +74,9 @@ describe("workspace deletion", () => {
         return Promise.resolve([]);
       }
       if (command === "open_workspace") {
-        return Promise.resolve((args as { workspaceId: string }).workspaceId === workspace.id ? workspace : secondWorkspace);
+        return Promise.resolve(
+          (args as { workspaceId: string }).workspaceId === workspace.id ? workspace : secondWorkspace,
+        );
       }
       throw new Error(`Unexpected command: ${command}`);
     });
@@ -100,7 +102,9 @@ describe("workspace deletion", () => {
         return Promise.resolve([]);
       }
       if (command === "open_workspace") {
-        return Promise.resolve((args as { workspaceId: string }).workspaceId === secondWorkspace.id ? secondWorkspace : workspace);
+        return Promise.resolve(
+          (args as { workspaceId: string }).workspaceId === secondWorkspace.id ? secondWorkspace : workspace,
+        );
       }
       throw new Error(`Unexpected command: ${command}`);
     });

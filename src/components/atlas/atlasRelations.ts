@@ -25,10 +25,7 @@ export type RelationLedgerRow = {
 
 export type RelationBeam = {
   edge: VisualEdge;
-  x1: number;
-  x2: number;
-  y1: number;
-  y2: number;
+  path: string;
   tone: RelationTone;
   active: boolean;
   label: string;
@@ -38,6 +35,74 @@ export const AT_GUTTER_WIDTH = 88;
 export const AT_LANE_WIDTH = 144;
 export const AT_LANE_GAP = 8;
 export const AT_LANE_PAD_X = 6;
+const AT_MAX_VISIBLE_BEAMS = 8;
+
+export function orderItemsByRelations<T>(
+  items: T[],
+  map: VisualMap | null,
+  nodeIdForItem: (item: T) => string,
+  selectedNodeId?: string | null,
+): T[] {
+  if (!map || items.length < 2) {
+    return items;
+  }
+  const itemIds = items.map(nodeIdForItem);
+  const knownIds = new Set(itemIds);
+  const adjacency = new Map<string, Set<string>>();
+  const incoming = new Map<string, number>();
+  const connectedIds = new Set<string>();
+  for (const id of itemIds) {
+    adjacency.set(id, new Set());
+    incoming.set(id, 0);
+  }
+  for (const edge of map.edges) {
+    // 후보/이름 단서는 주 흐름을 재배치하지 않는다. 선택 시 근거로는 남기되, 기본 지도는 읽은 관계만 따른다.
+    const tone = relationTone(edge);
+    if (tone === "candidate" || tone === "inferred") {
+      continue;
+    }
+    if (!knownIds.has(edge.from) || !knownIds.has(edge.to) || edge.from === edge.to) {
+      continue;
+    }
+    adjacency.get(edge.from)?.add(edge.to);
+    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1);
+    connectedIds.add(edge.from);
+    connectedIds.add(edge.to);
+  }
+
+  const level = new Map<string, number>();
+  const queue = itemIds.filter((id) => incoming.get(id) === 0);
+  if (selectedNodeId && knownIds.has(selectedNodeId)) {
+    queue.unshift(selectedNodeId);
+    level.set(selectedNodeId, -1);
+  }
+  for (const id of queue) {
+    if (!level.has(id)) {
+      level.set(id, 0);
+    }
+  }
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    const nextLevel = (level.get(current) ?? 0) + 1;
+    for (const next of adjacency.get(current) ?? []) {
+      if ((level.get(next) ?? Number.POSITIVE_INFINITY) > nextLevel) {
+        level.set(next, nextLevel);
+        queue.push(next);
+      }
+    }
+  }
+
+  // Disconnected components keep their input order after connected flow lanes.
+  return [...items].sort((a, b) => {
+    const aId = nodeIdForItem(a);
+    const bId = nodeIdForItem(b);
+    const aLevel = level.get(aId) ?? 1000;
+    const bLevel = level.get(bId) ?? 1000;
+    const aComponent = connectedIds.has(aId) ? 0 : 1;
+    const bComponent = connectedIds.has(bId) ? 0 : 1;
+    return aComponent - bComponent || aLevel - bLevel || itemIds.indexOf(aId) - itemIds.indexOf(bId);
+  });
+}
 
 export function edgeTouchesNode(edge: VisualEdge, node: VisualNode | null): boolean {
   if (!node) {
@@ -350,7 +415,7 @@ export function buildRelationBeams({
     return [];
   }
   const visibleEdges = prioritizedBeamEdges(map.edges, selectedEdge, selectedNode, selectedFocusId);
-  return visibleEdges.flatMap((edge) => {
+  return visibleEdges.flatMap((edge, index) => {
     const from = nodePosition(edge.from, routeCards, codeCards, tableCards);
     const to = nodePosition(edge.to, routeCards, codeCards, tableCards);
     if (!from || !to) {
@@ -360,10 +425,13 @@ export function buildRelationBeams({
     return [
       {
         edge,
-        x1: laneCenterX(from.lane),
-        x2: laneCenterX(to.lane),
-        y1: bandCenterPercent(bands, from.band),
-        y2: bandCenterPercent(bands, to.band),
+        path: relationPath(
+          laneCenterX(from.lane),
+          laneCenterX(to.lane),
+          bandCenterPercent(bands, from.band),
+          bandCenterPercent(bands, to.band),
+          index,
+        ),
         tone,
         active: selectedEdge?.id === edge.id || edgeTouchesNode(edge, selectedNode) || Boolean(selectedFocusId && edgeTouchesNodeId(edge, selectedFocusId)),
         label: `${relationLabel(tone)} 관계: ${nodeLabel(edge.from, map)} → ${nodeLabel(edge.to, map)}`,
@@ -387,7 +455,7 @@ function prioritizedBeamEdges(
   return uniqueEdges([
     ...focused.sort((a, b) => beamFocusRank(a, selectedEdge) - beamFocusRank(b, selectedEdge)),
     ...[...edges].sort((a, b) => relationRank(a) - relationRank(b)),
-  ]).slice(0, 12);
+  ]).slice(0, AT_MAX_VISIBLE_BEAMS);
 }
 
 function beamFocusRank(edge: VisualEdge, selectedEdge: VisualEdge | null): number {
@@ -439,6 +507,18 @@ export function relationFocusIdFromMapFocus(focusId: string): string | null {
 function laneCenterX(lane: number): number {
   // ponytail: mirrors fixed CSS lane sizes; measure DOM only if card widths become variable.
   return AT_GUTTER_WIDTH + AT_LANE_PAD_X + lane * (AT_LANE_WIDTH + AT_LANE_GAP) + AT_LANE_WIDTH / 2;
+}
+
+function relationPath(x1: number, x2: number, y1: number, y2: number, index: number): string {
+  const direction = x2 >= x1 ? 1 : -1;
+  const distance = Math.max(32, Math.abs(x2 - x1) * 0.42);
+  if (Math.abs(y1 - y2) < 0.5) {
+    const side = index % 2 === 0 ? -1 : 1;
+    const rail = Math.max(6, Math.min(94, y1 + side * (8 + (index % 3) * 3)));
+    return `M ${x1} ${y1} C ${x1 + direction * distance} ${rail}, ${x2 - direction * distance} ${rail}, ${x2} ${y2}`;
+  }
+  const middle = (y1 + y2) / 2;
+  return `M ${x1} ${y1} C ${x1 + direction * distance} ${middle}, ${x2 - direction * distance} ${middle}, ${x2} ${y2}`;
 }
 
 function bandCenterPercent(bands: Array<"api" | "code" | "db">, target: "api" | "code" | "db"): number {

@@ -118,6 +118,8 @@ fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .path()
         .app_local_data_dir()
         .map_err(|error| format!("로컬 앱 데이터 디렉터리를 찾지 못했습니다: {error}"))?;
+    // Keep the product data root stable while the Tauri identifier follows the
+    // reverse-domain convention, so existing workspaces survive upgrades.
     Ok(runtime_local
         .parent()
         .map(|parent| parent.join("VisualMap"))

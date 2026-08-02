@@ -62,6 +62,11 @@ describe("visual map model", () => {
   it("requires the expected result shape for focused map modes", () => {
     expect(mapAnswersMode(null, "api-flow")).toBe(false);
     expect(mapAnswersMode({ ...map("api"), apiReading: null }, "api-flow")).toBe(false);
-    expect(mapAnswersMode({ ...map("api"), nodes: [{ id: "n", kind: "api", title: "n", layer: "api", source: "code" }] }, "atlas")).toBe(true);
+    expect(
+      mapAnswersMode(
+        { ...map("api"), nodes: [{ id: "n", kind: "api", title: "n", layer: "api", source: "code" }] },
+        "atlas",
+      ),
+    ).toBe(true);
   });
 });

@@ -27,7 +27,7 @@
 
 .product-view-switch button:hover { color: var(--ink); }
 .product-view-switch button.active {
-  background: #fff;
+  background: var(--bg-raised);
   color: var(--blue-ink);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.09);
 }
@@ -37,7 +37,7 @@
   min-height: 0;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
-  background: #fff;
+  background: var(--bg-raised);
 }
 
 .target-navigator-header {
@@ -97,7 +97,7 @@
   background: var(--bg-panel);
   color: var(--ink-4);
 }
-.target-filter:focus-within { border-color: color-mix(in srgb, var(--blue) 50%, var(--line)); background: #fff; }
+.target-filter:focus-within { border-color: color-mix(in srgb, var(--blue) 50%, var(--line)); background: var(--bg-raised); }
 .target-filter input { min-width: 0; height: 30px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 11px; }
 
 .target-list {
@@ -169,7 +169,7 @@
   font-size: 10px;
   font-weight: 760;
 }
-.target-list-empty button:hover { border-color: var(--blue); background: #fff; }
+.target-list-empty button:hover { border-color: var(--blue); background: var(--bg-raised); }
 
 .target-navigator-footer {
   display: grid;
@@ -195,7 +195,7 @@
   padding: 0 6px;
   border: 1px solid var(--line);
   border-radius: 4px;
-  background: #fff;
+  background: var(--bg-raised);
   color: var(--ink-3);
   font-size: 10.5px;
   font-weight: 730;
@@ -209,7 +209,7 @@
   min-height: 0;
   overflow-y: auto;
   padding: 0 28px 40px;
-  background: #fff;
+  background: var(--bg-raised);
   scrollbar-gutter: stable;
 }
 
@@ -349,7 +349,7 @@
 .answer-flow-map-intro span { color: var(--ink-2); font-size: 11px; font-weight: 800; }
 .answer-flow-map-intro small { color: var(--ink-4); font-size: 9.5px; }
 .answer-flow-map .api-connection-view { min-width: 0; overflow-x: auto; }
-.answer-flow-map .api-connection-canvas { min-width: 620px; }
+.answer-flow-map .api-connection-canvas { min-width: 620px; min-height: 0; }
 .answer-flow-map .api-collapsed-relations { margin: 8px 12px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg-raised); }
 .answer-flow-map .api-collapsed-relations > summary { padding: 9px 11px; color: var(--ink-3); font-size: 10px; font-weight: 760; cursor: pointer; }
 .answer-flow-map .api-collapsed-relations > div { display: grid; gap: 5px; padding: 0 8px 8px; }
@@ -426,7 +426,7 @@
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--line));
   border-radius: 50%;
-  background: #fff;
+  background: var(--bg-raised);
   color: var(--blue-ink);
   font: 760 9px/1 var(--mono);
 }
@@ -566,11 +566,11 @@
 }
 .answer-change-intent > label { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-3); font-size: 10px; font-weight: 720; }
 .answer-change-intent select,
-.answer-change-intent input { height: 30px; border: 1px solid var(--line-2); border-radius: 4px; background: #fff; color: var(--ink-2); font: inherit; font-size: 10px; }
+.answer-change-intent input { height: 30px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--bg-raised); color: var(--ink-2); font: inherit; font-size: 10px; }
 .answer-change-intent select { padding: 0 28px 0 8px; }
 .answer-change-intent form { display: flex; gap: 5px; }
 .answer-change-intent input { width: 170px; padding: 0 8px; font-family: var(--mono); }
-.answer-change-intent button { height: 30px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 4px; background: #fff; color: var(--ink-2); font-size: 9.5px; font-weight: 720; }
+.answer-change-intent button { height: 30px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--bg-raised); color: var(--ink-2); font-size: 9.5px; font-weight: 720; }
 .answer-change-intent button.active { border-color: var(--blue); background: var(--accent-soft); color: var(--blue-ink); }
 .answer-change-intent > div { display: flex; gap: 4px; }
 .answer-change-intent > p { margin: 0; color: var(--ink-4); font-size: 9.5px; }
@@ -590,7 +590,7 @@
   padding: 9px 12px;
   border: 1px solid var(--line-2);
   border-radius: 6px;
-  background: #fff;
+  background: var(--bg-raised);
   color: var(--ink-2);
   text-align: left;
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
@@ -845,3 +845,14 @@
     width: min(320px, calc(100% - 204px));
   }
 }
+
+.answer-home-stats { display: flex; gap: 14px; margin-top: 16px; }
+.answer-home-stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.answer-home-stats svg { color: var(--blue-ink); }

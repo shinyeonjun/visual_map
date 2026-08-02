@@ -254,6 +254,34 @@ fn architecture_diagnostics(
 }
 
 fn is_coverage_diagnostic(diagnostic: &serde_json::Value) -> bool {
+    if let Some(code) = diagnostic.get("code").and_then(serde_json::Value::as_str) {
+        let level = diagnostic
+            .get("level")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        return level.eq_ignore_ascii_case("error")
+            || matches!(
+                code,
+                "provider-missing"
+                    | "indexer-failed"
+                    | "invalid-output"
+                    | "empty-semantic"
+                    | "missing-dependency-metadata"
+                    | "dependency-metadata-gap"
+                    | "missing-compile-context"
+                    | "missing-external-tool"
+                    | "missing-legacy-sdk"
+                    | "provider-timeout"
+                    | "provider-stopped"
+                    | "partial-coverage"
+                    | "large-workspace-partial"
+                    | "java-source-fallback"
+                    | "java-source-fallback-failed"
+            );
+    }
+
+    // Legacy architecture payloads predate DiagnosticCode. Keep their old
+    // shape readable, but never use human wording to classify a modern result.
     let kind = diagnostic
         .get("kind")
         .and_then(serde_json::Value::as_str)
@@ -1159,5 +1187,35 @@ mod tests {
         );
 
         assert!(gaps.is_empty());
+    }
+
+    #[test]
+    fn structured_provider_code_is_independent_of_message_wording() {
+        let complete = architecture_diagnostics(
+            Some(&serde_json::json!({
+                "diagnostics": [{
+                    "language": "java",
+                    "level": "warning",
+                    "code": "provider-diagnostic",
+                    "message": "native provider wording changed"
+                }]
+            })),
+            "shop",
+        );
+        assert!(complete.is_empty());
+
+        let missing = architecture_diagnostics(
+            Some(&serde_json::json!({
+                "diagnostics": [{
+                    "language": "java",
+                    "level": "warning",
+                    "code": "provider-missing",
+                    "message": "any human wording"
+                }]
+            })),
+            "shop",
+        );
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].kind, "code-provider-diagnostic");
     }
 }

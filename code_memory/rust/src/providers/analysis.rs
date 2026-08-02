@@ -8,10 +8,11 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::{
     dart_dependency_metadata_gap, dotnet_requires_unavailable_legacy_sdk, find_tool,
-    has_compile_context_for_files, is_fatal_lsp_error, normalize_scip_path, read_scip,
-    run_native_lsp, run_native_lsp_source_only, run_native_lsp_with_server, run_scip_indexer,
-    write_language_cache, Diagnostic, DocumentCoverage, DocumentOutput, FileCoverageOutput,
-    LanguageAnalysis, LanguageJob, LanguageOutput, LanguageSpec, ProviderKind, RelationOutput,
+    has_compile_context_for_files, is_fatal_lsp_error, lsp_failure_code, normalize_scip_path,
+    read_scip, run_native_lsp, run_native_lsp_source_only, run_native_lsp_with_server,
+    run_scip_indexer, write_language_cache, Diagnostic, DiagnosticCode, DocumentCoverage,
+    DocumentOutput, FileCoverageOutput, LanguageAnalysis, LanguageJob, LanguageOutput,
+    LanguageSpec, ProviderKind, RelationOutput,
 };
 
 static RUST_BUILD_TOOL_GAP_CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
@@ -38,6 +39,7 @@ pub(crate) fn language_failure(
         diagnostics: vec![Diagnostic {
             language: lang.id.to_string(),
             level: "error",
+            code: DiagnosticCode::IndexerFailed,
             message: error,
             path: None,
             line: None,
@@ -68,6 +70,7 @@ pub(crate) fn language_invalid_output(
         diagnostics: vec![Diagnostic {
             language: lang.id.to_string(),
             level: "error",
+            code: DiagnosticCode::InvalidOutput,
             message: error,
             path: None,
             line: None,
@@ -102,6 +105,7 @@ pub(crate) fn language_empty_output(
         diagnostics: vec![Diagnostic {
             language: lang.id.to_string(),
             level: "info",
+            code: DiagnosticCode::EmptySemantic,
             message: format!(
                 "{} provider analyzed the unit but returned no semantic facts",
                 lang.name
@@ -163,6 +167,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             lang,
             "native-lsp",
             files,
+            DiagnosticCode::LargeWorkspacePartial,
             "Rust semantic analysis deferred for a large crate; structural map remains available",
         );
     }
@@ -171,6 +176,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             lang,
             "native-lsp",
             files,
+            DiagnosticCode::MissingExternalTool,
             "Rust semantic analysis skipped because the crate build script requires an unavailable external tool; structural map remains available",
         );
     }
@@ -179,6 +185,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             lang,
             "scip",
             files,
+            DiagnosticCode::MissingLegacySdk,
             "C# semantic analysis skipped because the project targets an unavailable legacy SDK; structural map remains available",
         );
     }
@@ -187,6 +194,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             lang,
             "native-lsp",
             files,
+            DiagnosticCode::MissingDependencyMetadata,
             "Dart semantic analysis skipped because resolved package metadata is unavailable; local structure remains available and packages remain external",
         );
     }
@@ -195,6 +203,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             lang,
             "scip",
             files,
+            DiagnosticCode::MissingDependencyMetadata,
             "PHP semantic analysis skipped because Composer dependency metadata is unavailable; structural map remains available",
         );
     }
@@ -206,6 +215,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                 lang,
                 "native-lsp",
                 files,
+                DiagnosticCode::MissingCompileContext,
                 "C/C++ headers have no compile context; kept out of semantic indexing",
             );
         }
@@ -213,6 +223,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             lang,
             "native-lsp",
             files,
+            DiagnosticCode::MissingCompileContext,
             &format!(
                 "{} semantic analysis skipped because no usable compile context was found; structural map remains available",
                 lang.name
@@ -240,6 +251,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             lang,
             provider,
             files,
+            DiagnosticCode::Internal,
             "all files in this provider unit are excluded by source policy",
         );
     }
@@ -249,6 +261,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
         .map(|path| Diagnostic {
             language: lang.id.to_string(),
             level: "warning",
+            code: DiagnosticCode::RubyBundleWarning,
             message: format!(
                 "Ruby LSP previously reported a bundle setup problem at {}; provider results are retained, but project gem resolution may be incomplete",
                 path.display()
@@ -316,6 +329,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                                 provider_diagnostics.push(Diagnostic {
                                     language: lang.id.to_string(),
                                     level: "warning",
+                                    code: DiagnosticCode::JavaSourceFallback,
                                     message: "Java build import returned no semantic facts; source-only fallback retained project declarations and local relationships without a complete build classpath".to_string(),
                                     path: None,
                                     line: None,
@@ -327,6 +341,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                             Err(error) => provider_diagnostics.push(Diagnostic {
                                 language: lang.id.to_string(),
                                 level: "warning",
+                                code: DiagnosticCode::JavaSourceFallbackFailed,
                                 message: format!(
                                     "Java source-only fallback returned invalid output: {error}"
                                 ),
@@ -338,6 +353,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                     Err(error) => provider_diagnostics.push(Diagnostic {
                         language: lang.id.to_string(),
                         level: "warning",
+                        code: DiagnosticCode::JavaSourceFallbackFailed,
                         message: format!("Java source-only fallback failed: {error}"),
                         path: None,
                         line: None,
@@ -351,18 +367,22 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                         && documents.is_empty()
                         && provider_diagnostics
                             .iter()
-                            .any(|diagnostic| is_fatal_lsp_error(&diagnostic.message));
+                            .any(|diagnostic| diagnostic.code == DiagnosticCode::ProviderTimeout);
                     let provider_partial = java_source_fallback_used
                         || provider_diagnostics.iter().any(|diagnostic| {
-                            diagnostic
-                                .message
-                                .contains("semantic provider reached its time/resource limit")
+                            matches!(
+                                diagnostic.code,
+                                DiagnosticCode::ProviderTimeout
+                                    | DiagnosticCode::LargeWorkspacePartial
+                                    | DiagnosticCode::JavaSourceFallback
+                            )
                         });
                     let mut analysis = if provider_stopped {
                         language_excluded(
                             lang,
                             provider,
                             files,
+                            DiagnosticCode::ProviderStopped,
                             &format!(
                                 "{} semantic provider stopped; structural map remains available",
                                 lang.name
@@ -400,6 +420,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                     lang,
                     provider,
                     files,
+                    lsp_failure_code(&error).unwrap_or(DiagnosticCode::ProviderStopped),
                     &format!(
                         "{} semantic provider stopped ({error}); structural map remains available",
                         lang.name
@@ -514,6 +535,7 @@ pub(crate) fn language_excluded(
     lang: LanguageSpec,
     provider: &'static str,
     files: &[PathBuf],
+    code: DiagnosticCode,
     reason: &str,
 ) -> LanguageAnalysis {
     LanguageAnalysis {
@@ -532,6 +554,7 @@ pub(crate) fn language_excluded(
         diagnostics: vec![Diagnostic {
             language: lang.id.to_string(),
             level: "warning",
+            code,
             message: reason.to_string(),
             path: None,
             line: None,
@@ -572,6 +595,7 @@ pub(crate) fn classify_language_documents(
         vec![Diagnostic {
             language: lang.id.to_string(),
             level: "warning",
+            code: DiagnosticCode::PartialCoverage,
             message: format!(
                 "{} provider indexed {} of {} source documents; {} excluded and {} unresolved or outside project configuration",
                 lang.name,

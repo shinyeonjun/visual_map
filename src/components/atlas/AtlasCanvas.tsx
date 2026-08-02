@@ -1,5 +1,5 @@
-import { Cog, FileText, LoaderCircle, Maximize2, Minus, MousePointer2, Plus, Table2, X } from "lucide-react";
-import { useState } from "react";
+import { Cog, FileText, LoaderCircle, LocateFixed, Maximize2, Minus, MousePointer2, Plus, Scan, Table2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import { codeInventoryBackendRoutes, codeInventoryCodeItems, codeKindChip, dbInventoryTableKey } from "../../types/workspace";
 import type { CodeInventory, CodeInventoryItem } from "../../types/workspace";
@@ -18,9 +18,12 @@ import {
   visualNodeKindLabel as nodeKindLabel,
 } from "../../visual/labels";
 import { focusDbProfileSetup } from "../common/focusSourceSetup";
-import { ApiReadingHeader, ApiReadingPath } from "./ApiReadingPath";
+import { ApiFlowGapView, ApiReadingHeader, ApiReadingPath } from "./ApiReadingPath";
 import type { ApiReadingView } from "./ApiReadingPath";
-import { Band, DisconnectedCodeFocus, RelationBeams, RelationLedger } from "./AtlasCanvasParts";
+import { Band, RelationBeams, RelationLedger } from "./AtlasCanvasParts";
+import { CanvasTransitionState, CompositionToolbar, FocusStrip } from "./AtlasCanvasSupport";
+import type { FocusStripState } from "./AtlasCanvasSupport";
+import { CodeImpactMap } from "./CodeImpactMap";
 import { useCanvasViewport } from "./useCanvasViewport";
 import { ArchitectureMap, CompositionMap, RelationBadge } from "./ArchitectureMap";
 import { ImpactReviewBoard } from "./ImpactReviewBoard";
@@ -53,6 +56,7 @@ import {
   nodeLabel,
   nodeTouchesTable,
   nodesShareTableOrId,
+  orderItemsByRelations,
   rankNodeItems,
   relationFocusIdFromMapFocus,
   relationLedgerRows,
@@ -61,14 +65,6 @@ import {
   tableKeysFromNodeIds,
   takeWithPinned,
 } from "./atlasRelations";
-
-type FocusStripState = {
-  label: string;
-  title: string;
-  meta: string;
-  hint: string;
-  tone: "code" | "db" | "edge" | "neutral";
-};
 
 export function AtlasCanvas({
   openSourceManager,
@@ -93,6 +89,8 @@ export function AtlasCanvas({
       ? visualMapControls.currentMap?.reviewBoard ?? null
       : null;
   const apiReading = mode === "api-flow" ? visualMapControls.currentMap?.apiReading ?? null : null;
+  const apiFlowGap = mode === "api-flow" && Boolean(visualMapControls.currentMap) && !apiReading;
+  const codeImpactMode = mode === "search-focus" && Boolean(visualMapControls.currentMap);
   const needsTarget = visualMapControls.currentMap?.focus === "narrow-focus" && !visualMapControls.focusId;
   const projectionOnlyMode = architectureMode || Boolean(impactBoard) || Boolean(apiReading);
   const architectureDetail = Boolean(architectureMap?.focus.startsWith("group:"));
@@ -104,6 +102,8 @@ export function AtlasCanvas({
     stopPan,
     handleWheel,
     zoomAtlas,
+    fitCanvas,
+    focusCanvasNode,
     resetAtlasView,
     resetAtlasZoom,
     rememberCanvasView,
@@ -117,17 +117,11 @@ export function AtlasCanvas({
         dbProfileControls,
       )
     : null;
+  const relationCounts = useMemo(
+    () => buildRelationCounts(visualMapControls.currentMap),
+    [visualMapControls.currentMap],
+  );
 
-  if (visualMapControls.loading && !visualMapControls.currentMap) {
-    return (
-      <CanvasTransitionState
-        mode={mode}
-        focusId={visualMapControls.focusId}
-        codeInventory={workspaceControls.codeInventory}
-        dbProfileControls={dbProfileControls}
-      />
-    );
-  }
   const routes = projectionOnlyMode ? [] : codeInventoryBackendRoutes(workspaceControls.codeInventory);
   const codeItems = projectionOnlyMode ? [] : codeInventoryCodeItems(workspaceControls.codeInventory);
   const fileItems = projectionOnlyMode ? [] : workspaceControls.codeInventory?.files ?? [];
@@ -151,7 +145,7 @@ export function AtlasCanvas({
     ? Boolean(visualMapControls.currentMap?.nodes.length)
     : architectureMode
       ? Boolean(architectureMap?.nodes.length)
-      : impactBoard || apiReading
+      : impactBoard || apiReading || apiFlowGap
         ? true
         : hasInventoryData;
   const activeMode = hasData
@@ -163,7 +157,7 @@ export function AtlasCanvas({
         : "전체 구조"
       : impactBoard
         ? impactBoard.scope === "column" ? "컬럼 변경 영향" : "테이블 사용처"
-        : apiReading
+        : apiReading || apiFlowGap
           ? "API 읽기 경로"
         : atlasModeTitle(mode, inventoryCounts)
     : compositionMode
@@ -176,10 +170,10 @@ export function AtlasCanvas({
       ? "선택 대상 → 근거 경로 → 관계 상세"
       : architectureMode
       ? "구조 영역 → API → 코드 → DB"
-      : impactBoard
-        ? "직접 영향 → 코드 후보 → 확인 필요 → 권장 확인"
-        : apiReading
-          ? "Route → Handler → Service/Function → Repository/Query → DB 후보"
+        : impactBoard
+          ? "직접 영향 → 코드 후보 → 확인 필요 → 권장 확인"
+          : apiReading || apiFlowGap
+            ? "Route → Handler → Service/Function → Repository/Query → DB 후보"
         : atlasReadOrder(mode, inventoryCounts)
     : compositionMode ? "대상 2~8개 선택" : "프로젝트 → 코드 → DB";
   const modePurpose = hasData
@@ -191,7 +185,7 @@ export function AtlasCanvas({
         : "엔진 패키지와 DB 스키마 경계를 먼저 읽습니다"
       : impactBoard
         ? "수정 전에 확정 사실과 검증할 후보를 순서대로 읽습니다"
-        : apiReading
+        : apiReading || apiFlowGap
           ? "확정 HANDLES/CALLS만 읽기 경로로 사용합니다"
         : atlasModePurpose(mode, inventoryCounts)
     : compositionMode
@@ -216,7 +210,6 @@ export function AtlasCanvas({
   const visibleCodeItems = includeFocusedCodeItem(filteredCodeItems, focusedCodeBandItem);
   const orderedCodeItems = [...visibleCodeItems].sort((a, b) => atlasCodeKindRank(a.kind) - atlasCodeKindRank(b.kind));
   const visibleTables = shouldFocusCards ? filterTablesByMap(tables, focusedNodeIds) : tables;
-  const relationCounts = buildRelationCounts(visualMapControls.currentMap);
   const selectedCodeNodeId = visualMapControls.selectedNode?.source === "code"
     ? visualMapControls.selectedNode.id
     : focusedCodeItem
@@ -241,20 +234,43 @@ export function AtlasCanvas({
   const showApiBand = (mode !== "table-usage" && mode !== "column-impact" && routes.length > 0) || pinnedRouteIds.size > 0;
   const showCodeBand = codeItems.length > 0 || fileItems.length > 0 || pinnedCodeBandIds.size > 0;
   const showDbBand = (mode !== "api-flow" && allTables.length > 0) || pinnedVisibleTableKeys.size > 0;
-  const cardLimit = 12;
-  const rankedRoutes = rankNodeItems(visibleRoutes, relationCounts, (item) => `code:${item.id}`, selectedCodeNodeId);
-  const rankedCodeItems = rankNodeItems(orderedCodeItems, relationCounts, (item) => `code:${item.id}`, selectedCodeNodeId);
-  const rankedTables = rankNodeItems(
-    visibleTables,
-    relationCounts,
-    (table) => `db:table:${dbInventoryTableKey(table)}`,
-    selectedTableNodeId,
+  const rankedRoutes = useMemo(
+    () => rankNodeItems(visibleRoutes, relationCounts, (item) => `code:${item.id}`, selectedCodeNodeId),
+    [relationCounts, selectedCodeNodeId, visibleRoutes],
   );
-  const routeCards = takeWithPinned(rankedRoutes, pinnedRouteIds, (item) => item.id, cardLimit);
-  const codeCards = takeWithPinned(rankedCodeItems, pinnedCodeBandIds, (item) => item.id, cardLimit);
-  const tableCards = takeWithPinned(rankedTables, pinnedVisibleTableKeys, dbInventoryTableKey, cardLimit);
-  const displayedRouteCards = showApiBand ? routeCards : [];
-  const displayedCodeCards = showCodeBand ? codeCards : [];
+  const rankedCodeItems = useMemo(
+    () => rankNodeItems(orderedCodeItems, relationCounts, (item) => `code:${item.id}`, selectedCodeNodeId),
+    [orderedCodeItems, relationCounts, selectedCodeNodeId],
+  );
+  const flowOrderedCodeItems = useMemo(
+    () => orderItemsByRelations(
+      rankedCodeItems,
+      visualMapControls.currentMap,
+      (item) => `code:${item.id}`,
+      selectedRelationFocusId,
+    ),
+    [rankedCodeItems, selectedRelationFocusId, visualMapControls.currentMap],
+  );
+  const rankedTables = useMemo(
+    () => rankNodeItems(
+      visibleTables,
+      relationCounts,
+      (table) => `db:table:${dbInventoryTableKey(table)}`,
+      selectedTableNodeId,
+    ),
+    [relationCounts, selectedTableNodeId, visibleTables],
+  );
+  const routeCards = rankedRoutes;
+  const codeCards = flowOrderedCodeItems;
+  const tableCards = rankedTables;
+  const displayedRouteCards = useMemo(
+    () => showApiBand ? routeCards : [],
+    [routeCards, showApiBand],
+  );
+  const displayedCodeCards = useMemo(
+    () => showCodeBand ? codeCards : [],
+    [codeCards, showCodeBand],
+  );
   const codeBandLabel = codeBandItems.every((item) => item.kind.trim().toLowerCase() === "file")
     ? "파일"
     : mode === "column-impact"
@@ -262,22 +278,29 @@ export function AtlasCanvas({
       : fileItems.length > 0 && codeItems.length > 0 && shouldFocusCards
         ? "코드/파일"
         : "코드";
-  const displayedTableCards = showDbBand ? tableCards : [];
+  const displayedTableCards = useMemo(
+    () => showDbBand ? tableCards : [],
+    [showDbBand, tableCards],
+  );
   const laneCount = Math.max(4, displayedRouteCards.length, displayedCodeCards.length, displayedTableCards.length);
+  const mapWidth = AT_GUTTER_WIDTH + laneCount * AT_LANE_WIDTH + Math.max(0, laneCount - 1) * AT_LANE_GAP + AT_LANE_PAD_X * 2;
   const mapStyle = {
     "--at-lanes": laneCount,
     "--at-gutter-width": `${AT_GUTTER_WIDTH}px`,
     "--at-lane-width": `${AT_LANE_WIDTH}px`,
     "--at-lane-gap": `${AT_LANE_GAP}px`,
     "--at-lane-pad-x": `${AT_LANE_PAD_X}px`,
-    minWidth: `${AT_GUTTER_WIDTH + laneCount * AT_LANE_WIDTH + Math.max(0, laneCount - 1) * AT_LANE_GAP + AT_LANE_PAD_X * 2}px`,
+    minWidth: `${mapWidth}px`,
     zoom: atlasZoom,
   } as CSSProperties;
-  const bands: Array<"api" | "code" | "db"> = [
-    ...(showApiBand ? ["api" as const] : []),
-    ...(showCodeBand ? ["code" as const] : []),
-    ...(showDbBand ? ["db" as const] : []),
-  ];
+  const bands = useMemo<Array<"api" | "code" | "db">>(
+    () => [
+      ...(showApiBand ? ["api" as const] : []),
+      ...(showCodeBand ? ["code" as const] : []),
+      ...(showDbBand ? ["db" as const] : []),
+    ],
+    [showApiBand, showCodeBand, showDbBand],
+  );
   const bandNumber = (band: "api" | "code" | "db") => String(bands.indexOf(band) + 1);
   const emptyTitle = workspaceControls.currentWorkspace
     ? "코드/DB 목록을 불러오면 답이 열립니다"
@@ -302,6 +325,8 @@ export function AtlasCanvas({
                 : ` · +${apiReading.hiddenBranches}개 접힘`
               : ""
           }`
+        : apiFlowGap
+          ? `관계 ${visualMapControls.currentMap?.edges.length ?? 0}개 · 확정 읽기 결과 없음`
         : atlasCanvasFacts({
         mode,
         mapNodes: visualMapControls.currentMap?.nodes.length ?? 0,
@@ -339,28 +364,37 @@ export function AtlasCanvas({
             hint: apiReading.unknowns[0]?.detail ?? "번호 순서대로 파일을 읽습니다.",
             tone: "code" as const,
           }
+      : apiFlowGap
+        ? {
+            label: "API",
+            title: visualMapControls.currentMap?.focus ?? "선택한 API",
+            meta: `관계 ${visualMapControls.currentMap?.edges.length ?? 0}개 · 전용 읽기 결과 없음`,
+            hint: "확인하지 못한 호출은 가짜 노드로 만들지 않고 확인 필요로 남겼습니다.",
+            tone: "edge" as const,
+          }
       : atlasFocusState(focusedCodeItem, dbProfileControls, visualMapControls, tables);
-  const relationRows = relationLedgerRows(
-    visualMapControls.currentMap,
-    visualMapControls.selectedEdge,
-    visualMapControls.selectedNode,
-    selectedRelationFocusId,
+  const relationRows = useMemo(
+    () => relationLedgerRows(
+      visualMapControls.currentMap,
+      visualMapControls.selectedEdge,
+      visualMapControls.selectedNode,
+      selectedRelationFocusId,
+    ),
+    [selectedRelationFocusId, visualMapControls.currentMap, visualMapControls.selectedEdge, visualMapControls.selectedNode],
   );
-  const relationScopedTotal = relationLedgerScopedEdges(
-    visualMapControls.currentMap,
-    visualMapControls.selectedEdge,
-    visualMapControls.selectedNode,
-    selectedRelationFocusId,
-  ).length;
+  const relationScopedTotal = useMemo(
+    () => relationLedgerScopedEdges(
+      visualMapControls.currentMap,
+      visualMapControls.selectedEdge,
+      visualMapControls.selectedNode,
+      selectedRelationFocusId,
+    ).length,
+    [selectedRelationFocusId, visualMapControls.currentMap, visualMapControls.selectedEdge, visualMapControls.selectedNode],
+  );
   const relationTargetCodeItem = visualMapControls.selectedNode?.source === "code"
     ? codeInventoryItemFromNodeId(workspaceControls.codeInventory, visualMapControls.selectedNode.id)
     : focusedCodeItem;
-  const showDisconnectedCodeFocus = Boolean(
-    mode === "search-focus" &&
-      relationTargetCodeItem &&
-      selectedRelationFocusId &&
-      relationScopedTotal === 0,
-  );
+  const codeImpactFocusId = selectedRelationFocusId ?? (analysisFocusId.startsWith("code:") ? analysisFocusId : null);
   const focusedColumnLabel = columnLabelFromNodeId(analysisFocusId);
   const focusedTableKey = tableKeyFromFocusedTable(analysisFocusId);
   const selectedNodeTableKey = visualMapControls.selectedNode ? tableKeyFromNodeId(visualMapControls.selectedNode.id) : null;
@@ -404,11 +438,11 @@ export function AtlasCanvas({
             action: "01 → 04 순서로 검토",
             basis: "DB 직접 사실 · 코드 후보 · snapshot gap",
           }
-        : apiReading
+        : apiReading || apiFlowGap
           ? {
               question: "이 API 요청은 어디까지 이어지나",
-              action: "번호 순서대로 파일 읽기",
-              basis: "확정 HANDLES · CALLS · 정적 SQL READS/WRITES · 후보 분리",
+              action: apiReading ? "번호 순서대로 파일 읽기" : "확인 필요 구간과 실제 근거 확인",
+              basis: apiReading ? "확정 HANDLES · CALLS · 정적 SQL READS/WRITES · 후보 분리" : "확정된 Route/Handler만 표시 · 미확정 구간 분리",
             }
       : atlasCanvasGuide({
         mode,
@@ -437,16 +471,32 @@ export function AtlasCanvas({
         disabled: dbProfileControls.busy,
       }
     : null;
-  const relationBeams = buildRelationBeams({
-    map: architectureMode || apiReading || mode === "search-focus" ? null : visualMapControls.currentMap,
-    routeCards: displayedRouteCards,
-    codeCards: displayedCodeCards,
-    tableCards: displayedTableCards,
-    bands,
-    selectedEdge: visualMapControls.selectedEdge,
-    selectedNode: visualMapControls.selectedNode,
-    selectedFocusId: selectedRelationFocusId,
-  });
+  const relationBeams = useMemo(
+    () => buildRelationBeams({
+      map: architectureMode || apiReading || apiFlowGap || mode === "search-focus" ? null : visualMapControls.currentMap,
+      routeCards: displayedRouteCards,
+      codeCards: displayedCodeCards,
+      tableCards: displayedTableCards,
+      bands,
+      selectedEdge: visualMapControls.selectedEdge,
+      selectedNode: visualMapControls.selectedNode,
+      selectedFocusId: selectedRelationFocusId,
+    }),
+    [
+      architectureMode,
+      apiFlowGap,
+      apiReading,
+      bands,
+      displayedCodeCards,
+      displayedRouteCards,
+      displayedTableCards,
+      mode,
+      selectedRelationFocusId,
+      visualMapControls.currentMap,
+      visualMapControls.selectedEdge,
+      visualMapControls.selectedNode,
+    ],
+  );
   const hasRelationFocus = Boolean(visualMapControls.selectedEdge || visualMapControls.selectedNode || selectedRelationFocusId);
   const showRelationLedger = Boolean(
     hasData &&
@@ -454,6 +504,16 @@ export function AtlasCanvas({
       !apiReading &&
       (!architectureMode || architectureDetail || visualMapControls.selectedNode || visualMapControls.selectedEdge),
   );
+
+  if (visualMapControls.loading && !visualMapControls.currentMap) {
+    return (
+      <CanvasTransitionState
+        mode={mode}
+        descriptor={transitionDescriptor(mode)}
+        focus={transitionFocusState(mode, visualMapControls.focusId, workspaceControls.codeInventory, dbProfileControls)}
+      />
+    );
+  }
 
   return (
     <main className={`canvas at-canvas ${visualMapControls.loading ? "is-refreshing" : ""}`} aria-busy={visualMapControls.loading}>
@@ -463,7 +523,7 @@ export function AtlasCanvas({
           {pendingFocus ? `${pendingFocus.title} 분석 중 · 이전 결과 표시` : "새 보기 준비 중"}
         </div>
       ) : null}
-      <div className={`at-canvas-head${apiReading ? " api-reading-head" : ""}`}>
+      <div className={`at-canvas-head${apiReading || apiFlowGap ? " api-reading-head" : ""}`}>
         {apiReading && visualMapControls.currentMap ? (
           <ApiReadingHeader
             answer={apiReading}
@@ -514,10 +574,23 @@ export function AtlasCanvas({
             )}
           </>
         )}
-        {hasData && !apiReading && (
+        {hasData && !apiReading && !apiFlowGap && (
           <div className="at-canvas-controls">
             <button type="button" className="tool" title="화면 원점으로" aria-label="캔버스 화면 원점으로" onClick={resetAtlasView}>
               <Maximize2 size={14} />
+            </button>
+            <button type="button" className="tool" title="전체 그래프 맞춤" aria-label="전체 그래프 맞춤" onClick={fitCanvas}>
+              <Scan size={14} />
+            </button>
+            <button
+              type="button"
+              className="tool"
+              title="선택 항목 가운데로"
+              aria-label="선택 항목 가운데로"
+              disabled={!selectedRelationFocusId}
+              onClick={() => focusCanvasNode(selectedRelationFocusId)}
+            >
+              <LocateFixed size={14} />
             </button>
             <button type="button" className="tool wide" title="배율 초기화" aria-label="캔버스 배율 초기화" onClick={resetAtlasZoom}>
               {Math.round(atlasZoom * 100)}%
@@ -535,8 +608,9 @@ export function AtlasCanvas({
         <CompositionToolbar
           visualMapControls={visualMapControls}
           codeInventory={workspaceControls.codeInventory}
+          selectionLabel={compositionSelectionLabel}
         />
-      ) : hasData && !needsTarget && !apiReading ? (
+      ) : hasData && !needsTarget && !apiReading && !apiFlowGap ? (
         <FocusStrip
           focus={focus}
           onClear={visualMapControls.selectedEdge || visualMapControls.selectedNode ? visualMapControls.clearSelection : null}
@@ -579,8 +653,8 @@ export function AtlasCanvas({
         ) : (
           <>
             <div
-              className={`at-map-surface ${architectureMode ? "at-architecture-surface" : ""} ${compositionMode ? "at-composition-surface" : ""} ${impactBoard ? "at-impact-surface" : ""} ${apiReading ? "at-api-reading-surface" : ""} ${hasRelationFocus ? "has-relation-focus" : ""}`}
-              style={architectureMode || compositionMode || impactBoard || apiReading || showDisconnectedCodeFocus ? ({ zoom: atlasZoom } as CSSProperties) : mapStyle}
+              className={`at-map-surface ${architectureMode ? "at-architecture-surface" : ""} ${compositionMode ? "at-composition-surface" : ""} ${impactBoard ? "at-impact-surface" : ""} ${apiReading || apiFlowGap ? "at-api-reading-surface" : ""} ${hasRelationFocus ? "has-relation-focus" : ""}`}
+              style={architectureMode || compositionMode || impactBoard || apiReading || apiFlowGap || codeImpactMode ? ({ zoom: atlasZoom } as CSSProperties) : mapStyle}
             >
               {impactBoard && visualMapControls.currentMap ? (
                 <ImpactReviewBoard
@@ -621,15 +695,33 @@ export function AtlasCanvas({
                   onSelectNode={visualMapControls.selectNode}
                   onSelectEdge={visualMapControls.selectEdge}
                 />
-              ) : showDisconnectedCodeFocus && relationTargetCodeItem ? (
-                <DisconnectedCodeFocus
-                  item={relationTargetCodeItem}
-                  hiddenNearbyCount={Math.max(0, (visualMapControls.currentMap?.nodes.length ?? 1) - 1)}
+              ) : apiFlowGap && visualMapControls.currentMap ? (
+                <ApiFlowGapView
+                  map={visualMapControls.currentMap}
+                  onSelectNode={visualMapControls.selectNode}
+                  onSelectEdge={visualMapControls.selectEdge}
+                />
+              ) : codeImpactMode && visualMapControls.currentMap && codeImpactFocusId ? (
+                <CodeImpactMap
+                  map={visualMapControls.currentMap}
+                  focusId={codeImpactFocusId}
+                  fallbackNode={relationTargetCodeItem ? {
+                    id: codeImpactFocusId,
+                    kind: relationTargetCodeItem.kind,
+                    title: relationTargetCodeItem.name,
+                    subtitle: relationTargetCodeItem.filePath,
+                    layer: "code",
+                    source: "code",
+                  } : null}
+                  selectedNodeId={visualMapControls.selectedNode?.id ?? null}
+                  selectedEdgeId={visualMapControls.selectedEdge?.id ?? null}
+                  onSelectNode={visualMapControls.selectNode}
+                  onSelectEdge={visualMapControls.selectEdge}
                 />
               ) : (
               <>
               {relationBeams.length > 0 && (
-                <RelationBeams beams={relationBeams} onSelect={visualMapControls.selectEdge} />
+                <RelationBeams beams={relationBeams} viewBoxWidth={mapWidth} onSelect={visualMapControls.selectEdge} />
               )}
               {showApiBand && (
               <Band num={bandNumber("api")} label="API 라우트" total={routes.length} shown={routeCards.length}>
@@ -639,6 +731,7 @@ export function AtlasCanvas({
                     aria-label={`${route.name} API 선택. 오른쪽에 근거 표시`}
                     aria-pressed={isSelectedCodeCard(route.id)}
                     data-edge-role={edgeEndpointRole(`code:${route.id}`) ?? undefined}
+                    data-atlas-node-id={`code:${route.id}`}
                     key={route.id}
                     type="button"
                     title={`${route.name} · 대상 근거 표시`}
@@ -666,6 +759,7 @@ export function AtlasCanvas({
                     aria-label={`${item.name} ${codeKindChip(item.kind)} 선택. 오른쪽에 근거 표시`}
                     aria-pressed={isSelectedCodeCard(item.id)}
                     data-edge-role={edgeEndpointRole(`code:${item.id}`) ?? undefined}
+                    data-atlas-node-id={`code:${item.id}`}
                     key={item.id}
                     type="button"
                     title={`${item.name} · 주변 근거`}
@@ -699,6 +793,7 @@ export function AtlasCanvas({
                     <div className="at-table-slot" key={tableKey}>
                       <div
                         className={`at-card table ${needsColumns ? "needs-columns" : ""} ${isSelectedTableCard(tableKey) ? "selected" : ""}${isSelectedEdgeTableEndpoint(tableKey) ? " edge-endpoint" : ""}${isFocusRelatedTable(tableKey) ? " focus-related" : ""}`}
+                        data-atlas-node-id={dbTableNodeId(tableKey)}
                         data-edge-role={edgeEndpointTableRole(tableKey) ?? undefined}
                       >
                         <button
@@ -726,6 +821,7 @@ export function AtlasCanvas({
                           {visibleColumns.map((column) => (
                             <button
                               className={`at-column-row ${isActiveColumn(tableKey, column.name) ? "active" : ""}`}
+                              data-atlas-node-id={dbColumnNodeId(tableKey, column.name)}
                               aria-label={`${tableLabel}.${column.name} 컬럼 선택. 오른쪽에 근거 표시`}
                               aria-pressed={isActiveColumn(tableKey, column.name)}
                               key={column.name}
@@ -930,6 +1026,7 @@ export function AtlasCanvas({
     const node = visualMapControls.currentMap?.nodes.find((item) => item.id === nodeId) ?? null;
     if (node) {
       visualMapControls.selectNode(node);
+      focusCanvasNode(nodeId);
       return;
     }
     if (nodeId === analysisFocusId && focusedCodeItem) {
@@ -941,6 +1038,7 @@ export function AtlasCanvas({
         layer: "code",
         source: "code",
       });
+      focusCanvasNode(nodeId);
       return;
     }
     visualMapControls.showMode(mode, nodeId);
@@ -964,70 +1062,6 @@ function showWorkbenchDbSetup(openSourceManager: () => void, dbProfileControls: 
   window.requestAnimationFrame(() => focusDbProfileSetup(dbProfileControls));
 }
 
-
-function CanvasTransitionState({
-  mode,
-  focusId,
-  codeInventory,
-  dbProfileControls,
-}: {
-  mode: string;
-  focusId: string | null;
-  codeInventory: CodeInventory | null;
-  dbProfileControls: DbProfileControls;
-}) {
-  const descriptor = transitionDescriptor(mode);
-  const focus = transitionFocusState(mode, focusId, codeInventory, dbProfileControls);
-  const apiMode = mode === "api-flow";
-
-  return (
-    <main className="canvas at-canvas is-transitioning" aria-busy="true">
-      <div className={`at-canvas-head${apiMode ? " api-reading-head" : ""}`}>
-        <div className="at-title-block">
-          <strong>{descriptor.title}</strong>
-          <span>{descriptor.purpose}</span>
-        </div>
-        <div className="at-transition-progress" role="status" aria-live="polite">
-          <LoaderCircle className="spin" size={13} />
-          새 근거 구성 중
-        </div>
-        {!apiMode ? (
-          <div className="at-canvas-controls" aria-hidden="true">
-            <button className="tool" type="button" disabled><Maximize2 size={14} /></button>
-            <button className="tool wide" type="button" disabled>100%</button>
-            <button className="tool" type="button" disabled><Plus size={14} /></button>
-            <button className="tool" type="button" disabled><Minus size={14} /></button>
-          </div>
-        ) : null}
-      </div>
-      {!apiMode ? <FocusStrip focus={focus} onClear={null} /> : null}
-      <div className="at-stage">
-        <div className={`at-transition-map mode-${mode}`} aria-label={`${descriptor.title} 로딩 상태`}>
-          {descriptor.lanes.map((lane, index) => (
-            <section className="at-transition-lane" key={lane}>
-              <header>
-                <span>{String(index + 1).padStart(2, "0")}</span>
-                <strong>{lane}</strong>
-              </header>
-              <div className="at-transition-card" aria-hidden="true">
-                <i />
-                <b />
-                <small />
-              </div>
-              {index < descriptor.detailLanes ? (
-                <div className="at-transition-card compact" aria-hidden="true">
-                  <i />
-                  <b />
-                  <small />
-                </div>
-              ) : null}
-            </section>
-          ))}
-        </div>
-      </div>
-    </main>
-  );
-}
 
 function transitionDescriptor(mode: string): {
   title: string;
@@ -1148,71 +1182,6 @@ function transitionFocusState(
 }
 
 
-function CompositionToolbar({
-  visualMapControls,
-  codeInventory,
-}: {
-  visualMapControls: VisualMapControls;
-  codeInventory: CodeInventory | null;
-}) {
-  const views = [
-    ["connections", "전체 연결"],
-    ["calls", "호출"],
-    ["data", "데이터"],
-    ["impact", "영향"],
-  ] as const;
-
-  return (
-    <section className="composition-toolbar" aria-label="관계 분석 범위">
-      <header>
-        <strong>대상</strong>
-        <span>{visualMapControls.compositionFocusIds.length}/8</span>
-      </header>
-      <div className="composition-targets">
-        {visualMapControls.compositionFocusIds.length > 0 ? (
-          visualMapControls.compositionFocusIds.map((id) => (
-            <button
-              type="button"
-              title={`${compositionSelectionLabel(id, codeInventory, visualMapControls.currentMap)} 선택 해제`}
-              aria-label={`${compositionSelectionLabel(id, codeInventory, visualMapControls.currentMap)} 선택 해제`}
-              onClick={() => visualMapControls.toggleCompositionFocus(id)}
-              key={id}
-            >
-              <span>{compositionSelectionLabel(id, codeInventory, visualMapControls.currentMap)}</span>
-              <X size={12} />
-            </button>
-          ))
-        ) : (
-          <span className="composition-target-placeholder">선택 대기</span>
-        )}
-      </div>
-      <div className="composition-view-switch" role="group" aria-label="관계 보기 방식">
-        {views.map(([id, label]) => (
-          <button
-            className={visualMapControls.relationView === id ? "active" : ""}
-            type="button"
-            aria-pressed={visualMapControls.relationView === id}
-            onClick={() => visualMapControls.setRelationView(id)}
-            key={id}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <button
-        className="composition-clear"
-        type="button"
-        title="분석 대상 전체 해제"
-        aria-label="분석 대상 전체 해제"
-        disabled={visualMapControls.compositionFocusIds.length === 0}
-        onClick={visualMapControls.clearCompositionFocus}
-      >
-        <X size={14} />
-      </button>
-    </section>
-  );
-}
-
 function compositionSelectionLabel(
   nodeId: string,
   codeInventory: CodeInventory | null,
@@ -1228,25 +1197,6 @@ function compositionSelectionLabel(
   if (mapNode) return mapNode.title;
   const parts = nodeId.split(":");
   return parts[parts.length - 1] || nodeId;
-}
-
-function FocusStrip({ focus, onClear }: { focus: FocusStripState; onClear: (() => void) | null }) {
-  return (
-    <div className={`at-focus-strip ${focus.tone}`}>
-      <span>{focus.label}</span>
-      <strong title={focus.title}>{focus.title}</strong>
-      <em>{focus.meta}</em>
-      <small>
-        <b>다음 행동</b>
-        <i>{focus.hint}</i>
-      </small>
-      {onClear && (
-        <button className="at-focus-clear" type="button" title="선택 해제" aria-label="선택 해제" onClick={onClear}>
-          <X size={13} />
-        </button>
-      )}
-    </div>
-  );
 }
 
 function architectureFocusState(visualMapControls: VisualMapControls): FocusStripState {

@@ -43,7 +43,7 @@ language and an error in another.
 
 The architecture projection carries the same language and framework summaries
 as `languages` and `frameworks` arrays. The current payload is
-`code-memory.architecture-index.v2`; the arrays contain provider status, file
+`code-memory.architecture-index.v3`; the arrays contain provider status, file
 coverage, adapter status, and emitted fact/relation counts. The UI may display
 these summaries, but must keep the underlying evidence and gaps authoritative.
 

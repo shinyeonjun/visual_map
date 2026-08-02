@@ -25,6 +25,7 @@ export function WorkbenchView({
   engineRegistry,
   engineError,
   devSlot,
+  busyNotice = null,
   analysisSetupWorkspace,
   analysisInitializing = false,
   analysisProgress,
@@ -44,6 +45,7 @@ export function WorkbenchView({
   engineRegistry: EngineRegistry | null;
   engineError: string | null;
   devSlot?: ReactNode;
+  busyNotice?: string | null;
   analysisSetupWorkspace?: import("../../types/workspace").Workspace | null;
   analysisInitializing?: boolean;
   analysisProgress?: AnalysisProgress;
@@ -130,6 +132,7 @@ export function WorkbenchView({
     pendingSurface,
     visualMapControls.loading,
     visualMapControls.mode,
+    visualMapControls.currentMap,
     visualMapControls.currentMap?.mode,
     visualMapControls.currentMap?.focus,
     workspaceId,
@@ -221,6 +224,11 @@ export function WorkbenchView({
       >
         {answerStatus}
       </p>
+      {busyNotice ? (
+        <p className="workbench-busy-notice" role="status" aria-live="polite">
+          {busyNotice}
+        </p>
+      ) : null}
       <div className={`workspace product-workspace ${workspaceShellReady ? "" : "is-single-column"} ${showInspector ? "has-inspector" : ""} ${inspectorVisible ? "inspector-visible" : ""}`}>
         {workspaceShellReady ? <aside className="product-navigation" aria-label="주요 탐색">
           <ProjectExplorer

@@ -10,7 +10,16 @@ export type EngineAvailability = {
   path: string;
   available: boolean;
   releasable: boolean;
-  integrity: "release" | "development" | "development-internal" | "unpublished" | "unpublished-internal" | "missing" | "mismatch" | "manifest-error" | string;
+  integrity:
+    | "release"
+    | "development"
+    | "development-internal"
+    | "unpublished"
+    | "unpublished-internal"
+    | "missing"
+    | "mismatch"
+    | "manifest-error"
+    | string;
   sha256?: string | null;
   error?: string | null;
 };

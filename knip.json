@@ -1,6 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "entry": [
+    "src/main.tsx",
     "src/**/*.test.{ts,tsx}",
     "scripts/run-sidecar-json.mjs",
     "scripts/tauri-cdp-smoke.mjs"

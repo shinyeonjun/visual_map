@@ -36,14 +36,7 @@ describe("EngineStatus", () => {
   });
 
   it("shows a registry lookup failure even without an engine entry", () => {
-    render(
-      <EngineStatus
-        label="DB 읽기"
-        role="db"
-        registry={null}
-        error="읽기 도구 상태를 확인하지 못했습니다"
-      />,
-    );
+    render(<EngineStatus label="DB 읽기" role="db" registry={null} error="읽기 도구 상태를 확인하지 못했습니다" />);
 
     expect(screen.getByRole("alert")).toHaveTextContent("읽기 도구 상태를 확인하지 못했습니다");
   });

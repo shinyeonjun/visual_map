@@ -1,14 +1,7 @@
 import { dbTableIdentityKey } from "../inventory/dbIdentity";
 
 export type DbProfileSource =
-  | "sqlite"
-  | "ddl-sqlite"
-  | "postgres"
-  | "yugabytedb"
-  | "mysql"
-  | "mariadb"
-  | "sqlserver"
-  | "oracle";
+  "sqlite" | "ddl-sqlite" | "postgres" | "yugabytedb" | "mysql" | "mariadb" | "sqlserver" | "oracle";
 
 export const DB_PROFILE_SOURCE_OPTIONS: { value: DbProfileSource; label: string }[] = [
   { value: "ddl-sqlite", label: "SQLite DDL" },
@@ -248,8 +241,7 @@ function codeRouteSurface(route: CodeInventoryItem): CodeRouteSurface {
   if (route.kind.trim().toLowerCase() === "ui-route") return "ui-navigation";
   const detail = route.detail;
   if (detail && typeof detail === "object" && !Array.isArray(detail)) {
-    const value = (detail as Record<string, unknown>).routeSurface
-      ?? (detail as Record<string, unknown>).route_surface;
+    const value = (detail as Record<string, unknown>).routeSurface ?? (detail as Record<string, unknown>).route_surface;
     if (value === "backend-api" || value === "ui-navigation") return value;
   }
   // Older snapshots predate the surface contract; their Route inventory was API-only.
@@ -345,27 +337,31 @@ export function codeInventoryAnalysisQuality(inventory: CodeInventory | null | u
     return null;
   }
   const record = architecture as Record<string, unknown>;
-  const languages = readQualityArray(record.languages).map((value) => ({
-    id: readString(value, "id"),
-    name: readString(value, "name"),
-    provider: readString(value, "provider"),
-    filesFound: readNumber(value, "filesFound", "files_found"),
-    filesIndexed: readNumber(value, "filesIndexed", "files_indexed"),
-    filesExcluded: readNumber(value, "filesExcluded", "files_excluded"),
-    filesMissing: readNumber(value, "filesMissing", "files_missing"),
-    status: readString(value, "status"),
-    exclusionReason: readString(value, "exclusionReason", "exclusion_reason", "reason") || undefined,
-    exclusionScope: readString(value, "exclusionScope", "exclusion_scope") || undefined,
-  })).filter((language) => language.id && language.name);
-  const frameworks = readQualityArray(record.frameworks).map((value) => ({
-    id: readString(value, "id"),
-    language: readString(value, "language"),
-    name: readString(value, "name"),
-    adapter: readString(value, "adapter"),
-    status: readString(value, "status"),
-    factCount: readNumber(value, "factCount", "fact_count"),
-    relationCount: readNumber(value, "relationCount", "relation_count"),
-  })).filter((framework) => framework.id && framework.name);
+  const languages = readQualityArray(record.languages)
+    .map((value) => ({
+      id: readString(value, "id"),
+      name: readString(value, "name"),
+      provider: readString(value, "provider"),
+      filesFound: readNumber(value, "filesFound", "files_found"),
+      filesIndexed: readNumber(value, "filesIndexed", "files_indexed"),
+      filesExcluded: readNumber(value, "filesExcluded", "files_excluded"),
+      filesMissing: readNumber(value, "filesMissing", "files_missing"),
+      status: readString(value, "status"),
+      exclusionReason: readString(value, "exclusionReason", "exclusion_reason", "reason") || undefined,
+      exclusionScope: readString(value, "exclusionScope", "exclusion_scope") || undefined,
+    }))
+    .filter((language) => language.id && language.name);
+  const frameworks = readQualityArray(record.frameworks)
+    .map((value) => ({
+      id: readString(value, "id"),
+      language: readString(value, "language"),
+      name: readString(value, "name"),
+      adapter: readString(value, "adapter"),
+      status: readString(value, "status"),
+      factCount: readNumber(value, "factCount", "fact_count"),
+      relationCount: readNumber(value, "relationCount", "relation_count"),
+    }))
+    .filter((framework) => framework.id && framework.name);
   if (languages.length === 0 && frameworks.length === 0) {
     return null;
   }
@@ -374,13 +370,17 @@ export function codeInventoryAnalysisQuality(inventory: CodeInventory | null | u
     frameworks,
     indexedLanguages: languages.filter((language) => language.status === "indexed").length,
     partialLanguages: languages.filter((language) => language.status === "indexed-partial").length,
-    failedLanguages: languages.filter((language) => !["indexed", "indexed-partial", "excluded"].includes(language.status)).length,
+    failedLanguages: languages.filter(
+      (language) => !["indexed", "indexed-partial", "excluded"].includes(language.status),
+    ).length,
     detectedFrameworks: frameworks.filter((framework) => framework.status === "detected").length,
   };
 }
 
 function readQualityArray(value: unknown): Array<Record<string, unknown>> {
-  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    : [];
 }
 
 function readString(value: Record<string, unknown>, ...keys: string[]): string {
@@ -409,8 +409,9 @@ export function codeInventoryItemCount(inventory: CodeInventory | null | undefin
   if (!inventory) {
     return 0;
   }
-  return Object.values(inventory.summary).reduce((sum, count) => sum + count, 0)
-    + codeInventoryUiRoutes(inventory).length;
+  return (
+    Object.values(inventory.summary).reduce((sum, count) => sum + count, 0) + codeInventoryUiRoutes(inventory).length
+  );
 }
 
 export function codeInventoryRouteCount(inventory: CodeInventory | null | undefined): number {
@@ -425,8 +426,9 @@ export function codeInventorySymbolCount(inventory: CodeInventory | null | undef
   if (!inventory) {
     return 0;
   }
-  const { routes, files, ...symbols } = inventory.summary;
-  return Object.values(symbols).reduce((sum, count) => sum + count, 0);
+  return Object.entries(inventory.summary)
+    .filter(([key]) => key !== "routes" && key !== "files")
+    .reduce((sum, [, count]) => sum + count, 0);
 }
 
 export function dbInventoryTableCount(inventory: DbInventory | null | undefined): number {
@@ -453,7 +455,7 @@ export function codeInventoryDefaultRoute(
   selectedId?: string | null,
 ): CodeInventoryItem | null {
   const routes = codeInventoryBackendRoutes(inventory);
-  const selected = selectedId ? routes.find((route) => route.id === selectedId) ?? null : null;
+  const selected = selectedId ? (routes.find((route) => route.id === selectedId) ?? null) : null;
   if (selected || routes.length === 0) {
     return selected;
   }

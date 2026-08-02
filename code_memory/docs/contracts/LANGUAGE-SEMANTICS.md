@@ -5,7 +5,7 @@ relations are separate adapters and are not created here.
 
 ## Relations produced
 
-The normalized `code-memory.language-index.v1` output may contain:
+The normalized `code-memory.language-index.v2` output may contain:
 
 | Relation | Meaning |
 |---|---|
@@ -77,6 +77,14 @@ empty provider result or unresolved required relation fails the gate instead
 of becoming a guessed graph edge.
 
 Dynamic runtime dispatch remains outside this static contract for now.
+
+Diagnostics use `diagnostics[].code` for machine decisions. Human messages may
+change without changing the meaning of a result; clients must not classify a
+provider gap by matching message text.
+
+Semantic collections are canonicalized before serialization. `timings` is the
+only intentionally run-dependent field and is operational telemetry, not
+semantic evidence.
 
 CMake and Meson projects are supported through their generated
 `compile_commands.json` (including common `build/`, `out/`, and preset build

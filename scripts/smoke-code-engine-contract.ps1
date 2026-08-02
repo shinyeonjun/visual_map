@@ -110,6 +110,7 @@ function Invoke-CodeTool([string]$Tool, [hashtable]$Payload) {
 
 try {
     $env:CBM_CACHE_DIR = $cacheRoot
+    $env:CODE_MEMORY_CACHE_ROOT = $cacheRoot
     if ($RequireJavaProvider) {
         $javaRoot = Join-Path $fixtureRoot "java-repo"
         $javaSourceRoot = Join-Path $javaRoot "src\main\java\fixture"
@@ -162,11 +163,17 @@ class OwnerService {
         }
         $javaProject = [string]$javaIndex.project
         $javaArchitecture = Invoke-CodeTool "get_architecture" @{ project = $javaProject }
+        $missingCodeDiagnostics = @(@($javaArchitecture.diagnostics) | Where-Object {
+            [string]::IsNullOrWhiteSpace([string]$_.code)
+        })
+        if ($missingCodeDiagnostics.Count -gt 0) {
+            throw "Architecture diagnostics must carry a machine-readable code."
+        }
         $providerFailures = @(@($javaArchitecture.diagnostics) | Where-Object {
-            [string]$_.message -match "provider-missing|needs native LSP|jdtls.+not available|providers root is not configured"
+            [string]$_.code -eq "provider-missing"
         })
         if ($providerFailures.Count -gt 0) {
-            throw "Installed Java provider reported missing coverage: $($providerFailures[0].message)"
+            throw "Installed Java provider reported missing coverage [$($providerFailures[0].code)]: $($providerFailures[0].message)"
         }
         $javaCalls = Invoke-CodeTool "query_graph" @{
             project = $javaProject
@@ -362,6 +369,7 @@ def create_order(request):
 }
 finally {
     Remove-Item Env:CBM_CACHE_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:CODE_MEMORY_CACHE_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:CBM_ALLOWED_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:CODE_MEMORY_PROVIDERS_ROOT -ErrorAction SilentlyContinue
     if (-not $KeepFixture) {

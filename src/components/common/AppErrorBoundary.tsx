@@ -32,8 +32,7 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, { error: 
             <code>{this.state.error.message}</code>
           </details>
           <button className="primary-action" type="button" onClick={() => window.location.reload()}>
-            <RefreshCw size={14} />
-            앱 다시 불러오기
+            <RefreshCw size={14} />앱 다시 불러오기
           </button>
         </section>
       </main>

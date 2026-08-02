@@ -6,10 +6,13 @@ import {
   GitBranch,
   Layers3,
   List,
+  Maximize2,
+  Minus,
+  Plus,
   Table2,
   Workflow,
 } from "lucide-react";
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, CSSProperties } from "react";
 import type { DbInventoryTable } from "../../types/workspace";
 import { dbInventoryTableKey, routeDisplayName, routeMethodFromIdentity } from "../../types/workspace";
@@ -22,7 +25,12 @@ import type {
   VisualNode,
 } from "../../types/visual-map";
 import { tableKeyFromDbNodeId } from "../../visual/nodeIds";
-import { buildApiConnectionModel } from "./apiConnectionModel";
+import {
+  buildApiConnectionModel,
+  isCandidateApiEdge,
+  isConfirmedApiEdge,
+  isDatabaseEdge,
+} from "./apiConnectionModel";
 import {
   API_GRAPH_NODE_TOP,
   apiGraphEdgeLabelStyle,
@@ -31,6 +39,9 @@ import {
 } from "./apiReadingGraph";
 
 export type ApiReadingView = "connections" | "layers" | "list";
+
+const API_ZOOM_MIN = 0.6;
+const API_ZOOM_MAX = 1.5;
 
 const viewOptions: Array<{ id: ApiReadingView; label: string; icon: ComponentType<{ size?: number }> }> = [
   { id: "connections", label: "연결 지도", icon: Workflow },
@@ -51,7 +62,7 @@ export function ApiReadingHeader({
 }) {
   const method = answer.method ?? routeMethodFromIdentity(map.focus);
   const confirmed = map.edges.filter(isConfirmedApiEdge).length;
-  const candidates = map.edges.filter(isCandidateEdge).length;
+  const candidates = map.edges.filter(isCandidateApiEdge).length;
   const databaseRelations = answer.dbRelations?.length ?? 0;
   const clientRequests = answer.clientRequests?.length ?? 0;
   const clientRequestTone = clientRequests === 0
@@ -149,6 +160,82 @@ export function ApiReadingPath({
   );
 }
 
+export function ApiFlowGapView({
+  map,
+  onSelectNode,
+  onSelectEdge,
+}: {
+  map: VisualMap;
+  onSelectNode: (node: VisualNode) => void;
+  onSelectEdge: (edge: VisualEdge) => void;
+}) {
+  const route = map.nodes.find((node) => node.id === map.focus && (node.layer === "api" || node.kind === "route"))
+    ?? map.nodes.find((node) => node.layer === "api" || node.kind === "route")
+    ?? map.nodes.find((node) => node.id === map.focus)
+    ?? null;
+  const handles = route ? map.edges.filter((edge) => edge.from === route.id && edge.kind === "code_handle") : [];
+  const handler = handles.length > 0 ? map.nodes.find((node) => node.id === handles[0].to) ?? null : null;
+  const reason = map.warnings[0] ?? "API 전용 읽기 결과가 없어 정적 호출 경로를 확정하지 못했습니다.";
+
+  return (
+    <section className="api-flow-gap-view" aria-label="API 읽기 경로 확인 필요">
+      <header>
+        <span><Braces size={15} /> API 처리 흐름</span>
+        <strong>{route?.title ?? "선택한 API"}</strong>
+        <small>확인된 노드만 표시하고, 확인하지 못한 호출은 가짜 코드 노드로 만들지 않았습니다.</small>
+      </header>
+      <div className="api-gap-spine">
+        {route ? <GapSpineCard node={route} tone="route" onSelect={() => onSelectNode(route)} /> : <GapSpineUnknown text="API Route 근거를 찾지 못했습니다." />}
+        <span className="api-gap-spine-arrow">HANDLES <ArrowRightIcon /></span>
+        {handler && handles[0] ? (
+          <GapSpineCard node={handler} tone="handler" edge={handles[0]} onSelect={() => onSelectNode(handler)} onSelectEdge={() => onSelectEdge(handles[0])} />
+        ) : (
+          <GapSpineUnknown text="확인 필요 · Route의 실제 Handler 연결을 정적 분석으로 확인하지 못했습니다." />
+        )}
+        <div className="api-flow-gap-reason"><GitBranch size={15} /><span>{reason}</span></div>
+      </div>
+      <div className="api-flow-gap-status">
+        <span><b>{map.nodes.filter((node) => node.source === "code").length}</b> 코드 후보</span>
+        <span><b>{map.edges.length}</b> 관계 근거</span>
+        <strong>미확정 구간은 확인 필요로 남겼습니다</strong>
+      </div>
+    </section>
+  );
+}
+
+function GapSpineCard({
+  node,
+  tone,
+  edge,
+  onSelect,
+  onSelectEdge,
+}: {
+  node: VisualNode;
+  tone: "route" | "handler";
+  edge?: VisualEdge;
+  onSelect: () => void;
+  onSelectEdge?: () => void;
+}) {
+  return (
+    <article className={`api-gap-spine-card ${tone}`}>
+      <button type="button" onClick={onSelect}>
+        <span>{tone === "route" ? <Braces size={14} /> : <Box size={14} />}{tone === "route" ? "API / Route" : "Handler"}</span>
+        <strong>{node.title}</strong>
+        <small>{node.subtitle ?? node.location?.path ?? "위치 정보 없음"}</small>
+      </button>
+      {edge && onSelectEdge ? <button className="api-gap-edge-button" type="button" onClick={onSelectEdge}>{relationLabel(edge)}</button> : null}
+    </article>
+  );
+}
+
+function GapSpineUnknown({ text }: { text: string }) {
+  return <div className="api-gap-spine-unknown"><GitBranch size={15} /><strong>{text}</strong></div>;
+}
+
+function ArrowRightIcon() {
+  return <span aria-hidden="true">→</span>;
+}
+
 export function ApiConnectionView({
   answer,
   map,
@@ -166,23 +253,59 @@ export function ApiConnectionView({
   onSelectNode: (node: VisualNode) => void;
   onSelectEdge: (edge: VisualEdge) => void;
 }) {
-  const model = buildApiConnectionModel(answer, map);
-  const graph = buildApiGraphLayout(answer, map, model);
+  const model = useMemo(() => buildApiConnectionModel(answer, map), [answer, map]);
+  const graph = useMemo(() => buildApiGraphLayout(answer, map, model), [answer, map, model]);
   const method = answer.method ?? routeMethodFromIdentity(map.focus);
   const gapVisible = Boolean(model.gap && model.primaryPath.length <= 1);
+  const primaryEdgeIds = useMemo(
+    () => new Set([
+      ...model.primaryEdges.map((edge) => edge.id),
+      ...(model.primaryDatabase ? [model.primaryDatabase.edge.id] : []),
+    ]),
+    [model],
+  );
+  const nodesById = useMemo(() => new Map(map.nodes.map((node) => [node.id, node])), [map.nodes]);
+  const tablesByKey = useMemo(
+    () => new Map(dbTables.map((table) => [dbInventoryTableKey(table), table])),
+    [dbTables],
+  );
   const viewRef = useRef<HTMLElement>(null);
+  const [apiZoom, setApiZoom] = useState(1);
 
   useLayoutEffect(() => {
     if (viewRef.current) {
       viewRef.current.scrollLeft = 0;
       viewRef.current.scrollTop = 0;
     }
+    setApiZoom(1);
   }, [answer.subject, map.focus]);
+
+  function fitApiGraph() {
+    const viewportWidth = viewRef.current?.clientWidth ?? graph.width;
+    const availableWidth = Math.max(320, viewportWidth - 24);
+    setApiZoom(Math.max(API_ZOOM_MIN, Math.min(1, availableWidth / graph.width)));
+  }
 
   return (
     <section ref={viewRef} className="api-connection-view" aria-label={`${answer.subject} 연결 지도`}>
-      <div className="api-connection-canvas" style={{ width: graph.width, height: graph.height }}>
-        <svg className="api-connection-lines" viewBox={`0 0 ${graph.width} ${graph.height}`} aria-hidden="true">
+      <div className="api-connection-toolbar" aria-label="API 연결 지도 도구">
+        <span>배율 {Math.round(apiZoom * 100)}%</span>
+        <button type="button" title="전체 그래프 맞춤" aria-label="API 연결 지도 전체 맞춤" onClick={fitApiGraph}>
+          <Maximize2 size={13} />
+        </button>
+        <button type="button" title="확대" aria-label="API 연결 지도 확대" disabled={apiZoom >= API_ZOOM_MAX} onClick={() => setApiZoom((value) => Math.min(API_ZOOM_MAX, value + 0.1))}>
+          <Plus size={13} />
+        </button>
+        <button type="button" title="축소" aria-label="API 연결 지도 축소" disabled={apiZoom <= API_ZOOM_MIN} onClick={() => setApiZoom((value) => Math.max(API_ZOOM_MIN, value - 0.1))}>
+          <Minus size={13} />
+        </button>
+      </div>
+      <div className="api-connection-zoom-surface" style={{ width: graph.width * apiZoom, height: graph.height * apiZoom }}>
+        <div
+          className="api-connection-canvas"
+          style={{ width: graph.width, height: graph.height, transform: `scale(${apiZoom})`, transformOrigin: "top left" }}
+        >
+        <svg className="api-connection-lines" viewBox={`0 0 ${graph.width} ${graph.height}`} aria-label="API 관계선">
           <defs>
             <marker id="api-confirmed-arrow" markerHeight="7" markerWidth="7" orient="auto" refX="6" refY="3.5">
               <path d="M0,0 L7,3.5 L0,7 Z" />
@@ -193,35 +316,47 @@ export function ApiConnectionView({
           </defs>
           {graph.edges.map(({ edge, from, to }) => (
             <path
-              className={`api-edge-line ${isCandidateEdge(edge) ? "candidate" : "confirmed"}${selectedEdgeId === edge.id ? " selected" : ""}`}
+              className={`api-edge-line ${isCandidateApiEdge(edge) ? "candidate" : "confirmed"}${primaryEdgeIds.has(edge.id) ? " primary" : " secondary"}${selectedEdgeId === edge.id ? " selected" : ""}`}
               d={apiGraphEdgePath({ edge, from, to }, model.primaryDatabase?.edge.id ?? null)}
-              markerEnd={isCandidateEdge(edge) ? "url(#api-candidate-arrow)" : "url(#api-confirmed-arrow)"}
+              markerEnd={isCandidateApiEdge(edge) ? "url(#api-candidate-arrow)" : "url(#api-confirmed-arrow)"}
+              role="button"
+              tabIndex={0}
+              aria-label={`${from.node.title} ${relationLabel(edge)} ${to.node.title} 근거 보기`}
+              onClick={() => onSelectEdge(edge)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelectEdge(edge);
+                }
+              }}
               key={edge.id}
             />
           ))}
         </svg>
 
-        {graph.edges.map((connection) => (
-          <button
-            className={`api-edge-label ${isCandidateEdge(connection.edge) ? "candidate" : "confirmed"}${selectedEdgeId === connection.edge.id ? " selected" : ""}`}
-            style={apiGraphEdgeLabelStyle(connection, model.primaryDatabase?.edge.id ?? null)}
-            type="button"
-            data-edge-id={connection.edge.id}
-            aria-label={`${connection.from.node.title} ${relationLabel(connection.edge)} ${connection.to.node.title} 근거 보기`}
-            title={connection.edge.evidence[0]?.text ?? relationLabel(connection.edge)}
-            onClick={() => onSelectEdge(connection.edge)}
-            key={`label-${connection.edge.id}`}
-          >
-            {relationLabel(connection.edge)}
-          </button>
-        ))}
+        {graph.edges
+          .filter((connection) => primaryEdgeIds.has(connection.edge.id) || isCandidateApiEdge(connection.edge) || selectedEdgeId === connection.edge.id)
+          .map((connection) => (
+            <button
+              className={`api-edge-label ${isCandidateApiEdge(connection.edge) ? "candidate" : "confirmed"}${selectedEdgeId === connection.edge.id ? " selected" : ""}`}
+              style={apiGraphEdgeLabelStyle(connection, model.primaryDatabase?.edge.id ?? null)}
+              type="button"
+              data-edge-id={connection.edge.id}
+              aria-label={`${connection.from.node.title} ${relationLabel(connection.edge)} ${connection.to.node.title} 근거 보기`}
+              title={connection.edge.evidence[0]?.text ?? relationLabel(connection.edge)}
+              onClick={() => onSelectEdge(connection.edge)}
+              key={`label-${connection.edge.id}`}
+            >
+              {relationLabel(connection.edge)}
+            </button>
+          ))}
 
         {graph.nodes.map(({ node, item, x, y }) => (
           <ApiDiagramNode
             item={item}
             node={node}
             method={item && "lane" in item && item.lane === "route" ? method : null}
-            table={dbTableForNode(node, dbTables)}
+            table={dbTableForNode(node, tablesByKey)}
             selected={selectedNodeId === node.id}
             style={{ left: x, top: y }}
             onSelect={() => onSelectNode(node)}
@@ -242,6 +377,7 @@ export function ApiConnectionView({
           <span><i className="candidate" /> 후보 연결</span>
           <span><i className="unknown" /> 확인 안 됨</span>
         </div>
+        </div>
       </div>
       {answer.truncated || !model.primaryDatabase ? (
         <div className="api-map-notices">
@@ -260,8 +396,8 @@ export function ApiConnectionView({
           <summary>보조 관계 {model.collapsedEdges.length}개 · 겹침 방지를 위해 접혀 있음</summary>
           <div>
             {model.collapsedEdges.map((edge) => {
-              const from = map.nodes.find((node) => node.id === edge.from);
-              const to = map.nodes.find((node) => node.id === edge.to);
+              const from = nodesById.get(edge.from);
+              const to = nodesById.get(edge.to);
               return (
                 <button type="button" key={edge.id} onClick={() => onSelectEdge(edge)}>
                   <strong>{from?.title ?? edge.from}</strong>
@@ -463,20 +599,8 @@ function relationLabel(edge: VisualEdge): string {
   if (edge.kind === "client_request") return "REQUESTS";
   if (edge.kind === "code_db_read") return "READS";
   if (edge.kind === "code_db_write") return "WRITES";
-  if (isCandidateEdge(edge)) return "DB 후보";
+  if (isCandidateApiEdge(edge)) return "DB 후보";
   return edge.kind;
-}
-
-function isConfirmedApiEdge(edge: VisualEdge): boolean {
-  return edge.kind === "code_handle" || edge.kind === "code_call";
-}
-
-function isCandidateEdge(edge: VisualEdge): boolean {
-  return edge.kind.startsWith("candidate") || edge.confidence === "candidate";
-}
-
-function isDatabaseEdge(edge: VisualEdge): boolean {
-  return isCandidateEdge(edge) || edge.kind === "code_db_read" || edge.kind === "code_db_write";
 }
 
 function sourceLocationLabel(location?: { path: string; line?: number | null } | null): string | null {
@@ -484,9 +608,9 @@ function sourceLocationLabel(location?: { path: string; line?: number | null } |
   return `${location.path}${location.line ? `:${location.line}` : ""}`;
 }
 
-function dbTableForNode(node: VisualNode, tables: DbInventoryTable[]): DbInventoryTable | null {
+function dbTableForNode(node: VisualNode, tables: ReadonlyMap<string, DbInventoryTable>): DbInventoryTable | null {
   const tableKey = tableKeyFromDbNodeId(node.id);
-  return tableKey ? tables.find((table) => dbInventoryTableKey(table) === tableKey) ?? null : null;
+  return tableKey ? tables.get(tableKey) ?? null : null;
 }
 
 function visualNodeLane(node: VisualNode): string {

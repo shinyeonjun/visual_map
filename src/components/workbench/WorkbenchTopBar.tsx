@@ -131,7 +131,11 @@ export function WorkbenchTopBar({
                   visualMapControls.runSearch(value);
                 } else {
                   const firstResult = visualMapControls.searchGroups[0]?.results[0];
-                  firstResult ? visualMapControls.selectSearchResult(firstResult) : visualMapControls.runSearch();
+                  if (firstResult) {
+                    visualMapControls.selectSearchResult(firstResult);
+                  } else {
+                    visualMapControls.runSearch();
+                  }
                 }
               } else if (event.key === "ArrowDown" && visualMapControls.searchGroups.length > 0) {
                 event.preventDefault();

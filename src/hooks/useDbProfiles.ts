@@ -47,7 +47,10 @@ export function useDbProfiles({
 
   useLayoutEffect(() => {
     hydrateDbProfile(activeProfile);
-  }, [currentWorkspace?.id, activeProfile?.id]);
+    // Profile identity changes and profile object updates both require form/cache hydration.
+    // hydrateDbProfile is intentionally local to this hook and is not a stable dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentWorkspace?.id, activeProfile]);
 
   useLayoutEffect(() => {
     setDbStatus(null);
@@ -74,10 +77,9 @@ export function useDbProfiles({
           : dbProfileSource === "ddl-sqlite"
             ? "DDL 파일 선택"
             : "SQLite 데이터베이스 선택",
-        filters:
-          directory
-            ? undefined
-            : dbProfileSource === "ddl-sqlite"
+        filters: directory
+          ? undefined
+          : dbProfileSource === "ddl-sqlite"
             ? [{ name: "SQL", extensions: ["sql"] }]
             : [{ name: "SQLite", extensions: ["sqlite", "sqlite3", "db"] }],
       });
@@ -155,7 +157,10 @@ export function useDbProfiles({
           clearDbInventory();
           const successMessage = ["DB 구조 읽기 완료", dbIndexSummary(result.indexJson)].filter(Boolean).join(": ");
           if (!result.inventory) {
-            const uiError = toUserError(result.inventoryError ?? "DB inventory가 없습니다", "테이블 목록을 불러오지 못했습니다");
+            const uiError = toUserError(
+              result.inventoryError ?? "DB inventory가 없습니다",
+              "테이블 목록을 불러오지 못했습니다",
+            );
             setDbStatus(successMessage);
             setDbError(uiError.message);
             setDbErrorDetail(uiError.details);
@@ -219,10 +224,12 @@ export function useDbProfiles({
     const deletedName = activeProfile.name;
     await withBusy("db-delete", async () => {
       try {
-        const updated = validateWorkspace(await invoke<unknown>("delete_db_profile", {
-          workspaceId: currentWorkspace.id,
-          profileId: activeProfile.id,
-        }));
+        const updated = validateWorkspace(
+          await invoke<unknown>("delete_db_profile", {
+            workspaceId: currentWorkspace.id,
+            profileId: activeProfile.id,
+          }),
+        );
         setCurrentWorkspace(updated);
         clearDbInventory();
         clearVisualMap();
@@ -353,7 +360,11 @@ function dbInventoryStatus(inventory: DbInventory, action: string): string {
 }
 
 function getActiveDbProfile(workspace: Workspace | null): DbProfile | null {
-  return workspace?.dbProfiles.find((profile) => profile.id === workspace.activeDbProfileId) ?? workspace?.dbProfiles[0] ?? null;
+  return (
+    workspace?.dbProfiles.find((profile) => profile.id === workspace.activeDbProfileId) ??
+    workspace?.dbProfiles[0] ??
+    null
+  );
 }
 
 function dbProfileSourceForPath(value: string): DbProfileSource | null {
@@ -368,19 +379,18 @@ function dbProfileSourceForPath(value: string): DbProfileSource | null {
 }
 
 function dbProfileNameForPath(value: string): string | null {
-  const fileName = value.split(/[\\/]+/).filter(Boolean).pop()?.trim();
+  const fileName = value
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .pop()
+    ?.trim();
   if (!fileName) {
     return null;
   }
   return fileName.replace(/\.(sql|sqlite3?|db)$/i, "") || fileName;
 }
 
-function activeProfileMatchesForm(
-  profile: DbProfile,
-  name: string,
-  source: DbProfileSource,
-  path: string,
-): boolean {
+function activeProfileMatchesForm(profile: DbProfile, name: string, source: DbProfileSource, path: string): boolean {
   return (
     profile.name === name.trim() &&
     profile.source === source &&
@@ -391,10 +401,9 @@ function activeProfileMatchesForm(
 function dbIndexSummary(indexJson: unknown): string | null {
   const tables = countFromJson(indexJson, ["tables_indexed", "tableCount", "tablesCount", "tables"]);
   const columns = countFromJson(indexJson, ["columns_indexed", "columnCount", "columnsCount", "columns"]);
-  const facts = [
-    tables == null ? null : `테이블 ${tables}개`,
-    columns == null ? null : `컬럼 ${columns}개`,
-  ].filter((fact): fact is string => fact !== null);
+  const facts = [tables == null ? null : `테이블 ${tables}개`, columns == null ? null : `컬럼 ${columns}개`].filter(
+    (fact): fact is string => fact !== null,
+  );
   return facts.length > 0 ? facts.join(", ") : null;
 }
 
@@ -435,16 +444,34 @@ export function toDbUserError(value: string, fallback: string): { message: strin
   if (lower.includes("제품 안전 한도") || lower.includes("20,000")) {
     return { message: `${fallback}: 현재 제품의 DB 테이블 처리 한도를 초과했습니다`, details };
   }
-  if (lower.includes("password") || lower.includes("access denied") || lower.includes("login failed") || lower.includes("ora-01017") || lower.includes("auth")) {
+  if (
+    lower.includes("password") ||
+    lower.includes("access denied") ||
+    lower.includes("login failed") ||
+    lower.includes("ora-01017") ||
+    lower.includes("auth")
+  ) {
     return { message: `${fallback}: 인증 정보를 확인하세요`, details };
   }
-  if (lower.includes("driver") || lower.includes("odbc") || lower.includes("provider") || lower.includes("dll") || lower.includes("module not found")) {
+  if (
+    lower.includes("driver") ||
+    lower.includes("odbc") ||
+    lower.includes("provider") ||
+    lower.includes("dll") ||
+    lower.includes("module not found")
+  ) {
     return { message: `${fallback}: DB 드라이버를 확인하세요`, details };
   }
   if (lower.includes("parse") || lower.includes("invalid json") || lower.includes("metadata")) {
     return { message: `${fallback}: DB 구조 해석에 실패했습니다`, details };
   }
-  if (lower.includes("connection refused") || lower.includes("could not connect") || lower.includes("timed out") || lower.includes("timeout") || lower.includes("network")) {
+  if (
+    lower.includes("connection refused") ||
+    lower.includes("could not connect") ||
+    lower.includes("timed out") ||
+    lower.includes("timeout") ||
+    lower.includes("network")
+  ) {
     return { message: `${fallback}: 연결 정보를 확인하세요`, details };
   }
 

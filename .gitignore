@@ -19,6 +19,8 @@ src-tauri/engines/*.exe
 .cache/
 coverage/
 .codex/
+/.tmp/
+/build/
 
 # Environment and signing secrets
 .env

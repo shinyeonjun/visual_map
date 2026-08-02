@@ -60,7 +60,11 @@ export function SearchResultsPopover({
           ))}
         </div>
       ))}
-      {!hasResults && <small className="search-hint">범위: {searchScope} · API, 파일, 테이블, 컬럼, DB 객체 이름 일부를 입력하세요.</small>}
+      {!hasResults && (
+        <small className="search-hint">
+          범위: {searchScope} · API, 파일, 테이블, 컬럼, DB 객체 이름 일부를 입력하세요.
+        </small>
+      )}
     </div>
   );
 }

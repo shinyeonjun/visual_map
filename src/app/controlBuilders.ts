@@ -41,14 +41,14 @@ export function buildWorkspaceControls({
 }): WorkspaceControls {
   const currentWorkspaceMatchesForm = Boolean(
     workspaces.currentWorkspace &&
-      workspaces.currentWorkspace.name === workspaces.workspaceName.trim() &&
-      workspaceRepoInputValue(workspaces.currentWorkspace) === workspaces.repoPath.trim(),
+    workspaces.currentWorkspace.name === workspaces.workspaceName.trim() &&
+    workspaceRepoInputValue(workspaces.currentWorkspace) === workspaces.repoPath.trim(),
   );
   const codeEngine = engineRegistry?.engines.find((engine) => engine.role === "code") ?? null;
   const codeIndexBlockedReason = engineError
     ? "코드 읽기 도구 상태 확인 오류"
     : engineRegistry && !codeEngine?.available
-      ? codeEngine?.error ?? "코드 읽기 도구 설치 필요"
+      ? (codeEngine?.error ?? "코드 읽기 도구 설치 필요")
       : null;
   return {
     initialized: workspaces.initialized,
@@ -77,10 +77,7 @@ export function buildWorkspaceControls({
     canIndexCode: !codeIndexBlockedReason,
     codeIndexBlockedReason,
     canCreateWorkspace: Boolean(
-      workspaces.workspaceName.trim() &&
-        workspaces.repoPath.trim() &&
-        !repoPathError &&
-        !currentWorkspaceMatchesForm,
+      workspaces.workspaceName.trim() && workspaces.repoPath.trim() && !repoPathError && !currentWorkspaceMatchesForm,
     ),
     setRepoSourceMode: workspaces.setRepoSourceMode,
     setWorkspaceName: workspaces.setWorkspaceName,
@@ -117,15 +114,15 @@ export function buildDbProfileControls({
 }): DbProfileControls {
   const activeProfileMatchesForm = Boolean(
     db.activeProfile &&
-      db.activeProfile.name === db.dbProfileName.trim() &&
-      db.activeProfile.source === db.dbProfileSource &&
-      (!dbProfileSourceUsesPath(db.dbProfileSource) || (db.activeProfile.path ?? "") === db.dbProfilePath.trim()),
+    db.activeProfile.name === db.dbProfileName.trim() &&
+    db.activeProfile.source === db.dbProfileSource &&
+    (!dbProfileSourceUsesPath(db.dbProfileSource) || (db.activeProfile.path ?? "") === db.dbProfilePath.trim()),
   );
   const dbEngine = engineRegistry?.engines.find((engine) => engine.role === "db") ?? null;
   const dbIndexBlockedReason = engineError
     ? "DB 읽기 도구 상태 확인 오류"
     : engineRegistry && !dbEngine?.available
-      ? dbEngine?.error ?? "DB 읽기 도구 설치 필요"
+      ? (dbEngine?.error ?? "DB 읽기 도구 설치 필요")
       : null;
   const canRunDbEngine = !dbIndexBlockedReason;
 
@@ -147,14 +144,14 @@ export function buildDbProfileControls({
     deleting: busyAction === "db-delete",
     canSaveProfile: Boolean(
       !activeProfileMatchesForm &&
-        db.dbProfileName.trim() &&
-        (!dbProfileSourceUsesPath(db.dbProfileSource) || db.dbProfilePath.trim()),
+      db.dbProfileName.trim() &&
+      (!dbProfileSourceUsesPath(db.dbProfileSource) || db.dbProfilePath.trim()),
     ),
     canIndexProfile: Boolean(
       canRunDbEngine &&
       activeProfileMatchesForm &&
-        db.activeProfile &&
-        (dbProfileSourceUsesPath(db.activeProfile.source) || db.dbConnectionString.trim()),
+      db.activeProfile &&
+      (dbProfileSourceUsesPath(db.activeProfile.source) || db.dbConnectionString.trim()),
     ),
     dbIndexBlockedReason,
     setProfileName: db.setDbProfileName,
@@ -244,12 +241,15 @@ export function buildVisualMapControls({
     setRelationView: visual.setRelationView,
     setChangeIntent: visual.setChangeIntent,
     runSearch: (value) =>
-      visual.runSearch({
-        codeInventory: code.codeInventory,
-        dbInventory: db.dbInventory,
-        selectCodeItem: selectCodeOnly,
-        selectDbTable: selectDbOnly,
-      }, value),
+      visual.runSearch(
+        {
+          codeInventory: code.codeInventory,
+          dbInventory: db.dbInventory,
+          selectCodeItem: selectCodeOnly,
+          selectDbTable: selectDbOnly,
+        },
+        value,
+      ),
     selectSearchResult: visual.selectSearchResult,
     openSearchPopover: visual.openSearchPopover,
     closeSearchPopover: visual.closeSearchPopover,

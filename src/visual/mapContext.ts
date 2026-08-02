@@ -1,12 +1,5 @@
 const STORAGE_PREFIX = "backend-visual-map:map-context:v1:";
-const MODES = new Set([
-  "atlas",
-  "explore",
-  "api-flow",
-  "table-usage",
-  "column-impact",
-  "search-focus",
-]);
+const MODES = new Set(["atlas", "explore", "api-flow", "table-usage", "column-impact", "search-focus"]);
 
 type MapContext = {
   mode: string;

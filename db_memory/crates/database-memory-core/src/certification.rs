@@ -434,6 +434,28 @@ pub fn verify_certified_schema_snapshot(
     }
 }
 
+/// Replays a certified snapshot payload without opening a database.
+///
+/// Live adapter tests prove that a vendor can be queried; this boundary test
+/// proves that the serialized result still satisfies the same completeness
+/// and canonical-order contract after it is read back. The payload can come
+/// from a checked-in golden fixture or a captured adapter run.
+pub fn replay_certified_snapshot_json(
+    payload: &str,
+) -> Result<CertifiedSchemaSnapshot, CertificationError> {
+    let certified = serde_json::from_str::<CertifiedSchemaSnapshot>(payload).map_err(|error| {
+        CertificationError {
+            issues: vec![CertificationIssue {
+                code: "golden_payload_invalid".to_owned(),
+                subject: "payload".to_owned(),
+                message: error.to_string(),
+            }],
+        }
+    })?;
+    verify_certified_schema_snapshot(&certified)?;
+    Ok(certified)
+}
+
 pub fn emitted_object_counts(snapshot: &CanonicalSchemaSnapshot) -> BTreeMap<ObjectCategory, u64> {
     let schema = &snapshot.schema;
     let mut counts = ObjectCategory::ALL
@@ -975,6 +997,34 @@ mod tests {
         assert_eq!(certified.completeness.scope.schemas, vec!["main"]);
         let legacy_reader: SchemaSnapshot = serde_json::from_value(value).unwrap();
         assert_eq!(legacy_reader.database.name, "main");
+    }
+
+    #[test]
+    fn oracle_and_sqlserver_certified_payloads_replay_through_the_same_contract() {
+        for (adapter_name, product) in [("oracle", "Oracle"), ("sqlserver", "Microsoft SQL Server")]
+        {
+            let snapshot = snapshot();
+            let certified = certify_schema_snapshot(
+                snapshot.clone(),
+                AdapterIdentity {
+                    name: adapter_name.to_owned(),
+                    version: env!("CARGO_PKG_VERSION").to_owned(),
+                },
+                ServerIdentity {
+                    product: product.to_owned(),
+                    version: "fixture".to_owned(),
+                },
+                scope(),
+                fixture_discovery_counts(&snapshot),
+                capability_checks(),
+            )
+            .unwrap();
+            let payload = serde_json::to_string(&certified).unwrap();
+
+            let replayed = replay_certified_snapshot_json(&payload).unwrap();
+
+            assert_eq!(replayed, certified);
+        }
     }
 
     #[test]

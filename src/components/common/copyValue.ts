@@ -4,9 +4,7 @@ export async function copyValue(value: string): Promise<boolean> {
     if (!isTauri && navigator.clipboard?.writeText) {
       await Promise.race([
         navigator.clipboard.writeText(value),
-        new Promise<never>((_, reject) =>
-          window.setTimeout(() => reject(new Error("Clipboard API timed out")), 750),
-        ),
+        new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("Clipboard API timed out")), 750)),
       ]);
       return true;
     }

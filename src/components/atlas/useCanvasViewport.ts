@@ -124,6 +124,43 @@ export function useCanvasViewport(mode: string) {
     });
   }
 
+  function fitCanvas() {
+    const stage = stageRef.current;
+    const surface = stage?.querySelector<HTMLElement>(".at-map-surface");
+    if (!stage || !surface) {
+      return;
+    }
+    const current = zoomRef.current;
+    const bounds = surface.getBoundingClientRect();
+    const widthRatio = (stage.clientWidth - 24) / Math.max(1, bounds.width);
+    const heightRatio = (stage.clientHeight - 24) / Math.max(1, bounds.height);
+    const next = clamp(current * Math.min(1, widthRatio, heightRatio), 0.55, 1.65);
+    zoomRef.current = next;
+    setAtlasZoom(next);
+    stage.scrollLeft = 0;
+    stage.scrollTop = 0;
+    viewStatesRef.current.set(mode, { zoom: next, left: 0, top: 0 });
+  }
+
+  function focusCanvasNode(nodeId: string | null | undefined) {
+    if (!nodeId) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      const stage = stageRef.current;
+      const target = Array.from(stage?.querySelectorAll<HTMLElement>("[data-atlas-node-id]") ?? [])
+        .find((element) => element.dataset.atlasNodeId === nodeId);
+      if (!stage || !target) {
+        return;
+      }
+      const stageBounds = stage.getBoundingClientRect();
+      const targetBounds = target.getBoundingClientRect();
+      stage.scrollLeft += targetBounds.left - stageBounds.left - (stage.clientWidth - targetBounds.width) / 2;
+      stage.scrollTop += targetBounds.top - stageBounds.top - (stage.clientHeight - targetBounds.height) / 2;
+      rememberCanvasView();
+    });
+  }
+
   function rememberCanvasView() {
     const stage = stageRef.current;
     if (!stage) return;
@@ -142,6 +179,8 @@ export function useCanvasViewport(mode: string) {
     stopPan,
     handleWheel,
     zoomAtlas,
+    fitCanvas,
+    focusCanvasNode,
     resetAtlasView,
     resetAtlasZoom,
     rememberCanvasView,

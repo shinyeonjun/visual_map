@@ -132,7 +132,9 @@ function successStatus(label: string, message: string | null): OperationStatus |
 }
 
 function isNonSuccessStatus(value: string): boolean {
-  return value.includes("목록이 비어 있음") || value.includes("코드/DB 읽기 결과 필요") || value.includes("캔버스 항목 없음");
+  return (
+    value.includes("목록이 비어 있음") || value.includes("코드/DB 읽기 결과 필요") || value.includes("캔버스 항목 없음")
+  );
 }
 
 export function repoPathErrorFor(value: string, sourceMode: RepoSourceMode): string | null {
@@ -158,8 +160,7 @@ function isRemoteUrl(value: string): boolean {
 
 export function githubRepoName(value: string): string | null {
   const trimmed = value.trim().replace(/\/$/, "");
-  const path =
-    trimmed.match(/^https:\/\/github\.com\/(.+)$/i)?.[1] ?? trimmed.match(/^git@github\.com:(.+)$/i)?.[1];
+  const path = trimmed.match(/^https:\/\/github\.com\/(.+)$/i)?.[1] ?? trimmed.match(/^git@github\.com:(.+)$/i)?.[1];
   if (!path) {
     return null;
   }

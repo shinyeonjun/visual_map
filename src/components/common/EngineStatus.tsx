@@ -7,7 +7,11 @@ function engineForRole(registry: EngineRegistry | null, role: EngineRole): Engin
   return registry?.engines.find((engine) => engine.role === role) ?? null;
 }
 
-function engineState(registry: EngineRegistry | null, engine: EngineAvailability | null, error: string | null): EngineState {
+function engineState(
+  registry: EngineRegistry | null,
+  engine: EngineAvailability | null,
+  error: string | null,
+): EngineState {
   if (error) {
     return "error";
   }
@@ -27,7 +31,12 @@ function engineText(state: EngineState, missingText?: string): string {
   return state === "error" ? "오류" : "확인 전";
 }
 
-function engineTitle(registry: EngineRegistry | null, engine: EngineAvailability | null, error: string | null, missingTitle?: string): string {
+function engineTitle(
+  registry: EngineRegistry | null,
+  engine: EngineAvailability | null,
+  error: string | null,
+  missingTitle?: string,
+): string {
   if (error) {
     return error;
   }
@@ -69,13 +78,14 @@ export function EngineStatus({
   const displayState = state === "missing" && missingText ? "snapshot" : state;
   const detail = error ?? engine?.error ?? null;
   const StatusIcon = state === "ok" ? CircleCheck : state === "pending" ? Clock3 : CircleAlert;
-  const integrityLabel = engine?.integrity === "development"
-    ? "개발용"
-    : engine?.integrity === "development-internal"
-      ? "내부전용"
-    : engine?.integrity === "unpublished"
-      ? "배포대기"
-      : null;
+  const integrityLabel =
+    engine?.integrity === "development"
+      ? "개발용"
+      : engine?.integrity === "development-internal"
+        ? "내부전용"
+        : engine?.integrity === "unpublished"
+          ? "배포대기"
+          : null;
 
   return (
     <span
@@ -86,10 +96,12 @@ export function EngineStatus({
     >
       <StatusIcon size={12} />
       {label}
-      <b className={displayState}>
-        {integrityLabel ?? engineText(state, missingText)}
-      </b>
-      {detail ? <span className="engine-status-detail" role="alert">{detail}</span> : null}
+      <b className={displayState}>{integrityLabel ?? engineText(state, missingText)}</b>
+      {detail ? (
+        <span className="engine-status-detail" role="alert">
+          {detail}
+        </span>
+      ) : null}
     </span>
   );
 }

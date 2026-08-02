@@ -1,16 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import "./styles/index.css";
 import type { AppPaths } from "./components/common/DevDiagnostics";
 import { DevDiagnostics } from "./components/common/DevDiagnostics";
-import { WorkbenchView } from "./components/workbench/WorkbenchView";
 import { currentOperationStatus, repoPathErrorFor } from "./app/appState";
 import { toUserError } from "./app/operationStatus";
-import {
-  validateInventoryBootstrap,
-  validateWorkspace,
-  validateWorkspaceAnalysisResult,
-} from "./app/runtimeContracts";
+import { validateInventoryBootstrap, validateWorkspace, validateWorkspaceAnalysisResult } from "./app/runtimeContracts";
 import { buildDbProfileControls, buildVisualMapControls, buildWorkspaceControls } from "./app/controlBuilders";
 import { hasTauriRuntime } from "./app/tauriRuntime";
 import { useCodeInventory } from "./hooks/useCodeInventory";
@@ -20,28 +15,33 @@ import { useVisualMap } from "./hooks/useVisualMap";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { codeInventoryFromSnapshot, dbInventoryFromSnapshot } from "./inventory/snapshotRestore";
 import { dbProfileSourceUsesPath, codeInventoryItemCount } from "./types/workspace";
-import type {
-  InitializeWorkspaceAnalysisRequest,
-  SaveDbProfileRequest,
-} from "./types/workspace";
-import { prepareSearchIndex } from "./visual/search";
+import type { InitializeWorkspaceAnalysisRequest, SaveDbProfileRequest } from "./types/workspace";
+import { scheduleSearchIndex } from "./visual/search";
 import type { AnalysisProgress, AnalysisSetupChoice } from "./components/workbench/ProjectAnalysisSetupModal";
+
+const WorkbenchView = lazy(() =>
+  import("./components/workbench/WorkbenchView").then(({ WorkbenchView: view }) => ({ default: view })),
+);
 
 function App() {
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
   const [appPaths, setAppPaths] = useState<AppPaths | null>(null);
   const [appPathError, setAppPathError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [busyNotice, setBusyNotice] = useState<string | null>(null);
   const [latestOperationAction, setLatestOperationAction] = useState<string | null>(null);
   const [snapshotRestoring, setSnapshotRestoring] = useState(false);
   const [snapshotRecoveryNotice, setSnapshotRecoveryNotice] = useState<string | null>(null);
-  const [analysisSetupWorkspace, setAnalysisSetupWorkspace] = useState<import("./types/workspace").Workspace | null>(null);
+  const [analysisSetupWorkspace, setAnalysisSetupWorkspace] = useState<import("./types/workspace").Workspace | null>(
+    null,
+  );
   const [analysisInitializing, setAnalysisInitializing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ percent: 0, label: "분석 준비 중" });
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [dbConnectionError, setDbConnectionError] = useState<string | null>(null);
   const [snapshotBootstrappedWorkspaceId, setSnapshotBootstrappedWorkspaceId] = useState<string | null>(null);
   const busyActionRef = useRef<string | null>(null);
+  const busyNoticeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!import.meta.env.DEV || !hasTauriRuntime()) {
@@ -53,12 +53,30 @@ function App() {
       .catch((error: unknown) => setAppPathError(String(error)));
   }, []);
 
+  useEffect(
+    () => () => {
+      if (busyNoticeTimerRef.current !== null) {
+        window.clearTimeout(busyNoticeTimerRef.current);
+      }
+    },
+    [],
+  );
+
   async function withBusy(action: string, task: () => Promise<void>) {
     if (busyActionRef.current) {
+      setBusyNotice(`현재 ${busyActionLabel(busyActionRef.current)} 작업이 진행 중입니다. 완료 후 다시 시도하세요.`);
+      if (busyNoticeTimerRef.current !== null) {
+        window.clearTimeout(busyNoticeTimerRef.current);
+      }
+      busyNoticeTimerRef.current = window.setTimeout(() => {
+        setBusyNotice(null);
+        busyNoticeTimerRef.current = null;
+      }, 2600);
       return;
     }
 
     busyActionRef.current = action;
+    setBusyNotice(null);
     setLatestOperationAction(action);
     setBusyAction(action);
     try {
@@ -105,8 +123,7 @@ function App() {
     if (!code.codeInventory && !db.dbInventory) {
       return;
     }
-    const timer = window.setTimeout(() => prepareSearchIndex(code.codeInventory, db.dbInventory), 0);
-    return () => window.clearTimeout(timer);
+    return scheduleSearchIndex(code.codeInventory, db.dbInventory);
   }, [code.codeInventory, db.dbInventory]);
 
   useLayoutEffect(() => {
@@ -169,15 +186,14 @@ function App() {
     return () => {
       cancelled = true;
     };
+    // The workspace id is the lifecycle boundary. Control objects are recreated by their hooks
+    // and adding them here would re-run snapshot restoration on every inventory/state update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaces.currentWorkspace?.id]);
 
   useEffect(() => {
     const workspaceId = workspaces.currentWorkspace?.id;
-    if (
-      !workspaceId ||
-      snapshotBootstrappedWorkspaceId !== workspaceId ||
-      !hasTauriRuntime()
-    ) {
+    if (!workspaceId || snapshotBootstrappedWorkspaceId !== workspaceId || !hasTauriRuntime()) {
       return;
     }
     let cancelled = false;
@@ -205,9 +221,12 @@ function App() {
       cancelled = true;
       window.removeEventListener("focus", refreshFreshness);
     };
+    // visual is a hook result object; the workspace/bootstrap ids intentionally gate this refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshotBootstrappedWorkspaceId, workspaces.currentWorkspace?.id]);
 
-  const activeBusyAction = busyAction ?? (analysisInitializing ? "workspace-initialize" : snapshotRestoring ? "snapshot-restore" : null);
+  const activeBusyAction =
+    busyAction ?? (analysisInitializing ? "workspace-initialize" : snapshotRestoring ? "snapshot-restore" : null);
   const busy = Boolean(activeBusyAction);
   const repoPathError = repoPathErrorFor(workspaces.repoPath, workspaces.repoSourceMode);
   const currentStatus = currentOperationStatus({
@@ -303,7 +322,10 @@ function App() {
         }
         await workspaces.refreshWorkspaces(result.workspace.id);
 
-        const partialErrors = [choice !== "db-only" ? result.codeError : null, connectDb ? result.dbError : null].filter(Boolean);
+        const partialErrors = [
+          choice !== "db-only" ? result.codeError : null,
+          connectDb ? result.dbError : null,
+        ].filter(Boolean);
         if (!result.snapshotSaved || partialErrors.length > 0) {
           setAnalysisError(partialErrors.join("\n") || "통합 스냅샷을 저장하지 못했습니다");
           return;
@@ -384,36 +406,67 @@ function App() {
     busyAction: activeBusyAction,
   });
   const visualMapControls = buildVisualMapControls({ visual, code, db });
-  const devSlot = import.meta.env.DEV && hasTauriRuntime() ? <DevDiagnostics paths={appPaths} error={appPathError} /> : null;
+  const devSlot =
+    import.meta.env.DEV && hasTauriRuntime() ? <DevDiagnostics paths={appPaths} error={appPathError} /> : null;
 
   return (
-    <WorkbenchView
-      sourceManagerOpen={sourceManagerOpen}
-      setSourceManagerOpen={setSourceManagerOpen}
-      workspaceControls={workspaceControls}
-      dbProfileControls={dbProfileControls}
-      visualMapControls={visualMapControls}
-      engineRegistry={engineRegistry}
-      engineError={engineError}
-      devSlot={devSlot}
-      analysisSetupWorkspace={analysisSetupWorkspace}
-      analysisInitializing={analysisInitializing}
-      analysisProgress={analysisProgress}
-      analysisError={analysisError}
-      onStartAnalysis={startWorkspaceAnalysis}
-      onCancelAnalysis={() => setAnalysisSetupWorkspace(null)}
-      onOpenAnalysis={() => {
-        if (workspaces.currentWorkspace) {
-          setAnalysisError(null);
-          setAnalysisProgress({ percent: 0, label: "분석 준비 중" });
-          setAnalysisSetupWorkspace(workspaces.currentWorkspace);
-        }
-      }}
-      onSaveDbConnection={saveDbConnection}
-      dbConnectionError={dbConnectionError}
-      onOpenDbConnection={() => setDbConnectionError(null)}
-    />
+    <Suspense fallback={<WorkbenchLoadingState />}>
+      <WorkbenchView
+        sourceManagerOpen={sourceManagerOpen}
+        setSourceManagerOpen={setSourceManagerOpen}
+        workspaceControls={workspaceControls}
+        dbProfileControls={dbProfileControls}
+        visualMapControls={visualMapControls}
+        engineRegistry={engineRegistry}
+        engineError={engineError}
+        devSlot={devSlot}
+        busyNotice={busyNotice}
+        analysisSetupWorkspace={analysisSetupWorkspace}
+        analysisInitializing={analysisInitializing}
+        analysisProgress={analysisProgress}
+        analysisError={analysisError}
+        onStartAnalysis={startWorkspaceAnalysis}
+        onCancelAnalysis={() => setAnalysisSetupWorkspace(null)}
+        onOpenAnalysis={() => {
+          if (workspaces.currentWorkspace) {
+            setAnalysisError(null);
+            setAnalysisProgress({ percent: 0, label: "분석 준비 중" });
+            setAnalysisSetupWorkspace(workspaces.currentWorkspace);
+          }
+        }}
+        onSaveDbConnection={saveDbConnection}
+        dbConnectionError={dbConnectionError}
+        onOpenDbConnection={() => setDbConnectionError(null)}
+      />
+    </Suspense>
   );
+}
+
+function WorkbenchLoadingState() {
+  return (
+    <main className="workspace-initializing app-loading" aria-busy="true" aria-live="polite">
+      <strong>작업 화면을 준비하고 있습니다</strong>
+      <span>프로젝트 분석 결과와 시각화 화면을 불러옵니다.</span>
+    </main>
+  );
+}
+
+function busyActionLabel(action: string): string {
+  const labels: Record<string, string> = {
+    "workspace-create": "프로젝트 생성",
+    "workspace-open": "프로젝트 열기",
+    "workspace-refresh": "프로젝트 새로 읽기",
+    "workspace-repair": "프로젝트 복구",
+    "workspace-delete": "프로젝트 삭제",
+    "workspace-clone": "저장소 복제",
+    "code-index": "코드 분석",
+    "db-save": "DB 연결 저장",
+    "db-index": "DB 분석",
+    "db-delete": "DB 연결 삭제",
+    "workspace-initialize": "프로젝트 분석",
+    "snapshot-restore": "저장 결과 복원",
+  };
+  return labels[action] ?? "이전 작업";
 }
 
 export default App;

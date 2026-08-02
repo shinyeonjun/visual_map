@@ -48,6 +48,7 @@ function Invoke-CodeTool([string]$Tool, [hashtable]$Payload) {
 function Index-Fixture([string]$Name, [string]$Path) {
     $project = "evidence-$Name"
     $env:CBM_CACHE_DIR = Join-Path $cacheRoot $Name
+    $env:CODE_MEMORY_CACHE_ROOT = Join-Path $cacheRoot $Name
     $env:CBM_ALLOWED_ROOT = [IO.Path]::GetFullPath($Path)
     $index = Invoke-CodeTool "index_repository" @{ repo_path = $Path; mode = "full"; name = $project; persistence = $false }
     return [string]$index.project
@@ -92,6 +93,7 @@ try {
 }
 finally {
     Remove-Item Env:CBM_CACHE_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:CODE_MEMORY_CACHE_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:CBM_ALLOWED_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:CODE_MEMORY_PACKS_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:CODE_MEMORY_PROVIDERS_ROOT -ErrorAction SilentlyContinue

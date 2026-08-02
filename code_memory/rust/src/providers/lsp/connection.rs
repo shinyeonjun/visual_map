@@ -3,7 +3,7 @@ use super::{
     lsp_item_symbol, lsp_max_requests, lsp_message_length_allowed, lsp_session_timeout,
     parse_lsp_range, uri_to_relative_path, LspSymbol, NEXT_LSP_ID,
 };
-use crate::Diagnostic;
+use crate::{Diagnostic, DiagnosticCode};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -305,6 +305,7 @@ impl LspConnection {
                 Some(Diagnostic {
                     language: diagnostic_language(&path, language),
                     level,
+                    code: DiagnosticCode::ProviderDiagnostic,
                     message,
                     path: Some(path),
                     line: diagnostic.line,

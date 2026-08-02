@@ -89,7 +89,8 @@ pub fn trace_relationships_bounded(
             remaining_budget,
         )?;
         if max_paths != usize::MAX {
-            remaining_budget -= edges.len();
+            debug_assert!(edges.len() <= remaining_budget);
+            remaining_budget = remaining_budget.saturating_sub(edges.len());
         }
         truncated |= has_more_edges;
 
