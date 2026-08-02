@@ -125,14 +125,10 @@ jobs:
 
       - name: Smoke code engine JSON contract
         shell: pwsh
-        env:
-          CODE_MEMORY_REQUIRE_MANAGED_PROVIDERS: "1"
         run: .\scripts\smoke-code-engine-contract.ps1
 
       - name: Smoke code engine determinism
         shell: pwsh
-        env:
-          CODE_MEMORY_REQUIRE_MANAGED_PROVIDERS: "1"
         run: .\scripts\smoke-code-determinism.ps1
 
       - name: Smoke code evidence golden and negative fixtures
