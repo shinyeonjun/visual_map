@@ -23,6 +23,9 @@
       "developmentArtifacts": [
         {
             "sha256": "9D10A85A52F3DF198D4AA03816742CADD9D83602E37FD71D9A74927638DE342B"
+        },
+        {
+            "sha256": "58E43BDD5A7CFFC1A0CD9321E47C05ADECA9A6CFD4C422AB9F3F5A828003DDB9"
         }
       ]
     },
