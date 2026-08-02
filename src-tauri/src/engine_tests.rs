@@ -315,6 +315,22 @@ fn redaction_masks_json_and_spaced_key_values() {
 }
 
 #[test]
+fn redaction_preserves_json_with_secret_like_code_paths() {
+    let input = r#"{
+        "name": "forgot-password:module",
+        "password": null,
+        "token": "secret-token",
+        "children": [{"path": "accounts/reset-password/<token>/"}]
+    }"#;
+    let redacted = redact_secrets(input);
+    let value = serde_json::from_str::<serde_json::Value>(&redacted).unwrap();
+
+    assert_eq!(value["password"], "[REDACTED]");
+    assert_eq!(value["token"], "[REDACTED]");
+    assert!(value["children"][0]["path"].is_string());
+}
+
+#[test]
 fn command_runner_captures_process_output() {
     let result = run_command(
         &std::env::current_exe().unwrap(),

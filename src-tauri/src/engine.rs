@@ -797,6 +797,54 @@ fn collect_process_streams(
 }
 
 pub(crate) fn redact_secrets(input: &str) -> String {
+    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(input) {
+        redact_json_value(&mut value);
+        if let Ok(redacted) = serde_json::to_string(&value) {
+            return redacted;
+        }
+    }
+
+    redact_unstructured_secrets(input)
+}
+
+const SECRET_KEYS: &[&str] = &[
+    "password",
+    "passwd",
+    "pwd",
+    "token",
+    "secret",
+    "api_key",
+    "apikey",
+    "access_token",
+];
+
+fn redact_json_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (key, value) in fields.iter_mut() {
+                if SECRET_KEYS
+                    .iter()
+                    .any(|secret_key| key.eq_ignore_ascii_case(secret_key))
+                {
+                    *value = serde_json::Value::String("[REDACTED]".to_string());
+                } else {
+                    redact_json_value(value);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_json_value(item);
+            }
+        }
+        serde_json::Value::String(text) => {
+            *text = redact_unstructured_secrets(text);
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
+}
+
+fn redact_unstructured_secrets(input: &str) -> String {
     let mut redacted = redact_key_values(input);
     redacted = redact_url_passwords(&redacted);
     redacted = redact_oracle_connect_strings(&redacted);
@@ -804,19 +852,9 @@ pub(crate) fn redact_secrets(input: &str) -> String {
 }
 
 fn redact_key_values(input: &str) -> String {
-    let secret_keys = [
-        "password",
-        "passwd",
-        "pwd",
-        "token",
-        "secret",
-        "api_key",
-        "apikey",
-        "access_token",
-    ];
     let mut output = input.to_string();
 
-    for key in secret_keys {
+    for key in SECRET_KEYS {
         let mut search_start = 0;
         loop {
             let lower = output.to_ascii_lowercase();

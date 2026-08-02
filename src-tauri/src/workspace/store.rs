@@ -299,16 +299,44 @@ pub(crate) fn object_bool(value: &serde_json::Value, keys: &[&str]) -> bool {
 }
 
 pub(crate) fn engine_json_value(stdout: &str) -> Option<serde_json::Value> {
-    serde_json::from_str(stdout).ok().or_else(|| {
-        stdout.lines().find_map(|line| {
-            let line = line.trim();
-            if line.starts_with('{') || line.starts_with('[') {
-                serde_json::from_str(line).ok()
-            } else {
-                None
-            }
+    let trimmed = stdout.trim_start_matches('\u{feff}').trim();
+    serde_json::from_str(trimmed)
+        .ok()
+        .or_else(|| {
+            let bytes = stdout.as_bytes();
+            bytes
+                .iter()
+                .enumerate()
+                .filter(|(offset, byte)| {
+                    matches!(byte, b'{' | b'[') && json_starts_at_line(bytes, *offset)
+                })
+                .find_map(|(offset, _)| parse_json_prefix(&bytes[offset..]))
         })
-    })
+        .or_else(|| {
+            let bytes = stdout.as_bytes();
+            bytes
+                .iter()
+                .enumerate()
+                .filter(|(_, byte)| matches!(byte, b'{' | b'['))
+                .find_map(|(offset, _)| parse_json_prefix(&bytes[offset..]))
+        })
+}
+
+fn json_starts_at_line(bytes: &[u8], offset: usize) -> bool {
+    let line_start = bytes[..offset]
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
+    bytes[line_start..offset]
+        .iter()
+        .all(|byte| byte.is_ascii_whitespace())
+}
+
+fn parse_json_prefix(bytes: &[u8]) -> Option<serde_json::Value> {
+    serde_json::Deserializer::from_slice(bytes)
+        .into_iter::<serde_json::Value>()
+        .next()
+        .and_then(Result::ok)
 }
 
 pub(crate) fn write_workspace(workspaces_dir: &Path, workspace: &Workspace) -> Result<(), String> {

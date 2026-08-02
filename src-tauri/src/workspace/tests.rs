@@ -1304,6 +1304,24 @@ fn engine_json_value_accepts_log_prefixed_json_line() {
 }
 
 #[test]
+fn engine_json_value_accepts_pretty_json_between_engine_logs() {
+    let value = engine_json_value(
+        "level=info stage=architecture\n{\n  \"schema\": \"code-memory.architecture-index.v3\",\n  \"nodes\": []\n}\ntiming stage=complete elapsed_ms=42\n",
+    )
+    .unwrap();
+
+    assert_eq!(value["schema"], "code-memory.architecture-index.v3");
+    assert!(value["nodes"].as_array().is_some_and(Vec::is_empty));
+}
+
+#[test]
+fn engine_json_value_accepts_bom_and_same_line_prefix() {
+    let value = engine_json_value("\u{feff}engine: {\"status\":\"ok\"}").unwrap();
+
+    assert_eq!(value["status"], "ok");
+}
+
+#[test]
 fn code_inventory_extracts_items_from_search_results() {
     let routes = serde_json::json!({
         "results": [
