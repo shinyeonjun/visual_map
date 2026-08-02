@@ -4,7 +4,7 @@ import type { RelationView } from "../visual/visualMapModel";
 
 export const DEFAULT_CHANGE_INTENT: ChangeIntent = { kind: "rename", value: null };
 
-export type VisualMapUiState = {
+type VisualMapUiState = {
   mapMode: string;
   compositionFocusIds: string[];
   relationView: RelationView;
@@ -17,7 +17,7 @@ export type VisualMapUiState = {
   selectedVisualEdge: VisualEdge | null;
 };
 
-export type VisualMapUiAction =
+type VisualMapUiAction =
   | { type: "set-map-mode"; value: string }
   | { type: "set-composition-focus-ids"; value: string[] }
   | { type: "set-relation-view"; value: RelationView }

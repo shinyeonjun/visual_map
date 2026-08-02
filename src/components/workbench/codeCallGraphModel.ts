@@ -96,7 +96,7 @@ export type CallGraphPlaced = {
   y: number;
 };
 
-export type CodeCallGraphLayout = {
+type CodeCallGraphLayout = {
   width: number;
   height: number;
   focus: { x: number; y: number };
