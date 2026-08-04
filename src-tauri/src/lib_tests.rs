@@ -22,6 +22,15 @@ mod analysis_source_mode_tests {
 
         assert_eq!(request.analysis_mode, AnalysisSourceMode::CodeOnly);
     }
+
+    #[test]
+    fn combined_mode_promotes_only_when_both_required_sources_are_ready() {
+        assert!(AnalysisSourceMode::CodeOnly.required_sources_ready(true, false));
+        assert!(AnalysisSourceMode::DbOnly.required_sources_ready(false, true));
+        assert!(AnalysisSourceMode::CodeAndDb.required_sources_ready(true, true));
+        assert!(!AnalysisSourceMode::CodeAndDb.required_sources_ready(true, false));
+        assert!(!AnalysisSourceMode::CodeAndDb.required_sources_ready(false, true));
+    }
 }
 
 #[cfg(test)]

@@ -370,6 +370,7 @@ fn initialize_workspace_analysis(
     let code = code_result.and_then(Result::ok);
     let mut db = db_result.and_then(Result::ok);
     let mut workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
+    let previous_workspace = workspace.clone();
     let mut code_inventory = None;
     let mut db_inventory = None;
 
@@ -442,9 +443,11 @@ fn initialize_workspace_analysis(
         }
     }
 
-    let has_successful_source = code_inventory.is_some() || db_inventory.is_some();
+    let required_sources_ready = request
+        .analysis_mode
+        .required_sources_ready(code_inventory.is_some(), db_inventory.is_some());
     let mut snapshot_saved = false;
-    if has_successful_source {
+    if required_sources_ready {
         let previous_snapshot =
             atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace.id)?;
         let mut merged = previous_snapshot.clone();
@@ -503,6 +506,17 @@ fn initialize_workspace_analysis(
                 "통합 스냅샷 검증 중",
             );
             enrich_integrated_snapshot_code_evidence(&workspace, &mut snapshot);
+            if let Err(error) = validate_candidate_sources(&snapshot, request.analysis_mode) {
+                if let Some(result) = code.as_ref() {
+                    workspace::cleanup_code_project(
+                        &app_data_dir,
+                        &registry,
+                        &workspace_id,
+                        result.workspace.code_project.as_deref(),
+                    );
+                }
+                return Err(error.into());
+            }
             if let Err(error) = atlas::save_inventory_snapshot(&app_data_dir, &snapshot) {
                 if let Some(result) = code.as_ref() {
                     workspace::cleanup_code_project(
@@ -559,15 +573,31 @@ fn initialize_workspace_analysis(
                 "분석과 시각화 데이터 준비 완료",
             );
         }
+    } else {
+        if let Some(result) = code.as_ref().filter(|result| result.run.ok) {
+            workspace::cleanup_code_project(
+                &app_data_dir,
+                &registry,
+                &workspace_id,
+                result.workspace.code_project.as_deref(),
+            );
+        }
+        workspace = previous_workspace;
     }
 
     let mut code = code;
     if let Some(result) = code.as_mut() {
+        if !snapshot_saved {
+            result.workspace = workspace.clone();
+        }
         if let Some(inventory) = result.inventory.take() {
             result.inventory = Some(bounded_code_inventory(inventory));
         }
     }
     if let Some(result) = db.as_mut() {
+        if !snapshot_saved {
+            result.workspace = workspace.clone();
+        }
         if let Some(inventory) = db_inventory {
             result.inventory = Some(bounded_db_inventory(inventory));
         }
@@ -581,4 +611,17 @@ fn initialize_workspace_analysis(
         db_error,
         snapshot_saved,
     })
+}
+
+fn validate_candidate_sources(
+    snapshot: &InventorySnapshot,
+    mode: AnalysisSourceMode,
+) -> Result<(), String> {
+    if mode.includes_code() && snapshot.metadata.code.is_none() {
+        return Err("완성 후보에 코드 분석 결과가 없습니다".to_string());
+    }
+    if mode.includes_db() && snapshot.metadata.db.is_none() {
+        return Err("완성 후보에 DB 분석 결과가 없습니다".to_string());
+    }
+    Ok(())
 }

@@ -66,6 +66,10 @@ impl AnalysisSourceMode {
     fn includes_db(self) -> bool {
         matches!(self, Self::DbOnly | Self::CodeAndDb)
     }
+
+    fn required_sources_ready(self, code_ready: bool, db_ready: bool) -> bool {
+        (!self.includes_code() || code_ready) && (!self.includes_db() || db_ready)
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
