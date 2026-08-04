@@ -6,7 +6,7 @@ use std::env;
 use std::fs;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod architecture;
@@ -35,6 +35,18 @@ pub(crate) use source::{
 
 #[cfg(test)]
 mod tests;
+
+fn emit_progress(stage: &str, completed: usize, total: usize, label: &str) {
+    eprintln!(
+        "@visual-map-progress {}",
+        serde_json::json!({
+            "stage": stage,
+            "completed": completed,
+            "total": total.max(1),
+            "label": label,
+        })
+    );
+}
 
 fn main() {
     if let Err(error) = run() {

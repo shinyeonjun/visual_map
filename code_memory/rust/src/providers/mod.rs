@@ -22,7 +22,6 @@ pub(crate) use command::{compile_database_dir, has_compile_context, managed_prov
 pub(crate) use lsp::*;
 pub(crate) use process::{provider_timeout, run_bounded_command, terminate_process_tree};
 pub(crate) use scheduler::{
-    combined_job_files, max_parallel_providers, max_provider_weight, merge_provider_jobs,
-    provider_job_weight, ProviderJob,
+    combined_job_files, merge_provider_jobs, run_provider_jobs, ProviderJob,
 };
 pub(crate) use scip::*;

@@ -33,8 +33,26 @@ pub(crate) fn run_command_with_env(
     timeout: Duration,
     envs: &[(&str, &str)],
 ) -> Result<EngineRunResult, String> {
+    run_command_with_env_observer(
+        executable,
+        args,
+        EngineRunPolicy::fixed(timeout),
+        envs,
+        None,
+    )
+}
+
+pub(crate) fn run_command_with_env_observer(
+    executable: &Path,
+    args: &[&str],
+    policy: EngineRunPolicy,
+    envs: &[(&str, &str)],
+    observer: Option<EngineObserver>,
+) -> Result<EngineRunResult, String> {
     let started_at = timestamp();
-    let deadline = Instant::now() + timeout;
+    let process_started = Instant::now();
+    let deadline = process_started + policy.hard_timeout;
+    let last_activity_ms = Arc::new(AtomicU64::new(0));
     let cancellation = envs
         .iter()
         .find(|(key, _)| *key == "BACKEND_VISUAL_MAP_OPERATION_ID")
@@ -73,10 +91,30 @@ pub(crate) fn run_command_with_env(
     let output_limit_reached = Arc::new(AtomicBool::new(false));
     let stdout_limit = Arc::clone(&output_limit_reached);
     let stderr_limit = Arc::clone(&output_limit_reached);
-    let stdout_reader =
-        thread::spawn(move || read_process_stream_with_signal(stdout, stdout_limit));
-    let stderr_reader =
-        thread::spawn(move || read_process_stream_with_signal(stderr, stderr_limit));
+    let stdout_activity = Arc::clone(&last_activity_ms);
+    let stderr_activity = Arc::clone(&last_activity_ms);
+    let stdout_observer = observer.clone();
+    let stderr_observer = observer;
+    let stdout_reader = thread::spawn(move || {
+        read_process_stream_with_signal(
+            stdout,
+            stdout_limit,
+            stdout_activity,
+            process_started,
+            stdout_observer,
+            "stdout",
+        )
+    });
+    let stderr_reader = thread::spawn(move || {
+        read_process_stream_with_signal(
+            stderr,
+            stderr_limit,
+            stderr_activity,
+            process_started,
+            stderr_observer,
+            "stderr",
+        )
+    });
 
     loop {
         let status = match child.try_wait() {
@@ -144,6 +182,31 @@ pub(crate) fn run_command_with_env(
             });
         }
 
+        let elapsed_ms = process_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        let idle_ms = policy.idle_timeout.as_millis().min(u128::from(u64::MAX)) as u64;
+        if elapsed_ms.saturating_sub(last_activity_ms.load(Ordering::Acquire)) >= idle_ms {
+            terminate_engine_process_tree(&mut child);
+            let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
+            let stderr = String::from_utf8_lossy(&stderr);
+            let message = format!(
+                "읽기 도구에서 {}초 동안 진행 신호가 없어 중단했습니다",
+                policy.idle_timeout.as_secs()
+            );
+            let stderr = if stderr.trim().is_empty() {
+                message
+            } else {
+                format!("{}\n{message}", stderr.trim_end())
+            };
+            return Ok(EngineRunResult {
+                ok: false,
+                stdout: redact_secrets(&String::from_utf8_lossy(&stdout)),
+                stderr: redact_secrets(&stderr),
+                exit_code: None,
+                started_at,
+                finished_at: timestamp(),
+            });
+        }
+
         thread::sleep(Duration::from_millis(10));
     }
 }
@@ -201,8 +264,19 @@ struct CapturedProcessStream {
 fn read_process_stream_with_signal(
     stream: impl Read,
     overflow: Arc<AtomicBool>,
+    activity: Arc<AtomicU64>,
+    started: Instant,
+    observer: Option<EngineObserver>,
+    stream_name: &'static str,
 ) -> Result<CapturedProcessStream, String> {
-    read_process_stream_with_limit_and_signal(stream, MAX_ENGINE_STREAM_BYTES, Some(overflow))
+    read_process_stream_with_limit_and_signal(
+        stream,
+        MAX_ENGINE_STREAM_BYTES,
+        Some(overflow),
+        Some((activity, started)),
+        observer,
+        stream_name,
+    )
 }
 
 #[cfg(test)]
@@ -210,17 +284,21 @@ fn read_process_stream_with_limit(
     stream: impl Read,
     limit: usize,
 ) -> Result<CapturedProcessStream, String> {
-    read_process_stream_with_limit_and_signal(stream, limit, None)
+    read_process_stream_with_limit_and_signal(stream, limit, None, None, None, "test")
 }
 
 fn read_process_stream_with_limit_and_signal(
     mut stream: impl Read,
     limit: usize,
     overflow: Option<Arc<AtomicBool>>,
+    activity: Option<(Arc<AtomicU64>, Instant)>,
+    observer: Option<EngineObserver>,
+    stream_name: &'static str,
 ) -> Result<CapturedProcessStream, String> {
     let mut output = Vec::with_capacity(limit.min(64 * 1024));
     let mut buffer = [0u8; 64 * 1024];
     let mut exceeded_limit = false;
+    let mut pending_line = Vec::new();
 
     loop {
         let read = stream
@@ -228,6 +306,16 @@ fn read_process_stream_with_limit_and_signal(
             .map_err(|error| error.to_string())?;
         if read == 0 {
             break;
+        }
+        if let Some((activity, started)) = &activity {
+            activity.store(
+                started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                Ordering::Release,
+            );
+        }
+        if observer.is_some() {
+            pending_line.extend_from_slice(&buffer[..read]);
+            notify_progress_lines(&mut pending_line, observer.as_ref(), stream_name, false);
         }
         let remaining = limit.saturating_sub(output.len());
         let stored = remaining.min(read);
@@ -241,10 +329,46 @@ fn read_process_stream_with_limit_and_signal(
         }
     }
 
+    notify_progress_lines(&mut pending_line, observer.as_ref(), stream_name, true);
+
     Ok(CapturedProcessStream {
         bytes: output,
         exceeded_limit,
     })
+}
+
+fn notify_progress_lines(
+    pending: &mut Vec<u8>,
+    observer: Option<&EngineObserver>,
+    stream: &'static str,
+    flush: bool,
+) {
+    let Some(observer) = observer else {
+        return;
+    };
+    loop {
+        let boundary = pending.iter().position(|byte| *byte == b'\n');
+        let Some(boundary) = boundary.or_else(|| flush.then_some(pending.len())) else {
+            if pending.len() > 16 * 1024 {
+                pending.clear();
+            }
+            return;
+        };
+        let line = String::from_utf8_lossy(&pending[..boundary])
+            .trim_end_matches('\r')
+            .to_string();
+        let consumed = (boundary + usize::from(boundary < pending.len())).min(pending.len());
+        pending.drain(..consumed);
+        if line.starts_with("@visual-map-progress ") || line.starts_with("timing stage=") {
+            observer(EngineProcessEvent {
+                stream,
+                line: redact_secrets(&line),
+            });
+        }
+        if pending.is_empty() {
+            return;
+        }
+    }
 }
 
 fn collect_process_streams(

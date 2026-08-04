@@ -13,7 +13,7 @@ mod store;
 pub(crate) use code::focused_code_search_with_operation;
 pub(crate) use code::{
     cleanup_code_project, cleanup_previous_code_project, code_inventory,
-    index_code_repository_without_persisting, route_binding_id,
+    index_code_repository_without_persisting_with_observer, route_binding_id,
 };
 pub(crate) use db::{
     db_inventory, delete_db_profile, index_db_profile_without_persisting, save_db_profile,
@@ -41,8 +41,8 @@ pub(crate) use code::{
 };
 #[cfg(test)]
 pub(crate) use codebase_memory::{
-    focused_code_search_pattern, focused_code_search_payload, index_payload, inventory_nodes_query,
-    parse_focused_code_search_output, CALLS_QUERY, HANDLES_QUERY,
+    focused_code_search_pattern, focused_code_search_payload, index_payload,
+    parse_focused_code_search_output,
 };
 #[cfg(test)]
 pub(crate) use db::{

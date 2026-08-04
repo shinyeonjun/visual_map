@@ -24,7 +24,10 @@
     "files_indexed",
     "files_excluded",
     "files_missing",
-    "status"
+    "status",
+    "provider",
+    "execution",
+    "elapsed_ms"
   ],
   "requiredTimingStages": [
     "file_walk",

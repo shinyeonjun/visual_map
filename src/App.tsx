@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import "./styles/index.css";
 import type { AppPaths } from "./components/common/DevDiagnostics";
@@ -25,6 +26,17 @@ import { scheduleSearchIndex } from "./visual/search";
 import type { AnalysisProgress, AnalysisSetupChoice } from "./features/map/AnalysisSetupDialog";
 
 import { MapWorkspace } from "./features/map/MapWorkspace";
+
+interface AnalysisProgressEvent {
+  workspaceId: string;
+  source: string;
+  stage: string;
+  completed: number;
+  total: number;
+  percent: number;
+  label: string;
+  determinate: boolean;
+}
 
 function App() {
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
@@ -121,6 +133,35 @@ function App() {
     clearVisualMap: visual.clearVisualMap,
     refreshInventorySnapshot,
   });
+
+  useEffect(() => {
+    if (!hasTauriRuntime()) {
+      return;
+    }
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    void listen<AnalysisProgressEvent>("analysis-progress", ({ payload }) => {
+      const activeWorkspaceId = analysisSetupWorkspace?.id ?? workspaces.currentWorkspace?.id;
+      if (!activeWorkspaceId || payload.workspaceId !== activeWorkspaceId) {
+        return;
+      }
+      setAnalysisProgress((current) => ({
+        percent: Math.max(current.percent, Math.min(100, payload.percent)),
+        label: payload.label,
+        determinate: payload.determinate,
+      }));
+    }).then((stop) => {
+      if (disposed) {
+        stop();
+      } else {
+        unsubscribe = stop;
+      }
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [analysisSetupWorkspace?.id, workspaces.currentWorkspace?.id]);
 
   useEffect(() => {
     if (!code.codeInventory && !db.dbInventory) {
@@ -301,7 +342,11 @@ function App() {
           setAnalysisProgress({ percent: 20, label: "DB 연결 준비 완료" });
         }
 
-        setAnalysisProgress({ percent: connectDb ? 30 : 20, label: "코드·DB 구조 분석 중", determinate: false });
+        setAnalysisProgress({
+          percent: connectDb ? 20 : 10,
+          label: "엔진 진행 신호 기다리는 중",
+          determinate: false,
+        });
 
         const request: InitializeWorkspaceAnalysisRequest = {
           workspaceId: configuredWorkspace.id,

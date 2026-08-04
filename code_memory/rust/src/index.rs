@@ -6,6 +6,7 @@ pub(crate) fn index_project(
     providers_root: Option<&Path>,
 ) -> Result<(), String> {
     let root = crate::source::canonical_project_root(root)?;
+    emit_progress("discovery", 3, 100, "소스 파일 찾는 중");
     let pack_root = pack_root
         .canonicalize()
         .unwrap_or_else(|_| pack_root.to_path_buf());
@@ -48,6 +49,7 @@ pub(crate) fn index_project(
     let mut discovered_files = Vec::new();
     let mut cached_analyses = Vec::new();
     let mut planned_units = Vec::new();
+    let mut unit_runs = HashMap::new();
     let mut language_files = HashMap::new();
     let mut all_extensions: HashSet<&str> = LANGUAGES
         .iter()
@@ -59,6 +61,7 @@ pub(crate) fn index_project(
     let file_walk_started = Instant::now();
     let all_source_files =
         collect_files(&root, &all_extensions.iter().copied().collect::<Vec<_>>());
+    emit_progress("manifest", 10, 100, "파일 목록과 변경 범위 계산 중");
     let file_walk_elapsed = file_walk_started.elapsed();
     let source_hash_started = Instant::now();
     let mut source_snapshot = load_source_snapshot_metadata_from_files(&root, &all_source_files);
@@ -111,6 +114,7 @@ pub(crate) fn index_project(
     enforce_managed_provider_policy(&output.provider_provenance, &discovered_files)?;
 
     let project_model_started = Instant::now();
+    emit_progress("project-model", 16, 100, "워크스페이스와 패키지 경계 분석 중");
     let mut typescript_units = Vec::new();
     let mut typescript_call_ranges = Arc::new(HashMap::new());
     if all_source_files.iter().any(|path| {
@@ -172,6 +176,7 @@ pub(crate) fn index_project(
         stage: "typescript_project_model",
         elapsed_ms: project_model_started.elapsed().as_millis(),
     });
+    emit_progress("planning", 24, 100, "언어별 분석 단위 계획 중");
 
     let cache_lookup_started = Instant::now();
     let mut cache_key_elapsed = Duration::ZERO;
@@ -237,7 +242,26 @@ pub(crate) fn index_project(
                     module.project_excluded_files,
                 ));
             }
+            let unit_key = (lang.id.to_string(), module.id.clone());
+            let provider = if matches!(lang.id, "c" | "cpp")
+                && find_tool(lang.tool, providers_root.as_deref()).is_none()
+            {
+                "native-lsp"
+            } else {
+                match lang.provider {
+                    ProviderKind::Scip => "scip",
+                    ProviderKind::Lsp => "native-lsp",
+                }
+            };
             if lang.id == "rust" && files.len() > rust_semantic_file_limit() {
+                unit_runs.insert(
+                    unit_key,
+                    AnalysisUnitRun {
+                        provider,
+                        execution: "skipped",
+                        elapsed_ms: 0,
+                    },
+                );
                 cached_analyses.push(language_excluded(
                     *lang,
                     "native-lsp",
@@ -251,17 +275,15 @@ pub(crate) fn index_project(
                 ));
                 continue;
             }
-            let provider = if matches!(lang.id, "c" | "cpp")
-                && find_tool(lang.tool, providers_root.as_deref()).is_none()
-            {
-                "native-lsp"
-            } else {
-                match lang.provider {
-                    ProviderKind::Scip => "scip",
-                    ProviderKind::Lsp => "native-lsp",
-                }
-            };
             if !provider_ready(lang, providers_root.as_deref()) {
+                unit_runs.insert(
+                    unit_key,
+                    AnalysisUnitRun {
+                        provider,
+                        execution: "unavailable",
+                        elapsed_ms: 0,
+                    },
+                );
                 cached_analyses.push(LanguageAnalysis {
                     language: LanguageOutput {
                         id: lang.id.to_string(),
@@ -319,6 +341,14 @@ pub(crate) fn index_project(
                 cache_deserialize_elapsed +=
                     Duration::from_millis(cache_read.deserialize_ms as u64);
                 if let Some(cached) = cache_read.value {
+                unit_runs.insert(
+                    unit_key.clone(),
+                    AnalysisUnitRun {
+                        provider,
+                        execution: "cache",
+                        elapsed_ms: u128::from(cache_read.io_ms + cache_read.deserialize_ms),
+                    },
+                );
                 let coverage = language_document_coverage(
                     &module.root,
                     *lang,
@@ -441,62 +471,32 @@ pub(crate) fn index_project(
     let jobs = merge_provider_jobs(jobs);
 
     let provider_started = Instant::now();
-    let max_parallel = max_parallel_providers(jobs.len());
-    let max_weight = max_provider_weight();
-    let (result_sender, result_receiver) = mpsc::channel::<(usize, Vec<LanguageAnalysis>)>();
+    emit_progress("providers", 35, 100, "언어 공급자 실행 중");
     let mut analyses = cached_analyses;
-    let mut next_job = 0usize;
-    let mut active_jobs = 0usize;
-    let mut active_weight = 0usize;
-    while next_job < jobs.len() || active_jobs > 0 {
-        while next_job < jobs.len() && active_jobs < max_parallel {
-            let job = jobs[next_job].clone();
-            let weight = provider_job_weight(&job);
-            if active_jobs > 0 && active_weight + weight > max_weight {
-                break;
-            }
-            next_job += 1;
-            active_jobs += 1;
-            active_weight += weight;
-            let sender = result_sender.clone();
-            std::thread::spawn(move || {
-                let members = job.members.clone();
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    analyze_provider_job(job)
-                }))
-                .unwrap_or_else(|panic| {
-                    let message = panic_message(panic);
-                    members
-                        .iter()
-                        .map(|member| {
-                            language_failure(
-                                member.lang,
-                                if matches!(member.lang.id, "c" | "cpp") {
-                                    "native-lsp"
-                                } else {
-                                    match member.lang.provider {
-                                        ProviderKind::Scip => "scip",
-                                        ProviderKind::Lsp => "native-lsp",
-                                    }
-                                },
-                                &member.files,
-                                format!("provider worker panicked: {message}"),
-                            )
-                        })
-                        .collect()
-                });
-                let _ = sender.send((weight, result));
-            });
+    for result in run_provider_jobs(jobs, |completed, total| {
+        emit_progress(
+            "providers",
+            35 + completed.saturating_mul(35) / total.max(1),
+            100,
+            if completed == total {
+                "언어별 의미 분석 병합 중"
+            } else {
+                "언어 공급자 실행 중"
+            },
+        );
+    })? {
+        for unit in result.units {
+            unit_runs.insert(
+                (unit.language, unit.id),
+                AnalysisUnitRun {
+                    provider: unit.provider,
+                    execution: "provider",
+                    elapsed_ms: result.elapsed_ms,
+                },
+            );
         }
-
-        let (weight, result) = result_receiver
-            .recv()
-            .map_err(|error| format!("language worker stopped unexpectedly: {error}"))?;
-        active_jobs -= 1;
-        active_weight = active_weight.saturating_sub(weight);
-        analyses.extend(result);
+        analyses.extend(result.analyses);
     }
-    drop(result_sender);
     let (languages, documents, relations, diagnostics) = merge_language_analyses(analyses);
     output.languages = languages;
     output.documents = documents;
@@ -509,7 +509,8 @@ pub(crate) fn index_project(
         &output.languages,
         &output.project_model_files,
     );
-    output.analysis_units = build_analysis_units(&root, &planned_units, &output.coverage);
+    output.analysis_units =
+        build_analysis_units(&root, &planned_units, &output.coverage, &unit_runs);
     eprintln!(
         "timing stage=provider_merge elapsed_ms={} documents={} relations={} diagnostics={}",
         provider_started.elapsed().as_millis(),
@@ -523,6 +524,7 @@ pub(crate) fn index_project(
     });
 
     let framework_started = Instant::now();
+    emit_progress("frameworks", 74, 100, "프레임워크 의미 분석 중");
     let framework_key = framework_cache_key(
         &root,
         &pack_root,
@@ -575,6 +577,7 @@ pub(crate) fn index_project(
     );
     canonicalize_index_output(&mut output);
 
+    emit_progress("architecture", 78, 100, "계층과 호출 구조 통합 중");
     write_index_outputs(
         &root,
         out,
@@ -590,5 +593,6 @@ pub(crate) fn index_project(
     if let Err(error) = write_source_manifest(&root, &source_snapshot) {
         eprintln!("source manifest cache unavailable: {error}");
     }
+    emit_progress("index-complete", 80, 100, "코드 인덱스 완료");
     Ok(())
 }

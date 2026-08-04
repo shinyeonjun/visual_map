@@ -22,10 +22,10 @@ use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     thread,
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use workspace::{
     bounded_code_inventory, bounded_db_inventory, validate_workspace_id, CodeIndexResult,
     CodeInventory, CreateWorkspaceRequest, DbIndexResult, DbInventory, IndexCodeRequest,
@@ -66,6 +66,10 @@ impl AnalysisSourceMode {
     fn includes_db(self) -> bool {
         matches!(self, Self::DbOnly | Self::CodeAndDb)
     }
+
+    fn required_sources_ready(self, code_ready: bool, db_ready: bool) -> bool {
+        (!self.includes_code() || code_ready) && (!self.includes_db() || db_ready)
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -77,6 +81,87 @@ struct InitializeWorkspaceAnalysisResult {
     code_error: Option<String>,
     db_error: Option<String>,
     snapshot_saved: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnalysisProgressEvent {
+    workspace_id: String,
+    source: String,
+    stage: String,
+    completed: usize,
+    total: usize,
+    percent: u8,
+    label: String,
+    determinate: bool,
+}
+
+fn emit_analysis_progress(
+    app: &tauri::AppHandle,
+    workspace_id: &str,
+    source: &str,
+    stage: &str,
+    completed: usize,
+    total: usize,
+    percent: u8,
+    label: impl Into<String>,
+) {
+    let _ = app.emit(
+        "analysis-progress",
+        AnalysisProgressEvent {
+            workspace_id: workspace_id.to_string(),
+            source: source.to_string(),
+            stage: stage.to_string(),
+            completed,
+            total: total.max(1),
+            percent: percent.min(100),
+            label: label.into(),
+            determinate: total > 0,
+        },
+    );
+}
+
+fn code_progress_observer(
+    app: tauri::AppHandle,
+    workspace_id: String,
+    includes_db: bool,
+) -> engine::EngineObserver {
+    Arc::new(move |event| {
+        let Some(raw) = event.line.strip_prefix("@visual-map-progress ") else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+            return;
+        };
+        let completed = value
+            .get("completed")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default() as usize;
+        let total = value
+            .get("total")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(100) as usize;
+        let stage = value
+            .get("stage")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("code");
+        let label = value
+            .get("label")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("코드 구조 분석 중");
+        let share = if includes_db { 65usize } else { 82usize };
+        let percent = 5usize + completed.min(total).saturating_mul(share) / total.max(1);
+        emit_analysis_progress(
+            &app,
+            &workspace_id,
+            "code",
+            stage,
+            completed,
+            total,
+            percent.min(90) as u8,
+            label,
+        );
+    })
 }
 
 // The desktop app is single-instance, but commands can still overlap within it.

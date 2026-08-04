@@ -141,13 +141,28 @@ fn index_code_repository(
 ) -> CommandResult<CodeIndexResult> {
     let app_data_dir = app_data_dir(&app)?;
     let _mutation_guard = begin_workspace_mutation(&app_data_dir, &request.workspace_id)?;
-    let registry = get_engine_availability(app)?;
+    let registry = get_engine_availability(app.clone())?;
     let workspace_id = request.workspace_id.clone();
+    let observer = code_progress_observer(app.clone(), workspace_id.clone(), false);
+    emit_analysis_progress(
+        &app,
+        &workspace_id,
+        "system",
+        "prepare",
+        0,
+        1,
+        2,
+        "코드 분석 준비 중",
+    );
 
     let previous_workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
     let previous_snapshot = atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace_id)?;
-    let mut result =
-        workspace::index_code_repository_without_persisting(&app_data_dir, &registry, request)?;
+    let mut result = workspace::index_code_repository_without_persisting_with_observer(
+        &app_data_dir,
+        &registry,
+        request,
+        observer,
+    )?;
     if result.run.ok {
         let inventory = result
             .inventory
@@ -245,7 +260,17 @@ fn initialize_workspace_analysis(
     let workspace_id = request.workspace_id.clone();
     let app_data_dir = app_data_dir(&app)?;
     let _mutation_guard = begin_workspace_mutation(&app_data_dir, &workspace_id)?;
-    let registry = get_engine_availability(app)?;
+    let registry = get_engine_availability(app.clone())?;
+    emit_analysis_progress(
+        &app,
+        &workspace_id,
+        "system",
+        "prepare",
+        0,
+        1,
+        2,
+        "분석 실행 계획 준비 중",
+    );
     let code_request = IndexCodeRequest {
         workspace_id: workspace_id.clone(),
     };
@@ -262,24 +287,53 @@ fn initialize_workspace_analysis(
     let db_app_data_dir = app_data_dir.clone();
     let code_registry = registry.clone();
     let db_registry = registry.clone();
+    let code_observer = code_progress_observer(
+        app.clone(),
+        workspace_id.clone(),
+        request.analysis_mode.includes_db(),
+    );
+    let db_app = app.clone();
+    let db_workspace_id = workspace_id.clone();
     let (code_result, db_result) = thread::scope(|scope| {
         let code_handle = request.analysis_mode.includes_code().then(|| {
             scope.spawn(|| {
-                workspace::index_code_repository_without_persisting(
+                workspace::index_code_repository_without_persisting_with_observer(
                     &code_app_data_dir,
                     &code_registry,
                     code_request,
+                    code_observer,
                 )
             })
         });
         let db_handle = request.analysis_mode.includes_db().then(|| {
             let db_request = db_request.expect("DB mode validated its profile");
             scope.spawn(|| {
-                workspace::index_db_profile_without_persisting(
+                emit_analysis_progress(
+                    &db_app,
+                    &db_workspace_id,
+                    "db",
+                    "db-index",
+                    0,
+                    1,
+                    8,
+                    "DB 구조 읽는 중",
+                );
+                let result = workspace::index_db_profile_without_persisting(
                     &db_app_data_dir,
                     &db_registry,
                     db_request,
-                )
+                );
+                emit_analysis_progress(
+                    &db_app,
+                    &db_workspace_id,
+                    "db",
+                    "db-index",
+                    1,
+                    1,
+                    70,
+                    "DB 구조 읽기 완료",
+                );
+                result
             })
         });
         let code_result = code_handle.map(|handle| {
@@ -296,6 +350,16 @@ fn initialize_workspace_analysis(
         });
         (code_result, db_result)
     });
+    emit_analysis_progress(
+        &app,
+        &workspace_id,
+        "system",
+        "reduce",
+        1,
+        1,
+        82,
+        "코드와 DB 결과 통합 중",
+    );
 
     let mut code_error = code_result
         .as_ref()
@@ -306,6 +370,7 @@ fn initialize_workspace_analysis(
     let code = code_result.and_then(Result::ok);
     let mut db = db_result.and_then(Result::ok);
     let mut workspace = workspace::open_workspace(&app_data_dir, &workspace_id)?;
+    let previous_workspace = workspace.clone();
     let mut code_inventory = None;
     let mut db_inventory = None;
 
@@ -378,9 +443,11 @@ fn initialize_workspace_analysis(
         }
     }
 
-    let has_successful_source = code_inventory.is_some() || db_inventory.is_some();
+    let required_sources_ready = request
+        .analysis_mode
+        .required_sources_ready(code_inventory.is_some(), db_inventory.is_some());
     let mut snapshot_saved = false;
-    if has_successful_source {
+    if required_sources_ready {
         let previous_snapshot =
             atlas::load_inventory_snapshot_optional(&app_data_dir, &workspace.id)?;
         let mut merged = previous_snapshot.clone();
@@ -428,7 +495,28 @@ fn initialize_workspace_analysis(
         }
         if let Some(snapshot) = merged {
             let mut snapshot = snapshot;
+            emit_analysis_progress(
+                &app,
+                &workspace_id,
+                "system",
+                "snapshot",
+                0,
+                1,
+                90,
+                "통합 스냅샷 검증 중",
+            );
             enrich_integrated_snapshot_code_evidence(&workspace, &mut snapshot);
+            if let Err(error) = validate_candidate_sources(&snapshot, request.analysis_mode) {
+                if let Some(result) = code.as_ref() {
+                    workspace::cleanup_code_project(
+                        &app_data_dir,
+                        &registry,
+                        &workspace_id,
+                        result.workspace.code_project.as_deref(),
+                    );
+                }
+                return Err(error.into());
+            }
             if let Err(error) = atlas::save_inventory_snapshot(&app_data_dir, &snapshot) {
                 if let Some(result) = code.as_ref() {
                     workspace::cleanup_code_project(
@@ -474,16 +562,42 @@ fn initialize_workspace_analysis(
                 );
             }
             snapshot_saved = true;
+            emit_analysis_progress(
+                &app,
+                &workspace_id,
+                "system",
+                "complete",
+                1,
+                1,
+                100,
+                "분석과 시각화 데이터 준비 완료",
+            );
         }
+    } else {
+        if let Some(result) = code.as_ref().filter(|result| result.run.ok) {
+            workspace::cleanup_code_project(
+                &app_data_dir,
+                &registry,
+                &workspace_id,
+                result.workspace.code_project.as_deref(),
+            );
+        }
+        workspace = previous_workspace;
     }
 
     let mut code = code;
     if let Some(result) = code.as_mut() {
+        if !snapshot_saved {
+            result.workspace = workspace.clone();
+        }
         if let Some(inventory) = result.inventory.take() {
             result.inventory = Some(bounded_code_inventory(inventory));
         }
     }
     if let Some(result) = db.as_mut() {
+        if !snapshot_saved {
+            result.workspace = workspace.clone();
+        }
         if let Some(inventory) = db_inventory {
             result.inventory = Some(bounded_db_inventory(inventory));
         }
@@ -497,4 +611,17 @@ fn initialize_workspace_analysis(
         db_error,
         snapshot_saved,
     })
+}
+
+fn validate_candidate_sources(
+    snapshot: &InventorySnapshot,
+    mode: AnalysisSourceMode,
+) -> Result<(), String> {
+    if mode.includes_code() && snapshot.metadata.code.is_none() {
+        return Err("완성 후보에 코드 분석 결과가 없습니다".to_string());
+    }
+    if mode.includes_db() && snapshot.metadata.db.is_none() {
+        return Err("완성 후보에 DB 분석 결과가 없습니다".to_string());
+    }
+    Ok(())
 }

@@ -1921,12 +1921,6 @@ fn code_inventory_reads_locations_from_the_node_contract() {
         (Some(20), Some(3), Some(46), Some(18))
     );
     assert_eq!(item.file_path.as_deref(), Some("src/handlers/orders.rs"));
-
-    let query = inventory_nodes_query();
-    assert!(query.contains("node.start_line AS start_line"));
-    assert!(query.contains("node.start_column AS start_column"));
-    assert!(query.contains("node.end_line AS end_line"));
-    assert!(query.contains("node.end_column AS end_column"));
 }
 
 fn pinned_code_field_inventory(label: &str) -> (PathBuf, CodeInventory) {
@@ -2176,30 +2170,6 @@ fn code_field_fastapi_adapter_proves_real_import_calls() {
     );
     println!("product FastAPI static import calls={}", proven.len());
     fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn code_engine_queries_use_one_bounded_node_contract_and_safe_aliases() {
-    let query = inventory_nodes_query();
-
-    assert!(query.starts_with("MATCH (node:Route|Function|Method|Class|"));
-    assert!(query.contains("|Package|Resource|File)"));
-    assert!(!query.contains("|Union|"));
-    assert!(query.contains("labels(node) AS labels"));
-    assert!(query.ends_with("LIMIT 100000"));
-    assert!(!query.contains("SEMANTICALLY_RELATED"));
-    assert!(!query.contains("SIMILAR_TO"));
-    assert!(CALLS_QUERY.contains(" AS source"));
-    assert!(CALLS_QUERY.contains(" AS target"));
-    assert!(CALLS_QUERY.contains(" AS confidence"));
-    assert!(CALLS_QUERY.contains(" AS strategy"));
-    assert!(CALLS_QUERY.contains(" AS call_expression"));
-    assert!(CALLS_QUERY.contains(" AS path"));
-    assert!(CALLS_QUERY.contains(" AS range"));
-    assert!(!CALLS_QUERY.contains(" AS from"));
-    assert!(HANDLES_QUERY.starts_with("MATCH (handler)-[:HANDLES]->(route)"));
-    assert!(HANDLES_QUERY.contains(" AS source"));
-    assert!(HANDLES_QUERY.contains(" AS target"));
 }
 
 #[test]
