@@ -343,6 +343,7 @@ fn canonical_builder_preserves_handler_location_and_normalizes_handles() {
                 }
             ]
         })),
+        evidence: None,
         calls: vec![
             CodeCall {
                 from: "shop.routes.create_order".to_string(),
@@ -510,6 +511,7 @@ fn code_relation_gaps_keep_stable_ids_and_known_related_endpoints() {
             unknown: 0,
         },
         architecture: None,
+        evidence: None,
         calls: Vec::new(),
         handles: Vec::new(),
         relation_gaps: vec![CodeInventoryGap::new(
@@ -580,6 +582,7 @@ fn canonical_builder_splits_legacy_collapsed_route_bindings() {
             unknown: 0,
         },
         architecture: None,
+        evidence: None,
         calls: Vec::new(),
         handles: vec![
             CodeHandle {
@@ -715,6 +718,7 @@ fn empty_inventories_keep_source_provenance() {
             unknown: 0,
         },
         architecture: None,
+        evidence: None,
         calls: Vec::new(),
         handles: Vec::new(),
         relation_gaps: Vec::new(),
@@ -1368,6 +1372,10 @@ fn replacing_code_inventory_preserves_the_existing_db_source() {
     let mut metadata = super::model::SnapshotMetadata {
         code: existing.metadata.code.clone(),
         architecture: Some(serde_json::json!({ "packages": ["replacement"] })),
+        evidence: Some(serde_json::json!({
+            "schema": "code-memory.evidence-summary.v1",
+            "collectors": [{ "id": "contracts", "status": "collected" }]
+        })),
         ..Default::default()
     };
     if let Some(code) = metadata.code.as_mut() {
@@ -1393,6 +1401,10 @@ fn replacing_code_inventory_preserves_the_existing_db_source() {
 
     let merged = replace_inventory_source(Some(existing), incoming, "code").unwrap();
     assert_eq!(merged.metadata.db, db_metadata);
+    assert_eq!(
+        merged.metadata.evidence.as_ref().unwrap()["collectors"][0]["id"],
+        "contracts"
+    );
     assert!(db_ids
         .iter()
         .all(|id| merged.items.iter().any(|item| &item.id == id)));
@@ -2041,6 +2053,39 @@ fn cached_snapshot_reuses_unchanged_file_and_invalidates_after_save() {
         .items
         .iter()
         .any(|item| item.id == "code:file:cache-refresh"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cached_snapshot_reloads_after_an_external_replacement() {
+    let root = temp_root("snapshot-cache-external");
+    let first = fixture_inventory("workspace-1".to_string());
+    save_inventory_snapshot(&root, &first).unwrap();
+    let cached = load_inventory_snapshot_cached(&root, "workspace-1").unwrap();
+
+    let mut second = first.clone();
+    second.items.push(item(
+        "code:file:external-refresh",
+        "file",
+        "external-refresh.rs",
+        "code",
+        "code",
+        None,
+        Some("src/external-refresh.rs"),
+    ));
+    fs::write(
+        snapshot_path(&root, "workspace-1"),
+        serde_json::to_vec(&second).unwrap(),
+    )
+    .unwrap();
+
+    let refreshed = load_inventory_snapshot_cached(&root, "workspace-1").unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&cached, &refreshed));
+    assert!(refreshed
+        .items
+        .iter()
+        .any(|entry| entry.id == "code:file:external-refresh"));
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -4299,6 +4344,29 @@ fn visual_map_without_focus_returns_overview() {
 }
 
 #[test]
+fn architecture_marks_an_area_partial_when_its_members_have_a_gap() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot.metadata.gaps.push(super::model::SnapshotGap {
+        id: "gap:code:orders".to_string(),
+        kind: "provider-failed".to_string(),
+        message: "코드 일부를 읽지 못했습니다".to_string(),
+        related_ids: vec!["code:route:orders:create".to_string()],
+    });
+
+    let map = visual_map(&snapshot, None, "atlas".to_string());
+    let order = map
+        .nodes
+        .iter()
+        .find(|node| node.id == "group:domain:order")
+        .expect("order area");
+
+    assert_eq!(
+        order.coverage.as_ref().map(|coverage| coverage.has_partial),
+        Some(true)
+    );
+}
+
+#[test]
 fn atlas_prefers_engine_packages_and_db_schemas_over_name_groups() {
     let mut snapshot = fixture_inventory("workspace-1".to_string());
     snapshot.metadata.architecture = Some(serde_json::json!({
@@ -4361,6 +4429,82 @@ fn atlas_reads_packages_from_architecture_index_nodes() {
 }
 
 #[test]
+fn atlas_restores_module_groups_from_architecture_index() {
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    snapshot.metadata.architecture = Some(serde_json::json!({
+        "schema": "code-memory.architecture-index.v3",
+        "nodes": [
+            {
+                "id": "package:python:apps/api/plane",
+                "kind": "PACKAGE",
+                "name": "plane",
+                "path": "apps/api/plane"
+            },
+            {
+                "id": "module:python:apps/api/plane:apps/api/plane/sessions",
+                "kind": "MODULE",
+                "name": "sessions",
+                "path": "apps/api/plane/sessions",
+                "parent_id": "package:python:apps/api/plane"
+            },
+            {
+                "id": "file:apps/api/plane/sessions/routes.py",
+                "kind": "FILE",
+                "name": "routes.py",
+                "path": "apps/api/plane/sessions/routes.py",
+                "parent_id": "module:python:apps/api/plane:apps/api/plane/sessions"
+            }
+        ],
+        "edges": []
+    }));
+    snapshot
+        .items
+        .iter_mut()
+        .find(|item| item.id == "code:route:orders:create")
+        .unwrap()
+        .path = Some("apps/api/plane/sessions/routes.py".to_string());
+
+    let map = visual_map(&snapshot, None, "atlas".to_string());
+    let package = map
+        .nodes
+        .iter()
+        .find(|node| node.id == "group:package:plane")
+        .expect("package projection");
+    let module = map
+        .nodes
+        .iter()
+        .find(|node| node.id == "group:module:plane:sessions")
+        .expect("module projection");
+
+    assert_eq!(package.parent_id, None);
+    assert_eq!(package.depth, Some(0));
+    assert_eq!(package.assigned_by.as_deref(), Some("package"));
+    assert_eq!(module.parent_id.as_deref(), Some("group:package:plane"));
+    assert_eq!(module.depth, Some(1));
+    assert_eq!(module.assigned_by.as_deref(), Some("module-path"));
+    assert_eq!(
+        module.metrics.as_ref().map(|metrics| metrics.api_count),
+        Some(1)
+    );
+}
+
+#[test]
+fn atlas_without_architecture_keeps_flat_group_projection() {
+    let map = visual_map(
+        &fixture_inventory("workspace-1".to_string()),
+        None,
+        "atlas".to_string(),
+    );
+
+    assert!(map.nodes.iter().all(|node| node.depth == Some(0)));
+    assert!(map.nodes.iter().all(|node| node.parent_id.is_none()));
+    assert!(!map
+        .nodes
+        .iter()
+        .any(|node| node.assigned_by.as_deref() == Some("module-path")));
+}
+
+#[test]
 fn atlas_overview_uses_primary_code_symbols_only() {
     let mut function = item(
         "code:function:process-order",
@@ -4417,9 +4561,81 @@ fn atlas_overview_uses_primary_code_symbols_only() {
     assert!(subtitle.contains("processOrder"));
     assert!(!subtitle.contains("order_id"));
     assert!(!subtitle.contains("tauri::command"));
+    let metrics = app
+        .metrics
+        .as_ref()
+        .expect("group metrics should be structured");
+    assert_eq!(metrics.api_count, 0);
+    assert_eq!(metrics.code_count, 1);
+    assert_eq!(metrics.db_count, 0);
+    assert_eq!(metrics.top_code, vec!["processOrder"]);
+    assert_eq!(metrics.depth, Some(0));
     assert!(map.warnings.iter().any(|warning| {
         warning.contains("하위 코드 심벌 2개") && warning.contains("코드 검색에 보존")
     }));
+}
+
+#[test]
+fn atlas_overview_uses_role_axis_when_multiple_roles_have_evidence() {
+    let mut items = vec![
+        item(
+            "code:handler:orders",
+            "handler",
+            "OrdersHandler",
+            "code",
+            "code",
+            None,
+            Some("src/app/orders_handler.ts"),
+        ),
+        item(
+            "code:service:orders",
+            "service",
+            "OrdersService",
+            "code",
+            "code",
+            None,
+            Some("src/app/orders_service.ts"),
+        ),
+        item(
+            "code:repository:orders",
+            "repository",
+            "OrdersRepository",
+            "code",
+            "code",
+            None,
+            Some("src/app/orders_repository.ts"),
+        ),
+    ];
+    for value in &mut items {
+        value.group_id = Some("app".to_string());
+    }
+    let snapshot = InventorySnapshot {
+        schema_version: super::model::SNAPSHOT_SCHEMA_VERSION,
+        workspace_id: "workspace-1".to_string(),
+        saved_at: "1".to_string(),
+        metadata: super::model::SnapshotMetadata {
+            architecture: Some(serde_json::json!({ "packages": ["app"] })),
+            ..Default::default()
+        },
+        stale_reasons: Vec::new(),
+        links: Vec::new(),
+        items,
+    };
+
+    let map = visual_map(&snapshot, None, "atlas".to_string());
+    let axis = map.overview_axis.expect("overview axis should be declared");
+
+    assert_eq!(axis.kind, "role");
+    assert!(axis.lanes.iter().any(|lane| lane == "handler"));
+    assert!(axis.lanes.iter().any(|lane| lane == "other"));
+    assert!(axis.reason.contains("역할 기준"));
+    let metrics = map.nodes[0]
+        .metrics
+        .as_ref()
+        .expect("role metrics should be structured");
+    assert_eq!(metrics.handler_count, 1);
+    assert_eq!(metrics.service_count, 1);
+    assert_eq!(metrics.repository_count, 1);
 }
 
 #[test]
@@ -5019,7 +5235,16 @@ fn atlas_group_drilldown_is_bounded_ordered_and_has_no_dangling_edges() {
         .collect::<Vec<_>>();
 
     assert_eq!(map.focus, "group:domain:order");
-    assert_eq!(map.nodes.len(), 36);
+    // The drilldown carries the opened group, its bounded members, and every
+    // sibling group so the surrounding map survives an in-place expansion.
+    let group_nodes = map
+        .nodes
+        .iter()
+        .filter(|node| node.id.starts_with("group:"))
+        .count();
+    assert_eq!(map.nodes.len() - group_nodes, 35);
+    assert!(group_nodes >= 1);
+    assert!(map.nodes.iter().any(|node| node.id == "group:domain:order"));
     assert!(member_layers.windows(2).all(|pair| pair[0] <= pair[1]));
     assert!(map
         .edges
@@ -5346,6 +5571,8 @@ fn save_inventory_snapshot_redacts_secret_shapes_before_persisting() {
                 ),
                 qualified_name: None,
                 engine_label: None,
+                language: None,
+                role_basis: None,
                 project_id: None,
                 group_id: None,
                 location: None,
@@ -5363,6 +5590,8 @@ fn save_inventory_snapshot_redacts_secret_shapes_before_persisting() {
                 path: None,
                 qualified_name: None,
                 engine_label: None,
+                language: None,
+                role_basis: None,
                 project_id: None,
                 group_id: None,
                 location: None,
@@ -5566,6 +5795,7 @@ fn snapshot_links_static_client_request_to_unique_backend_route() {
             unknown: 0,
         },
         architecture: None,
+        evidence: None,
         calls: Vec::new(),
         handles: Vec::new(),
         relation_gaps: Vec::new(),
@@ -5631,6 +5861,8 @@ fn api_flow_keeps_client_request_as_a_separate_incoming_lane() {
         path: Some("frontend/login.tsx".to_string()),
         qualified_name: Some("performLogin".to_string()),
         engine_label: Some("Function".to_string()),
+        language: Some("typescript".to_string()),
+        role_basis: None,
         project_id: None,
         group_id: None,
         location: Some(super::model::SourceLocation {

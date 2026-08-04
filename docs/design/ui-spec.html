@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backend Visual Map — 확정 UI/UX</title>
+<style>
+:root{
+  --bg-app:#edf3fa; --bg-panel:#f8fbff; --bg-raised:#fff; --bg-inset:#e8eef7;
+  --ink:#0f172a; --ink-2:#334155; --ink-3:#526176; --ink-4:#5b6b82;
+  --line:rgba(15,23,42,.10); --line-2:rgba(15,23,42,.16);
+  --blue:#2563eb; --blue-ink:#1d4ed8; --teal:#0891b2;
+  --green:#059669; --orange:#d97706; --red:#dc2626; --violet:#7c3aed;
+  --mono:"Cascadia Code",Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-app);color:var(--ink);
+  font:13px/1.6 "Pretendard","Malgun Gothic",-apple-system,system-ui,sans-serif}
+.wrap{max-width:1400px;margin:0 auto;padding:32px 24px 64px}
+h1{margin:0;font-size:26px;letter-spacing:-.02em}
+.sub{margin:6px 0 0;color:var(--ink-3);font-size:13px}
+h2{margin:44px 0 4px;font-size:16px;display:flex;align-items:center;gap:9px}
+h2 .n{width:21px;height:21px;display:grid;place-items:center;border-radius:6px;
+  background:var(--ink);color:#fff;font-size:11px;font-weight:800}
+.h2sub{margin:0 0 14px 30px;color:var(--ink-3);font-size:12px}
+
+/* ---------- app window ---------- */
+/* The spec describes a desktop window; on a narrow screen it scrolls rather
+   than collapsing the canvas column to nothing. */
+.appscroll{overflow-x:auto;padding-bottom:4px}
+.app{min-width:1120px;border:1px solid var(--line-2);border-radius:11px;overflow:hidden;
+  background:var(--bg-panel);box-shadow:0 14px 40px rgba(15,23,42,.10)}
+.pathpanel-scroll{overflow-x:auto}
+.titlebar{display:flex;align-items:center;gap:9px;padding:8px 12px;
+  background:var(--bg-raised);border-bottom:1px solid var(--line)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--line-2)}
+.titlebar b{font-size:11.5px}
+.topbar{display:flex;align-items:center;gap:9px;padding:9px 12px;
+  background:var(--bg-raised);border-bottom:1px solid var(--line)}
+.pill{display:inline-flex;align-items:center;gap:6px;height:27px;padding:0 10px;
+  border:1px solid var(--line-2);border-radius:6px;background:var(--bg-raised);
+  font-size:11px;font-weight:700;color:var(--ink-2)}
+.pill.wide{flex:1;max-width:280px;justify-content:flex-start;color:var(--ink)}
+.spacer{flex:1}
+
+/* coverage */
+.cov{margin:10px 12px;padding:9px 11px;border:1px solid rgba(220,38,38,.4);
+  border-left:3px solid var(--red);border-radius:7px;background:rgba(220,38,38,.06)}
+.cov .row1{display:flex;align-items:flex-start;gap:7px}
+.cov .row1 b{flex:1;color:var(--red);font-size:11.5px;font-weight:800}
+.cov small{display:block;color:var(--ink-3);font-size:10.5px;font-weight:700}
+.cov .langs{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:5px;font-size:10.5px}
+.cov .langs .absent b{color:var(--red)}
+.cov .langs .part b{color:var(--orange)}
+.cov .langs span{color:var(--ink-3)}
+.cov .basis{display:block;margin-top:5px;color:var(--ink-4);font-size:10px}
+.btn-o{height:24px;padding:0 9px;border:1px solid var(--line-2);border-radius:5px;
+  background:var(--bg-raised);font-size:10.5px;font-weight:700;color:var(--ink-2);white-space:nowrap}
+
+/* 3 columns */
+.cols{display:grid;grid-template-columns:224px minmax(0,1fr) 286px;gap:0;min-height:520px}
+.col{padding:12px}
+.col+.col{border-left:1px solid var(--line)}
+.coltitle{display:flex;align-items:center;gap:6px;margin-bottom:9px;
+  color:var(--ink-4);font-size:9.5px;font-weight:800;letter-spacing:.03em}
+.coltitle .tag{margin-left:auto;padding:1px 5px;border-radius:4px;background:var(--bg-inset);
+  color:var(--ink-3);font-size:8.5px}
+
+/* left tree */
+.tree{font-size:11px}
+.tw{display:flex;align-items:center;gap:5px;padding:3px 5px;border-radius:5px;color:var(--ink-2)}
+.tw.sel{background:rgba(37,99,235,.11);color:var(--blue-ink);font-weight:750}
+.tw .car{width:9px;color:var(--ink-4);font-size:9px}
+.tw .ct{margin-left:auto;color:var(--ink-4);font-size:9.5px;font-variant-numeric:tabular-nums}
+.i1{padding-left:14px}.i2{padding-left:28px}
+.sw{width:8px;height:8px;border-radius:2px;flex:none}
+.sw.api{background:var(--blue)}.sw.code{background:var(--violet)}
+.sw.db{background:var(--green)}.sw.ext{background:var(--ink-4)}.sw.job{background:var(--orange)}
+.hint{margin-top:10px;padding:7px 8px;border:1px dashed var(--line-2);border-radius:6px;
+  color:var(--ink-4);font-size:9.5px;line-height:1.5}
+
+/* canvas */
+.canvas{position:relative;background:
+  linear-gradient(var(--bg-app) 1px,transparent 1px) 0 0/100% 22px,
+  linear-gradient(90deg,var(--bg-app) 1px,transparent 1px) 0 0/22px 100%,var(--bg-raised);
+  border:1px solid var(--line);border-radius:9px;padding:12px;min-height:470px}
+.crumb{display:flex;align-items:center;gap:5px;margin-bottom:10px;font-size:10.5px;color:var(--ink-4)}
+.crumb b{color:var(--ink-2)}
+.axis{margin-bottom:11px;padding:5px 8px;border-radius:5px;background:var(--bg-inset);
+  color:var(--ink-3);font-size:10px}
+.lanes{display:flex;align-items:flex-start;gap:0}
+.laneslot{flex:1 1 0;min-width:0;display:flex;align-items:stretch}
+.lane{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px;padding:9px;
+  border:1px solid var(--line-2);border-radius:8px;background:var(--bg-panel)}
+.lane>header{display:flex;align-items:center;gap:6px;margin-bottom:1px}
+.lane .ln{width:16px;height:16px;display:grid;place-items:center;border-radius:4px;
+  background:var(--bg-inset);color:var(--ink-3);font-size:9px;font-weight:800}
+.lane header b{font-size:10.5px}
+.lane header .c{margin-left:auto;color:var(--ink-4);font-size:9.5px}
+.arrow{flex:none;align-self:center;width:18px;height:8px;background:var(--line-2);
+  clip-path:polygon(0 40%,62% 40%,62% 0,100% 50%,62% 100%,62% 60%,0 60%)}
+
+.card{border:1px solid var(--line-2);border-radius:6px;padding:6px 8px;background:var(--bg-raised)}
+.card .t{display:flex;align-items:center;gap:5px}
+.card .t b{font-size:11px;font-weight:740;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .t .n{margin-left:auto;color:var(--ink-3);font-size:10px;font-variant-numeric:tabular-nums}
+.card .g{display:block;color:var(--ink-4);font-size:9px;margin-top:1px}
+.card .deg{display:flex;gap:7px;margin-top:3px;color:var(--ink-4);font-size:9px;font-variant-numeric:tabular-nums}
+.card.api{background:rgba(37,99,235,.07);border-color:rgba(37,99,235,.32)}
+.card.code{background:rgba(124,58,237,.06);border-color:rgba(124,58,237,.28)}
+.card.db{background:rgba(5,150,105,.07);border-color:rgba(5,150,105,.30)}
+.card.ext{background:rgba(91,107,130,.07);border-color:rgba(91,107,130,.30)}
+.card.job{background:rgba(217,119,6,.07);border-color:rgba(217,119,6,.30)}
+.card.sel{outline:2px solid var(--blue);outline-offset:1px}
+.card.cand{border-style:dashed}
+.card.blind{background-image:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(220,38,38,.13) 3px,rgba(220,38,38,.13) 5px);border-style:dashed;border-color:rgba(220,38,38,.5)}
+.child{margin-left:11px;border-left:1px solid var(--line-2);padding-left:8px;display:flex;flex-direction:column;gap:5px}
+.more{padding:4px 8px;border:1px dashed var(--line-2);border-radius:5px;background:transparent;
+  color:var(--ink-4);font-size:9.5px;text-align:left}
+
+.legend{position:absolute;left:14px;bottom:12px;display:flex;flex-wrap:wrap;gap:6px 14px;
+  padding:7px 10px;border:1px solid var(--line-2);border-radius:7px;background:rgba(255,255,255,.94);
+  font-size:9px;color:var(--ink-3)}
+.legend i{display:inline-flex;align-items:center;gap:4px;font-style:normal}
+.zoom{position:absolute;right:14px;bottom:12px;display:flex;flex-direction:column;
+  border:1px solid var(--line-2);border-radius:6px;overflow:hidden;background:var(--bg-raised)}
+.zoom span{width:24px;height:22px;display:grid;place-items:center;font-size:11px;color:var(--ink-3)}
+.zoom span+span{border-top:1px solid var(--line)}
+
+/* right */
+.ins h3{margin:0 0 2px;font-size:12.5px}
+.ins .kind{display:inline-block;padding:1px 6px;border-radius:4px;background:rgba(124,58,237,.12);
+  color:var(--violet);font-size:9px;font-weight:800;margin-bottom:9px}
+.sec{margin-top:11px}
+.sec>b{display:block;color:var(--ink-4);font-size:9px;font-weight:800;letter-spacing:.03em;margin-bottom:4px}
+.kv{display:grid;grid-template-columns:52px 1fr;gap:2px 8px;font-size:10.5px}
+.kv dt{color:var(--ink-4)}.kv dd{margin:0;color:var(--ink-2);overflow-wrap:anywhere}
+.ev{padding:6px 7px;border:1px solid var(--line);border-radius:5px;background:var(--bg-raised);margin-bottom:4px}
+.ev b{display:block;font-size:10px;font-weight:740}
+.ev code{color:var(--ink-4);font-size:9.5px;font-family:var(--mono)}
+.pathbtn{width:100%;display:flex;align-items:center;gap:6px;padding:7px 8px;margin-top:3px;
+  border:1px solid rgba(37,99,235,.35);border-radius:6px;background:rgba(37,99,235,.07);
+  color:var(--blue-ink);font-size:10.5px;font-weight:740;text-align:left}
+.open{display:flex;gap:5px;margin-top:5px}
+.open span{flex:1;padding:5px;border:1px solid var(--line-2);border-radius:5px;background:var(--bg-raised);
+  text-align:center;font-size:10px;font-weight:700;color:var(--ink-2)}
+
+/* status */
+.status{display:flex;align-items:center;gap:14px;padding:6px 12px;background:var(--bg-raised);
+  border-top:1px solid var(--line);font-size:9.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.status .ok{color:var(--green);font-weight:750}
+.status .warn{color:var(--red);font-weight:750}
+
+/* path panel */
+.pathpanel{border:1px solid var(--line-2);border-radius:9px;background:var(--bg-raised);padding:14px}
+.step{display:grid;grid-template-columns:20px 1fr auto;gap:9px;align-items:baseline;padding:6px 7px;border-radius:6px}
+.step:hover{background:var(--bg-panel)}
+.step .ix{width:19px;text-align:center;border-radius:4px;background:var(--bg-inset);
+  color:var(--ink-3);font-size:9.5px;font-weight:800}
+.step .lane2{color:var(--blue-ink);font-size:9px;font-weight:800}
+.step .lane2 em{color:var(--ink-4);font-style:normal;font-weight:600;margin-left:5px}
+.step strong{display:block;font-size:11.5px;font-weight:720}
+.step code{color:var(--ink-4);font-size:9.5px;font-family:var(--mono)}
+.d0{margin-left:0}.d1{margin-left:15px}.d2{margin-left:30px}.d3{margin-left:45px}
+.brk{margin-top:8px;padding:9px 11px;border:1px solid rgba(220,38,38,.3);border-left:3px solid var(--red);
+  border-radius:7px;background:rgba(220,38,38,.05)}
+.brk b{color:var(--red);font-size:11px}
+.brk div{margin-top:5px;font-size:10.5px;color:var(--ink-2)}
+.brk small{color:var(--ink-3);font-size:10px}
+
+/* tiers + rules */
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.tier{border:1px solid var(--line-2);border-radius:9px;background:var(--bg-raised);padding:12px}
+.tier h4{margin:0 0 2px;font-size:12px}
+.tier p{margin:0 0 9px;color:var(--ink-3);font-size:10.5px}
+.mini{display:flex;gap:5px}
+.minicol{flex:1;display:flex;flex-direction:column;gap:3px}
+.mb{height:13px;border-radius:3px;border:1px solid var(--line-2);background:var(--bg-panel)}
+.mb.api{background:rgba(37,99,235,.16);border-color:rgba(37,99,235,.3)}
+.mb.code{background:rgba(124,58,237,.14);border-color:rgba(124,58,237,.28)}
+.mb.db{background:rgba(5,150,105,.16);border-color:rgba(5,150,105,.3)}
+.mb.ghost{background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(15,23,42,.06) 3px,rgba(15,23,42,.06) 5px)}
+table{width:100%;border-collapse:collapse;font-size:11.5px;background:var(--bg-raised);
+  border:1px solid var(--line-2);border-radius:9px;overflow:hidden}
+th,td{padding:8px 11px;text-align:left;border-bottom:1px solid var(--line)}
+th{background:var(--bg-panel);color:var(--ink-4);font-size:9.5px;font-weight:800;letter-spacing:.03em}
+tr:last-child td{border-bottom:0}
+td b{font-weight:750}
+.no{color:var(--red)}.yes{color:var(--green)}
+ol.rules{margin:0;padding-left:20px;font-size:12px;color:var(--ink-2)}
+ol.rules li{margin:5px 0}
+ol.rules b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Backend Visual Map — 확정 UI/UX</h1>
+<p class="sub">한 캔버스에서 접고 펼치며 전체 구조에서 근거까지 · 데스크톱 3열 · 위치가 의미를 담는다</p>
+
+<!-- ============ 1 ============ -->
+<h2><span class="n">1</span> 확정 레이아웃</h2>
+<p class="h2sub">대형 프로젝트를 열었고, <b>Order</b> 영역을 펼친 뒤 <b>OrderService</b>를 선택한 상태</p>
+
+<div class="appscroll">
+<div class="appscroll">
+<div class="app">
+  <div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+    <b>Backend Visual Map</b></div>
+
+  <div class="topbar">
+    <span class="pill wide">📁 enterprise-platform</span>
+    <span class="pill">⌕ 검색 <b style="color:var(--ink-4);font-weight:600">Ctrl K</b></span>
+    <span class="spacer"></span>
+    <span class="pill">소스 관리</span>
+  </div>
+
+  <div class="cov">
+    <div class="row1">
+      <div style="flex:1">
+        <b>이 지도는 프로젝트 전체가 아닙니다</b>
+        <small>파일 3,973개 중 661개만 지도에 있습니다 (17%)</small>
+        <div class="langs">
+          <span class="absent"><b>TypeScript</b> <span>3,312개 중 8개 분석</span></span>
+          <span class="part"><b>JavaScript</b> <span>10개 중 2개 분석</span></span>
+        </div>
+        <span class="basis">지도의 근거: Python 651개 · TypeScript 8개 · JavaScript 2개</span>
+      </div>
+      <button class="btn-o">분석 설정</button>
+    </div>
+  </div>
+
+  <div class="cols">
+    <!-- LEFT -->
+    <div class="col">
+      <div class="coltitle">구조<span class="tag">캔버스와 동기</span></div>
+      <div class="tree">
+        <div class="tw"><span class="car">▾</span><b>1 들어오는 곳</b><span class="ct">21</span></div>
+        <div class="tw i1"><span class="car">▸</span><span class="sw api"></span>Checkout<span class="ct">12</span></div>
+        <div class="tw i1"><span class="car">▸</span><span class="sw api"></span>Catalog<span class="ct">7</span></div>
+        <div class="tw i1"><span class="car"></span><span class="sw job"></span>배치·잡<span class="ct">2</span></div>
+
+        <div class="tw" style="margin-top:5px"><span class="car">▾</span><b>2 거치는 곳</b><span class="ct">40</span></div>
+        <div class="tw i1"><span class="car">▾</span><span class="sw code"></span>Order<span class="ct">84</span></div>
+        <div class="tw i2 sel"><span class="car"></span><span class="sw code"></span>OrderService<span class="ct">8</span></div>
+        <div class="tw i2"><span class="car"></span><span class="sw code"></span>OrderRepository<span class="ct">6</span></div>
+        <div class="tw i2"><span class="car"></span><span class="sw code"></span>OrderMapper<span class="ct">4</span></div>
+        <div class="tw i2" style="color:var(--ink-4)"><span class="car"></span>기타 66개</div>
+        <div class="tw i1"><span class="car">▸</span><span class="sw code"></span>Catalog<span class="ct">71</span></div>
+        <div class="tw i1" style="color:var(--red)"><span class="car">▸</span><span class="sw code"></span>Legacy<span class="ct">—</span></div>
+        <div class="tw i1" style="color:var(--ink-4)"><span class="car"></span>기타 31개</div>
+
+        <div class="tw" style="margin-top:5px"><span class="car">▾</span><b>3 데이터</b><span class="ct">63</span></div>
+        <div class="tw i1"><span class="car"></span><span class="sw db"></span>orders<span class="ct">18</span></div>
+        <div class="tw i1"><span class="car"></span><span class="sw db"></span>products<span class="ct">31</span></div>
+        <div class="tw i1" style="color:var(--ink-4)"><span class="car"></span>기타 12개</div>
+      </div>
+      <div class="hint">검색으로 항목을 고르면 접혀 있던 상위가 자동으로 펼쳐집니다.</div>
+    </div>
+
+    <!-- CENTER -->
+    <div class="col">
+      <div class="coltitle">지도<span class="tag">대형 · 초기 접힘</span></div>
+      <div class="canvas">
+        <div class="crumb">전체 시스템 › <b>Order</b> › OrderService</div>
+        <div class="axis">축: <b>역할</b> · 핸들러·서비스·저장소 역할이 확인되어 역할 기준으로 배치했습니다</div>
+
+        <div class="lanes">
+          <div class="laneslot">
+            <div class="lane">
+              <header><span class="ln">1</span><b>들어오는 곳</b><span class="c">21</span></header>
+              <div class="card api"><div class="t"><b>Checkout</b><span class="n">12</span></div>
+                <span class="g">요청이 시작되는 자리</span><div class="deg"><span>→3</span><span>←0</span></div></div>
+              <div class="card api"><div class="t"><b>Catalog</b><span class="n">7</span></div>
+                <div class="deg"><span>→2</span><span>←0</span></div></div>
+              <div class="card job"><div class="t"><b>배치·잡</b><span class="n">2</span></div>
+                <div class="deg"><span>→2</span><span>←0</span></div></div>
+            </div>
+            <span class="arrow"></span>
+          </div>
+
+          <div class="laneslot">
+            <div class="lane">
+              <header><span class="ln">2</span><b>거치는 곳</b><span class="c">40</span></header>
+              <div class="card code" style="border-color:var(--blue)">
+                <div class="t"><b>▾ Order</b><span class="n">84</span></div>
+                <span class="g">이 프로젝트가 가진 것</span>
+                <div class="deg"><span>→9</span><span>←5</span></div>
+              </div>
+              <div class="child">
+                <div class="card code sel"><div class="t"><b>OrderService</b><span class="n">8</span></div>
+                  <span class="g">일을 처리하는 곳</span><div class="deg"><span>→5</span><span>←3</span></div></div>
+                <div class="card code"><div class="t"><b>OrderRepository</b><span class="n">6</span></div>
+                  <span class="g">DB를 읽고 쓰는 곳</span></div>
+                <div class="card code cand"><div class="t"><b>OrderMapper</b><span class="n">4</span></div>
+                  <span class="g">후보 · 근거 약함</span></div>
+                <button class="more">기타 66개 펼치기</button>
+              </div>
+              <div class="card code"><div class="t"><b>▸ Catalog</b><span class="n">71</span></div>
+                <div class="deg"><span>→6</span><span>←4</span></div></div>
+              <div class="card code blind"><div class="t"><b>▸ Legacy</b><span class="n">—</span></div>
+                <span class="g" style="color:var(--red)">TypeScript 미분석 구간</span></div>
+              <button class="more">기타 31개 펼치기</button>
+            </div>
+            <span class="arrow"></span>
+          </div>
+
+          <div class="laneslot">
+            <div class="lane">
+              <header><span class="ln">3</span><b>데이터</b><span class="c">63</span></header>
+              <div class="card db"><div class="t"><b>orders</b><span class="n">18</span></div>
+                <span class="g">테이블 · 컬럼 18</span><div class="deg"><span>←4</span></div></div>
+              <div class="card db"><div class="t"><b>products</b><span class="n">31</span></div>
+                <div class="deg"><span>←2</span></div></div>
+              <div class="card ext"><div class="t"><b>외부 라이브러리</b><span class="n">307</span></div></div>
+              <button class="more">기타 12개 펼치기</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="legend">
+          <i><span class="sw api"></span>API·라우트</i>
+          <i><span class="sw code"></span>코드</i>
+          <i><span class="sw job"></span>워커·잡</i>
+          <i><span class="sw db"></span>데이터베이스</i>
+          <i><span class="sw ext"></span>외부</i>
+          <i style="border-left:1px solid var(--line-2);padding-left:12px">실선 테두리 = 확정</i>
+          <i>점선 = 후보</i>
+          <i>빗금 = 미분석</i>
+        </div>
+        <div class="zoom"><span>+</span><span>−</span><span>⛶</span></div>
+      </div>
+    </div>
+
+    <!-- RIGHT -->
+    <div class="col ins">
+      <div class="coltitle">근거</div>
+      <h3>OrderService</h3>
+      <span class="kind">Service · 일을 처리하는 곳</span>
+
+      <div class="sec"><b>위치</b>
+        <div style="font-size:10.5px;color:var(--ink-2)">전체 시스템 › Order › OrderService</div>
+      </div>
+
+      <div class="sec"><b>요약</b>
+        <dl class="kv">
+          <dt>소스</dt><dd>src/order/service/OrderService.kt</dd>
+          <dt>언어</dt><dd>Kotlin</dd>
+          <dt>메서드</dt><dd>8</dd>
+          <dt>부름</dt><dd>5곳</dd>
+          <dt>불림</dt><dd>3곳</dd>
+        </dl>
+      </div>
+
+      <div class="sec"><b>직접 근거 4</b>
+        <div class="ev"><b>OrderService.kt:42</b><code>fun createOrder(req: CreateOrderReq)</code></div>
+        <div class="ev"><b>OrderController.kt:31</b><code>@PostMapping("/orders")</code></div>
+        <div class="ev"><b>OrderRepository.kt:19</b><code>INSERT INTO orders</code></div>
+        <div class="ev"><b>application.yml:58</b><code>order.service.timeout=5000</code></div>
+      </div>
+
+      <div class="sec"><b>열기</b>
+        <div class="open"><span>VS Code</span><span>Cursor</span><span>탐색기</span></div>
+      </div>
+
+      <div class="sec"><b>경로 3</b>
+        <button class="pathbtn">→ POST /api/orders 경로 보기 · 12단계</button>
+        <button class="pathbtn">→ 배치: OrderCleanup · 6단계</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="status">
+    <span>영역 <b>40</b></span><span>코드 <b>23,417</b></span><span>API <b>100</b></span>
+    <span>테이블 <b>63</b></span>
+    <span class="ok">확정 4</span><span class="warn">확인 필요 9</span>
+    <span class="spacer"></span><span>마지막 분석 08:33</span>
+  </div>
+</div>
+</div>
+
+<!-- ============ 2 ============ -->
+<h2><span class="n">2</span> 경로는 캔버스가 아니라 별도 패널</h2>
+<p class="h2sub">지도는 <b>공간</b>(무엇이 어디 있나), 경로는 <b>순서</b>(무엇이 먼저 일어나나). 좌표계가 달라 섞으면 둘 다 흐려집니다.</p>
+
+<div class="pathpanel-scroll"><div class="pathpanel" style="min-width:640px">
+  <div style="display:flex;align-items:baseline;gap:9px;margin-bottom:9px">
+    <b style="font-size:13px">POST /api/orders</b>
+    <span style="color:var(--ink-3);font-size:10.5px">요청이 지나가는 순서 · 들여쓰기는 호출 깊이</span>
+    <span class="spacer"></span>
+    <span style="color:var(--green);font-size:10.5px;font-weight:750">확정 11</span>
+    <span style="color:var(--red);font-size:10.5px;font-weight:750">확인 필요 1</span>
+  </div>
+
+  <div class="step d0"><span class="ix">1</span><span><span class="lane2">Route<em>요청이 들어오는 곳</em></span>
+    <strong>POST /api/orders</strong></span><code>OrderController.kt:31</code></div>
+  <div class="step d1"><span class="ix">2</span><span><span class="lane2">Handler<em>요청을 받는 곳</em></span>
+    <strong>OrderController.create</strong></span><code>OrderController.kt:42</code></div>
+  <div class="step d2"><span class="ix">3</span><span><span class="lane2">Service<em>일을 처리하는 곳</em></span>
+    <strong>OrderService.validate</strong></span><code>OrderService.kt:66</code></div>
+  <div class="step d3"><span class="ix">4</span><span><span class="lane2">Repository<em>DB를 읽고 쓰는 곳</em></span>
+    <strong>StockRepo.check</strong></span><code>StockRepo.kt:22</code></div>
+  <div class="step d2"><span class="ix">5</span><span><span class="lane2">Service<em>일을 처리하는 곳</em></span>
+    <strong>OrderService.submit</strong></span><code>OrderService.kt:88</code></div>
+  <div class="step d3"><span class="ix">6</span><span><span class="lane2">Repository<em>DB를 읽고 쓰는 곳</em></span>
+    <strong>OrderRepo.insert → orders</strong></span><code>OrderRepo.kt:19</code></div>
+
+  <div class="brk">
+    <b>↳ 확정 경로가 여기서 끊깁니다</b>
+    <div>NotifyService.send
+      <small style="display:block">이 요청을 받는 코드를 찾지 못했습니다 · 동적 등록일 수 있습니다 — 의심 1순위</small></div>
+  </div>
+</div>
+</div>
+
+<!-- ============ 3 ============ -->
+<h2><span class="n">3</span> 규모는 화면을 바꾸지 않는다 — 초기 펼침 깊이만 바꾼다</h2>
+<p class="h2sub">티어별로 다른 화면을 만들면 사용자가 도구를 네 개 배워야 합니다. 조작은 항상 접기/펼치기 하나입니다.</p>
+
+<div class="grid3">
+  <div class="tier"><h4>S 소형</h4><p>진입점 ~30 · 영역 ~5<br>전부 펼친 채로 시작</p>
+    <div class="mini">
+      <div class="minicol"><span class="mb api"></span><span class="mb api"></span></div>
+      <div class="minicol"><span class="mb code"></span><span class="mb code"></span><span class="mb code"></span></div>
+      <div class="minicol"><span class="mb db"></span></div>
+    </div></div>
+  <div class="tier"><h4>M 중형</h4><p>진입점 30~300 · 영역 5~30<br>영역까지 펼침</p>
+    <div class="mini">
+      <div class="minicol"><span class="mb api"></span><span class="mb api"></span><span class="mb ghost"></span></div>
+      <div class="minicol"><span class="mb code"></span><span class="mb code"></span><span class="mb code"></span><span class="mb ghost"></span></div>
+      <div class="minicol"><span class="mb db"></span><span class="mb db"></span></div>
+    </div></div>
+  <div class="tier"><h4>L 대형</h4><p>진입점 300+ · 영역 30~100<br>상위 영역만, 접힌 채로</p>
+    <div class="mini">
+      <div class="minicol"><span class="mb api"></span><span class="mb ghost"></span></div>
+      <div class="minicol"><span class="mb code"></span><span class="mb code"></span><span class="mb ghost"></span></div>
+      <div class="minicol"><span class="mb db"></span><span class="mb ghost"></span></div>
+    </div></div>
+  <div class="tier"><h4>XL 모노레포</h4><p>독립 배포 단위 2개 이상<br>서비스만</p>
+    <div class="mini">
+      <div class="minicol"><span class="mb code"></span></div>
+      <div class="minicol"><span class="mb code"></span></div>
+      <div class="minicol"><span class="mb ghost"></span></div>
+    </div></div>
+</div>
+
+<!-- ============ 4 ============ -->
+<h2><span class="n">4</span> 인코딩 규칙 — 채널이 겹치지 않게</h2>
+<p class="h2sub">색은 종류, 테두리는 신뢰도, 위치는 층, 크기는 규모. 하나의 채널이 두 가지를 말하지 않습니다.</p>
+
+<table>
+  <tr><th>객체</th><th>채널</th><th>의미</th></tr>
+  <tr><td rowspan="5"><b>노드</b></td><td>채움 색</td><td>종류 — API·라우트 / 코드 / 워커·잡 / 데이터베이스 / 외부</td></tr>
+  <tr><td>테두리</td><td>확정(실선) · 후보(점선) · 미분석(빗금 + 점선)</td></tr>
+  <tr><td>가로 위치(레인)</td><td>시스템 층 — 역할 축 또는 의존 깊이 축</td></tr>
+  <tr><td>세로 위치</td><td>연결 관계 (정렬로 암시, 선 없이)</td></tr>
+  <tr><td>크기</td><td>규모 (멤버 수, log 스케일)</td></tr>
+  <tr><td rowspan="3"><b>엣지</b></td><td>표시 여부</td><td><b>기본 숨김.</b> 선택했을 때만 표출</td></tr>
+  <tr><td>선 스타일</td><td>확정(실선) · 후보(점선)</td></tr>
+  <tr><td>두께</td><td>가중치 (묶인 원본 링크 수)</td></tr>
+</table>
+
+<!-- ============ 5 ============ -->
+<h2><span class="n">5</span> Figma에서 가져온 것과 버린 것</h2>
+<p class="h2sub">Figma의 진짜 가치는 캔버스가 아니라 <b>트리 ↔ 캔버스 ↔ 속성 3자 동기화</b>입니다.</p>
+
+<table>
+  <tr><th>요소</th><th>채택</th><th>이유</th></tr>
+  <tr><td>좌측 트리 ↔ 캔버스 양방향 동기화</td><td class="yes"><b>채택</b></td><td>캔버스에서 못 찾는 걸 트리에서 찾습니다</td></tr>
+  <tr><td>우측 속성 패널</td><td class="yes"><b>채택</b></td><td>이미 Inspector가 그 역할</td></tr>
+  <tr><td>선택 상태 3곳 동시 반영</td><td class="yes"><b>채택</b></td><td>"내가 어디 있는지"가 항상 세 곳에 있습니다</td></tr>
+  <tr><td>키보드 중심 (Ctrl K · Esc · 방향키)</td><td class="yes"><b>채택</b></td><td>데스크톱 앱 관례</td></tr>
+  <tr><td>플로팅 범례·줌 컨트롤</td><td class="yes"><b>채택</b></td><td>화면 공간 절약, 범례는 상시 노출</td></tr>
+  <tr><td>세션 간 상태 복원</td><td class="yes"><b>채택</b></td><td>다시 열면 어제 보던 자리여야 공간 기억이 쌓입니다</td></tr>
+  <tr><td>자유 배치 · 드래그</td><td class="no"><b>버림</b></td><td><b>위치가 의미를 담습니다.</b> 사용자가 옮기면 의미가 깨집니다</td></tr>
+  <tr><td>미니맵</td><td class="no"><b>버림</b></td><td>미니맵이 필요하다는 건 한 화면 원칙이 깨졌다는 신호입니다</td></tr>
+  <tr><td>다중 선택 · 그룹 편집</td><td class="no"><b>버림</b></td><td>읽기 전용 도구입니다</td></tr>
+</table>
+
+<!-- ============ 6 ============ -->
+<h2><span class="n">6</span> 확정 규칙 10개</h2>
+<ol class="rules">
+  <li><b>아무것도 사라지지 않는다.</b> 접힌 것도 개수로 남고 면적을 차지한다.</li>
+  <li><b>상한은 상수가 아니라 뷰포트의 함수다.</b> 큰 화면에서 더 보여야 한다.</li>
+  <li><b>밀도가 부족하면 요약 축을 한 단계 올린다.</b> 심볼 → 파일 → 영역.</li>
+  <li><b>펼침은 세로로만.</b> 좌우 레인의 x축은 절대 움직이지 않는다.</li>
+  <li><b>중첩은 최대 3단계.</b> 그 이상은 어느 레벨인지 읽히지 않는다.</li>
+  <li><b>연결선은 기본 숨김.</b> 관계는 정렬로 먼저, 선은 선택했을 때.</li>
+  <li><b>모든 노드는 클릭하면 <code>파일:줄</code>로 간다.</b> 보기만 하고 끝나는 화면은 죽는다.</li>
+  <li><b>도구는 자기 판단을 설명한다.</b> 어떤 축을 왜 골랐는지 화면에 문장으로.</li>
+  <li><b>못 보는 것을 먼저 말한다.</b> 미분석·동적 경계·DB 미연결을 지도보다 앞에.</li>
+  <li><b>전문 용어에는 설명을 병기한다.</b> Repository → "DB를 읽고 쓰는 곳".</li>
+</ol>
+
+</div>
+</body>
+</html>

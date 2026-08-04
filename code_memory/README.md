@@ -1,22 +1,8 @@
 # Visual Map Code Memory
 
-This directory is the extraction boundary for Visual Map's code-graph engine.
-
-It deliberately does not copy the upstream MCP product as a whole. The first
-boundary contains only reusable source-discovery and syntax-extraction pieces:
-
-- repository file discovery and language detection;
-- Tree-sitter runtime and vendored grammars;
-- definitions, imports, and unified per-file AST facts;
-- the upstream extraction data structures and arena-backed result lifetime.
-
-The upstream SQLite graph store, Cypher implementation, MCP server, CLI, UI,
-watcher, embeddings, and product-specific pipeline are excluded. Visual Map
-will define its own canonical graph contract and persistence layer around the
-extracted facts.
-
-Upstream source was taken from `codebase-memory-mcp` commit `affa2231`.
-The upstream project is MIT licensed; see `THIRD_PARTY_NOTICES.md`.
+This directory is the source boundary for Visual Map's code-graph engine.
+The production engine is the Rust executable under `rust/`; framework packs,
+provider assets, contracts, and end-to-end fixtures live beside it.
 
 ## 12-language semantic bridge
 
@@ -64,9 +50,39 @@ library boundaries, database/file boundaries, module-level relations, and
 bounded entrypoint flows. Use `--architecture-out` to choose another path.
 The contract is documented in `docs/contracts/ARCHITECTURE-INDEX.md`.
 
+## Evidence providers
+
+`collect` adds non-language evidence without changing the SCIP/LSP provider
+contract. It reads project descriptors and existing artifacts; it does not run
+builds, tests, containers, Terraform, or application code.
+
+```powershell
+cargo run --manifest-path rust\Cargo.toml -- collect --root D:\path\to\repo --packs-root .
+```
+
+The output is `.code_memory\collection-report.json` using
+`code-memory.collection-report.v1`. It contains build units, framework facts,
+API contracts, Git revision state, CI evidence, migrations, explicit messaging
+APIs, deployment descriptors, and aggregated OTLP traces. Missing inputs are
+reported as `not-detected`, not fabricated as empty facts. The provider and
+safety contract is documented in
+`docs/contracts/EVIDENCE-PROVIDERS.md`.
+
+Command execution is separate and explicit:
+
+```powershell
+cargo run --manifest-path rust\Cargo.toml -- verify --root D:\path\to\repo `
+  --tool cargo --arg test --label "Rust tests"
+```
+
+`verify` never accepts a shell command string. It stores only status, duration,
+exit code, provenance, and bounded output sizes; raw command output remains in
+the terminal. Network-oriented package-manager environment is disabled unless
+`CODE_MEMORY_ALLOW_NETWORK=1` is set by the caller.
+
 ## Framework packs
 
-The supported framework catalog is under `packs/framework`. Validate all 84
+The supported framework catalog is under `packs/framework`. Validate all 85
 declared packs with:
 
 ```powershell

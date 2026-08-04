@@ -1,47 +1,154 @@
 /* ============================================================
-   Base — light backend-map palette
+   Design tokens
+
+   Every visual decision in the product resolves to a token here.
+   The rule is that component CSS never writes a raw hex, a raw px
+   font size, or a raw radius — it names one of these instead. That
+   is what keeps a 200KB stylesheet reading as one product rather
+   than as the sum of the passes that built it.
    ============================================================ */
 :root {
-  /* Surfaces */
-  --bg-app: #edf3fa;
-  --bg-panel: #f8fbff;
-  --bg-raised: #ffffff;
-  --bg-inset: #e8eef7;
+  /* ----------------------------------------------------------
+     Neutral ramp — one slate scale, lightest to darkest.
+     ---------------------------------------------------------- */
+  --n-0: #ffffff;
+  --n-25: #fbfcfe;
+  --n-50: #f6f8fb;
+  --n-100: #eef2f7;
+  --n-200: #e3e9f0;
+  --n-300: #cfd8e3;
+  --n-400: #a6b3c4;
+  --n-500: #7c8ba0;
+  --n-600: #5b6a80;
+  --n-700: #41506a;
+  --n-800: #2a3750;
+  --n-900: #16203a;
 
-  /* Text */
-  --ink: #0f172a;
-  --ink-2: #334155;
-  --ink-3: #526176;
-  --ink-4: #5b6b82;
+  /* ----------------------------------------------------------
+     Surfaces — 0 is the page, each step sits above the last.
+     ---------------------------------------------------------- */
+  --bg-app: var(--n-100);
+  --bg-panel: var(--n-50);
+  --bg-raised: var(--n-0);
+  --bg-inset: var(--n-100);
+  --bg-sunken: var(--n-200);
 
-  /* Borders */
-  --line: rgba(15, 23, 42, 0.10);
-  --line-2: rgba(15, 23, 42, 0.16);
-  --card-line: rgba(15, 23, 42, 0.14);
+  /* ----------------------------------------------------------
+     Text — primary carries content, the rest step back.
+     ---------------------------------------------------------- */
+  --ink: var(--n-900);
+  --ink-2: var(--n-700);
+  --ink-3: var(--n-600);
+  --ink-4: var(--n-500);
 
-  /* Accent + status */
-  --teal: #0891b2;
-  --teal-deep: #0e7490;
-  --teal-ink: #0f7188;
+  /* ----------------------------------------------------------
+     Borders — hairline by default; -2 only where it must be seen.
+     ---------------------------------------------------------- */
+  --line: var(--n-200);
+  --line-2: var(--n-300);
+  --card-line: var(--n-200);
+
+  /* ----------------------------------------------------------
+     Roles. `soft` is the tint behind body text, the solid hue is
+     for the control surface and for text on a neutral background.
+     ---------------------------------------------------------- */
   --blue: #2563eb;
   --blue-deep: #1d4ed8;
   --blue-ink: #1d4ed8;
-  --green: #059669;
-  --green-soft: rgba(5, 150, 105, 0.12);
-  --orange: #d97706;
-  --orange-soft: rgba(217, 119, 6, 0.12);
-  --red: #dc2626;
-  --red-soft: rgba(220, 38, 38, 0.12);
+  --blue-soft: #eef4ff;
+  --blue-line: #c2d6fb;
 
-  /* Elevation */
-  --shadow-panel: 0 16px 40px rgba(15, 23, 42, 0.12);
+  --green: #0f9b6c;
+  --green-ink: #067a55;
+  --green-soft: #e7f6f0;
+  --green-line: #a9dfc9;
 
-  --mono: "Cascadia Code", Consolas, monospace;
+  --orange: #c2760a;
+  --orange-ink: #a4620a;
+  --orange-soft: #fdf3e3;
+  --orange-line: #f0d2a1;
+
+  --red: #d64545;
+  --red-ink: #b93030;
+  --red-soft: #fdeeee;
+  --red-line: #f3c4c4;
+
+  --violet: #7c5cd6;
+  --violet-ink: #6543c4;
+  --violet-soft: #f2eefc;
+  --violet-line: #d6c9f4;
+
+  --teal: #0891b2;
+  --teal-deep: #0e7490;
+  --teal-ink: #0f7188;
+
+  /* Default accent. A shell may repoint these; nothing else may. */
+  --accent: var(--blue);
+  --accent-deep: var(--blue-deep);
+  --accent-ink: var(--blue-ink);
+  --accent-soft: var(--blue-soft);
+  --accent-line: var(--blue-line);
+
+  /* ----------------------------------------------------------
+     Type scale. Seven steps, and 10px is the floor — text below
+     that reads as unfinished no matter how dense the surface.
+     ---------------------------------------------------------- */
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 14px;
+  --fs-xl: 17px;
+  --fs-2xl: 21px;
+
+  --lh-tight: 1.25;
+  --lh-snug: 1.4;
+  --lh-body: 1.55;
+
+  /* Four weights. Small text leans on 600/700, body sits at 400. */
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* ----------------------------------------------------------
+     Spacing — a 4px grid with a 6px half-step for dense chrome.
+     ---------------------------------------------------------- */
+  --sp-1: 4px;
+  --sp-1h: 6px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* ----------------------------------------------------------
+     Radius — controls, cards, panels, pills.
+     ---------------------------------------------------------- */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
+  --r-pill: 999px;
+
+  /* ----------------------------------------------------------
+     Elevation — two contact shadows and one for floating layers.
+     ---------------------------------------------------------- */
+  --shadow-sm: 0 1px 2px rgba(22, 32, 58, 0.06);
+  --shadow-md: 0 2px 4px rgba(22, 32, 58, 0.06), 0 1px 2px rgba(22, 32, 58, 0.04);
+  --shadow-lg: 0 8px 24px rgba(22, 32, 58, 0.10), 0 2px 6px rgba(22, 32, 58, 0.06);
+  --shadow-panel: var(--shadow-lg);
+
+  /* Focus ring, stated once so every control agrees. */
+  --focus-ring: 0 0 0 2px var(--bg-raised), 0 0 0 4px var(--accent-soft);
+
+  --mono: "Cascadia Code", Consolas, ui-monospace, monospace;
 
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 13px;
-  line-height: 1.45;
-  font-weight: 400;
+  font-size: var(--fs-md);
+  line-height: var(--lh-snug);
+  font-weight: var(--fw-regular);
   color: var(--ink);
   background: var(--bg-app);
   font-synthesis: none;

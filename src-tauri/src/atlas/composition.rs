@@ -180,9 +180,11 @@ pub(crate) fn composition_map(
         focus: selected[0].clone(),
         nodes,
         edges,
+        overview_axis: None,
         warnings,
         review_board: None,
         api_reading: None,
+        representative_paths: None,
     })
 }
 
@@ -370,6 +372,7 @@ fn graph_edges(
                     kind: "candidate_uses".to_string(),
                     confidence: Some(link.confidence.clone()),
                     evidence: link.evidence.clone(),
+                    weight: None,
                 }),
         );
     }
@@ -394,6 +397,7 @@ fn graph_edges(
                         item_name(parent, item_by_id)
                     ),
                 }],
+                weight: None,
             })
         }));
     }

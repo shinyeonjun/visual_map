@@ -7,6 +7,10 @@
       "path": "django/pack.json"
     },
     {
+      "id": "drf",
+      "path": "drf/pack.json"
+    },
+    {
       "id": "flask",
       "path": "flask/pack.json"
     },

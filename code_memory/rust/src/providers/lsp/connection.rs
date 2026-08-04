@@ -307,6 +307,7 @@ impl LspConnection {
                     level,
                     code: DiagnosticCode::ProviderDiagnostic,
                     message,
+                    detail: None,
                     path: Some(path),
                     line: diagnostic.line,
                 })

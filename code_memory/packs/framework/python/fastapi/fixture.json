@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "src/fixture.py",
-      "source": "from fastapi import FastAPI; @app.get('/fixture') def handler(): pass\n@Autowired UserService service;"
+      "source": "from fastapi import FastAPI\n@app.get('/fixture')\ndef handler(): pass\n@Autowired UserService service;"
     },
     {
       "path": "pyproject.toml",

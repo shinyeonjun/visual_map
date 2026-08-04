@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 pub(crate) const ITEM_SOURCE_CODE: &str = "code";
 pub(crate) const ITEM_SOURCE_DB: &str = "db";
@@ -35,6 +35,8 @@ pub(crate) struct SnapshotMetadata {
     pub db: Option<SnapshotSourceMetadata>,
     #[serde(default)]
     pub architecture: Option<serde_json::Value>,
+    #[serde(default)]
+    pub evidence: Option<serde_json::Value>,
     #[serde(default)]
     pub migration: SnapshotMigration,
     #[serde(default)]
@@ -112,6 +114,10 @@ pub(crate) struct InventoryItem {
     pub qualified_name: Option<String>,
     #[serde(default)]
     pub engine_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_basis: Option<String>,
     #[serde(default)]
     pub project_id: Option<String>,
     #[serde(default)]
@@ -209,10 +215,36 @@ pub(crate) struct VisualMap {
     pub nodes: Vec<VisualNode>,
     pub edges: Vec<VisualEdge>,
     pub warnings: Vec<String>,
+    /// The evidence-backed organising axis used by the overview projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview_axis: Option<OverviewAxis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_board: Option<ImpactReviewBoard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_reading: Option<ApiReadingAnswer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub representative_paths: Option<Vec<RepresentativePath>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RepresentativePath {
+    pub entry_id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    pub step_count: usize,
+    pub new_coverage: usize,
+    pub cumulative_share: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OverviewAxis {
+    /// "role" or "depth". A depth axis may use the legacy lanes when roots are unsafe.
+    pub kind: String,
+    pub lanes: Vec<String>,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -290,6 +322,7 @@ pub(crate) struct ImpactReviewLane {
 pub(crate) struct ImpactReviewItem {
     pub id: String,
     pub node_id: Option<String>,
+    #[serde(serialize_with = "serialize_diagnostic_kind")]
     pub kind: String,
     pub title: String,
     pub detail: String,
@@ -301,6 +334,28 @@ pub(crate) struct ImpactReviewItem {
     pub location: Option<SourceLocation>,
 }
 
+fn serialize_diagnostic_kind<S>(kind: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let code = match kind {
+        "handler-gap" => "missing-handler",
+        "call-gap" => "unresolved-call",
+        "stale" => "stale-index",
+        "reindex" | "snapshot-migration" => "snapshot-incompatible",
+        "db-inventory-truncated"
+        | "db-limit-clamped"
+        | "candidate-cap"
+        | "candidate-linker-cap"
+        | "db-truncated"
+        | "truncated" => "display-limit",
+        "db-capability" => "unsupported-framework",
+        "gap" | "db-inventory-gap" | "excluded-engine-edge" => "unknown",
+        other => other,
+    };
+    serializer.serialize_str(code)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VisualNode {
@@ -310,8 +365,59 @@ pub(crate) struct VisualNode {
     pub subtitle: Option<String>,
     pub layer: String,
     pub source: String,
+    /// Canonical ownership parent for projected group nodes. Ordinary code,
+    /// API, and data nodes leave this empty; legacy snapshots remain valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Structural ownership depth: package = 0, module = 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<usize>,
+    /// Evidence basis for the projected group assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<SourceLocation>,
+    /// Structured facts the map can render directly. Legacy snapshots keep using subtitle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<VisualNodeMetrics>,
+    /// Language coverage contributed by this node, when the projection has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<VisualNodeCoverage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VisualNodeMetrics {
+    #[serde(default)]
+    pub member_count: usize,
+    pub api_count: usize,
+    pub code_count: usize,
+    pub db_count: usize,
+    pub top_api: Vec<String>,
+    pub top_code: Vec<String>,
+    pub top_db: Vec<String>,
+    #[serde(default)]
+    pub handler_count: usize,
+    #[serde(default)]
+    pub service_count: usize,
+    #[serde(default)]
+    pub repository_count: usize,
+    /// Hops from the nearest entry point. None until the overview computes depth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<usize>,
+    #[serde(default)]
+    pub in_degree: usize,
+    #[serde(default)]
+    pub out_degree: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VisualNodeCoverage {
+    pub languages: Vec<String>,
+    pub has_blind_spot: bool,
+    #[serde(default)]
+    pub has_partial: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -323,4 +429,85 @@ pub(crate) struct VisualEdge {
     pub kind: String,
     pub confidence: Option<String>,
     pub evidence: Vec<Evidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RepresentativePath, VisualEdge, VisualMap, VisualNode};
+
+    #[test]
+    fn legacy_visual_map_deserializes_without_structured_node_fields() {
+        let map: VisualMap = serde_json::from_value(serde_json::json!({
+            "id": "legacy-map",
+            "workspaceId": "workspace-1",
+            "mode": "atlas",
+            "focus": "all",
+            "nodes": [{
+                "id": "group:legacy",
+                "kind": "group-domain",
+                "title": "레거시 영역",
+                "subtitle": "API 1 · 코드 2 · DB 0|route|handler|",
+                "layer": "mixed",
+                "source": "projection",
+                "location": null
+            }],
+            "edges": [],
+            "warnings": []
+        }))
+        .expect("legacy visual map should remain readable");
+
+        assert_eq!(map.nodes[0].metrics, None);
+        assert_eq!(map.nodes[0].coverage, None);
+        assert_eq!(map.representative_paths, None);
+    }
+
+    #[test]
+    fn visual_map_contract_serializes_structured_fields() {
+        let map = VisualMap {
+            id: "map".to_string(),
+            workspace_id: "workspace".to_string(),
+            mode: "atlas".to_string(),
+            focus: "all".to_string(),
+            nodes: vec![VisualNode {
+                id: "group:api".to_string(),
+                kind: "group-domain".to_string(),
+                title: "API".to_string(),
+                subtitle: None,
+                layer: "api".to_string(),
+                source: "projection".to_string(),
+                parent_id: None,
+                depth: None,
+                assigned_by: None,
+                location: None,
+                metrics: None,
+                coverage: None,
+            }],
+            edges: vec![VisualEdge {
+                id: "edge".to_string(),
+                from: "group:api".to_string(),
+                to: "group:code".to_string(),
+                kind: "code_call".to_string(),
+                confidence: Some("high".to_string()),
+                evidence: Vec::new(),
+                weight: Some(3),
+            }],
+            warnings: Vec::new(),
+            overview_axis: None,
+            review_board: None,
+            api_reading: None,
+            representative_paths: Some(vec![RepresentativePath {
+                entry_id: "route".to_string(),
+                title: "GET /orders".to_string(),
+                method: Some("GET".to_string()),
+                step_count: 3,
+                new_coverage: 4,
+                cumulative_share: 0.5,
+            }]),
+        };
+        let value = serde_json::to_value(map).expect("visual map contract should serialize");
+        assert_eq!(value["edges"][0]["weight"], 3);
+        assert_eq!(value["representativePaths"][0]["stepCount"], 3);
+    }
 }

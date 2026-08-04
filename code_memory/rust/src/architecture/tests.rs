@@ -64,6 +64,7 @@ fn excluded_language_reason_is_stable_for_ui_consumers() {
         message:
             "PHP semantic analysis skipped because Composer dependency metadata is unavailable"
                 .to_string(),
+        detail: None,
         path: None,
         line: None,
     }];
@@ -84,6 +85,7 @@ fn diagnostic_code_does_not_depend_on_human_message_wording() {
         level: "warning",
         code: DiagnosticCode::MissingDependencyMetadata,
         message: "provider wording changed in a future release".to_string(),
+        detail: None,
         path: None,
         line: None,
     }];

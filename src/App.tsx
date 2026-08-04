@@ -1,11 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import "./styles/index.css";
 import type { AppPaths } from "./components/common/DevDiagnostics";
 import { DevDiagnostics } from "./components/common/DevDiagnostics";
 import { currentOperationStatus, repoPathErrorFor } from "./app/appState";
 import { toUserError } from "./app/operationStatus";
-import { validateInventoryBootstrap, validateWorkspace, validateWorkspaceAnalysisResult } from "./app/runtimeContracts";
+import {
+  validateInventoryBootstrap,
+  validateStringArray,
+  validateWorkspace,
+  validateWorkspaceAnalysisResult,
+} from "./app/runtimeContracts";
 import { buildDbProfileControls, buildVisualMapControls, buildWorkspaceControls } from "./app/controlBuilders";
 import { hasTauriRuntime } from "./app/tauriRuntime";
 import { useCodeInventory } from "./hooks/useCodeInventory";
@@ -17,11 +22,9 @@ import { codeInventoryFromSnapshot, dbInventoryFromSnapshot } from "./inventory/
 import { dbProfileSourceUsesPath, codeInventoryItemCount } from "./types/workspace";
 import type { InitializeWorkspaceAnalysisRequest, SaveDbProfileRequest } from "./types/workspace";
 import { scheduleSearchIndex } from "./visual/search";
-import type { AnalysisProgress, AnalysisSetupChoice } from "./components/workbench/ProjectAnalysisSetupModal";
+import type { AnalysisProgress, AnalysisSetupChoice } from "./features/map/AnalysisSetupDialog";
 
-const WorkbenchView = lazy(() =>
-  import("./components/workbench/WorkbenchView").then(({ WorkbenchView: view }) => ({ default: view })),
-);
+import { MapWorkspace } from "./features/map/MapWorkspace";
 
 function App() {
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
@@ -199,7 +202,8 @@ function App() {
     let cancelled = false;
 
     const refreshFreshness = () => {
-      void invoke<string[]>("refresh_snapshot_freshness", { workspaceId })
+      void invoke<unknown>("refresh_snapshot_freshness", { workspaceId })
+        .then((value) => validateStringArray(value, "스냅샷 최신성 결과"))
         .then((reasons) => {
           if (cancelled) {
             return;
@@ -372,7 +376,7 @@ function App() {
           source: dbProfileControls.profileSource,
           path: sourceUsesPath ? dbProfileControls.profilePath.trim() : null,
         };
-        const updated = await invoke<import("./types/workspace").Workspace>("save_db_profile", { request });
+        const updated = validateWorkspace(await invoke<unknown>("save_db_profile", { request }));
         workspaces.setCurrentWorkspace(updated);
         db.clearDbInventory();
         visual.clearVisualMap();
@@ -410,44 +414,26 @@ function App() {
     import.meta.env.DEV && hasTauriRuntime() ? <DevDiagnostics paths={appPaths} error={appPathError} /> : null;
 
   return (
-    <Suspense fallback={<WorkbenchLoadingState />}>
-      <WorkbenchView
-        sourceManagerOpen={sourceManagerOpen}
-        setSourceManagerOpen={setSourceManagerOpen}
-        workspaceControls={workspaceControls}
-        dbProfileControls={dbProfileControls}
-        visualMapControls={visualMapControls}
-        engineRegistry={engineRegistry}
-        engineError={engineError}
-        devSlot={devSlot}
-        busyNotice={busyNotice}
-        analysisSetupWorkspace={analysisSetupWorkspace}
-        analysisInitializing={analysisInitializing}
-        analysisProgress={analysisProgress}
-        analysisError={analysisError}
-        onStartAnalysis={startWorkspaceAnalysis}
-        onCancelAnalysis={() => setAnalysisSetupWorkspace(null)}
-        onOpenAnalysis={() => {
-          if (workspaces.currentWorkspace) {
-            setAnalysisError(null);
-            setAnalysisProgress({ percent: 0, label: "분석 준비 중" });
-            setAnalysisSetupWorkspace(workspaces.currentWorkspace);
-          }
-        }}
-        onSaveDbConnection={saveDbConnection}
-        dbConnectionError={dbConnectionError}
-        onOpenDbConnection={() => setDbConnectionError(null)}
-      />
-    </Suspense>
-  );
-}
-
-function WorkbenchLoadingState() {
-  return (
-    <main className="workspace-initializing app-loading" aria-busy="true" aria-live="polite">
-      <strong>작업 화면을 준비하고 있습니다</strong>
-      <span>프로젝트 분석 결과와 시각화 화면을 불러옵니다.</span>
-    </main>
+    <MapWorkspace
+      sourceManagerOpen={sourceManagerOpen}
+      setSourceManagerOpen={setSourceManagerOpen}
+      workspaceControls={workspaceControls}
+      dbProfileControls={dbProfileControls}
+      visualMapControls={visualMapControls}
+      engineRegistry={engineRegistry}
+      engineError={engineError}
+      devSlot={devSlot}
+      busyNotice={busyNotice}
+      analysisSetupWorkspace={analysisSetupWorkspace}
+      analysisInitializing={analysisInitializing}
+      analysisProgress={analysisProgress}
+      analysisError={analysisError}
+      onStartAnalysis={startWorkspaceAnalysis}
+      onCancelAnalysis={() => setAnalysisSetupWorkspace(null)}
+      onSaveDbConnection={saveDbConnection}
+      dbConnectionError={dbConnectionError}
+      onOpenDbConnection={() => setDbConnectionError(null)}
+    />
   );
 }
 

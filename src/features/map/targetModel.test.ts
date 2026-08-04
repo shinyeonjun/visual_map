@@ -1,0 +1,273 @@
+import { describe, expect, it } from "vitest";
+import type { CodeInventory, DbInventory } from "../../types/workspace";
+import {
+  apiPathSegments,
+  buildApiTree,
+  buildCodeTree,
+  buildTargetCatalog,
+  codePathSegments,
+  firstAvailableTargetKind,
+  targetKindForMode,
+} from "./targetModel";
+
+describe("targetModel", () => {
+  it("maps each target type to its automatic answer mode", () => {
+    const catalog = buildTargetCatalog(codeInventory(), dbInventory());
+
+    expect(catalog.api[0]).toMatchObject({
+      title: "/api/orders",
+      sourcePath: "src/routes.ts",
+      focusId: "code:route-orders",
+      mode: "api-flow",
+    });
+    expect(catalog.code[0]).toMatchObject({
+      title: "loadOrders",
+      focusId: "code:function-load-orders",
+      mode: "search-focus",
+    });
+    expect(catalog.table[0]).toMatchObject({
+      title: "public.orders",
+      focusId: "db:table:public.orders",
+      mode: "table-usage",
+    });
+    expect(catalog.column[0]).toMatchObject({
+      title: "id",
+      group: "public.orders",
+      focusId: "db:column:public.orders:id",
+      mode: "column-impact",
+    });
+  });
+
+  it("derives the browser category from the answer mode", () => {
+    expect(targetKindForMode("api-flow")).toBe("api");
+    expect(targetKindForMode("search-focus")).toBe("code");
+    expect(targetKindForMode("table-usage")).toBe("table");
+    expect(targetKindForMode("column-impact")).toBe("column");
+    expect(targetKindForMode("atlas")).toBeNull();
+  });
+
+  it("uses the first category that actually has data", () => {
+    const catalog = buildTargetCatalog(null, dbInventory());
+    expect(firstAvailableTargetKind(catalog)).toBe("table");
+  });
+
+  it("puts backend roles ahead of modules and files", () => {
+    const inventory = codeInventory();
+    inventory.services = [codeItem("service", "OrderService")];
+    inventory.handlers = [codeItem("handler", "OrderHandler")];
+    inventory.repositories = [codeItem("repository", "OrderRepository")];
+    inventory.classes = [codeItem("class", "OrderModel")];
+    inventory.modules = [codeItem("module", "orders.module")];
+    inventory.files = [codeItem("file", "orders.ts")];
+
+    expect(buildTargetCatalog(inventory, null).code.map((item) => [item.badge, item.group])).toEqual([
+      ["HNDL", "핸들러"],
+      ["SVC", "서비스"],
+      ["REPO", "리포지토리"],
+      ["FUNC", "함수"],
+      ["CLASS", "클래스"],
+      ["MOD", "모듈"],
+      ["FILE", "파일"],
+    ]);
+  });
+
+  it("keeps engine-only builtins out of user-selectable code targets", () => {
+    const inventory = codeInventory();
+    inventory.functions.push({
+      ...codeItem("function", "len"),
+      filePath: "<python-builtins>",
+    });
+
+    expect(buildTargetCatalog(inventory, null).code.map((item) => item.title)).toEqual(["loadOrders"]);
+    expect(inventory.functions.map((item) => item.name)).toContain("len");
+  });
+
+  it("keeps the source root visible for duplicate routes in different trees", () => {
+    const inventory = codeInventory();
+    inventory.routes = [
+      { ...inventory.routes[0], id: "legacy-route", filePath: "legacy/backend/app/api/routes/events.py", line: 198 },
+      { ...inventory.routes[0], id: "current-route", filePath: "server/app/api/routes/events/query.py", line: 116 },
+    ];
+
+    expect(buildTargetCatalog(inventory, null).api.map((item) => item.meta)).toEqual([
+      "legacy/…/routes/events.py:198",
+      "server/…/events/query.py:116",
+    ]);
+  });
+
+  it("keeps API and table positions stable when engine result order changes", () => {
+    const inventory = codeInventory();
+    inventory.routes = [
+      { ...inventory.routes[0], id: "route-z", name: "/api/zebra" },
+      { ...inventory.routes[0], id: "route-a", name: "/api/accounts" },
+    ];
+    const database = dbInventory();
+    database.tables = [
+      { schema: "public", name: "users", columns: [] },
+      { schema: "audit", name: "events", columns: [] },
+    ];
+
+    const catalog = buildTargetCatalog(inventory, database);
+
+    expect(catalog.api.map((item) => item.title)).toEqual(["/api/accounts", "/api/zebra"]);
+    expect(catalog.table.map((item) => item.title)).toEqual(["audit.events", "public.users"]);
+    expect(inventory.routes.map((item) => item.name)).toEqual(["/api/zebra", "/api/accounts"]);
+    expect(database.tables.map((table) => table.name)).toEqual(["users", "events"]);
+  });
+
+  it("keeps UI navigation routes out of the API catalog", () => {
+    const inventory = codeInventory();
+    inventory.routes.push({
+      id: "ui-login",
+      kind: "Route",
+      name: "/login",
+      filePath: "frontend/pages/login.tsx",
+      line: 21,
+      detail: { routeSurface: "ui-navigation" },
+    });
+
+    const catalog = buildTargetCatalog(inventory, null);
+    expect(catalog.api.map((item) => item.title)).toEqual(["/api/orders"]);
+    expect(catalog.code.find((item) => item.id === "code:ui-login")).toMatchObject({
+      badge: "UI",
+      group: "화면 라우트",
+      mode: "search-focus",
+    });
+  });
+
+  it("fails closed for frontend navigation routes without the optional surface field", () => {
+    const inventory = codeInventory();
+    inventory.routes.push({
+      id: "ui-login-inferred",
+      kind: "Route",
+      name: "ANY /login",
+      filePath: "frontend/src/pages/login.tsx",
+      line: 21,
+      detail: {},
+    });
+
+    const catalog = buildTargetCatalog(inventory, null);
+    expect(catalog.api.map((item) => item.title)).toEqual(["/api/orders"]);
+    expect(catalog.code.find((item) => item.id === "code:ui-login-inferred")).toMatchObject({
+      badge: "UI",
+    });
+  });
+
+  it("builds API folders from route paths without framework-specific mapping", () => {
+    const catalog = buildTargetCatalog(
+      {
+        ...codeInventory(),
+        routes: [
+          { ...codeInventory().routes[0], id: "auth-login", name: "POST /api/v1/auth/login" },
+          { ...codeInventory().routes[0], id: "auth-me", name: "GET /api/v1/auth/me" },
+          { ...codeInventory().routes[0], id: "session-detail", name: "GET /api/v1/sessions/{session_id}" },
+        ],
+      },
+      null,
+    );
+    const tree = buildApiTree(catalog.api);
+    const api = tree.children.find((node) => node.label === "api");
+    const v1 = api?.children.find((node) => node.label === "v1");
+    expect(v1?.children.map((node) => node.label)).toEqual(["auth", "sessions"]);
+    expect(apiPathSegments("fastapi: DELETE /api/v1/sessions/{session_id}")).toEqual([
+      "api",
+      "v1",
+      "sessions",
+      "{session_id}",
+    ]);
+  });
+
+  it("renders a duplicated provider method prefix only once", () => {
+    const inventory = codeInventory();
+    inventory.routes = [
+      {
+        ...inventory.routes[0],
+        name: "POST POST /token",
+        qualifiedName: "__route__POST__/token",
+      },
+    ];
+
+    expect(buildTargetCatalog(inventory, null).api[0]?.title).toBe("POST /token");
+  });
+
+  it("builds code folders from source paths without language-specific mapping", () => {
+    const catalog = buildTargetCatalog(
+      {
+        ...codeInventory(),
+        functions: [
+          { ...codeInventory().functions[0], filePath: "server/orders/service.ts" },
+          {
+            ...codeInventory().functions[0],
+            id: "function-list-orders",
+            name: "listOrders",
+            filePath: "server/orders/query.ts",
+          },
+        ],
+      },
+      null,
+    );
+    const tree = buildCodeTree(catalog.code);
+    const server = tree.children.find((node) => node.label === "server");
+    const orders = server?.children.find((node) => node.label === "orders");
+
+    expect(orders?.children.map((node) => node.label)).toEqual(["query.ts", "service.ts"]);
+    expect(orders?.children[0]?.items[0]?.title).toBe("listOrders");
+    expect(codePathSegments("D:\\repo\\server\\routes\\auth.py")).toEqual(["repo", "server", "routes", "auth.py"]);
+    expect(codePathSegments(null)).toEqual(["소스 위치 없음"]);
+  });
+});
+
+function codeInventory(): CodeInventory {
+  return {
+    project: "orders",
+    routes: [
+      { id: "route-orders", kind: "api", name: "/api/orders", filePath: "src/routes.ts", line: 12, detail: null },
+    ],
+    services: [],
+    handlers: [],
+    repositories: [],
+    functions: [
+      {
+        id: "function-load-orders",
+        kind: "function",
+        name: "loadOrders",
+        filePath: "src/orders.ts",
+        line: 23,
+        detail: null,
+      },
+    ],
+    classes: [],
+    modules: [],
+    unknown: [],
+    files: [],
+    calls: [],
+    summary: {
+      routes: 1,
+      handlers: 0,
+      services: 0,
+      repositories: 0,
+      functions: 1,
+      classes: 0,
+      modules: 0,
+      files: 0,
+      unknown: 0,
+    },
+  };
+}
+
+function codeItem(kind: string, name: string) {
+  return { id: `${kind}-${name}`, kind, name, filePath: `src/${name}`, line: 1, detail: null };
+}
+
+function dbInventory(): DbInventory {
+  return {
+    profileId: "main-db",
+    tables: [
+      {
+        schema: "public",
+        name: "orders",
+        columns: [{ name: "id", dataType: "uuid", isPrimaryKey: true, isForeignKey: false }],
+      },
+    ],
+  };
+}

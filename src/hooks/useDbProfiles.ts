@@ -1,12 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { toUserError } from "../app/operationStatus";
 import { validateDbIndexResult, validateDbInventory, validateWorkspace } from "../app/runtimeContracts";
 import { hasTauriRuntime, tauriUnavailableMessage } from "../app/tauriRuntime";
 import {
   dbInventoryTableKey,
   dbInventoryTableCount,
+  dbInventoryTotalTableCount,
   dbProfileSourceUsesPath,
   type DbInventory,
   type DbProfile,
@@ -44,6 +45,7 @@ export function useDbProfiles({
   const [dbInventory, setDbInventory] = useState<DbInventory | null>(null);
   const [inventoryWorkspaceId, setInventoryWorkspaceId] = useState<string | null>(null);
   const [selectedDbTableKey, setSelectedDbTableKey] = useState<string | null>(null);
+  const indexGenerationRef = useRef(0);
 
   useLayoutEffect(() => {
     hydrateDbProfile(activeProfile);
@@ -53,10 +55,11 @@ export function useDbProfiles({
   }, [currentWorkspace?.id, activeProfile]);
 
   useLayoutEffect(() => {
+    indexGenerationRef.current += 1;
     setDbStatus(null);
     setDbError(null);
     setDbErrorDetail(null);
-  }, [currentWorkspace?.id]);
+  }, [currentWorkspace?.id, activeProfile?.id]);
 
   async function pickDbPath(directory = false) {
     if (!dbProfileSourceUsesPath(dbProfileSource)) {
@@ -147,10 +150,14 @@ export function useDbProfiles({
     if (!request) {
       return;
     }
+    const generation = ++indexGenerationRef.current;
 
     await withBusy("db-index", async () => {
       try {
         const result = validateDbIndexResult(await invoke<unknown>("index_db_profile", { request }));
+        if (generation !== indexGenerationRef.current) {
+          return;
+        }
         const dbMessage = redactUiSecret(result.run.stderr || result.run.stdout || "DB 읽기 실패", dbConnectionString);
         setCurrentWorkspace(result.workspace);
         if (result.run.ok) {
@@ -167,7 +174,7 @@ export function useDbProfiles({
           } else {
             setDbStatus("DB 읽기 결과 저장 중...");
             try {
-              await storeDbInventory(request.workspaceId, result.inventory);
+              await storeDbInventory(request.workspaceId, result.inventory, generation);
             } catch (error) {
               const uiError = toUserError(error, "DB 읽기 결과를 저장하지 못했습니다");
               setDbStatus(successMessage);
@@ -295,9 +302,10 @@ export function useDbProfiles({
     workspaceId = currentWorkspace?.id ?? null,
   ) {
     validateDbInventory(inventory);
+    const partial = dbInventoryIsPartial(inventory);
     setDbInventory({
       ...inventory,
-      partial: Boolean(inventory.partial || dbInventoryTableCount(inventory) > inventory.tables.length),
+      partial,
     });
     setInventoryWorkspaceId(workspaceId);
     setSelectedDbTableKey(selectedTableKey);
@@ -306,19 +314,29 @@ export function useDbProfiles({
     setDbErrorDetail(null);
   }
 
-  async function storeDbInventory(workspaceId: string, inventory: DbInventory) {
+  async function storeDbInventory(
+    workspaceId: string,
+    inventory: DbInventory,
+    generation = indexGenerationRef.current,
+  ) {
+    if (generation !== indexGenerationRef.current) {
+      return;
+    }
     validateDbInventory(inventory);
     const presentedInventory = {
       ...inventory,
-      partial: Boolean(inventory.partial || dbInventoryTableCount(inventory) > inventory.tables.length),
+      partial: dbInventoryIsPartial(inventory),
     };
+    await refreshInventorySnapshot(workspaceId);
+    if (generation !== indexGenerationRef.current) {
+      return;
+    }
     setDbInventory(presentedInventory);
     setInventoryWorkspaceId(workspaceId);
     setSelectedDbTableKey(presentedInventory.tables[0] ? dbInventoryTableKey(presentedInventory.tables[0]) : null);
     setDbStatus(dbInventoryStatus(presentedInventory, "읽음"));
     setDbError(null);
     setDbErrorDetail(null);
-    await refreshInventorySnapshot(workspaceId);
   }
 
   return {
@@ -348,15 +366,27 @@ export function useDbProfiles({
 
 function dbInventoryStatus(inventory: DbInventory, action: string): string {
   const tableCount = dbInventoryTableCount(inventory);
+  const totalTableCount = dbInventoryTotalTableCount(inventory);
   if (tableCount === 0) {
     return "테이블 목록이 비어 있음";
   }
   const columnCount = inventory.tables.reduce((sum, table) => sum + table.columns.length, 0);
   const missingColumnTables = inventory.tables.filter((table) => table.columns.length === 0).length;
+  const partial = dbInventoryIsPartial(inventory);
+  const tableLabel =
+    partial && totalTableCount > tableCount ? `표시 ${tableCount}/${totalTableCount}개` : `테이블 ${tableCount}개`;
   if (missingColumnTables > 0 && columnCount > 0) {
-    return `테이블 ${tableCount}개, 컬럼 ${columnCount}개, ${missingColumnTables}개 테이블 컬럼 필요 ${action}`;
+    return `${tableLabel}, 컬럼 ${columnCount}개, ${missingColumnTables}개 테이블 컬럼 필요 ${action}`;
   }
-  return `테이블 ${tableCount}개, 컬럼 ${columnCount}개 ${action}`;
+  return `${tableLabel}, 컬럼 ${columnCount}개 ${action}`;
+}
+
+function dbInventoryIsPartial(inventory: DbInventory): boolean {
+  return Boolean(
+    inventory.partial ||
+    inventory.truncated ||
+    (inventory.totalTables != null && inventory.totalTables > inventory.tables.length),
+  );
 }
 
 function getActiveDbProfile(workspace: Workspace | null): DbProfile | null {

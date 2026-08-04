@@ -16,7 +16,7 @@ if ($adapterCatalog.schema -ne 'code-memory.framework-adapter-catalog.v1') {
 $expected = @{
     typescript = @('react','nextjs','angular','vue','nuxt','sveltekit','express','fastify','nestjs','koa')
     javascript = @('react','nextjs','angular','vue','nuxt','sveltekit','express','fastify','nestjs','koa','tauri')
-    python = @('django','flask','fastapi','starlette','sanic')
+    python = @('django','drf','flask','fastapi','starlette','sanic')
     java = @('spring','spring-boot','spring-mvc','spring-webflux','jakarta-ee','quarkus','micronaut','play')
     csharp = @('aspnet-core','aspnet-mvc','aspnet-web-api','minimal-api','blazor','dotnet-maui')
     c = @('gtk-glib','qt','libuv','libevent')
@@ -108,7 +108,6 @@ foreach ($language in $catalog.languages) {
     Write-Host "PASS $($language.id): $(@($document.packs).Count) packs"
 }
 
-if ($total -ne 84) { throw "expected 84 packs, found $total" }
-if (@($adapterCatalog.adapters.psobject.Properties).Count -ne 84) { throw "expected 84 adapters" }
-Write-Host "framework pack gate: passed=$total total=84"
-
+if ($total -ne 85) { throw "expected 85 packs, found $total" }
+if (@($adapterCatalog.adapters.psobject.Properties).Count -ne 85) { throw "expected 85 adapters" }
+Write-Host "framework pack gate: passed=$total total=85"

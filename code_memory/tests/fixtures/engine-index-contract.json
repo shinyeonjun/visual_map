@@ -1,0 +1,37 @@
+{
+  "schema": "code-memory.language-index.v2",
+  "requiredTopLevel": [
+    "schema",
+    "project_root",
+    "provider_provenance",
+    "languages",
+    "coverage",
+    "documents",
+    "relations",
+    "file_relations",
+    "project_model_files",
+    "frameworks",
+    "framework_relations",
+    "diagnostics",
+    "timings",
+    "analysis_units"
+  ],
+  "requiredAnalysisUnitFields": [
+    "id",
+    "language",
+    "root",
+    "files_found",
+    "files_indexed",
+    "files_excluded",
+    "files_missing",
+    "status"
+  ],
+  "requiredTimingStages": [
+    "file_walk",
+    "source_hashing",
+    "cache_invalidation",
+    "cache_key_hashing",
+    "cache_io",
+    "cache_json_deserialize"
+  ]
+}

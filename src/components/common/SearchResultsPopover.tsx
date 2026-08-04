@@ -45,7 +45,7 @@ export function SearchResultsPopover({
         {hasResults && <span>표시 {resultCount}개</span>}
       </div>
       {visualMapControls.searchGroups.map((group) => (
-        <div className="search-group" key={group.title}>
+        <div className="search-group" key={group.title + ":" + (group.results[0]?.id ?? "empty")}>
           <span>
             {group.title} · {group.results.length}개
           </span>

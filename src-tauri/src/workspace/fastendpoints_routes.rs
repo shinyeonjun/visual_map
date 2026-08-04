@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fs, path::Path};
 
-use super::model::{CodeHandle, CodeInventory, CodeInventoryItem};
+use super::model::{CodeHandle, CodeInventory, CodeInventoryGap, CodeInventoryItem};
 
 const MAX_CSHARP_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
 const HTTP_METHODS: &[&str] = &[
@@ -15,6 +15,7 @@ struct RouteDeclaration {
 }
 
 pub(super) fn enrich_fastendpoints_routes(repo_path: &str, inventory: &mut CodeInventory) {
+    record_unreadable_fastendpoints_sources(repo_path, inventory);
     let discovered = discover_fastendpoints_routes(repo_path, inventory);
     if discovered.is_empty() {
         return;
@@ -33,6 +34,52 @@ pub(super) fn enrich_fastendpoints_routes(repo_path: &str, inventory: &mut CodeI
         }
     }
     super::code::attach_route_handles(handles, inventory);
+}
+
+fn record_unreadable_fastendpoints_sources(repo_path: &str, inventory: &mut CodeInventory) {
+    let mut seen = HashSet::new();
+    let paths = code_items(inventory)
+        .into_iter()
+        .filter(|item| item.engine_label == "Method" && item.name == "Configure")
+        .filter_map(|configure| {
+            configure
+                .file_path
+                .as_deref()
+                .filter(|path| is_csharp_path(path))
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    for path in paths {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let Ok(resolved) = crate::source::resolve_repo_source(repo_path, &path) else {
+            inventory.relation_gaps.push(CodeInventoryGap::new(
+                "provider-source-scan",
+                "provider:fastendpoints",
+                format!("file:{path}"),
+                "FastEndpoints 보강 분석이 C# 소스 경로를 확인하지 못했습니다. 해당 endpoint의 정적 경로를 확정하지 않았습니다.",
+            ));
+            continue;
+        };
+        let too_large = resolved
+            .metadata()
+            .map(|metadata| metadata.len() > MAX_CSHARP_SOURCE_BYTES)
+            .unwrap_or(true);
+        let unreadable = !too_large && fs::read_to_string(&resolved).is_err();
+        if too_large || unreadable {
+            inventory.relation_gaps.push(CodeInventoryGap::new(
+                "provider-source-scan",
+                "provider:fastendpoints",
+                format!("file:{path}"),
+                if too_large {
+                    "FastEndpoints 보강 분석이 안전 한도보다 큰 C# 소스를 제외했습니다. 해당 endpoint의 정적 경로를 확정하지 않았습니다."
+                } else {
+                    "FastEndpoints 보강 분석이 C# 소스를 읽지 못했습니다. 해당 endpoint의 정적 경로를 확정하지 않았습니다."
+                },
+            ));
+        }
+    }
 }
 
 fn discover_fastendpoints_routes(
@@ -547,6 +594,7 @@ mod tests {
                 unknown: 0,
             },
             architecture: None,
+            evidence: None,
             calls: Vec::new(),
             handles: Vec::new(),
             relation_gaps: Vec::new(),

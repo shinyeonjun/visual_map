@@ -541,6 +541,17 @@ mod tests {
 
     use super::*;
 
+    const ODBC_ADAPTER_SOURCE: &str = concat!(
+        include_str!("adapters/odbc.rs"),
+        include_str!("adapters/odbc/core.rs"),
+        include_str!("adapters/odbc/runtime/core.rs"),
+        include_str!("adapters/odbc/runtime/strategies.rs"),
+        include_str!("adapters/odbc/runtime/introspection.rs"),
+        include_str!("adapters/odbc/runtime/validation.rs"),
+        include_str!("adapters/odbc/runtime/errors.rs"),
+        include_str!("adapters/odbc/tests.rs"),
+    );
+
     #[test]
     fn product_boundary_stays_rdb_first() {
         assert_eq!("RDB schema graph memory", product_boundary());
@@ -582,7 +593,7 @@ mod tests {
             ("yugabytedb", include_str!("adapters/yugabytedb.rs")),
             ("mysql", include_str!("adapters/mysql.rs")),
             ("mysql-catalog", adapters::mysql_catalog::SOURCE),
-            ("odbc", include_str!("adapters/odbc.rs")),
+            ("odbc", ODBC_ADAPTER_SOURCE),
             ("sqlserver", include_str!("adapters/sqlserver.rs")),
             ("sqlserver-catalog", adapters::sqlserver_catalog::SOURCE),
             ("oracle", include_str!("adapters/oracle.rs")),
@@ -644,7 +655,7 @@ mod tests {
             ),
             (
                 "odbc",
-                include_str!("adapters/odbc.rs"),
+                ODBC_ADAPTER_SOURCE,
                 ["set_read_only_access", "verify_read_only_access"].as_slice(),
             ),
             (
@@ -672,7 +683,7 @@ mod tests {
             ("mysql", adapters::mysql_catalog::SOURCE),
             ("sqlserver", adapters::sqlserver_catalog::SOURCE),
             ("oracle", adapters::oracle_catalog::SOURCE),
-            ("odbc", include_str!("adapters/odbc.rs")),
+            ("odbc", ODBC_ADAPTER_SOURCE),
         ];
         let forbidden = [
             "insert into ",

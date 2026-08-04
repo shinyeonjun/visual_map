@@ -36,7 +36,7 @@
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
       "engines/manifest.json": "engines/manifest.json",
       "engines/code-memory-language.exe": "engines/code-memory-language.exe",
-      "engines/packs": "engines/packs",
+      "../code_memory/packs": "engines/packs",
       "engines/provider-bundles": "engines/provider-bundles",
       "engines/database-memory.exe": "engines/database-memory.exe"
     },

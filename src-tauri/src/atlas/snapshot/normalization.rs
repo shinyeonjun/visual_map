@@ -284,6 +284,9 @@ pub(super) fn code_item(
     } else {
         &entry.engine_label
     };
+    let inferred_kind = detail_string(&entry.detail, &["role"]);
+    let language = detail_string(&entry.detail, &["language"])
+        .or_else(|| path.as_deref().and_then(language_for_path));
     let location = path.clone().map(|path| SourceLocation {
         path,
         line: entry.line,
@@ -298,7 +301,7 @@ pub(super) fn code_item(
 
     InventoryItem {
         id: format!("code:{}", entry.id),
-        kind: kind.to_string(),
+        kind: inferred_kind.unwrap_or_else(|| kind.to_string()),
         name: entry.name.clone(),
         layer: layer.to_string(),
         source: "code".to_string(),
@@ -306,6 +309,8 @@ pub(super) fn code_item(
         path,
         qualified_name: non_empty(qualified_name),
         engine_label: non_empty(engine_label),
+        language,
+        role_basis: detail_string(&entry.detail, &["roleBasis", "role_basis"]),
         project_id: non_empty(project),
         group_id: detail_string(
             &entry.detail,
@@ -324,6 +329,26 @@ pub(super) fn code_item(
         is_foreign_key: false,
         nullable: None,
     }
+}
+
+fn language_for_path(path: &str) -> Option<String> {
+    let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
+    let language = match extension.as_str() {
+        "ts" | "tsx" | "mts" | "cts" => "typescript",
+        "js" | "jsx" | "mjs" | "cjs" => "javascript",
+        "py" | "pyi" => "python",
+        "java" => "java",
+        "cs" => "csharp",
+        "go" => "go",
+        "rs" => "rust",
+        "php" => "php",
+        "rb" | "rake" => "ruby",
+        "dart" => "dart",
+        "c" | "h" => "c",
+        "cc" | "cpp" | "cxx" | "hpp" => "cpp",
+        _ => return None,
+    };
+    Some(language.to_string())
 }
 
 pub(super) fn is_ui_route(entry: &CodeInventoryItem) -> bool {

@@ -212,10 +212,10 @@ pub(crate) fn analyze_with_sources(
                         || matched_metadata_roots
                             .iter()
                             .any(|root| path_is_in_scope(path, root));
-                    (has_route_syntax_candidate(source, &pack.language)
+                    ((has_route_syntax_candidate(source, &pack.language)
                         || file_system_route(&pack, path, source).is_some())
+                        || source_signal_files.contains(path))
                         && in_metadata_scope
-                        || source_signal_files.contains(path)
                 } else {
                     !restrict_to_signal_files || source_signal_files.contains(*path)
                 }
@@ -397,4 +397,3 @@ pub(crate) fn analyze_with_sources(
         relations,
     })
 }
-

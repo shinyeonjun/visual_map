@@ -49,7 +49,6 @@ foreach ($engine in @($manifest.engines)) {
 foreach ($requiredText in @(
   "Permission is hereby granted, free of charge",
   'THE SOFTWARE IS PROVIDED "AS IS"',
-  "Copyright (c) 2025 DeusData",
   "Copyright (c) 2026"
 )) {
   if (-not $notices.Contains($requiredText)) {

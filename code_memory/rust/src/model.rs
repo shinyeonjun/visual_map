@@ -233,6 +233,8 @@ pub(crate) struct Diagnostic {
     pub(crate) code: DiagnosticCode,
     pub(crate) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) line: Option<u32>,
@@ -245,10 +247,14 @@ pub(crate) struct Diagnostic {
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum DiagnosticCode {
     ProviderMissing,
+    #[serde(rename = "provider-failed")]
+    ProviderFailed,
     IndexerFailed,
     InvalidOutput,
     EmptySemantic,
+    #[serde(rename = "missing-dependency-metadata")]
     MissingDependencyMetadata,
+    #[serde(rename = "missing-dependency")]
     DependencyMetadataGap,
     MissingCompileContext,
     MissingExternalTool,
@@ -256,11 +262,21 @@ pub(crate) enum DiagnosticCode {
     ProviderTimeout,
     ProviderStopped,
     PartialCoverage,
+    #[serde(rename = "workspace-too-large")]
     LargeWorkspacePartial,
     JavaSourceFallback,
     JavaSourceFallbackFailed,
+    TypescriptSourceFallback,
     RubyBundleWarning,
     ProviderDiagnostic,
+    GeneratedCode,
+    TestOnly,
+    UnsupportedFramework,
+    DynamicRegistration,
+    StaleIndex,
+    SnapshotIncompatible,
+    DisplayLimit,
+    Unknown,
     #[default]
     Internal,
 }
@@ -269,22 +285,32 @@ impl DiagnosticCode {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::ProviderMissing => "provider-missing",
+            Self::ProviderFailed => "provider-failed",
             Self::IndexerFailed => "indexer-failed",
             Self::InvalidOutput => "invalid-output",
             Self::EmptySemantic => "empty-semantic",
             Self::MissingDependencyMetadata => "missing-dependency-metadata",
-            Self::DependencyMetadataGap => "dependency-metadata-gap",
+            Self::DependencyMetadataGap => "missing-dependency",
             Self::MissingCompileContext => "missing-compile-context",
             Self::MissingExternalTool => "missing-external-tool",
             Self::MissingLegacySdk => "missing-legacy-sdk",
             Self::ProviderTimeout => "provider-timeout",
             Self::ProviderStopped => "provider-stopped",
             Self::PartialCoverage => "partial-coverage",
-            Self::LargeWorkspacePartial => "large-workspace-partial",
+            Self::LargeWorkspacePartial => "workspace-too-large",
             Self::JavaSourceFallback => "java-source-fallback",
             Self::JavaSourceFallbackFailed => "java-source-fallback-failed",
+            Self::TypescriptSourceFallback => "typescript-source-fallback",
             Self::RubyBundleWarning => "ruby-bundle-warning",
             Self::ProviderDiagnostic => "provider-diagnostic",
+            Self::GeneratedCode => "generated-code",
+            Self::TestOnly => "test-only",
+            Self::UnsupportedFramework => "unsupported-framework",
+            Self::DynamicRegistration => "dynamic-registration",
+            Self::StaleIndex => "stale-index",
+            Self::SnapshotIncompatible => "snapshot-incompatible",
+            Self::DisplayLimit => "display-limit",
+            Self::Unknown => "unknown",
             Self::Internal => "internal",
         }
     }

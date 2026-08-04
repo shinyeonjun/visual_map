@@ -57,6 +57,7 @@
     "php/slim": "registration-routing",
     "php/symfony": "annotation-routing",
     "python/django": "annotation-routing",
+    "python/drf": "annotation-routing",
     "python/fastapi": "annotation-routing",
     "python/flask": "annotation-routing",
     "python/sanic": "annotation-routing",

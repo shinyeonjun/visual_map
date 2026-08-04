@@ -387,3 +387,19 @@ The two cores are ready for Visual Map integration only when:
 
 This document is the data checklist for codebase-memory, database-memory, the
 integration adapter, and the fixture tests.
+
+## 9. Golden contract check
+
+The minimum serialized shape is captured in
+`code_memory/tests/fixtures/engine-index-contract.json` and checked by
+`index_output_matches_contract_golden_shape` in the Rust test suite. The
+fixture intentionally validates field names and required sections, not a
+large project snapshot.
+
+When the contract changes, update the fixture and the test assertion together,
+then run:
+
+```powershell
+cargo test --manifest-path code_memory/rust/Cargo.toml index_output_matches_contract_golden_shape
+cargo test --locked --manifest-path src-tauri/Cargo.toml visual_map_contract_serializes_structured_fields
+```

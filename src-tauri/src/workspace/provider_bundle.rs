@@ -1,6 +1,8 @@
+use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::{
-    fs::{self, File},
+    collections::HashSet,
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
@@ -32,6 +34,19 @@ struct ExtractedProviderManifest {
 #[derive(Debug, serde::Deserialize)]
 struct ExtractedProvider {
     path: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ExtractedProviderChecksums {
+    #[serde(default)]
+    files: Vec<ExtractedProviderChecksum>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ExtractedProviderChecksum {
+    path: String,
+    bytes: u64,
+    sha256: String,
 }
 
 static EXTRACTION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -84,12 +99,22 @@ pub(crate) fn ensure_provider_root(
     let _lock = lock
         .lock()
         .map_err(|_| "provider 압축 해제 잠금이 손상됐습니다".to_string())?;
+    fs::create_dir_all(cache_dir)
+        .map_err(|error| format!("provider 캐시 폴더를 만들지 못했습니다: {error}"))?;
+    let process_lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(cache_dir.join("provider-extraction.lock"))
+        .map_err(|error| format!("provider 압축 해제 잠금 파일을 열지 못했습니다: {error}"))?;
+    process_lock
+        .try_lock_exclusive()
+        .map_err(|error| format!("다른 앱 인스턴스가 provider 압축을 해제 중입니다: {error}"))?;
     if cached_provider_root_is_usable(&destination, &marker, &manifest_hash) {
         return Ok(Some(destination));
     }
 
-    fs::create_dir_all(cache_dir)
-        .map_err(|error| format!("provider 캐시 폴더를 만들지 못했습니다: {error}"))?;
     let temporary = cache_dir.join(format!("providers.tmp-{}", std::process::id()));
     if temporary.exists() {
         fs::remove_dir_all(&temporary)
@@ -104,9 +129,10 @@ pub(crate) fn ensure_provider_root(
         &temporary,
     )
     .and_then(|()| {
+        let checksum_hash = sha256_file(&temporary.join("checksums.json"))?;
         fs::write(
             temporary.join(PROVIDER_CACHE_MARKER),
-            manifest_hash.as_bytes(),
+            cache_marker_contents(&manifest_hash, &checksum_hash),
         )
         .map_err(|error| format!("provider 캐시 검증 표식을 저장하지 못했습니다: {error}"))
     })
@@ -132,11 +158,7 @@ pub(crate) fn ensure_provider_root(
 }
 
 fn cached_provider_root_is_usable(destination: &Path, marker: &Path, manifest_hash: &str) -> bool {
-    if !destination.is_dir()
-        || fs::read_to_string(marker)
-            .map(|value| value.trim() != manifest_hash)
-            .unwrap_or(true)
-    {
+    if !destination.is_dir() {
         return false;
     }
 
@@ -146,7 +168,7 @@ fn cached_provider_root_is_usable(destination: &Path, marker: &Path, manifest_ha
         "node/project-model.cjs",
         "node/runtime/node.exe",
     ] {
-        if !is_real_file(&destination.join(relative)) {
+        if !is_safe_cached_file(destination, relative) {
             return false;
         }
     }
@@ -157,10 +179,91 @@ fn cached_provider_root_is_usable(destination: &Path, marker: &Path, manifest_ha
     let Ok(manifest) = serde_json::from_slice::<ExtractedProviderManifest>(&bytes) else {
         return false;
     };
-    !manifest.providers.is_empty()
-        && manifest.providers.iter().all(|provider| {
-            is_safe_relative_path(&provider.path) && is_real_file(&destination.join(&provider.path))
+    if manifest.providers.is_empty()
+        || !manifest
+            .providers
+            .iter()
+            .all(|provider| is_safe_cached_file(destination, &provider.path))
+    {
+        return false;
+    }
+
+    let Ok(checksum_bytes) = fs::read(destination.join("checksums.json")) else {
+        return false;
+    };
+    let checksum_hash = sha256_bytes(&checksum_bytes);
+    if fs::read_to_string(marker)
+        .map(|value| !cache_marker_matches(&value, manifest_hash, &checksum_hash))
+        .unwrap_or(true)
+    {
+        return false;
+    }
+    let Ok(checksums) = serde_json::from_slice::<ExtractedProviderChecksums>(&checksum_bytes)
+    else {
+        return false;
+    };
+    let mut checksum_paths = HashSet::new();
+    !checksums.files.is_empty()
+        && checksums.files.iter().all(|entry| {
+            if !is_safe_relative_path(&entry.path) || !is_sha256(&entry.sha256) {
+                return false;
+            }
+            if !checksum_paths.insert(entry.path.clone()) {
+                return false;
+            }
+            let path = destination.join(&entry.path);
+            if !is_real_file(&path) {
+                return false;
+            }
+            let Ok(metadata) = fs::metadata(&path) else {
+                return false;
+            };
+            metadata.len() == entry.bytes
+                && sha256_file(&path)
+                    .map(|hash| hash.eq_ignore_ascii_case(&entry.sha256))
+                    .unwrap_or(false)
         })
+        && [
+            "manifest.json",
+            "node/project-model.cjs",
+            "node/runtime/node.exe",
+        ]
+        .into_iter()
+        .chain(
+            manifest
+                .providers
+                .iter()
+                .map(|provider| provider.path.as_str()),
+        )
+        .all(|path| checksum_paths.contains(path))
+}
+
+fn cache_marker_contents(manifest_hash: &str, checksum_hash: &str) -> String {
+    format!("{manifest_hash}\n{checksum_hash}\n")
+}
+
+fn cache_marker_matches(value: &str, manifest_hash: &str, checksum_hash: &str) -> bool {
+    let mut lines = value.lines();
+    lines
+        .next()
+        .is_some_and(|line| line.trim() == manifest_hash)
+        && lines
+            .next()
+            .is_some_and(|line| line.trim() == checksum_hash)
+        && lines.next().is_none()
+}
+
+fn is_safe_cached_file(destination: &Path, relative: &str) -> bool {
+    if !is_safe_relative_path(relative) || !is_real_file(&destination.join(relative)) {
+        return false;
+    }
+    let Ok(root) = fs::canonicalize(destination) else {
+        return false;
+    };
+    let Ok(path) = fs::canonicalize(destination.join(relative)) else {
+        return false;
+    };
+    path.starts_with(root)
 }
 
 fn is_real_file(path: &Path) -> bool {
@@ -304,15 +407,23 @@ mod tests {
         let archive_path = bundle_dir.join("providers-test.zip");
         let file = File::create(&archive_path).unwrap();
         let mut zip = ZipWriter::new(file);
+        let manifest_bytes: &[u8] = br#"{"providers":[{"path":"test/project-model.txt"}]}"#;
+        let checksums = serde_json::json!({
+            "schema": "code-memory.provider-checksums.v1",
+            "files": [
+                { "path": "manifest.json", "bytes": manifest_bytes.len(), "sha256": sha256_bytes(manifest_bytes) },
+                { "path": "node/project-model.cjs", "bytes": 5, "sha256": sha256_bytes(b"model") },
+                { "path": "node/runtime/node.exe", "bytes": 4, "sha256": sha256_bytes(b"node") },
+                { "path": "test/project-model.txt", "bytes": 8, "sha256": sha256_bytes(b"provider") }
+            ]
+        });
+        let checksums_bytes = serde_json::to_vec(&checksums).unwrap();
         zip.start_file("test/project-model.txt", SimpleFileOptions::default())
             .unwrap();
         zip.write_all(b"provider").unwrap();
         for (path, contents) in [
-            (
-                "manifest.json",
-                &br#"{"providers":[{"path":"test/project-model.txt"}]}"#[..],
-            ),
-            ("checksums.json", &br#"{}"#[..]),
+            ("manifest.json", manifest_bytes),
+            ("checksums.json", checksums_bytes.as_slice()),
             ("node/project-model.cjs", &b"model"[..]),
             ("node/runtime/node.exe", &b"node"[..]),
         ] {
@@ -349,11 +460,26 @@ mod tests {
             provider_root
         );
 
+        fs::write(provider_root.join("node/project-model.cjs"), b"tampered").unwrap();
         fs::remove_file(provider_root.join("node/runtime/node.exe")).unwrap();
         let restored = ensure_provider_root(&root.join("engines"), &cache_dir)
             .unwrap()
             .unwrap();
+        assert_eq!(
+            fs::read(restored.join("node/project-model.cjs")).unwrap(),
+            b"model"
+        );
         assert!(is_real_file(&restored.join("node/runtime/node.exe")));
+
+        fs::write(restored.join("checksums.json"), b"{}").unwrap();
+        let restored_after_checksum_tamper =
+            ensure_provider_root(&root.join("engines"), &cache_dir)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            fs::read(restored_after_checksum_tamper.join("test/project-model.txt")).unwrap(),
+            b"provider"
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

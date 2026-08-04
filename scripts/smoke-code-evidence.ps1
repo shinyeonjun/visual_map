@@ -14,7 +14,7 @@ $engineRoot = Split-Path -Parent $EnginePath
 $packsRoot = Join-Path $engineRoot "packs"
 $providersRoot = Join-Path $engineRoot "providers"
 if (-not (Test-Path -LiteralPath (Join-Path $packsRoot "framework") -PathType Container)) {
-    $packsRoot = Join-Path $repoRoot "src-tauri\engines\packs"
+    $packsRoot = Join-Path $repoRoot "code_memory\packs"
 }
 if (Test-Path -LiteralPath (Join-Path $packsRoot "framework") -PathType Container) { $env:CODE_MEMORY_PACKS_ROOT = $packsRoot }
 if (Test-Path -LiteralPath $providersRoot -PathType Container) { $env:CODE_MEMORY_PROVIDERS_ROOT = $providersRoot }
@@ -58,6 +58,10 @@ function Get-Architecture([string]$Project) {
     return Invoke-CodeTool "get_architecture" @{ project = $Project }
 }
 
+function Get-Evidence([string]$Project) {
+    return Invoke-CodeTool "get_evidence" @{ project = $Project }
+}
+
 function Has-Node($Architecture, [string]$Kind, [string]$PathPart) {
     return @($Architecture.nodes | Where-Object { [string]$_.kind -eq $Kind -and ([string]$_.path -like "*$PathPart*" -or [string]$_.name -like "*$PathPart*") }).Count -gt 0
 }
@@ -73,9 +77,12 @@ try {
     Copy-Item -LiteralPath (Join-Path $repoRoot "code_memory\tests\fixtures\evidence\golden-fastapi") -Destination $goldenPath -Recurse
     $goldenProject = Index-Fixture "golden" $goldenPath
     $golden = Get-Architecture $goldenProject
+    $goldenEvidence = Get-Evidence $goldenProject
     if (-not (Has-Node $golden "ENDPOINT" "server.py")) { throw "Golden fixture has no FastAPI endpoint." }
     if (-not (Has-Edge $golden "IMPORTS" "server.py")) { throw "Golden fixture has no import boundary." }
     if (-not (Has-Edge $golden "READS" "services.py")) { throw "Golden fixture has no static SQL READS edge." }
+    if ([string]$goldenEvidence.schema -ne "code-memory.evidence-summary.v1") { throw "Evidence summary schema is missing." }
+    if (@($goldenEvidence.collectors).Count -ne 9) { throw "Evidence summary does not contain all 9 providers." }
 
     $negativePath = Join-Path $runRoot "negative-sql"
     Copy-Item -LiteralPath (Join-Path $repoRoot "code_memory\tests\fixtures\evidence\negative-sql") -Destination $negativePath -Recurse

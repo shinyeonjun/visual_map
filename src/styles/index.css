@@ -3,8 +3,8 @@
 @import './layout.css';
 @import './forms.css';
 @import './buttons.css';
-@import './workbench.css';
-@import './canvas.css';
+@import './map-inspector.css';
+@import './map-panels.css';
+@import './map-canvas.css';
 @import './status.css';
-@import './product-shell.css';
-@import './answer-workbench.css';
+@import './map-app.css';

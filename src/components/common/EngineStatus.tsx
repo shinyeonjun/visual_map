@@ -86,6 +86,14 @@ export function EngineStatus({
         : engine?.integrity === "unpublished"
           ? "배포대기"
           : null;
+  /*
+    When the badge already names the integrity state ("개발용", "배포대기"), the
+    matching sentence adds nothing and does not fit: the 28px status bar cut it
+    down to a few characters of debris. The full text stays on the tooltip and
+    the accessible label. A real failure has no integrity badge, so it keeps its
+    inline alert.
+  */
+  const inlineDetail = integrityLabel ? null : detail;
 
   return (
     <span
@@ -95,11 +103,13 @@ export function EngineStatus({
       data-engine-error={detail ?? undefined}
     >
       <StatusIcon size={12} />
-      {label}
+      {/* An element, not a bare text node: only an element can ellipsis, and in
+          a narrow window the name is what should give way, not the badge. */}
+      <span className="engine-status-label">{label}</span>
       <b className={displayState}>{integrityLabel ?? engineText(state, missingText)}</b>
-      {detail ? (
+      {inlineDetail ? (
         <span className="engine-status-detail" role="alert">
-          {detail}
+          {inlineDetail}
         </span>
       ) : null}
     </span>

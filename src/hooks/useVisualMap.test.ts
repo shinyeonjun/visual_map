@@ -487,6 +487,13 @@ describe("useVisualMap transitions", () => {
       layer: "code",
       source: "code",
     };
+    const database: VisualNode = {
+      id: "db:table:public.users",
+      kind: "table",
+      title: "public.users",
+      layer: "db",
+      source: "db",
+    };
     const edge: VisualEdge = {
       id: "edge-1",
       from: node.id,
@@ -497,7 +504,7 @@ describe("useVisualMap transitions", () => {
 
     await waitFor(() => expect(requests).toHaveLength(1));
     const map = visualMap("atlas", "overview");
-    map.nodes = [node];
+    map.nodes = [node, database];
     map.edges = [edge];
     act(() => requests[0].resolve(map));
     await waitFor(() => expect(result.current.visualMap?.mode).toBe("atlas"));

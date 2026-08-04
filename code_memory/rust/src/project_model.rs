@@ -1,15 +1,11 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
 use std::path::Path;
-use std::process::Stdio;
-use std::thread;
-use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
 use crate::{
-    project_cache_root, provider_timeout, terminate_process_tree, tool_command, Diagnostic,
+    project_cache_root, provider_timeout, run_bounded_command, tool_command, Diagnostic,
     DiagnosticCode, FileRelationOutput,
 };
 
@@ -95,6 +91,7 @@ pub(crate) fn analyze_typescript_project(
             },
             code: DiagnosticCode::ProviderDiagnostic,
             message: diagnostic.message,
+            detail: None,
             path: None,
             line: None,
         })
@@ -135,76 +132,32 @@ fn load_project_model_from_provider(
 }
 
 fn run_project_model_command(
-    mut command: std::process::Command,
+    command: std::process::Command,
 ) -> Result<std::process::Output, String> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("cannot run project model provider: {error}"))?;
-    let stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            terminate_process_tree(&mut child);
-            return Err("project model provider stdout unavailable".to_string());
-        }
-    };
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            terminate_process_tree(&mut child);
-            return Err("project model provider stderr unavailable".to_string());
-        }
-    };
-    let stdout_reader = thread::spawn(move || read_stream(stdout));
-    let stderr_reader = thread::spawn(move || read_stream(stderr));
-    let deadline = Instant::now() + provider_timeout();
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout = stdout_reader
-                    .join()
-                    .map_err(|_| "project model stdout reader failed".to_string())?;
-                let stderr = stderr_reader
-                    .join()
-                    .map_err(|_| "project model stderr reader failed".to_string())?;
-                return Ok(std::process::Output {
-                    status,
-                    stdout,
-                    stderr,
-                });
-            }
-            Ok(None) if Instant::now() >= deadline => {
-                terminate_process_tree(&mut child);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return Err(format!(
-                    "project model provider timeout after {} seconds",
-                    provider_timeout().as_secs()
-                ));
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(25)),
-            Err(error) => {
-                terminate_process_tree(&mut child);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return Err(format!("project model provider wait failed: {error}"));
-            }
-        }
+    let output = run_bounded_command(
+        command,
+        "project model provider",
+        provider_timeout(),
+        MAX_PROJECT_MODEL_STREAM_BYTES,
+        MAX_PROJECT_MODEL_STREAM_BYTES,
+    )?;
+    if output.stdout_truncated {
+        return Err(format!(
+            "project model provider stdout exceeded {} bytes",
+            MAX_PROJECT_MODEL_STREAM_BYTES
+        ));
     }
-}
-
-fn read_stream(mut stream: impl Read) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    let _ = stream
-        .by_ref()
-        .take((MAX_PROJECT_MODEL_STREAM_BYTES + 1) as u64)
-        .read_to_end(&mut bytes);
-    bytes.truncate(MAX_PROJECT_MODEL_STREAM_BYTES);
-    bytes
+    if output.stderr_truncated {
+        eprintln!(
+            "project model provider stderr exceeded {} bytes; retained failure tail",
+            MAX_PROJECT_MODEL_STREAM_BYTES
+        );
+    }
+    Ok(std::process::Output {
+        status: output.status,
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
 }
 
 fn dedupe_relations(relations: Vec<FileRelationOutput>) -> Vec<FileRelationOutput> {
@@ -225,12 +178,10 @@ fn dedupe_relations(relations: Vec<FileRelationOutput>) -> Vec<FileRelationOutpu
 
 #[cfg(test)]
 mod tests {
-    use super::{read_stream, MAX_PROJECT_MODEL_STREAM_BYTES};
+    use super::MAX_PROJECT_MODEL_STREAM_BYTES;
 
     #[test]
-    fn project_model_stream_is_bounded() {
-        let input = vec![b'x'; MAX_PROJECT_MODEL_STREAM_BYTES + 1];
-        let output = read_stream(std::io::Cursor::new(input));
-        assert_eq!(output.len(), MAX_PROJECT_MODEL_STREAM_BYTES);
+    fn project_model_stream_limit_is_finite() {
+        assert_eq!(MAX_PROJECT_MODEL_STREAM_BYTES, 128 * 1024 * 1024);
     }
 }

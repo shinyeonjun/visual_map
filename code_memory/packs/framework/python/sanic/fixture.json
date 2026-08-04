@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "src/fixture.py",
-      "source": "from sanic import Sanic; @app.get('/fixture') async def handler(request): pass\napp.use(authMiddleware);"
+      "source": "from sanic import Sanic\n@app.get('/fixture')\nasync def handler(request): pass\napp.use(authMiddleware);"
     },
     {
       "path": "pyproject.toml",

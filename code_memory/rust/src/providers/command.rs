@@ -234,6 +234,7 @@ fn apply_offline_environment(command: &mut Command) {
         return;
     }
     command.env("CODE_MEMORY_OFFLINE", "1");
+    command.env("CARGO_NET_OFFLINE", "true");
     command.env("GOPROXY", "off");
     command.env("GOSUMDB", "off");
     command.env("GONOSUMDB", "*");
@@ -241,6 +242,13 @@ fn apply_offline_environment(command: &mut Command) {
     command.env("BUNDLE_ALLOW_OFFLINE_INSTALL", "1");
     command.env("BUNDLE_FROZEN", "1");
     command.env("DART_DISABLE_ANALYTICS", "true");
+    command.env("npm_config_offline", "true");
+    command.env("npm_config_audit", "false");
+    command.env("npm_config_fund", "false");
+    command.env("PNPM_CONFIG_OFFLINE", "true");
+    command.env("YARN_ENABLE_NETWORK", "0");
+    command.env("PIP_NO_INDEX", "1");
+    command.env("UV_OFFLINE", "1");
     command.env("MAVEN_ARGS", "-o");
     let gradle_opts = env::var("GRADLE_OPTS").unwrap_or_default();
     let gradle_opts = if gradle_opts.is_empty() {

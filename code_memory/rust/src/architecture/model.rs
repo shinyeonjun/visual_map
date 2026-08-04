@@ -215,6 +215,8 @@ pub(crate) struct ArchitectureDiagnostic {
     pub(crate) path: Option<String>,
     pub(crate) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) exclusion_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) exclusion_scope: Option<String>,

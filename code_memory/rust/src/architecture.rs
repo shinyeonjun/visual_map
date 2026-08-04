@@ -49,6 +49,7 @@ pub(crate) fn build_with_sources(
             kind: "provider".to_string(),
             code: diagnostic.code,
             path: diagnostic.path.clone(),
+            detail: diagnostic.detail.clone(),
             message: match diagnostic.line {
                 Some(line) => format!("{}:{}: {}", diagnostic.language, line, diagnostic.message),
                 None => format!("{}: {}", diagnostic.language, diagnostic.message),
@@ -67,6 +68,7 @@ pub(crate) fn build_with_sources(
                 kind: coverage.status.to_string(),
                 code: DiagnosticCode::PartialCoverage,
                 path: Some(coverage.path.clone()),
+                detail: None,
                 message: coverage
                     .reason
                     .as_deref()

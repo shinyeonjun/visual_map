@@ -7,12 +7,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use crate::{
-    dart_dependency_metadata_gap, dotnet_requires_unavailable_legacy_sdk, find_tool,
-    has_compile_context_for_files, is_fatal_lsp_error, lsp_failure_code, normalize_scip_path,
-    read_scip, run_native_lsp, run_native_lsp_source_only, run_native_lsp_with_server,
-    run_scip_indexer, write_language_cache, Diagnostic, DiagnosticCode, DocumentCoverage,
-    DocumentOutput, FileCoverageOutput, LanguageAnalysis, LanguageJob, LanguageOutput,
-    LanguageSpec, ProviderKind, RelationOutput,
+    dotnet_requires_unavailable_legacy_sdk, find_tool, has_compile_context_for_files,
+    is_fatal_lsp_error, lsp_failure_code, normalize_scip_path, read_scip, run_native_lsp,
+    run_native_lsp_source_only, run_native_lsp_with_server, run_scip_indexer, write_language_cache,
+    Diagnostic, DiagnosticCode, DocumentCoverage, DocumentOutput, FileCoverageOutput,
+    LanguageAnalysis, LanguageJob, LanguageOutput, LanguageSpec, ProviderKind, RelationOutput,
 };
 
 static RUST_BUILD_TOOL_GAP_CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
@@ -23,6 +22,7 @@ pub(crate) fn language_failure(
     files: &[PathBuf],
     error: String,
 ) -> LanguageAnalysis {
+    let (message, detail) = provider_error_parts(&error, lang.name);
     LanguageAnalysis {
         language: LanguageOutput {
             id: lang.id.to_string(),
@@ -39,13 +39,24 @@ pub(crate) fn language_failure(
         diagnostics: vec![Diagnostic {
             language: lang.id.to_string(),
             level: "error",
-            code: DiagnosticCode::IndexerFailed,
-            message: error,
+            code: DiagnosticCode::ProviderFailed,
+            message,
+            detail,
             path: None,
             line: None,
         }],
         project_excluded_files: 0,
     }
+}
+
+fn provider_error_parts(error: &str, language: &str) -> (String, Option<String>) {
+    let Some((_message, detail)) = error.split_once("; stderr_tail: ") else {
+        return (error.to_string(), None);
+    };
+    (
+        format!("{language} semantic provider failed; provider output is attached"),
+        (!detail.trim().is_empty()).then(|| detail.trim().to_string()),
+    )
 }
 
 pub(crate) fn language_invalid_output(
@@ -72,6 +83,7 @@ pub(crate) fn language_invalid_output(
             level: "error",
             code: DiagnosticCode::InvalidOutput,
             message: error,
+            detail: None,
             path: None,
             line: None,
         }],
@@ -110,6 +122,7 @@ pub(crate) fn language_empty_output(
                 "{} provider analyzed the unit but returned no semantic facts",
                 lang.name
             ),
+            detail: None,
             path: None,
             line: None,
         }],
@@ -189,24 +202,6 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             "C# semantic analysis skipped because the project targets an unavailable legacy SDK; structural map remains available",
         );
     }
-    if lang.id == "dart" && dart_dependency_metadata_gap(root).is_some() {
-        return language_excluded(
-            lang,
-            "native-lsp",
-            files,
-            DiagnosticCode::MissingDependencyMetadata,
-            "Dart semantic analysis skipped because resolved package metadata is unavailable; local structure remains available and packages remain external",
-        );
-    }
-    if lang.id == "php" && php_dependency_metadata_gap(root) {
-        return language_excluded(
-            lang,
-            "scip",
-            files,
-            DiagnosticCode::MissingDependencyMetadata,
-            "PHP semantic analysis skipped because Composer dependency metadata is unavailable; structural map remains available",
-        );
-    }
     let use_clangd_fallback =
         matches!(lang.id, "c" | "cpp") && find_tool(lang.tool, providers_root).is_none();
     if use_clangd_fallback && !has_compile_context_for_files(root, files) {
@@ -266,6 +261,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                 "Ruby LSP previously reported a bundle setup problem at {}; provider results are retained, but project gem resolution may be incomplete",
                 path.display()
             ),
+            detail: None,
             path: Some(".ruby-lsp/install_error".to_string()),
             line: None,
         });
@@ -290,8 +286,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             provider_config,
             &provider_files,
             project_config_digest,
-        )
-        .map(|()| Vec::new()),
+        ),
         ProviderKind::Lsp => {
             run_native_lsp(&lang, root, &scip_path, providers_root, &provider_files)
         }
@@ -331,6 +326,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                                     level: "warning",
                                     code: DiagnosticCode::JavaSourceFallback,
                                     message: "Java build import returned no semantic facts; source-only fallback retained project declarations and local relationships without a complete build classpath".to_string(),
+                                    detail: None,
                                     path: None,
                                     line: None,
                                 });
@@ -345,6 +341,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                                 message: format!(
                                     "Java source-only fallback returned invalid output: {error}"
                                 ),
+                                detail: None,
                                 path: None,
                                 line: None,
                             }),
@@ -355,6 +352,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                         level: "warning",
                         code: DiagnosticCode::JavaSourceFallbackFailed,
                         message: format!("Java source-only fallback failed: {error}"),
+                        detail: None,
                         path: None,
                         line: None,
                     }),
@@ -369,14 +367,9 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                             .iter()
                             .any(|diagnostic| diagnostic.code == DiagnosticCode::ProviderTimeout);
                     let provider_partial = java_source_fallback_used
-                        || provider_diagnostics.iter().any(|diagnostic| {
-                            matches!(
-                                diagnostic.code,
-                                DiagnosticCode::ProviderTimeout
-                                    | DiagnosticCode::LargeWorkspacePartial
-                                    | DiagnosticCode::JavaSourceFallback
-                            )
-                        });
+                        || provider_diagnostics
+                            .iter()
+                            .any(provider_diagnostic_is_partial);
                     let mut analysis = if provider_stopped {
                         language_excluded(
                             lang,
@@ -433,6 +426,17 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
     }
 }
 
+pub(crate) fn provider_diagnostic_is_partial(diagnostic: &Diagnostic) -> bool {
+    matches!(
+        diagnostic.code,
+        DiagnosticCode::ProviderTimeout
+            | DiagnosticCode::LargeWorkspacePartial
+            | DiagnosticCode::DependencyMetadataGap
+            | DiagnosticCode::JavaSourceFallback
+            | DiagnosticCode::TypescriptSourceFallback
+    )
+}
+
 fn semantic_output_is_empty(documents: &[DocumentOutput]) -> bool {
     documents.is_empty()
         || documents
@@ -440,7 +444,7 @@ fn semantic_output_is_empty(documents: &[DocumentOutput]) -> bool {
             .all(|document| document.symbols.is_empty() && document.occurrences.is_empty())
 }
 
-fn rust_semantic_file_limit() -> usize {
+pub(crate) fn rust_semantic_file_limit() -> usize {
     env::var("CODE_MEMORY_RUST_SEMANTIC_MAX_FILES")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -461,19 +465,20 @@ fn rust_build_requires_missing_tool(root: &Path, providers_root: Option<&Path>) 
     {
         return value;
     }
-    let mut pending = vec![scan_root.clone()];
-    if scan_root == root {
-        let mut ancestor = root.parent();
-        for _ in 0..4 {
-            let Some(path) = ancestor else {
-                break;
-            };
-            pending.push(path.to_path_buf());
-            ancestor = path.parent();
-        }
+    let missing = rust_tree_requires_make(&scan_root);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(scan_root, missing);
     }
+    missing
+}
+
+fn rust_tree_requires_make(scan_root: &Path) -> bool {
+    let mut pending = vec![scan_root.to_path_buf()];
     let mut missing = false;
     while let Some(directory) = pending.pop() {
+        if crate::source::is_managed_provider_root(&directory) {
+            continue;
+        }
         let Ok(entries) = fs::read_dir(directory) else {
             continue;
         };
@@ -505,9 +510,6 @@ fn rust_build_requires_missing_tool(root: &Path, providers_root: Option<&Path>) 
             }
         }
     }
-    if let Ok(mut cache) = cache.lock() {
-        cache.insert(scan_root, missing);
-    }
     missing
 }
 
@@ -519,16 +521,6 @@ fn rust_workspace_root(root: &Path) -> PathBuf {
         })
         .map(Path::to_path_buf)
         .unwrap_or_else(|| root.to_path_buf())
-}
-
-fn php_dependency_metadata_gap(root: &Path) -> bool {
-    root.join("composer.json").is_file()
-        && (!root.join("vendor").join("autoload.php").is_file()
-            || !root
-                .join("vendor")
-                .join("composer")
-                .join("installed.php")
-                .is_file())
 }
 
 pub(crate) fn language_excluded(
@@ -556,6 +548,7 @@ pub(crate) fn language_excluded(
             level: "warning",
             code,
             message: reason.to_string(),
+            detail: None,
             path: None,
             line: None,
         }],
@@ -604,6 +597,7 @@ pub(crate) fn classify_language_documents(
                 coverage.excluded,
                 missing,
             ),
+            detail: None,
             path: None,
             line: None,
         }],
@@ -890,4 +884,27 @@ pub(crate) fn allowed_document_paths(root: &Path, files: &[PathBuf]) -> HashSet<
             normalize_scip_path(&relative.to_string_lossy(), root)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rust_tree_requires_make;
+
+    #[test]
+    fn rust_build_tool_scan_does_not_escape_the_crate_root() {
+        let parent = std::env::temp_dir().join(format!(
+            "code-memory-rust-build-boundary-{}",
+            std::process::id()
+        ));
+        let crate_root = parent.join("crate");
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&crate_root).unwrap();
+        std::fs::write(parent.join("build.rs"), "Command::new(\"make\");").unwrap();
+
+        assert!(!rust_tree_requires_make(&crate_root));
+
+        std::fs::write(crate_root.join("build.rs"), "Command::new(\"make\");").unwrap();
+        assert!(rust_tree_requires_make(&crate_root));
+        let _ = std::fs::remove_dir_all(parent);
+    }
 }
