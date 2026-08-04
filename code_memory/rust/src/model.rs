@@ -143,6 +143,9 @@ pub(crate) struct AnalysisUnitOutput {
     pub(crate) files_excluded: usize,
     pub(crate) files_missing: usize,
     pub(crate) status: &'static str,
+    pub(crate) provider: &'static str,
+    pub(crate) execution: &'static str,
+    pub(crate) elapsed_ms: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) reason: Option<String>,
 }

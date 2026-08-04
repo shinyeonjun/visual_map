@@ -49,6 +49,7 @@ pub(crate) fn index_project(
     let mut discovered_files = Vec::new();
     let mut cached_analyses = Vec::new();
     let mut planned_units = Vec::new();
+    let mut unit_runs = HashMap::new();
     let mut language_files = HashMap::new();
     let mut all_extensions: HashSet<&str> = LANGUAGES
         .iter()
@@ -241,7 +242,26 @@ pub(crate) fn index_project(
                     module.project_excluded_files,
                 ));
             }
+            let unit_key = (lang.id.to_string(), module.id.clone());
+            let provider = if matches!(lang.id, "c" | "cpp")
+                && find_tool(lang.tool, providers_root.as_deref()).is_none()
+            {
+                "native-lsp"
+            } else {
+                match lang.provider {
+                    ProviderKind::Scip => "scip",
+                    ProviderKind::Lsp => "native-lsp",
+                }
+            };
             if lang.id == "rust" && files.len() > rust_semantic_file_limit() {
+                unit_runs.insert(
+                    unit_key,
+                    AnalysisUnitRun {
+                        provider,
+                        execution: "skipped",
+                        elapsed_ms: 0,
+                    },
+                );
                 cached_analyses.push(language_excluded(
                     *lang,
                     "native-lsp",
@@ -255,17 +275,15 @@ pub(crate) fn index_project(
                 ));
                 continue;
             }
-            let provider = if matches!(lang.id, "c" | "cpp")
-                && find_tool(lang.tool, providers_root.as_deref()).is_none()
-            {
-                "native-lsp"
-            } else {
-                match lang.provider {
-                    ProviderKind::Scip => "scip",
-                    ProviderKind::Lsp => "native-lsp",
-                }
-            };
             if !provider_ready(lang, providers_root.as_deref()) {
+                unit_runs.insert(
+                    unit_key,
+                    AnalysisUnitRun {
+                        provider,
+                        execution: "unavailable",
+                        elapsed_ms: 0,
+                    },
+                );
                 cached_analyses.push(LanguageAnalysis {
                     language: LanguageOutput {
                         id: lang.id.to_string(),
@@ -323,6 +341,14 @@ pub(crate) fn index_project(
                 cache_deserialize_elapsed +=
                     Duration::from_millis(cache_read.deserialize_ms as u64);
                 if let Some(cached) = cache_read.value {
+                unit_runs.insert(
+                    unit_key.clone(),
+                    AnalysisUnitRun {
+                        provider,
+                        execution: "cache",
+                        elapsed_ms: u128::from(cache_read.io_ms + cache_read.deserialize_ms),
+                    },
+                );
                 let coverage = language_document_coverage(
                     &module.root,
                     *lang,
@@ -446,82 +472,31 @@ pub(crate) fn index_project(
 
     let provider_started = Instant::now();
     emit_progress("providers", 35, 100, "언어 공급자 실행 중");
-    let max_parallel = max_parallel_providers(jobs.len());
-    let max_weight = max_provider_weight();
-    let (result_sender, result_receiver) = mpsc::channel::<(usize, Vec<LanguageAnalysis>)>();
     let mut analyses = cached_analyses;
-    let mut next_job = 0usize;
-    let mut active_jobs = 0usize;
-    let mut active_weight = 0usize;
-    let total_jobs = jobs.len();
-    let mut completed_jobs = 0usize;
-    while next_job < jobs.len() || active_jobs > 0 {
-        while next_job < jobs.len() && active_jobs < max_parallel {
-            let job = jobs[next_job].clone();
-            let weight = provider_job_weight(&job);
-            if active_jobs > 0 && active_weight + weight > max_weight {
-                break;
-            }
-            next_job += 1;
-            active_jobs += 1;
-            active_weight += weight;
-            let sender = result_sender.clone();
-            std::thread::spawn(move || {
-                let members = job.members.clone();
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    analyze_provider_job(job)
-                }))
-                .unwrap_or_else(|panic| {
-                    let message = panic_message(panic);
-                    members
-                        .iter()
-                        .map(|member| {
-                            language_failure(
-                                member.lang,
-                                if matches!(member.lang.id, "c" | "cpp") {
-                                    "native-lsp"
-                                } else {
-                                    match member.lang.provider {
-                                        ProviderKind::Scip => "scip",
-                                        ProviderKind::Lsp => "native-lsp",
-                                    }
-                                },
-                                &member.files,
-                                format!("provider worker panicked: {message}"),
-                            )
-                        })
-                        .collect()
-                });
-                let _ = sender.send((weight, result));
-            });
-        }
-
-        let (weight, result) = loop {
-            match result_receiver.recv_timeout(Duration::from_secs(5)) {
-                Ok(result) => break result,
-                Err(mpsc::RecvTimeoutError::Timeout) => emit_progress(
-                    "providers",
-                    35 + completed_jobs.saturating_mul(35) / total_jobs.max(1),
-                    100,
-                    "언어 공급자 실행 중",
-                ),
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err("language workers stopped unexpectedly".to_string())
-                }
-            }
-        };
-        active_jobs -= 1;
-        active_weight = active_weight.saturating_sub(weight);
-        completed_jobs += 1;
-        analyses.extend(result);
+    for result in run_provider_jobs(jobs, |completed, total| {
         emit_progress(
             "providers",
-            35 + completed_jobs.saturating_mul(35) / total_jobs.max(1),
+            35 + completed.saturating_mul(35) / total.max(1),
             100,
-            "언어별 의미 분석 병합 중",
+            if completed == total {
+                "언어별 의미 분석 병합 중"
+            } else {
+                "언어 공급자 실행 중"
+            },
         );
+    })? {
+        for unit in result.units {
+            unit_runs.insert(
+                (unit.language, unit.id),
+                AnalysisUnitRun {
+                    provider: unit.provider,
+                    execution: "provider",
+                    elapsed_ms: result.elapsed_ms,
+                },
+            );
+        }
+        analyses.extend(result.analyses);
     }
-    drop(result_sender);
     let (languages, documents, relations, diagnostics) = merge_language_analyses(analyses);
     output.languages = languages;
     output.documents = documents;
@@ -534,7 +509,8 @@ pub(crate) fn index_project(
         &output.languages,
         &output.project_model_files,
     );
-    output.analysis_units = build_analysis_units(&root, &planned_units, &output.coverage);
+    output.analysis_units =
+        build_analysis_units(&root, &planned_units, &output.coverage, &unit_runs);
     eprintln!(
         "timing stage=provider_merge elapsed_ms={} documents={} relations={} diagnostics={}",
         provider_started.elapsed().as_millis(),

@@ -185,18 +185,18 @@ fn compare_optional_f64(left: Option<f64>, right: Option<f64>) -> Ordering {
     left.map(f64::to_bits).cmp(&right.map(f64::to_bits))
 }
 
-fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
-    panic
-        .downcast_ref::<&str>()
-        .map(|message| (*message).to_string())
-        .or_else(|| panic.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "unknown panic".to_string())
+#[derive(Clone, Copy)]
+struct AnalysisUnitRun {
+    provider: &'static str,
+    execution: &'static str,
+    elapsed_ms: u128,
 }
 
 fn build_analysis_units(
     project_root: &Path,
     plans: &[(String, String, PathBuf, Vec<PathBuf>, usize)],
     coverage: &[FileCoverageOutput],
+    runs: &HashMap<(String, String), AnalysisUnitRun>,
 ) -> Vec<AnalysisUnitOutput> {
     let mut units = plans
         .iter()
@@ -239,6 +239,14 @@ fn build_analysis_units(
                 .iter()
                 .filter_map(|entry| entry.reason.clone())
                 .next();
+            let run = runs
+                .get(&(language.clone(), id.clone()))
+                .copied()
+                .unwrap_or(AnalysisUnitRun {
+                    provider: "unknown",
+                    execution: "not-run",
+                    elapsed_ms: 0,
+                });
             AnalysisUnitOutput {
                 id: id.clone(),
                 language: language.clone(),
@@ -248,6 +256,9 @@ fn build_analysis_units(
                 files_excluded: excluded + *project_excluded,
                 files_missing: missing,
                 status,
+                provider: run.provider,
+                execution: run.execution,
+                elapsed_ms: run.elapsed_ms,
                 reason,
             }
         })
