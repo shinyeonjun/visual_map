@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::source::is_managed_provider_root;
 use crate::{
     active_c_family_files, is_excluded_source_dir, Diagnostic, DocumentOutput, LanguageAnalysis,
     LanguageOutput, LanguageSpec, RelationOutput,
@@ -221,6 +222,9 @@ pub(crate) fn typescript_config_files(root: &Path) -> Vec<PathBuf> {
 }
 
 fn collect_typescript_config_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    if is_managed_provider_root(dir) {
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -300,6 +304,9 @@ fn module_markers(language: &str) -> &'static [&'static str] {
 }
 
 fn collect_module_marker_roots(dir: &Path, markers: &[&str], roots: &mut HashSet<PathBuf>) {
+    if is_managed_provider_root(dir) {
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };

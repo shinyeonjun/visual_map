@@ -117,7 +117,12 @@ pub(crate) fn visual_map_with_change(
             subtitle: item.path.clone(),
             layer: item.layer.clone(),
             source: item.source.clone(),
+            parent_id: None,
+            depth: None,
+            assigned_by: None,
             location: item.location.clone(),
+            metrics: None,
+            coverage: None,
         })
         .collect();
     nodes.sort_by(|a, b| a.id.cmp(&b.id));
@@ -139,6 +144,7 @@ pub(crate) fn visual_map_with_change(
                     kind: "contains".to_string(),
                     confidence: None,
                     evidence: Vec::new(),
+                    weight: None,
                 })
             } else {
                 None
@@ -154,6 +160,7 @@ pub(crate) fn visual_map_with_change(
                 kind: "candidate_uses".to_string(),
                 confidence: Some(link.confidence.clone()),
                 evidence: link.evidence.clone(),
+                weight: None,
             })
         } else {
             None
@@ -172,6 +179,7 @@ pub(crate) fn visual_map_with_change(
         focus: focus.unwrap_or_else(|| "overview".to_string()),
         nodes,
         edges,
+        overview_axis: None,
         warnings: if included_count > cap {
             vec![format!(
                 "주변 항목 {included_count}개 중 {cap}개만 표시합니다. 표시되지 않은 관계가 있을 수 있습니다."
@@ -181,6 +189,7 @@ pub(crate) fn visual_map_with_change(
         },
         review_board: None,
         api_reading: None,
+        representative_paths: None,
     }
 }
 
@@ -251,6 +260,7 @@ pub(super) fn focus_neighborhood_map(
                     kind: "contains".to_string(),
                     confidence: None,
                     evidence: Vec::new(),
+                    weight: None,
                 })
             } else {
                 None
@@ -266,6 +276,7 @@ pub(super) fn focus_neighborhood_map(
                 kind: "candidate_uses".to_string(),
                 confidence: Some(link.confidence.clone()),
                 evidence: link.evidence.clone(),
+                weight: None,
             })
         } else {
             None
@@ -284,6 +295,7 @@ pub(super) fn focus_neighborhood_map(
         focus: focus.unwrap_or_else(|| "overview".to_string()),
         nodes,
         edges,
+        overview_axis: None,
         warnings: if included_count > cap {
             vec![format!(
                 "주변 항목 {included_count}개 중 {cap}개만 표시합니다. 표시되지 않은 관계가 있을 수 있습니다."
@@ -293,6 +305,7 @@ pub(super) fn focus_neighborhood_map(
         },
         review_board: None,
         api_reading: None,
+        representative_paths: None,
     }
 }
 
@@ -304,7 +317,12 @@ pub(super) fn visual_node(item: &InventoryItem) -> VisualNode {
         subtitle: node_subtitle(item),
         layer: item.layer.clone(),
         source: item.source.clone(),
+        parent_id: None,
+        depth: None,
+        assigned_by: None,
         location: item.location.clone(),
+        metrics: None,
+        coverage: None,
     }
 }
 
@@ -432,6 +450,7 @@ pub(super) fn confirmed_link_edge(
         kind: link.kind.clone(),
         confidence: (link.truth_class == "candidate").then(|| "candidate".to_string()),
         evidence,
+        weight: None,
     }
 }
 

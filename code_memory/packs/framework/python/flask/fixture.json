@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "src/fixture.py",
-      "source": "from flask import Flask; @app.route('/fixture') def handler(): pass\napp.use(authMiddleware);"
+      "source": "from flask import Flask\n@app.route('/fixture')\ndef handler(): pass\napp.use(authMiddleware);"
     },
     {
       "path": "pyproject.toml",

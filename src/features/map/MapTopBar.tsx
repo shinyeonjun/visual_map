@@ -1,0 +1,238 @@
+import {
+  ChevronDown,
+  CircleCheck,
+  Clock3,
+  Database,
+  Folder,
+  FolderCog,
+  Network,
+  RefreshCw,
+  Search,
+  TriangleAlert,
+} from "lucide-react";
+import { DB_PROFILE_SOURCE_OPTIONS, type DbProfileSource } from "../../types/workspace";
+import { useSearchHotkey } from "../../hooks/useSearchHotkey";
+import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
+import { codeInventoryItemCount } from "../../types/workspace";
+import { searchScopeText } from "../../visual/search";
+import { SearchResultsPopover, focusFirstSearchResult } from "../../components/common/SearchResultsPopover";
+
+export function MapTopBar({
+  sourceManagerOpen,
+  onToggleSourceManager,
+  workspaceControls,
+  dbProfileControls,
+  visualMapControls,
+}: {
+  sourceManagerOpen: boolean;
+  onToggleSourceManager: () => void;
+  workspaceControls: WorkspaceControls;
+  dbProfileControls: DbProfileControls;
+  visualMapControls: VisualMapControls;
+}) {
+  const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
+  const hasInventory =
+    codeInventoryItemCount(workspaceControls.codeInventory) > 0 || Boolean(dbProfileControls.inventory?.tables.length);
+  const searchScope = searchScopeText(workspaceControls.codeInventory, dbProfileControls.inventory);
+  const { searchInputRef, queueSearch, cancelQueuedSearch, flushSearch } = useSearchHotkey(
+    !sourceManagerOpen ? visualMapControls.openSearchPopover : undefined,
+    visualMapControls.searchQuery,
+    visualMapControls.setSearchQuery,
+  );
+  const partialDetail = sourcePartialDetail(workspaceControls, dbProfileControls);
+  const freshness = sourceFreshness(workspaceControls, visualMapControls, hasInventory, partialDetail);
+  const FreshnessIcon = freshness.icon;
+  const sourceManagerActive = sourceManagerOpen || (!hasWorkspace && workspaceControls.initialized);
+
+  return (
+    <header className="topbar product-topbar">
+      <div className="product-identity">
+        <span className="brand-mark" aria-hidden="true">
+          <Network size={18} />
+        </span>
+        <span className="product-brand-copy">
+          <strong className="product-name">백엔드 비주얼 맵</strong>
+        </span>
+      </div>
+
+      <label className={`top-select select-shell ${hasWorkspace ? "" : "empty"}`}>
+        <Folder size={15} />
+        <select
+          aria-label="프로젝트"
+          value={workspaceControls.currentWorkspace?.id ?? ""}
+          disabled={workspaceControls.busy || workspaceControls.workspaces.length === 0}
+          onChange={(event) => workspaceControls.openWorkspace(event.currentTarget.value)}
+        >
+          {!hasWorkspace && (
+            <option value="">{workspaceControls.initialized ? "프로젝트 없음" : "프로젝트 확인 중"}</option>
+          )}
+          {workspaceControls.workspaces.map((workspace) => (
+            <option value={workspace.id} key={workspace.id}>
+              {workspace.name}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={13} />
+      </label>
+
+      {/*
+        Informational only. Acting on staleness stays with the explicit
+        "소스 관리" control beside it — a status that also does something makes
+        it unclear which part of the bar changes the project.
+      */}
+      <span
+        className={`source-freshness ${freshness.tone}`}
+        role="status"
+        aria-label={`${freshness.label}: ${freshness.detail}`}
+        title={freshness.detail}
+      >
+        <FreshnessIcon size={14} className={freshness.spin ? "spin" : undefined} />
+        <span>{freshness.label}</span>
+      </span>
+
+      {dbProfileControls.inventory ? (
+        <span className="topbar-chip" title={`DB ${dbProfileControls.activeProfile?.name ?? "저장된 구조"}`}>
+          <Database size={13} />
+          <span>
+            {dbSourceLabel(dbProfileControls.activeProfile?.source) ?? dbProfileControls.activeProfile?.name ?? "DB"}
+          </span>
+        </span>
+      ) : null}
+
+      <div className="product-search-access" aria-label="프로젝트 전역 검색">
+        <Search className="topbar-search-icon" size={15} aria-hidden="true" />
+        <input
+          id="global-inventory-search"
+          ref={searchInputRef}
+          aria-label="API, 함수, 파일, 테이블, 컬럼, DB 객체 검색"
+          defaultValue={visualMapControls.searchQuery}
+          disabled={!hasInventory}
+          onFocus={() => hasInventory && visualMapControls.openSearchPopover()}
+          onChange={(event) => queueSearch(event.currentTarget.value)}
+          onBlur={(event) => {
+            flushSearch(event.currentTarget.value);
+            visualMapControls.closeSearchPopover();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              if (event.currentTarget.value !== visualMapControls.searchQuery) {
+                const value = event.currentTarget.value;
+                cancelQueuedSearch();
+                visualMapControls.runSearch(value);
+              } else {
+                const firstResult = visualMapControls.searchGroups[0]?.results[0];
+                if (firstResult) {
+                  visualMapControls.selectSearchResult(firstResult);
+                } else {
+                  visualMapControls.runSearch();
+                }
+              }
+            } else if (event.key === "ArrowDown" && visualMapControls.searchGroups.length > 0) {
+              event.preventDefault();
+              focusFirstSearchResult();
+            } else if (event.key === "Escape") {
+              flushSearch(event.currentTarget.value);
+              visualMapControls.closeSearchPopover();
+            }
+          }}
+          placeholder={hasInventory ? `${searchScope} 검색` : "소스를 연결하면 검색할 수 있습니다"}
+        />
+        {hasInventory ? <SearchResultsPopover visualMapControls={visualMapControls} searchScope={searchScope} /> : null}
+      </div>
+
+      <button
+        className={`source-manager-trigger ${sourceManagerActive ? "active" : ""}`}
+        type="button"
+        aria-pressed={hasWorkspace ? sourceManagerOpen : undefined}
+        aria-current={!hasWorkspace && workspaceControls.initialized ? "page" : undefined}
+        disabled={!workspaceControls.initialized}
+        onClick={() => {
+          if (!hasWorkspace) {
+            document.querySelector<HTMLInputElement>("#workspace-repo-input")?.focus();
+            return;
+          }
+          onToggleSourceManager();
+        }}
+      >
+        <FolderCog size={16} />
+        <span>소스 관리</span>
+      </button>
+    </header>
+  );
+}
+
+function sourceFreshness(
+  workspaceControls: WorkspaceControls,
+  visualMapControls: VisualMapControls,
+  hasInventory: boolean,
+  partialDetail: string | null,
+): {
+  label: string;
+  detail: string;
+  tone: "fresh" | "stale" | "busy" | "pending" | "error";
+  icon: typeof CircleCheck;
+  spin?: boolean;
+} {
+  if (!workspaceControls.initialized) {
+    return { label: "프로젝트 없음", detail: "왼쪽에서 프로젝트를 연결하세요.", tone: "pending", icon: Folder };
+  }
+  if (workspaceControls.busy) {
+    return { label: "분석 중", detail: "프로젝트 소스를 읽고 있습니다.", tone: "busy", icon: RefreshCw, spin: true };
+  }
+  if (workspaceControls.operationStatus.phase === "error") {
+    return {
+      label: "확인 필요",
+      detail: workspaceControls.operationStatus.message,
+      tone: "error",
+      icon: TriangleAlert,
+    };
+  }
+  if (visualMapControls.snapshotStaleReasons.length > 0) {
+    return {
+      label: "다시 읽기 필요",
+      detail: visualMapControls.snapshotStaleReasons.join(" · "),
+      tone: "stale",
+      icon: TriangleAlert,
+    };
+  }
+  if (partialDetail) {
+    return {
+      label: "부분 완료",
+      detail: partialDetail,
+      tone: "stale",
+      icon: TriangleAlert,
+    };
+  }
+  if (visualMapControls.snapshotSavedAt || hasInventory) {
+    return {
+      label: "워크스페이스 열림",
+      detail: visualMapControls.snapshotSourceSummary ?? "마지막으로 읽은 코드와 DB 구조를 표시합니다.",
+      tone: "fresh",
+      icon: CircleCheck,
+    };
+  }
+  return {
+    label: "분석 전",
+    detail: "코드 또는 데이터베이스 소스를 연결하세요.",
+    tone: "pending",
+    icon: Clock3,
+  };
+}
+
+function dbSourceLabel(source: DbProfileSource | undefined): string | null {
+  return DB_PROFILE_SOURCE_OPTIONS.find((option) => option.value === source)?.label ?? null;
+}
+
+function sourcePartialDetail(
+  workspaceControls: WorkspaceControls,
+  dbProfileControls: DbProfileControls,
+): string | null {
+  const code = workspaceControls.codeInventory;
+  if (code?.partial) {
+    return code.relationGaps?.[0]?.message ?? "일부 코드 관계를 확인하지 못했습니다. 소스 관리에서 진단을 확인하세요.";
+  }
+  if (dbProfileControls.inventory?.partial) {
+    return dbProfileControls.inventory.capabilityWarnings?.[0] ?? "일부 데이터베이스 구조를 확인하지 못했습니다.";
+  }
+  return null;
+}

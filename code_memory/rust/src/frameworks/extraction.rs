@@ -4,11 +4,13 @@ fn file_system_route(
     source: &str,
 ) -> Option<(String, String, Option<String>, usize)> {
     let normalized = path.replace('\\', "/");
+    let next_pages = pack.id == "nextjs"
+        && (normalized.contains("/pages/") || normalized.starts_with("pages/"));
+    let next_app = pack.id == "nextjs"
+        && (normalized.contains("/app/") || normalized.starts_with("app/"));
     let relative = match pack.id.as_str() {
-        "nextjs" if normalized.contains("/pages/") || normalized.starts_with("pages/") => {
-            after_directory(&normalized, "pages")?
-        }
-        "nextjs" if normalized.contains("/app/") || normalized.starts_with("app/") => {
+        "nextjs" if next_pages => after_directory(&normalized, "pages")?,
+        "nextjs" if next_app => {
             after_directory(&normalized, "app")?
         }
         "nuxt" if normalized.contains("/server/api/") || normalized.starts_with("server/api/") => {
@@ -33,6 +35,16 @@ fn file_system_route(
         .rsplit_once('.')
         .map(|(stem, _)| stem)
         .unwrap_or(file_name);
+    let exported_method = exported_http_handler(source);
+    if next_app {
+        match file {
+            "route" if exported_method.is_some() => {}
+            "page" if has_default_export(source, &pack.language) => {}
+            _ => return None,
+        }
+    } else if next_pages && !has_default_export(source, &pack.language) {
+        return None;
+    }
     let file_method = if pack.id == "nuxt" {
         file.rsplit_once('.').and_then(|(stem, suffix)| {
             let method = filesystem_http_method(suffix)?;
@@ -57,7 +69,6 @@ fn file_system_route(
     } else {
         format!("/{}", route.join("/"))
     };
-    let exported_method = exported_http_handler(source);
     let method = file_method
         .or_else(|| exported_method.map(|(method, _)| method))
         .unwrap_or("ANY")
@@ -111,6 +122,13 @@ fn file_system_route(
         })
         .unwrap_or(1);
     Some((route_path, method, handler, source_line))
+}
+
+fn has_default_export(source: &str, language: &str) -> bool {
+    source_without_comments(source, language).lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("export default") || line.starts_with("export { default")
+    })
 }
 
 fn filesystem_http_method(value: &str) -> Option<&'static str> {
@@ -467,4 +485,3 @@ fn java_enclosing_type(lines: &[&str], index: usize) -> Option<String> {
             identifier_after(line, "class ").or_else(|| identifier_after(line, "record "))
         })
 }
-

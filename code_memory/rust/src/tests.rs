@@ -9,6 +9,84 @@ fn registry_has_exactly_twelve_languages() {
 }
 
 #[test]
+fn index_output_matches_contract_golden_shape() {
+    let golden: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/engine-index-contract.json"
+    ))
+    .expect("contract golden must be valid JSON");
+    let root =
+        std::env::temp_dir().join(format!("code-memory-index-contract-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("create contract fixture root");
+    std::fs::write(root.join("main.py"), "def health():\n    return 'ok'\n")
+        .expect("write contract fixture source");
+    let output_path = root.join("language-index.json");
+    let architecture_path = root.join("architecture-index.json");
+    let pack_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("code_memory root");
+    index_project(&root, &output_path, &architecture_path, pack_root, None)
+        .expect("contract fixture should index without external providers");
+    let output: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&output_path).expect("read generated contract output"),
+    )
+    .expect("generated contract output must be valid JSON");
+    assert_eq!(output["schema"], golden["schema"]);
+    for field in golden["requiredTopLevel"].as_array().unwrap() {
+        let field = field.as_str().unwrap();
+        assert!(output.get(field).is_some(), "missing output field: {field}");
+    }
+    for stage in golden["requiredTimingStages"].as_array().unwrap() {
+        let stage = stage.as_str().unwrap();
+        assert!(output["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|timing| timing["stage"] == stage));
+    }
+    let unit = output["analysis_units"]
+        .as_array()
+        .unwrap()
+        .first()
+        .unwrap();
+    for field in golden["requiredAnalysisUnitFields"].as_array().unwrap() {
+        let field = field.as_str().unwrap();
+        assert!(
+            unit.get(field).is_some(),
+            "missing analysis unit field: {field}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn diagnostic_codes_use_the_stable_contract_names() {
+    assert_eq!(
+        serde_json::to_value(DiagnosticCode::DependencyMetadataGap).unwrap(),
+        "missing-dependency"
+    );
+    assert_eq!(
+        serde_json::to_value(DiagnosticCode::LargeWorkspacePartial).unwrap(),
+        "workspace-too-large"
+    );
+    assert_eq!(DiagnosticCode::ProviderFailed.as_str(), "provider-failed");
+}
+
+#[test]
+fn provider_stderr_capture_keeps_a_bounded_failure_tail() {
+    let input = (0..20)
+        .map(|index| format!("fatal provider line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tail = capture_provider_stderr("test-provider", std::io::Cursor::new(input))
+        .join()
+        .expect("stderr capture should finish");
+    assert!(!tail.contains("fatal provider line 0"));
+    assert!(tail.contains("fatal provider line 19"));
+    assert!(tail.lines().count() <= 12);
+    assert!(tail.len() <= 4096);
+}
+
+#[test]
 fn strict_gate_does_not_fail_explicit_source_exclusions() {
     let output = IndexOutput {
         schema: "test",
@@ -1293,6 +1371,20 @@ fn dart_plain_package_dependencies_also_require_resolved_metadata() {
 }
 
 #[test]
+fn dependency_metadata_fallback_is_reported_as_partial() {
+    let diagnostic = Diagnostic {
+        language: "dart".to_string(),
+        level: "warning",
+        code: DiagnosticCode::DependencyMetadataGap,
+        message: "local-only package map".to_string(),
+        detail: None,
+        path: None,
+        line: None,
+    };
+    assert!(provider_diagnostic_is_partial(&diagnostic));
+}
+
+#[test]
 fn typescript_config_discovery_includes_nested_and_named_configs() {
     let root = std::env::temp_dir().join(format!(
         "code-memory-typescript-configs-{}",
@@ -1312,6 +1404,14 @@ fn typescript_config_discovery_includes_nested_and_named_configs() {
     fs::create_dir_all(root.join("NODE_MODULES")).expect("create case-variant excluded directory");
     fs::write(root.join("NODE_MODULES").join("tsconfig.hidden.json"), "{}")
         .expect("write case-variant excluded config");
+    let providers = root.join("tools").join("managed-providers");
+    fs::create_dir_all(&providers).expect("create managed provider directory");
+    fs::write(
+        providers.join("manifest.json"),
+        r#"{"schema":"code-memory.provider-manifest.v1"}"#,
+    )
+    .expect("write provider manifest");
+    fs::write(providers.join("tsconfig.provider.json"), "{}").expect("write provider config");
 
     let configs = typescript_config_files(&root);
     assert_eq!(configs.len(), 4);
@@ -1328,6 +1428,7 @@ fn typescript_config_discovery_includes_nested_and_named_configs() {
     assert!(configs
         .iter()
         .all(|path| !path.starts_with(root.join("NODE_MODULES"))));
+    assert!(configs.iter().all(|path| !path.starts_with(&providers)));
 
     let project_configs = project_config_files(&root);
     assert!(project_configs
@@ -1336,6 +1437,9 @@ fn typescript_config_discovery_includes_nested_and_named_configs() {
     assert!(project_configs
         .iter()
         .any(|path| path.ends_with("tsconfig.test.json")));
+    assert!(project_configs
+        .iter()
+        .all(|path| !path.starts_with(&providers)));
     let _ = fs::remove_dir_all(root);
 }
 

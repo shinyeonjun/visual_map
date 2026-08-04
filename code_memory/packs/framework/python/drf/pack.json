@@ -1,0 +1,21 @@
+{
+  "schema": "code-memory.framework-pack.v1",
+  "language": "python",
+  "id": "drf",
+  "name": "Django REST framework",
+  "kind": "web",
+  "signals": [
+    "import:rest_framework",
+    "APIView",
+    "ViewSet",
+    "@api_view",
+    "router.register"
+  ],
+  "outputs": [
+    "HTTP_ROUTE",
+    "HANDLES"
+  ],
+  "rule_sets": [
+    "HTTP_ROUTE"
+  ]
+}

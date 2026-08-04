@@ -49,6 +49,7 @@ pub(crate) const HANDLES_QUERY: &str = "MATCH (handler)-[:HANDLES]->(route) RETU
 #[derive(Debug)]
 pub(crate) struct CodebaseMemoryInventory {
     pub architecture: Value,
+    pub evidence: Value,
     pub nodes: Value,
     pub calls: Value,
     pub handles: Value,
@@ -117,6 +118,11 @@ impl<'a> CodebaseMemoryAdapter<'a> {
             &json!({ "project": project }),
             Duration::from_secs(60),
         )?;
+        let evidence = self.invoke_json(
+            CodebaseMemoryTool::GetEvidence,
+            &json!({ "project": project }),
+            Duration::from_secs(30),
+        )?;
         let nodes =
             normalize_inventory_nodes(&self.query_graph(project, &inventory_nodes_query())?)?;
         ensure_result_below_limit(&nodes, "code nodes", MAX_CODE_NODES)?;
@@ -128,6 +134,7 @@ impl<'a> CodebaseMemoryAdapter<'a> {
 
         Ok(CodebaseMemoryInventory {
             architecture,
+            evidence,
             nodes,
             calls,
             handles,
@@ -224,6 +231,17 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         if let Some(path) = engine_dir
             .map(|directory| directory.join("packs"))
             .filter(|path| path.is_dir())
+            .or_else(|| {
+                #[cfg(debug_assertions)]
+                {
+                    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../code_memory/packs");
+                    source.is_dir().then_some(source)
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    None
+                }
+            })
         {
             env_values.push((
                 "CODE_MEMORY_PACKS_ROOT".to_string(),
@@ -283,6 +301,7 @@ enum CodebaseMemoryTool {
     IndexRepository,
     DeleteProject,
     GetArchitecture,
+    GetEvidence,
     QueryGraph,
     SearchCode,
 }
@@ -293,6 +312,7 @@ impl CodebaseMemoryTool {
             Self::IndexRepository => "index_repository",
             Self::DeleteProject => "delete_project",
             Self::GetArchitecture => "get_architecture",
+            Self::GetEvidence => "get_evidence",
             Self::QueryGraph => "query_graph",
             Self::SearchCode => "search_code",
         }
@@ -598,6 +618,7 @@ mod tests {
             CodebaseMemoryTool::IndexRepository,
             CodebaseMemoryTool::DeleteProject,
             CodebaseMemoryTool::GetArchitecture,
+            CodebaseMemoryTool::GetEvidence,
             CodebaseMemoryTool::QueryGraph,
             CodebaseMemoryTool::SearchCode,
         ]
@@ -609,6 +630,7 @@ mod tests {
                 "index_repository",
                 "delete_project",
                 "get_architecture",
+                "get_evidence",
                 "query_graph",
                 "search_code"
             ]

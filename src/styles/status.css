@@ -12,7 +12,7 @@
   background: var(--bg-panel);
   color: var(--ink-2);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   overflow: hidden;
 }
 .statusbar span {
@@ -25,46 +25,44 @@
   white-space: nowrap;
 }
 .statusbar svg { color: var(--green); }
-.status-workspace {
-  flex: 1 1 160px;
-  max-width: 260px;
-}
+/*
+  Sized to its content, not to 114px. The engine name plus its integrity badge
+  ("개발용", "배포대기") needs about 155px, and the fixed basis chopped the badge
+  through the middle of a glyph. The bar has the room.
+*/
 .engine-status {
-  flex: 0 0 114px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 210px;
 }
-.status-source {
-  flex: 0 1 196px;
+
+/* The badge is the status; the name gives way first. */
+.statusbar .engine-status > b { flex: 0 0 auto; }
+.engine-status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.status-map {
-  flex: 0 0 142px;
+
+/* A real failure gets room to state itself instead of a 48px sliver. */
+.engine-status:has(> .engine-status-detail) {
+  max-width: 380px;
 }
+
+/* The badge is the status. It ellipsises the name before it clips itself. */
+.statusbar .engine-status > b { flex: 0 0 auto; }
 .status-snapshot {
   flex: 0 0 158px;
   justify-content: flex-end;
   color: var(--ink-3);
 }
-.status-quality {
-  flex: 0 0 184px;
-  justify-content: center;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--bg-inset);
-  color: var(--ink-3);
-}
-.status-quality.ready {
-  background: var(--green-soft);
-  color: var(--green);
-}
-.status-quality.candidate {
-  background: var(--orange-soft);
-  color: var(--orange);
-}
 .statusbar b {
   padding: 0 6px;
-  border-radius: 5px;
+  border-radius: var(--r-md);
   background: var(--green-soft);
   color: var(--green);
-  font-size: 9.5px;
+  font-size: var(--fs-2xs);
 }
 .statusbar b.missing {
   background: var(--orange-soft);
@@ -123,7 +121,7 @@
   padding: 8px 10px;
   overflow: auto;
   border: 1px solid var(--line-2);
-  border-radius: 8px;
+  border-radius: var(--r-lg);
   background: var(--bg-raised);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
   white-space: pre-wrap;
@@ -147,11 +145,11 @@
   height: 18px;
   padding: 0 7px;
   border: 1px solid var(--line-2);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--bg-raised);
   color: var(--ink-4);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   opacity: 0.7;
 }
 .dev-diag-chip.open,
@@ -168,18 +166,18 @@
   gap: 3px;
   padding: 8px 10px;
   border: 1px solid var(--line-2);
-  border-radius: 8px;
+  border-radius: var(--r-lg);
   background: var(--bg-raised);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
   color: var(--ink-2);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 .statusbar .dev-diag-panel { right: 0; }
 .dev-diag-panel strong {
   color: var(--ink);
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .dev-diag-panel span {
   overflow: hidden;
@@ -194,14 +192,8 @@
   .side { width: 300px; flex-basis: 300px; }
   .side-right { width: 340px; flex-basis: 340px; }
   .select-shell select { max-width: 132px; }
-  .search-shell { width: 240px; flex-basis: 240px; }
-  .global-search { width: 240px; }
   .statusbar { gap: 6px; }
-  .status-workspace { max-width: 210px; }
-  .engine-status { flex-basis: 108px; }
-  .status-source { flex-basis: 150px; }
-  .status-map { flex-basis: 128px; }
-  .status-quality { flex-basis: 150px; }
+  .engine-status { max-width: 152px; }
   .status-snapshot { display: none; }
   .at-legend-item:not(.primary) { display: none; }
   .at-cards { gap: var(--at-lane-gap, 18px); padding-right: var(--at-lane-pad-x, 10px); }
@@ -226,7 +218,6 @@
     gap: 5px;
     padding-inline: 10px;
   }
-  .statusbar .status-workspace,
   .statusbar .status-snapshot,
   .statusbar .operation-details,
   .statusbar .dev-diag {
@@ -236,24 +227,7 @@
     margin-left: 0;
   }
   .statusbar .engine-status {
-    flex: 0 0 104px;
-  }
-  .statusbar .status-source {
-    flex: 0.85 1 128px;
-    min-width: 126px;
-  }
-  .statusbar .push.status-source {
-    flex: 1.25 1 168px;
-    min-width: 150px;
-  }
-  .statusbar .status-map {
-    flex: 0 0 130px;
-  }
-  .statusbar .status-quality {
-    flex: 0 0 112px;
-  }
-  .statusbar .status-source:not(.push) {
-    display: none;
+    max-width: 132px;
   }
   .side-left {
     width: 248px;
@@ -275,12 +249,6 @@
   }
 }
 
-@media (max-width: 960px) {
-  .statusbar .status-source:not(.push) {
-    display: none;
-  }
-}
-
 @media (max-width: 860px) {
   .side-left {
     width: 220px;
@@ -297,6 +265,6 @@
   .side-right .answer-head span,
   .side-right .answer-verdict {
     padding-inline: 4px;
-    font-size: 9px;
+    font-size: var(--fs-2xs);
   }
 }

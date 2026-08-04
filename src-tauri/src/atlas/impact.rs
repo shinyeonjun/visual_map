@@ -74,6 +74,7 @@ pub(super) fn table_detail_map(
             kind: "candidate_uses".to_string(),
             confidence: Some(link.confidence.clone()),
             evidence: link.evidence.clone(),
+            weight: None,
         })
         .collect::<Vec<_>>();
     let fk_links = db_fk_links_for_table(snapshot, &item_by_id, table.id.as_str());
@@ -165,6 +166,7 @@ pub(super) fn table_detail_map(
                     kind: "contains".to_string(),
                     confidence: None,
                     evidence: Vec::new(),
+                    weight: None,
                 })
             } else {
                 None
@@ -185,6 +187,7 @@ pub(super) fn table_detail_map(
                     kind: "candidate_uses".to_string(),
                     confidence: Some(link.confidence),
                     evidence: link.evidence,
+                    weight: None,
                 })
             } else {
                 None
@@ -219,9 +222,11 @@ pub(super) fn table_detail_map(
         focus: table.id.clone(),
         nodes,
         edges,
+        overview_axis: None,
         warnings,
         review_board: Some(review_board),
         api_reading: None,
+        representative_paths: None,
     }
 }
 
@@ -330,6 +335,7 @@ pub(super) fn column_impact_map(
             kind: "contains".to_string(),
             confidence: None,
             evidence: Vec::new(),
+            weight: None,
         });
     }
     if column.is_primary_key && !has_primary_object {
@@ -382,6 +388,8 @@ pub(super) fn column_impact_map(
         focus: column.id.clone(),
         nodes,
         edges,
+        overview_axis: None,
+        representative_paths: None,
         warnings: if candidate_count > 8 {
             warnings
                 .into_iter()
@@ -465,7 +473,12 @@ fn constraint_node(column: &InventoryItem, suffix: &str, title: &str) -> VisualN
         subtitle: Some("확정 DB 구조".to_string()),
         layer: "data".to_string(),
         source: "db".to_string(),
+        parent_id: None,
+        depth: None,
+        assigned_by: None,
         location: None,
+        metrics: None,
+        coverage: None,
     }
 }
 
@@ -485,6 +498,7 @@ fn constraint_edge(column: &InventoryItem, suffix: &str) -> VisualEdge {
             kind: "db-metadata".to_string(),
             text: format!("{} 컬럼은 {title}로 표시된 DB 구조입니다", column.name),
         }],
+        weight: None,
     }
 }
 
@@ -527,6 +541,7 @@ fn column_reference_candidates(
                 .to_string(),
             ),
             evidence: link.evidence.clone(),
+            weight: None,
         })
         .collect::<Vec<_>>();
     edges.extend(
@@ -567,6 +582,7 @@ fn column_reference_candidates(
                             )
                         },
                     }],
+                    weight: None,
                 })
             }),
     );

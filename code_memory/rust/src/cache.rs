@@ -5,8 +5,9 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
+use crate::source::is_managed_provider_root;
 use crate::{compile_database_dirs, find_tool, is_excluded_source_dir};
 use crate::{
     Diagnostic, DiagnosticCode, DocumentOutput, IndexOutput, LanguageSpec, RelationOutput,
@@ -71,6 +72,8 @@ pub(crate) struct CachedDiagnostic {
     #[serde(default)]
     pub(crate) code: DiagnosticCode,
     pub(crate) message: String,
+    #[serde(default)]
+    pub(crate) detail: Option<String>,
     pub(crate) path: Option<String>,
     pub(crate) line: Option<u32>,
 }
@@ -387,6 +390,9 @@ pub(crate) fn project_config_digest(root: &Path) -> u64 {
     hash
 }
 fn collect_project_config_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    if is_managed_provider_root(dir) {
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -650,17 +656,39 @@ fn checksum_range(state: &mut u64, range: &[i32]) {
 pub(crate) fn language_cache_path(root: &Path, lang: &LanguageSpec, key: &str) -> PathBuf {
     project_cache_root(root).join(format!("{}-{key}.json", lang.id))
 }
+pub(crate) struct LanguageCacheRead {
+    pub(crate) value: Option<CachedLanguageResult>,
+    pub(crate) io_ms: u128,
+    pub(crate) deserialize_ms: u128,
+}
+
 pub(crate) fn load_language_cache(
     root: &Path,
     lang: &LanguageSpec,
     key: &str,
-) -> Option<CachedLanguageResult> {
-    let value = fs::read(language_cache_path(root, lang, key)).ok()?;
-    let cached: CachedLanguageResult = serde_json::from_slice(&value).ok()?;
-    (cached.schema == "code-memory.language-cache.v3"
-        && cached.key == key
-        && !cached.documents.is_empty())
-    .then_some(cached)
+) -> LanguageCacheRead {
+    let io_started = Instant::now();
+    let Ok(value) = fs::read(language_cache_path(root, lang, key)) else {
+        return LanguageCacheRead {
+            value: None,
+            io_ms: io_started.elapsed().as_millis(),
+            deserialize_ms: 0,
+        };
+    };
+    let io_ms = io_started.elapsed().as_millis();
+    let deserialize_started = Instant::now();
+    let cached = serde_json::from_slice::<CachedLanguageResult>(&value).ok();
+    let deserialize_ms = deserialize_started.elapsed().as_millis();
+    let value = cached.filter(|cached| {
+        cached.schema == "code-memory.language-cache.v3"
+            && cached.key == key
+            && !cached.documents.is_empty()
+    });
+    LanguageCacheRead {
+        value,
+        io_ms,
+        deserialize_ms,
+    }
 }
 pub(crate) fn write_language_cache(
     root: &Path,
@@ -688,6 +716,7 @@ pub(crate) fn write_language_cache(
                         DiagnosticCode::ProviderTimeout
                             | DiagnosticCode::LargeWorkspacePartial
                             | DiagnosticCode::JavaSourceFallback
+                            | DiagnosticCode::TypescriptSourceFallback
                     )
             })
             .map(|diagnostic| CachedDiagnostic {
@@ -695,6 +724,7 @@ pub(crate) fn write_language_cache(
                 level: diagnostic.level.to_string(),
                 code: diagnostic.code,
                 message: diagnostic.message.clone(),
+                detail: diagnostic.detail.clone(),
                 path: diagnostic.path.clone(),
                 line: diagnostic.line,
             })

@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{FrameworkFixture, FrameworkFixtureFile, FrameworkPack};
+use crate::source::is_managed_provider_root;
 use crate::LANGUAGES;
 
 pub(crate) fn load_packs(root: &Path) -> Result<Vec<FrameworkPack>, String> {
@@ -326,7 +327,38 @@ pub(crate) fn source_signal_matches(relative: &str, source: &str, signal: &str) 
         }
         Some("require") => source.contains("require(") && source.contains(&needle),
         Some("include") => source.contains("#include") && source.contains(&needle),
+        Some("package") => package_source_signal_matches(relative, source, &needle),
         _ => source.contains(&needle),
+    }
+}
+
+fn package_source_signal_matches(relative: &str, source: &str, needle: &str) -> bool {
+    match Path::new(relative)
+        .extension()
+        .and_then(|value| value.to_str())
+    {
+        Some("dart") => source.lines().any(|line| {
+            line.trim_start().starts_with("import ") && line.contains(&format!("package:{needle}"))
+        }),
+        Some("go") => source.lines().any(|line| {
+            let line = line.trim();
+            let import_line = line.starts_with("import ")
+                || line.starts_with('"')
+                || line
+                    .split_whitespace()
+                    .nth(1)
+                    .is_some_and(|value| value.starts_with('"'));
+            import_line && line.contains(&format!("\"{needle}"))
+        }),
+        Some("rs") => source.lines().any(|line| {
+            let line = line.trim();
+            line.strip_prefix("use ")
+                .is_some_and(|value| value.starts_with(&format!("{needle}::")))
+                || line
+                    .strip_prefix("extern crate ")
+                    .is_some_and(|value| value.trim_end_matches(';') == needle)
+        }),
+        _ => false,
     }
 }
 
@@ -469,6 +501,9 @@ pub(crate) fn cached_metadata_signal_match(
 }
 
 pub(crate) fn collect_metadata_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
+    if is_managed_provider_root(dir) {
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };

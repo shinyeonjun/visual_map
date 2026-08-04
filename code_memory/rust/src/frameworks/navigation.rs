@@ -394,6 +394,9 @@ fn has_route_syntax_candidate(source: &str, language: &str) -> bool {
         "[Options(",
         ".add_url_rule(",
         ".add_api_route(",
+        "router.register(",
+        "@api_view",
+        "as_view(",
         ".addRoute(",
         ".and_then(",
         "Route(",
@@ -432,7 +435,7 @@ fn has_route_syntax_candidate(source: &str, language: &str) -> bool {
     .any(|marker| source.contains(marker))
 }
 
-fn source_code_mask(source: &str, language: &str) -> String {
+pub(crate) fn source_code_mask(source: &str, language: &str) -> String {
     source_mask(source, language, true)
 }
 
@@ -452,7 +455,7 @@ fn source_path_is_test(path: &str) -> bool {
     })
 }
 
-fn source_without_comments(source: &str, language: &str) -> String {
+pub(crate) fn source_without_comments(source: &str, language: &str) -> String {
     source_mask(source, language, false)
 }
 
@@ -610,4 +613,3 @@ fn has_route_prefix_syntax(line: &str) -> bool {
         || (line.trim_start().starts_with("[Route(") && !line.contains("#[Route("))
         || line.trim_start().starts_with("[RoutePrefix(")
 }
-

@@ -21,17 +21,6 @@ fn angular_service_evidence_does_not_promote_component_decorators() {
 
 #[test]
 fn route_parser_covers_registration_and_annotation_shapes() {
-    let pack = FrameworkPack {
-        id: "test".to_string(),
-        language: "typescript".to_string(),
-        name: "test".to_string(),
-        kind: "web".to_string(),
-        signals: vec!["test".to_string()],
-        outputs: vec!["HTTP_ROUTE".to_string()],
-        rules: vec!["HTTP_ROUTE".to_string()],
-        adapter: "registration-routing".to_string(),
-        fixture: FrameworkFixture::default(),
-    };
     for (source, method) in [
         ("app.get(\"/x\", handler);", "GET"),
         ("@app.get(\"/x\")\ndef health(): pass", "GET"),
@@ -60,16 +49,69 @@ fn route_parser_covers_registration_and_annotation_shapes() {
         ("@GetMapping(\"/x\") void health() {}", "GET"),
         ("#[get(\"/x\")] fn health() {}", "GET"),
     ] {
-        if source.contains("Route(\"/x\"") {
-            assert_eq!(route_method(source), Some(method), "route method: {source}");
-            assert!(first_route_path(source).is_some(), "route path: {source}");
-        }
-        let mut facts = Vec::new();
-        extract_routes(&pack, "src/test", source, &[], None, &mut facts);
-        assert_eq!(facts.len(), 1, "source: {source}");
-        assert_eq!(facts[0].method.as_deref(), Some(method));
-        assert_eq!(facts[0].path.as_deref(), Some("/x"));
+        assert_eq!(route_method(source), Some(method), "route method: {source}");
+        assert!(first_route_path(source).is_some(), "route path: {source}");
     }
+}
+
+#[test]
+fn drf_router_register_expands_indexed_actions_without_inventing_methods() {
+    let pack = FrameworkPack {
+        id: "drf".to_string(),
+        language: "python".to_string(),
+        name: "Django REST framework".to_string(),
+        kind: "web".to_string(),
+        signals: vec![],
+        outputs: vec!["HTTP_ROUTE".to_string(), "HANDLES".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = "class ProjectViewSet(ViewSet):\n    def list(self, request): pass\n    def retrieve(self, request, pk=None): pass\n    @action(methods=['post'], detail=True, url_path='publish')\n    def publish(self, request, pk=None): pass\nrouter.register('projects', ProjectViewSet, basename='project')";
+    let names = [
+        ("fixture/ProjectViewSet#", vec![0, 0, 10, 0]),
+        ("fixture/ProjectViewSet#list().", vec![1, 0, 2, 0]),
+        ("fixture/ProjectViewSet#retrieve().", vec![2, 0, 3, 0]),
+        ("fixture/ProjectViewSet#publish().", vec![4, 0, 5, 0]),
+    ];
+    let documents = vec![DocumentOutput {
+        language: "python".to_string(),
+        path: "src/api.py".to_string(),
+        symbols: Vec::new(),
+        occurrences: names
+            .into_iter()
+            .map(|(symbol, range)| OccurrenceOutput {
+                symbol: symbol.to_string(),
+                range,
+                enclosing_range: Vec::new(),
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            })
+            .collect(),
+    }];
+    let mut facts = Vec::new();
+    extract_routes(&pack, "src/api.py", source, &documents, None, &mut facts);
+    let routes = facts
+        .iter()
+        .filter(|fact| fact.kind == "HTTP_ROUTE")
+        .collect::<Vec<_>>();
+    assert!(routes.iter().any(|fact| {
+        fact.path.as_deref() == Some("/projects/") && fact.method.as_deref() == Some("GET")
+    }));
+    assert!(routes.iter().any(|fact| {
+        fact.path.as_deref() == Some("/projects/{pk}/") && fact.method.as_deref() == Some("GET")
+    }));
+    assert!(routes.iter().any(|fact| {
+        fact.path.as_deref() == Some("/projects/{pk}/publish/")
+            && fact.method.as_deref() == Some("POST")
+    }));
+    assert!(!routes.iter().any(|fact| {
+        fact.path.as_deref() == Some("/projects/{pk}/")
+            && matches!(fact.method.as_deref(), Some("PUT" | "PATCH" | "DELETE"))
+    }));
+    assert!(routes.iter().all(|fact| fact.symbol.is_some()));
 }
 
 #[test]
@@ -246,7 +288,7 @@ fn javascript_static_router_mounts_compose_nested_prefixes_only_when_unique() {
 #[test]
 fn java_route_prefix_does_not_leak_to_the_next_controller() {
     let pack = FrameworkPack {
-        id: "spring".to_string(),
+        id: "spring-mvc".to_string(),
         language: "java".to_string(),
         name: "Spring".to_string(),
         kind: "web".to_string(),
@@ -389,7 +431,7 @@ fn filesystem_frameworks_create_routes_from_file_conventions() {
     let mut facts = Vec::new();
     extract_routes(
         &pack,
-        "src/app/users/[id]/page.tsx",
+        "src/app/users/[id]/route.ts",
         "export async function GET() {}",
         &[],
         None,
@@ -634,6 +676,16 @@ fn annotation_and_macro_routes_find_the_following_handler() {
         "src/app.ts",
         "const name = \"express\";",
         "import:express"
+    ));
+    assert!(!source_signal_matches(
+        "src/engine.rs",
+        "let fixture = \"package:axum Router::new\";",
+        "package:axum"
+    ));
+    assert!(source_signal_matches(
+        "src/main.rs",
+        "use axum::Router;",
+        "package:axum"
     ));
 
     let pack = FrameworkPack {
@@ -1742,6 +1794,45 @@ fn nested_next_package_does_not_claim_sibling_page_routes() {
 }
 
 #[test]
+fn nested_framework_metadata_does_not_claim_sibling_behavioral_syntax() {
+    let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-framework-rust-package-scope-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("server/src")).unwrap();
+    fs::create_dir_all(root.join("engine/src")).unwrap();
+    fs::write(
+        root.join("server/Cargo.toml"),
+        "[package]\nname = \"server\"\nversion = \"0.1.0\"\n[dependencies]\naxum = \"0.8\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("server/src/main.rs"),
+        "use axum::Router;\nfn app() { Router::new().route(\"/ok\", get(handler)); }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("engine/src/lib.rs"),
+        "fn unrelated() { graph.route(\"not-http\", node).layer(metadata); }\n",
+    )
+    .unwrap();
+
+    let analysis = analyze(&root, &[], pack_root).unwrap();
+    let axum = analysis
+        .frameworks
+        .iter()
+        .find(|framework| framework.id == "axum")
+        .expect("Axum framework");
+    assert!(axum
+        .facts
+        .iter()
+        .all(|fact| fact.source_file.starts_with("server/")));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn prefixed_source_signals_do_not_match_only_a_path_name() {
     assert!(!source_signal_matches(
         "src/next_helpers.c",
@@ -1893,7 +1984,7 @@ fn go_grpc_rpc_endpoint_requires_registration_shape() {
 fn every_declared_pack_has_an_executable_shared_rule() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let packs = load_packs(root).expect("framework packs should load");
-    assert_eq!(packs.len(), 84);
+    assert_eq!(packs.len(), 85);
     for pack in &packs {
         for rule in &pack.rules {
             if matches!(rule.as_str(), "HTTP_ROUTE" | "HANDLES") {
@@ -1919,11 +2010,17 @@ fn every_declared_pack_has_an_executable_shared_rule() {
             );
         }
         if pack.rules.iter().any(|rule| rule == "HTTP_ROUTE") {
+            let source_file = pack
+                .fixture
+                .files
+                .iter()
+                .find(|file| fixture_is_source_file(pack, &file.path))
+                .expect("HTTP route fixture source");
             let mut facts = Vec::new();
             extract_routes(
                 pack,
-                "src/framework_fixture",
-                representative_route(pack),
+                &source_file.path,
+                &source_file.source,
                 &[],
                 None,
                 &mut facts,
@@ -2280,6 +2377,13 @@ fn django_and_rails_routes_accept_framework_native_relative_paths() {
         Some("handler".to_string())
     );
     assert_eq!(
+        route_registration_handler(
+            "django",
+            "path(\"/fixture\", UserAssetEndpoint.as_view(http_method_names=[\"post\"]))",
+        ),
+        Some("UserAssetEndpoint".to_string())
+    );
+    assert_eq!(
         route_registration_handler("starlette", "Route(\"/fixture\", handler)"),
         Some("handler".to_string())
     );
@@ -2295,6 +2399,189 @@ fn django_and_rails_routes_accept_framework_native_relative_paths() {
     );
     assert_eq!(rails.len(), 1);
     assert_eq!(rails[0].path.as_deref(), Some("/photos/:photo_id"));
+}
+
+#[test]
+fn django_routes_do_not_promote_outbound_http_calls() {
+    let pack = FrameworkPack {
+        id: "django".to_string(),
+        language: "python".to_string(),
+        name: "Django".to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "registration-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = r#"
+url = normalize_url_path(f"{live_url}/convert-document/")
+response = requests.post(url, json=payload)
+urlpatterns = [path("api/issues/", issue_list)]
+"#;
+    let mut facts = Vec::new();
+    extract_routes(
+        &pack,
+        "plane/bgtasks/copy_s3_object.py",
+        source,
+        &[],
+        None,
+        &mut facts,
+    );
+
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].path.as_deref(), Some("/api/issues/"));
+    assert_eq!(facts[0].source_line, 4);
+}
+
+#[test]
+fn python_web_packs_do_not_promote_outbound_http_calls() {
+    for id in ["fastapi", "flask", "sanic", "starlette"] {
+        let pack = FrameworkPack {
+            id: id.to_string(),
+            language: "python".to_string(),
+            name: id.to_string(),
+            kind: "web".to_string(),
+            signals: Vec::new(),
+            outputs: vec!["HTTP_ROUTE".to_string()],
+            rules: vec!["HTTP_ROUTE".to_string()],
+            adapter: "registration-routing".to_string(),
+            fixture: FrameworkFixture::default(),
+        };
+        let mut facts = Vec::new();
+        extract_routes(
+            &pack,
+            "src/client.py",
+            "response = requests.post(\"/convert-document\", json=payload)",
+            &[],
+            None,
+            &mut facts,
+        );
+        assert!(facts.is_empty(), "{id} claimed an outbound client call");
+    }
+}
+
+#[test]
+fn server_route_packs_do_not_promote_outbound_client_calls() {
+    let cases = [
+        ("express", "typescript", "axios.get(\"/remote\");"),
+        ("spring-mvc", "java", "client.get(\"/remote\");"),
+        ("aspnet-mvc", "csharp", "client.Get(\"/remote\");"),
+        ("drogon", "cpp", "client->get(\"/remote\");"),
+        ("gin", "go", "http.Get(\"/remote\")"),
+        ("axum", "rust", "client.get(\"/remote\").send().await;"),
+        ("laravel", "php", "$client->get('/remote');"),
+        ("rails", "ruby", "client.get(\"/remote\")"),
+        ("shelf", "dart", "client.get('/remote');"),
+    ];
+
+    for (id, language, source) in cases {
+        let pack = FrameworkPack {
+            id: id.to_string(),
+            language: language.to_string(),
+            name: id.to_string(),
+            kind: "web".to_string(),
+            signals: Vec::new(),
+            outputs: vec!["HTTP_ROUTE".to_string()],
+            rules: vec!["HTTP_ROUTE".to_string()],
+            adapter: "registration-routing".to_string(),
+            fixture: FrameworkFixture::default(),
+        };
+        let mut facts = Vec::new();
+        extract_routes(&pack, "src/client", source, &[], None, &mut facts);
+        assert!(facts.is_empty(), "{language}/{id} claimed an outbound call");
+    }
+}
+
+#[test]
+fn django_class_routes_resolve_explicit_http_methods() {
+    let pack = FrameworkPack {
+        id: "django".to_string(),
+        language: "python".to_string(),
+        name: "Django".to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "registration-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let class_symbol = "lsp . . . app.views.py#IssueEndpoint@0:0";
+    let post_symbol = "lsp . . . app.views.py#post@1:4";
+    let documents = vec![DocumentOutput {
+        language: "python".to_string(),
+        path: "app/views.py".to_string(),
+        symbols: Vec::new(),
+        occurrences: vec![
+            OccurrenceOutput {
+                symbol: class_symbol.to_string(),
+                range: vec![0, 0, 5, 0],
+                enclosing_range: Vec::new(),
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            },
+            OccurrenceOutput {
+                symbol: post_symbol.to_string(),
+                range: vec![1, 4, 4, 0],
+                enclosing_range: Vec::new(),
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            },
+        ],
+    }];
+    let mut facts = Vec::new();
+    extract_routes(
+        &pack,
+        "app/urls.py",
+        "path(\"issues/\", IssueEndpoint.as_view(http_method_names=[\"post\"]))",
+        &documents,
+        None,
+        &mut facts,
+    );
+
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].method.as_deref(), Some("POST"));
+    assert_eq!(facts[0].symbol.as_deref(), Some(post_symbol));
+}
+
+#[test]
+fn nextjs_routes_do_not_promote_outbound_http_clients() {
+    let pack = FrameworkPack {
+        id: "nextjs".to_string(),
+        language: "typescript".to_string(),
+        name: "Next.js".to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "hybrid-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let mut facts = Vec::new();
+    extract_routes(
+        &pack,
+        "src/services/issues.ts",
+        "export const loadIssue = (id: string) => client.get(`/api/issues/${id}`);",
+        &[],
+        None,
+        &mut facts,
+    );
+
+    assert!(facts.is_empty());
+
+    extract_routes(
+        &pack,
+        "src/app/issues/form.tsx",
+        "export default function IssueForm() {}",
+        &[],
+        None,
+        &mut facts,
+    );
+    assert!(facts.is_empty());
 }
 
 #[test]
@@ -2570,21 +2857,5 @@ fn representative_line(rule: &str) -> &'static str {
         "SCHEMA" => "#[derive(GraphQLObject)] struct User {}",
         "SCHEDULED_JOB" => "@Scheduled(cron = \"* * * * *\") void run() {}",
         _ => "",
-    }
-}
-
-fn representative_route(pack: &FrameworkPack) -> &'static str {
-    match pack.language.as_str() {
-        "typescript" | "javascript" => "app.get(\"/fixture\", handler);",
-        "python" => "@app.get(\"/fixture\")\ndef handler(): pass",
-        "java" => "@GetMapping(\"/fixture\") void handler() {}",
-        "csharp" => "app.MapGet(\"/fixture\", handler);",
-        "cpp" | "c" => "CROW_ROUTE(app, \"/fixture\")(handler);",
-        "go" => "router.GET(\"/fixture\", handler)",
-        "rust" => "router.route(\"/fixture\", get(handler));",
-        "php" => "Route::get('/fixture', 'handler');",
-        "ruby" => "get \"/fixture\" do; end",
-        "dart" => "router.get('/fixture', handler);",
-        _ => "app.get(\"/fixture\", handler);",
     }
 }

@@ -131,6 +131,8 @@ pub(crate) struct CodeInventory {
     pub unknown: Vec<CodeInventoryItem>,
     pub summary: CodeInventorySummary,
     pub architecture: Option<serde_json::Value>,
+    #[serde(default)]
+    pub evidence: Option<serde_json::Value>,
     pub calls: Vec<CodeCall>,
     #[serde(default)]
     pub handles: Vec<CodeHandle>,
@@ -235,6 +237,8 @@ pub(crate) struct CodeInventoryGap {
     pub from: String,
     pub to: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 impl CodeInventoryGap {
@@ -263,6 +267,7 @@ impl CodeInventoryGap {
             from,
             to,
             message,
+            detail: None,
         }
     }
 

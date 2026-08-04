@@ -13,7 +13,7 @@ fn main() {
     if skip_provider_resources {
         std::env::set_var(
             "TAURI_CONFIG",
-            r#"{"bundle":{"resources":["../THIRD_PARTY_NOTICES.md","engines/manifest.json","engines/code-memory-language.exe","engines/packs","engines/database-memory.exe"]}}"#,
+            r#"{"bundle":{"resources":{"../THIRD_PARTY_NOTICES.md":"THIRD_PARTY_NOTICES.md","engines/manifest.json":"engines/manifest.json","engines/code-memory-language.exe":"engines/code-memory-language.exe","../code_memory/packs":"engines/packs","engines/database-memory.exe":"engines/database-memory.exe"}}}"#,
         );
     }
     tauri_build::build()

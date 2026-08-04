@@ -8,44 +8,7 @@
   </head>
 
   <body>
-    <div id="root">
-      <main class="boot-splash" role="status" aria-live="polite">
-        <div class="boot-splash-mark" aria-hidden="true">⌁</div>
-        <strong>Visual Map</strong>
-        <span>프로젝트 구조를 준비하는 중...</span>
-      </main>
-    </div>
-    <style>
-      html, body, #root { min-height: 100%; margin: 0; }
-      body { background: #f4f6f6; }
-      .boot-splash {
-        min-height: 100vh;
-        box-sizing: border-box;
-        display: grid;
-        place-content: center;
-        justify-items: center;
-        gap: 10px;
-        color: #122228;
-        font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-      }
-      .boot-splash-mark {
-        display: grid;
-        place-items: center;
-        width: 42px;
-        height: 42px;
-        border-radius: 12px;
-        background: #122228;
-        color: #75d4c0;
-        font-size: 28px;
-        font-weight: 700;
-      }
-      .boot-splash strong { font-size: 20px; letter-spacing: -.02em; }
-      .boot-splash span { color: #6d7c80; }
-      @media (prefers-reduced-motion: no-preference) {
-        .boot-splash-mark { animation: boot-pulse 1.4s ease-in-out infinite; }
-      }
-      @keyframes boot-pulse { 50% { transform: translateY(-3px); opacity: .72; } }
-    </style>
+    <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

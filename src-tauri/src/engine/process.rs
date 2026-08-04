@@ -1,0 +1,287 @@
+fn validate_sidecar_args(args: &[String]) -> Result<(), String> {
+    for arg in args {
+        let lower = arg.to_ascii_lowercase();
+        let token = lower.trim_start_matches('-');
+        if matches!(
+            token,
+            "install" | "installer" | "setup" | "register" | "register-mcp" | "mcp-register"
+        ) || lower.ends_with(".ps1")
+            || lower.ends_with(".bat")
+            || lower.ends_with(".cmd")
+            || lower.ends_with(".msi")
+            || lower.contains("claude_desktop_config")
+            || lower.contains("mcp_config")
+        {
+            return Err("허용되지 않는 sidecar 실행 인자입니다".to_string());
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn run_command(
+    executable: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<EngineRunResult, String> {
+    run_command_with_env(executable, args, timeout, &[])
+}
+
+pub(crate) fn run_command_with_env(
+    executable: &Path,
+    args: &[&str],
+    timeout: Duration,
+    envs: &[(&str, &str)],
+) -> Result<EngineRunResult, String> {
+    let started_at = timestamp();
+    let deadline = Instant::now() + timeout;
+    let cancellation = envs
+        .iter()
+        .find(|(key, _)| *key == "BACKEND_VISUAL_MAP_OPERATION_ID")
+        .and_then(|(_, operation_id)| cancellation_for_operation(operation_id));
+    if cancellation
+        .as_ref()
+        .is_some_and(|value| value.load(Ordering::Acquire))
+    {
+        return Ok(cancelled_engine_run(started_at, Vec::new(), Vec::new()));
+    }
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .envs(envs.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_console_window(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("읽기 도구 실행 실패: {error}"))?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_engine_process_tree(&mut child);
+            return Err("읽기 도구 stdout을 열지 못했습니다".to_string());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            terminate_engine_process_tree(&mut child);
+            return Err("읽기 도구 stderr를 열지 못했습니다".to_string());
+        }
+    };
+    let output_limit_reached = Arc::new(AtomicBool::new(false));
+    let stdout_limit = Arc::clone(&output_limit_reached);
+    let stderr_limit = Arc::clone(&output_limit_reached);
+    let stdout_reader =
+        thread::spawn(move || read_process_stream_with_signal(stdout, stdout_limit));
+    let stderr_reader =
+        thread::spawn(move || read_process_stream_with_signal(stderr, stderr_limit));
+
+    loop {
+        let status = match child.try_wait() {
+            Ok(status) => status,
+            Err(error) => {
+                terminate_engine_process_tree(&mut child);
+                let _ = collect_process_streams(stdout_reader, stderr_reader);
+                return Err(format!("읽기 도구 상태 확인 실패: {error}"));
+            }
+        };
+        if let Some(status) = status {
+            // A sidecar can exit while a descendant still owns the inherited
+            // pipe. Ask the platform to terminate the tree before joining
+            // readers; the bounded join below is the final no-hang guard.
+            terminate_engine_process_tree(&mut child);
+            let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
+
+            return Ok(EngineRunResult {
+                ok: status.success(),
+                stdout: redact_secrets(&String::from_utf8_lossy(&stdout)),
+                stderr: redact_secrets(&String::from_utf8_lossy(&stderr)),
+                exit_code: status.code(),
+                started_at,
+                finished_at: timestamp(),
+            });
+        }
+
+        if output_limit_reached.load(Ordering::Acquire) {
+            terminate_engine_process_tree(&mut child);
+            let _ = collect_process_streams(stdout_reader, stderr_reader);
+            return Err(format!(
+                "읽기 도구 출력이 안전 한도({MAX_ENGINE_STREAM_BYTES} bytes)를 초과했습니다"
+            ));
+        }
+
+        if cancellation
+            .as_ref()
+            .is_some_and(|value| value.load(Ordering::Acquire))
+        {
+            terminate_engine_process_tree(&mut child);
+            let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
+            return Ok(cancelled_engine_run(started_at, stdout, stderr));
+        }
+
+        if Instant::now() >= deadline {
+            terminate_engine_process_tree(&mut child);
+            let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
+            let stderr = String::from_utf8_lossy(&stderr);
+            let stderr = if stderr.trim().is_empty() {
+                "읽기 도구 실행 시간이 초과되었습니다".to_string()
+            } else {
+                format!(
+                    "{}\n읽기 도구 실행 시간이 초과되었습니다",
+                    stderr.trim_end()
+                )
+            };
+
+            return Ok(EngineRunResult {
+                ok: false,
+                stdout: redact_secrets(&String::from_utf8_lossy(&stdout)),
+                stderr: redact_secrets(&stderr),
+                exit_code: None,
+                started_at,
+                finished_at: timestamp(),
+            });
+        }
+
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn terminate_engine_process_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        let _ = Command::new("taskkill")
+            .creation_flags(0x08000000)
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(windows)]
+fn hide_console_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    // CREATE_NO_WINDOW keeps bundled console sidecars invisible in the GUI app.
+    command.creation_flags(0x08000000);
+}
+
+#[cfg(not(windows))]
+fn hide_console_window(_command: &mut Command) {}
+
+fn cancelled_engine_run(started_at: String, stdout: Vec<u8>, stderr: Vec<u8>) -> EngineRunResult {
+    let stderr = String::from_utf8_lossy(&stderr);
+    let stderr = if stderr.trim().is_empty() {
+        "읽기 도구 실행이 취소되었습니다".to_string()
+    } else {
+        format!("{}\n읽기 도구 실행이 취소되었습니다", stderr.trim_end())
+    };
+    EngineRunResult {
+        ok: false,
+        stdout: redact_secrets(&String::from_utf8_lossy(&stdout)),
+        stderr: redact_secrets(&stderr),
+        exit_code: None,
+        started_at,
+        finished_at: timestamp(),
+    }
+}
+
+struct CapturedProcessStream {
+    bytes: Vec<u8>,
+    exceeded_limit: bool,
+}
+
+fn read_process_stream_with_signal(
+    stream: impl Read,
+    overflow: Arc<AtomicBool>,
+) -> Result<CapturedProcessStream, String> {
+    read_process_stream_with_limit_and_signal(stream, MAX_ENGINE_STREAM_BYTES, Some(overflow))
+}
+
+#[cfg(test)]
+fn read_process_stream_with_limit(
+    stream: impl Read,
+    limit: usize,
+) -> Result<CapturedProcessStream, String> {
+    read_process_stream_with_limit_and_signal(stream, limit, None)
+}
+
+fn read_process_stream_with_limit_and_signal(
+    mut stream: impl Read,
+    limit: usize,
+    overflow: Option<Arc<AtomicBool>>,
+) -> Result<CapturedProcessStream, String> {
+    let mut output = Vec::with_capacity(limit.min(64 * 1024));
+    let mut buffer = [0u8; 64 * 1024];
+    let mut exceeded_limit = false;
+
+    loop {
+        let read = stream
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        let remaining = limit.saturating_sub(output.len());
+        let stored = remaining.min(read);
+        output.extend_from_slice(&buffer[..stored]);
+        if stored < read {
+            exceeded_limit = true;
+            if let Some(overflow) = &overflow {
+                overflow.store(true, Ordering::Release);
+            }
+            break;
+        }
+    }
+
+    Ok(CapturedProcessStream {
+        bytes: output,
+        exceeded_limit,
+    })
+}
+
+fn collect_process_streams(
+    stdout: thread::JoinHandle<Result<CapturedProcessStream, String>>,
+    stderr: thread::JoinHandle<Result<CapturedProcessStream, String>>,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = (|| {
+            let stdout = stdout
+                .join()
+                .map_err(|_| "읽기 도구 stdout 수집 작업이 중단됐습니다".to_string())??;
+            let stderr = stderr
+                .join()
+                .map_err(|_| "읽기 도구 stderr 수집 작업이 중단됐습니다".to_string())??;
+            Ok::<_, String>((stdout, stderr))
+        })();
+        let _ = sender.send(result);
+    });
+    let (stdout, stderr) = receiver
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| "읽기 도구 출력 수집이 시간 제한을 초과했습니다".to_string())??;
+    if stdout.exceeded_limit || stderr.exceeded_limit {
+        return Err(format!(
+            "읽기 도구 출력이 안전 한도({MAX_ENGINE_STREAM_BYTES} bytes)를 초과했습니다"
+        ));
+    }
+    Ok((stdout.bytes, stderr.bytes))
+}
+
+pub(crate) fn redact_secrets(input: &str) -> String {
+    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(input) {
+        redact_json_value(&mut value);
+        if let Ok(redacted) = serde_json::to_string(&value) {
+            return redacted;
+        }
+    }
+
+    redact_unstructured_secrets(input)
+}

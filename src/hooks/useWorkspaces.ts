@@ -3,7 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import { githubRepoName, repoPathErrorFor } from "../app/appState";
 import { toUserError } from "../app/operationStatus";
-import { validateWorkspace, validateWorkspaceList } from "../app/runtimeContracts";
+import { validateWorkspace, validateWorkspaceList, validateWorkspaceRecoveryWarnings } from "../app/runtimeContracts";
 import { hasTauriRuntime, tauriUnavailableMessage } from "../app/tauriRuntime";
 import {
   workspaceRepoInputValue,
@@ -54,14 +54,14 @@ export function useWorkspaces({ withBusy }: { withBusy: WithBusy }) {
     try {
       const [itemsValue, warnings] = await Promise.all([
         invoke<unknown>("list_workspaces"),
-        invoke<WorkspaceRecoveryWarning[]>("get_workspace_recovery_warnings"),
+        invoke<unknown>("get_workspace_recovery_warnings"),
       ]);
       if (!isLatestRequest()) {
         return;
       }
       const items = validateWorkspaceList(itemsValue);
       setWorkspaces(items);
-      setRecoveryWarnings(warnings);
+      setRecoveryWarnings(validateWorkspaceRecoveryWarnings(warnings));
       const selected =
         (preferredWorkspaceId ? items.find((workspace) => workspace.id === preferredWorkspaceId) : null) ??
         (currentWorkspace && items.find((workspace) => workspace.id === currentWorkspace.id)) ??

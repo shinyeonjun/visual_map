@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { toUserError } from "../app/operationStatus";
 import { validateCodeIndexResult, validateCodeInventory } from "../app/runtimeContracts";
 import {
@@ -36,8 +36,10 @@ export function useCodeInventory({
   const [codeInventory, setCodeInventory] = useState<CodeInventory | null>(null);
   const [inventoryWorkspaceId, setInventoryWorkspaceId] = useState<string | null>(null);
   const [selectedCodeItem, setSelectedCodeItem] = useState<CodeInventoryItem | null>(null);
+  const indexGenerationRef = useRef(0);
 
   useLayoutEffect(() => {
+    indexGenerationRef.current += 1;
     clearCodeInventory();
     setCodeStatus(null);
     setCodeError(null);
@@ -51,6 +53,7 @@ export function useCodeInventory({
     }
 
     const request: IndexCodeRequest = { workspaceId: workspace.id };
+    const generation = ++indexGenerationRef.current;
 
     await withBusy("code-index", async () => {
       try {
@@ -58,6 +61,9 @@ export function useCodeInventory({
         setCodeError(null);
         setCodeErrorDetail(null);
         const result = validateCodeIndexResult(await invoke<unknown>("index_code_repository", { request }));
+        if (generation !== indexGenerationRef.current) {
+          return;
+        }
         setCurrentWorkspace(result.workspace);
         if (result.run.ok) {
           clearCodeInventory();
@@ -72,7 +78,7 @@ export function useCodeInventory({
           } else {
             setCodeStatus("코드 목록 저장 중...");
             try {
-              await storeCodeInventory(result.workspace.id, result.inventory);
+              await storeCodeInventory(result.workspace.id, result.inventory, generation);
             } catch (error) {
               const uiError = toUserError(error, "코드 읽기 결과를 저장하지 못했습니다");
               setCodeStatus("코드 구조 읽기 완료");
@@ -112,15 +118,25 @@ export function useCodeInventory({
     setCodeErrorDetail(null);
   }
 
-  async function storeCodeInventory(workspaceId: string, inventory: CodeInventory) {
+  async function storeCodeInventory(
+    workspaceId: string,
+    inventory: CodeInventory,
+    generation = indexGenerationRef.current,
+  ) {
+    if (generation !== indexGenerationRef.current) {
+      return;
+    }
     validateCodeInventory(inventory);
+    await refreshInventorySnapshot(workspaceId);
+    if (generation !== indexGenerationRef.current) {
+      return;
+    }
     setCodeInventory(inventory);
     setInventoryWorkspaceId(workspaceId);
     setSelectedCodeItem(firstCodeInventoryItem(inventory));
     setCodeStatus(codeInventoryStatus(inventory, "읽음"));
     setCodeError(null);
     setCodeErrorDetail(null);
-    await refreshInventorySnapshot(workspaceId);
   }
 
   return {

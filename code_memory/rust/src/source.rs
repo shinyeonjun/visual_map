@@ -1,13 +1,10 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-#[cfg(test)]
-use std::collections::HashSet;
-
 use crate::SourceSnapshot;
-#[cfg(test)]
 use crate::LANGUAGES;
 
 pub(crate) fn collect_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
@@ -17,7 +14,17 @@ pub(crate) fn collect_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     files
 }
 
-#[cfg(test)]
+pub(crate) fn canonical_project_root(root: &Path) -> Result<PathBuf, String> {
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("invalid project root {}: {error}", root.display()))?;
+    Ok(root
+        .to_string_lossy()
+        .strip_prefix("\\\\?\\")
+        .map(PathBuf::from)
+        .unwrap_or(root))
+}
+
 pub(crate) fn load_source_snapshot(root: &Path) -> SourceSnapshot {
     let mut extensions = HashSet::new();
     for language in LANGUAGES {
@@ -28,7 +35,6 @@ pub(crate) fn load_source_snapshot(root: &Path) -> SourceSnapshot {
     load_source_snapshot_from_files(root, &files)
 }
 
-#[cfg(test)]
 pub(crate) fn load_source_snapshot_from_files(root: &Path, files: &[PathBuf]) -> SourceSnapshot {
     let mut snapshot = load_source_snapshot_metadata_from_files(root, files);
     load_source_contents(root, &mut snapshot);
@@ -127,6 +133,9 @@ fn source_hash(bytes: &[u8]) -> u64 {
 }
 
 pub(crate) fn collect_files_recursive(dir: &Path, extensions: &[&str], files: &mut Vec<PathBuf>) {
+    if is_managed_provider_root(dir) {
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -150,6 +159,17 @@ pub(crate) fn collect_files_recursive(dir: &Path, extensions: &[&str], files: &m
             files.push(path);
         }
     }
+}
+
+pub(crate) fn is_managed_provider_root(path: &Path) -> bool {
+    let manifest = path.join("manifest.json");
+    let Ok(metadata) = fs::metadata(&manifest) else {
+        return false;
+    };
+    metadata.len() <= 64 * 1024
+        && fs::read_to_string(manifest)
+            .ok()
+            .is_some_and(|source| source.contains("\"code-memory.provider-manifest.v1\""))
 }
 
 pub(crate) fn is_excluded_source_dir(name: &str) -> bool {

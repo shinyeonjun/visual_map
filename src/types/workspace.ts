@@ -244,8 +244,19 @@ function codeRouteSurface(route: CodeInventoryItem): CodeRouteSurface {
     const value = (detail as Record<string, unknown>).routeSurface ?? (detail as Record<string, unknown>).route_surface;
     if (value === "backend-api" || value === "ui-navigation") return value;
   }
+  if (looksLikeFrontendNavigationRoute(route)) {
+    return "ui-navigation";
+  }
   // Older snapshots predate the surface contract; their Route inventory was API-only.
   return "backend-api";
+}
+
+function looksLikeFrontendNavigationRoute(route: CodeInventoryItem): boolean {
+  const path = route.filePath?.replace(/\\/g, "/").toLowerCase();
+  if (!path || !/\.(tsx|jsx|vue|svelte)$/.test(path)) {
+    return false;
+  }
+  return /(^|\/)(frontend|client|web|ui)(\/|$)/.test(path) || /\/(pages|screens|views)\//.test(path);
 }
 
 export function isUiRoute(route: CodeInventoryItem): boolean {
@@ -277,11 +288,47 @@ export type CodeInventory = {
   unknown: CodeInventoryItem[];
   summary: CodeInventorySummary;
   architecture?: unknown;
+  evidence?: CodeEvidenceSummary | null;
   calls: CodeCall[];
   clientRequests?: ClientRequest[];
   handles?: CodeHandle[];
   relationGaps?: CodeInventoryGap[];
   partial?: boolean;
+};
+
+export type CodeEvidenceSummary = {
+  schema: "code-memory.evidence-summary.v1" | string;
+  sourceSchema?: string | null;
+  projectRoot?: string | null;
+  collectors: CodeEvidenceCollector[];
+  factCount: number;
+  relationCount: number;
+  diagnosticCount: number;
+  diagnostics: CodeEvidenceDiagnostic[];
+  diagnosticsHidden: number;
+};
+
+export type CodeEvidenceCollector = {
+  id: string;
+  capability: string;
+  mode: "passive" | "tool-assisted" | string;
+  status: "collected" | "partial" | "not-detected" | "unavailable" | "failed" | string;
+  detectedBy: string[];
+  detectedByTotal: number;
+  tool?: string | null;
+  toolOrigin?: string | null;
+  toolVersion?: string | null;
+  factCount: number;
+  relationCount: number;
+  diagnosticCount: number;
+};
+
+export type CodeEvidenceDiagnostic = {
+  collector: string;
+  level: string;
+  code: string;
+  message: string;
+  path?: string | null;
 };
 
 export type ClientRequest = {
@@ -299,7 +346,7 @@ export type ClientRequest = {
   evidence: string[];
 };
 
-type CodeAnalysisLanguage = {
+export type CodeAnalysisLanguage = {
   id: string;
   name: string;
   provider: string;
@@ -322,13 +369,25 @@ type CodeAnalysisFramework = {
   relationCount: number;
 };
 
-type CodeAnalysisQuality = {
+export type CodeAnalysisQuality = {
   languages: CodeAnalysisLanguage[];
   frameworks: CodeAnalysisFramework[];
   indexedLanguages: number;
   partialLanguages: number;
   failedLanguages: number;
   detectedFrameworks: number;
+  /**
+   * Languages whose files exist on disk but reached none of the index.
+   *
+   * Derived from file counts rather than `status`, because the engine reports a
+   * whole-language skip as `excluded` — an intentional-sounding word for what
+   * the reader experiences as a missing part of the map.
+   */
+  blindSpots: CodeAnalysisLanguage[];
+  /** Languages that were indexed, but not completely. */
+  partialSpots: CodeAnalysisLanguage[];
+  filesFound: number;
+  filesIndexed: number;
 };
 
 export function codeInventoryAnalysisQuality(inventory: CodeInventory | null | undefined): CodeAnalysisQuality | null {
@@ -374,6 +433,12 @@ export function codeInventoryAnalysisQuality(inventory: CodeInventory | null | u
       (language) => !["indexed", "indexed-partial", "excluded"].includes(language.status),
     ).length,
     detectedFrameworks: frameworks.filter((framework) => framework.status === "detected").length,
+    blindSpots: languages.filter((language) => language.filesFound > 0 && language.filesIndexed === 0),
+    partialSpots: languages.filter(
+      (language) => language.filesIndexed > 0 && language.filesIndexed < language.filesFound,
+    ),
+    filesFound: languages.reduce((total, language) => total + language.filesFound, 0),
+    filesIndexed: languages.reduce((total, language) => total + language.filesIndexed, 0),
   };
 }
 
@@ -432,6 +497,15 @@ export function codeInventorySymbolCount(inventory: CodeInventory | null | undef
 }
 
 export function dbInventoryTableCount(inventory: DbInventory | null | undefined): number {
+  if (!inventory) {
+    return 0;
+  }
+  return inventory.partial || inventory.truncated
+    ? inventory.tables.length
+    : (inventory.totalTables ?? inventory.tables.length);
+}
+
+export function dbInventoryTotalTableCount(inventory: DbInventory | null | undefined): number {
   return inventory?.totalTables ?? inventory?.tables.length ?? 0;
 }
 
@@ -490,10 +564,23 @@ export function routeMethodFromIdentity(identity: string | null | undefined): st
 }
 
 export function routeDisplayName(subject: string, method: string | null | undefined): string {
-  if (!method || subject.toUpperCase().startsWith(`${method.toUpperCase()} `)) {
+  const normalized = normalizeRouteName(subject, method);
+  if (!method || normalized.toUpperCase().startsWith(method.toUpperCase() + " ")) {
+    return normalized;
+  }
+  return method.toUpperCase() + " " + normalized;
+}
+
+export function normalizeRouteName(subject: string, method: string | null | undefined): string {
+  if (!method) {
     return subject;
   }
-  return `${method.toUpperCase()} ${subject}`;
+  const prefix = method.toUpperCase() + " ";
+  let normalized = subject.trim();
+  while (normalized.toUpperCase().startsWith(prefix + prefix)) {
+    normalized = normalized.slice(prefix.length);
+  }
+  return normalized;
 }
 
 function routeSpecificity(route: CodeInventoryItem): number {

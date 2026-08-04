@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use super::{ImportUse, PackageInfo, PhpNamespaceIndex, SourcePathIndex};
+use crate::source::is_managed_provider_root;
 use crate::LANGUAGES;
 
 pub(crate) fn load_packages(root: &Path) -> Vec<PackageInfo> {
@@ -41,6 +42,9 @@ pub(crate) fn load_packages(root: &Path) -> Vec<PackageInfo> {
 }
 
 pub(crate) fn collect_metadata_files(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
+    if is_managed_provider_root(dir) {
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };

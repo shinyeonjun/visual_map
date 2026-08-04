@@ -1,7 +1,7 @@
 # Framework pack contract
 
 `packs/framework` is the fixed framework boundary for the 12-language
-code-memory contract. It currently contains 84 declared packs (the original
+code-memory contract. It currently contains 85 declared packs (the original
 82-pack baseline plus JavaScript and Rust Tauri desktop bridge packs).
 
 Each language manifest contains:
@@ -74,7 +74,7 @@ cargo run --manifest-path rust\Cargo.toml -- framework-packs --root .
 ```
 
 The pack boundary and shared adapter families are implemented. The catalog,
-semantic, and provider-backed gates all pass for all 84 packs. The provider
+semantic, and provider-backed gates all pass for all 85 packs. The provider
 gate validates each pack through its configured language provider, source range,
 fact, and relation contract. This does not claim that every version-specific or
 framework-specific DSL in every real project is understood; those remain

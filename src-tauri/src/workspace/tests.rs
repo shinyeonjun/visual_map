@@ -1322,6 +1322,11 @@ fn engine_json_value_accepts_bom_and_same_line_prefix() {
 }
 
 #[test]
+fn engine_json_value_rejects_ambiguous_log_payloads() {
+    assert!(engine_json_value("log {\"status\":\"wrong\"} {\"status\":\"actual\"}").is_none());
+}
+
+#[test]
 fn code_inventory_extracts_items_from_search_results() {
     let routes = serde_json::json!({
         "results": [

@@ -1,3 +1,5 @@
+import type { CodeEvidenceSummary } from "./workspace";
+
 export type VisualMap = {
   id: string;
   workspaceId: string;
@@ -6,8 +8,17 @@ export type VisualMap = {
   nodes: VisualNode[];
   edges: VisualEdge[];
   warnings: string[];
+  overviewAxis?: OverviewAxis | null;
+  /** Entry points ranked so a first-time reader knows what to read first. */
+  representativePaths?: RepresentativePath[] | null;
   reviewBoard?: ImpactReviewBoard | null;
   apiReading?: ApiReadingAnswer | null;
+};
+
+export type OverviewAxis = {
+  kind: "role" | "depth" | string;
+  lanes: string[];
+  reason: string;
 };
 
 export type ApiReadingAnswer = {
@@ -25,7 +36,7 @@ export type ApiReadingAnswer = {
   truncationReason?: string | null;
 };
 
-export type ApiReadingStep = ImpactReviewItem & {
+type ApiReadingStep = ImpactReviewItem & {
   depth: number;
   lane: "route" | "handler" | "service-function" | "repository-query" | string;
   laneBasis: "engine-node" | "confirmed-handles" | "name-inferred" | string;
@@ -59,7 +70,7 @@ type ImpactReviewLane = {
   items: ImpactReviewItem[];
 };
 
-export type ImpactReviewItem = {
+type ImpactReviewItem = {
   id: string;
   nodeId?: string | null;
   kind: string;
@@ -79,7 +90,53 @@ export type VisualNode = {
   subtitle?: string | null;
   layer: string;
   source: string;
+  /** Structural ownership. Root package = null, module = package group id. */
+  parentId?: string | null;
+  /** Structural ownership depth. Package = 0, module = 1. */
+  depth?: number | null;
+  /** Engine rule that assigned this group. */
+  assignedBy?: "package" | "module-path" | "path-root" | string | null;
   location?: SourceLocation | null;
+  metrics?: VisualNodeMetrics | null;
+  coverage?: VisualNodeCoverage | null;
+};
+
+export type RepresentativePath = {
+  entryId: string;
+  title: string;
+  method?: string | null;
+  stepCount: number;
+  /** Items this path reaches that earlier paths in the list do not. */
+  newCoverage: number;
+  /** Share of confirmed items covered by this path and every earlier one. */
+  cumulativeShare: number;
+};
+
+export type VisualNodeMetrics = {
+  memberCount?: number;
+  apiCount: number;
+  codeCount: number;
+  dbCount: number;
+  topApi: string[];
+  topCode: string[];
+  topDb: string[];
+  handlerCount?: number;
+  serviceCount?: number;
+  repositoryCount?: number;
+  depth?: number | null;
+  /**
+   * Confirmed degrees counted before any display truncation, so a card can
+   * state how connected an area is even when the map carries only some of it.
+   */
+  inDegree?: number;
+  outDegree?: number;
+};
+
+export type VisualNodeCoverage = {
+  languages: string[];
+  hasBlindSpot: boolean;
+  /** Indexed, but not completely — distinct from a language that never landed. */
+  hasPartial?: boolean;
 };
 
 export type VisualEdge = {
@@ -89,6 +146,8 @@ export type VisualEdge = {
   kind: string;
   confidence?: string | null;
   evidence: { kind: string; text: string }[];
+  /** How many underlying relations this edge stands for. */
+  weight?: number | null;
 };
 
 export type InventoryItem = {
@@ -173,6 +232,7 @@ type SnapshotMetadata = {
   code?: SnapshotSourceMetadata | null;
   db?: SnapshotSourceMetadata | null;
   architecture?: unknown;
+  evidence?: CodeEvidenceSummary | null;
   migration?: SnapshotMigration;
   gaps?: SnapshotGap[];
 };

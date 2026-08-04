@@ -38,7 +38,14 @@ pub(crate) fn bounded_code_inventory(mut inventory: CodeInventory) -> CodeInvent
 }
 
 pub(crate) fn bounded_db_inventory(mut inventory: DbInventory) -> DbInventory {
+    let truncated = inventory.tables.len() > INVENTORY_ITEM_LIMIT;
     inventory.tables.truncate(INVENTORY_ITEM_LIMIT);
+    if truncated {
+        // The engine result remains complete; this is only the response-side
+        // presentation bound. Mark the returned value so the UI cannot claim
+        // that every table is currently displayed.
+        inventory.truncated = Some(true);
+    }
     inventory
 }
 

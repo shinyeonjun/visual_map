@@ -8,5 +8,4 @@ $ErrorActionPreference = 'Stop'
 & $Bridge framework-packs --root $Root --self-test
 if ($LASTEXITCODE -ne 0) { throw 'framework semantic self-test failed' }
 
-Write-Host 'framework semantic gate: passed=84 total=84'
-
+Write-Host 'framework semantic gate: passed=85 total=85'

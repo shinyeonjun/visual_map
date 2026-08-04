@@ -73,6 +73,7 @@ export function codeInventoryFromSnapshot(
       unknown: unknown.length,
     }),
     architecture: snapshot.metadata?.architecture ?? null,
+    evidence: snapshot.metadata?.evidence ?? null,
     calls: (snapshot.links ?? [])
       .filter((link) => link.kind === "code_call" && link.truthClass === "confirmed")
       .map((link) => ({
