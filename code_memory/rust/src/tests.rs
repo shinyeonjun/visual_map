@@ -836,37 +836,58 @@ fn cache_impact_includes_importers_of_changed_files() {
         std::env::temp_dir().join(format!("code-memory-cache-impact-{}", std::process::id()));
     let importer = root.join("src").join("main.ts");
     let dependency = root.join("src").join("types.ts");
-    let output = root.join("previous.json");
-    let architecture = root.join("previous.architecture.json");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(importer.parent().unwrap()).expect("create impact fixture");
     fs::write(&importer, "import { Value } from './types';\n").expect("write importer");
     fs::write(&dependency, "export type Value = string;\n").expect("write dependency");
     let first = load_source_snapshot_from_files(&root, &[importer.clone(), dependency.clone()]);
-    write_source_manifest(&root, &first).expect("write source manifest");
+    let dependency_context_digest = 7;
+    write_source_manifest(
+        &root,
+        &first,
+        &HashMap::from([("src/types.ts".to_string(), vec!["src/main.ts".to_string()])]),
+        dependency_context_digest,
+    )
+    .expect("write source manifest");
     fs::write(&dependency, "export type Value = number;\n").expect("change dependency");
     let current = load_source_snapshot_metadata_from_files(&root, &[importer, dependency]);
-    fs::write(
-        &output,
-        serde_json::json!({
-            "file_relations": [{
-                "from": "src/main.ts",
-                "to": "src/types.ts",
-                "kind": "IMPORTS",
-                "path": "src/main.ts",
-                "range": [],
-                "properties": {}
-            }]
-        })
-        .to_string(),
-    )
-    .expect("write previous output");
-    fs::write(&architecture, "{\"edges\":[]}").expect("write previous architecture");
-    let impact = cache_impact(&root, &output, &architecture, &current);
+    let impact = cache_impact(&root, &current, dependency_context_digest);
     assert!(!impact.force_all);
     assert!(impact.affected_paths.contains("src/types.ts"));
     assert!(impact.affected_paths.contains("src/main.ts"));
+    let context_change = cache_impact(&root, &current, dependency_context_digest + 1);
+    assert!(context_change.force_all);
+    assert_eq!(context_change.affected_paths.len(), 2);
     let _ = fs::remove_dir_all(project_cache_root(&root));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn source_snapshot_detects_same_size_same_timestamp_edits() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-source-hash-exactness-{}",
+        std::process::id()
+    ));
+    let source = root.join("main.ts");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create source hash fixture");
+    fs::write(&source, "export const n = 1;\n").expect("write first source");
+    let modified = fs::metadata(&source)
+        .expect("read source metadata")
+        .modified()
+        .expect("read source timestamp");
+    let first = load_source_snapshot_metadata_from_files(&root, std::slice::from_ref(&source));
+
+    fs::write(&source, "export const n = 2;\n").expect("write same-size source");
+    fs::File::options()
+        .write(true)
+        .open(&source)
+        .expect("open source timestamp")
+        .set_modified(modified)
+        .expect("restore source timestamp");
+    let second = load_source_snapshot_metadata_from_files(&root, std::slice::from_ref(&source));
+
+    assert_ne!(first.file_hashes, second.file_hashes);
     let _ = fs::remove_dir_all(root);
 }
 

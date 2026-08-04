@@ -44,6 +44,8 @@ pub(crate) fn index_project(
 
     let providers_root = providers_root.map(Path::to_path_buf);
     let project_config_digest = project_config_digest(&root);
+    let dependency_context_digest =
+        source_dependency_context_digest(providers_root.as_deref(), project_config_digest);
     let discovery_started = Instant::now();
     let mut jobs = Vec::new();
     let mut discovered_files = Vec::new();
@@ -68,7 +70,11 @@ pub(crate) fn index_project(
     let mut source_snapshot = load_source_snapshot_metadata_from_files(&root, &all_source_files);
     let source_hash_elapsed = source_hash_started.elapsed();
     let cache_invalidation_started = Instant::now();
-    let cache_impact_state = cache_impact(&root, out, architecture_out, &source_snapshot);
+    let cache_impact_state = cache_impact(
+        &root,
+        &source_snapshot,
+        dependency_context_digest,
+    );
     let cache_invalidation_elapsed = cache_invalidation_started.elapsed();
     if cache_impact_state.force_all {
         eprintln!("language cache invalidation: no previous source manifest");
@@ -584,7 +590,9 @@ pub(crate) fn index_project(
     canonicalize_index_output(&mut output);
 
     emit_progress("architecture", 78, 100, "계층과 호출 구조 통합 중");
-    let architecture_cache = write_index_outputs(
+    let capture_reverse_imports =
+        cache_impact_state.force_all || !cache_impact_state.affected_paths.is_empty();
+    let index_write = write_index_outputs(
         &root,
         out,
         architecture_out,
@@ -592,13 +600,21 @@ pub(crate) fn index_project(
         &output,
         &mut source_snapshot,
         project_config_digest,
+        capture_reverse_imports,
     )?;
-    active_cache_files.insert(architecture_cache);
+    active_cache_files.insert(index_write.architecture_cache);
     if env::var("CODE_MEMORY_STRICT").as_deref() == Ok("1") {
         enforce_quality_gate(&output)?;
     }
-    if let Err(error) = write_source_manifest(&root, &source_snapshot) {
-        eprintln!("source manifest cache unavailable: {error}");
+    if let Some(reverse_imports) = index_write.reverse_imports {
+        if let Err(error) = write_source_manifest(
+            &root,
+            &source_snapshot,
+            &reverse_imports,
+            dependency_context_digest,
+        ) {
+            eprintln!("source manifest cache unavailable: {error}");
+        }
     }
     if let Err(error) = commit_cache_generation(&root, active_cache_files) {
         eprintln!("cache generation cleanup unavailable: {error}");

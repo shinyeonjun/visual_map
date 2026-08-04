@@ -1,3 +1,9 @@
+struct IndexWriteResult {
+    architecture_cache: PathBuf,
+    reverse_imports: Option<HashMap<String, Vec<String>>>,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn write_index_outputs(
     root: &Path,
     out: &Path,
@@ -6,7 +12,8 @@ fn write_index_outputs(
     output: &IndexOutput,
     source_snapshot: &mut SourceSnapshot,
     project_config_digest: u64,
-) -> Result<PathBuf, String> {
+    capture_reverse_imports: bool,
+) -> Result<IndexWriteResult, String> {
     let index_write_started = Instant::now();
     let file = fs::File::create(out).map_err(|e| format!("cannot write {}: {e}", out.display()))?;
     let mut writer = BufWriter::new(file);
@@ -33,23 +40,52 @@ fn write_index_outputs(
     let architecture_cache =
         project_cache_root(root).join(format!("architecture-{architecture_key}.json"));
     if architecture_cache.is_file() {
-        fs::copy(&architecture_cache, architecture_out).map_err(|e| {
-            format!(
-                "cannot copy architecture cache {} to {}: {e}",
-                architecture_cache.display(),
-                architecture_out.display()
-            )
-        })?;
+        let reverse_imports = capture_reverse_imports
+            .then(|| {
+                let mut reverse_imports = read_architecture_reverse_imports(&architecture_cache)?;
+                record_index_reverse_imports(output, &mut reverse_imports);
+                canonicalize_reverse_imports(&mut reverse_imports);
+                Ok::<_, String>(reverse_imports)
+            })
+            .transpose();
+        if let Ok(reverse_imports) = reverse_imports {
+            fs::copy(&architecture_cache, architecture_out).map_err(|e| {
+                format!(
+                    "cannot copy architecture cache {} to {}: {e}",
+                    architecture_cache.display(),
+                    architecture_out.display()
+                )
+            })?;
+            eprintln!(
+                "timing stage=architecture_and_json elapsed_ms={} cached=true key={architecture_key}",
+                architecture_started.elapsed().as_millis()
+            );
+            println!("wrote {}", out.display());
+            println!("wrote {}", architecture_out.display());
+            return Ok(IndexWriteResult {
+                architecture_cache,
+                reverse_imports,
+            });
+        }
         eprintln!(
-            "timing stage=architecture_and_json elapsed_ms={} cached=true key={architecture_key}",
-            architecture_started.elapsed().as_millis()
+            "architecture cache invalid; rebuilding {}",
+            architecture_cache.display()
         );
-        println!("wrote {}", out.display());
-        println!("wrote {}", architecture_out.display());
-        return Ok(architecture_cache);
+        let _ = fs::remove_file(&architecture_cache);
     }
     load_source_contents(root, source_snapshot);
     let architecture = architecture::build_with_sources(root, output, source_snapshot);
+    let reverse_imports = capture_reverse_imports.then(|| {
+        let mut reverse_imports = HashMap::new();
+        record_index_reverse_imports(output, &mut reverse_imports);
+        for edge in &architecture.edges {
+            if edge.kind == "IMPORTS" {
+                record_architecture_reverse_import(&mut reverse_imports, &edge.from, &edge.to);
+            }
+        }
+        canonicalize_reverse_imports(&mut reverse_imports);
+        reverse_imports
+    });
     let file = fs::File::create(architecture_out)
         .map_err(|e| format!("cannot write {}: {e}", architecture_out.display()))?;
     let mut writer = BufWriter::new(file);
@@ -68,7 +104,21 @@ fn write_index_outputs(
     );
     println!("wrote {}", out.display());
     println!("wrote {}", architecture_out.display());
-    Ok(architecture_cache)
+    Ok(IndexWriteResult {
+        architecture_cache,
+        reverse_imports,
+    })
+}
+
+fn record_index_reverse_imports(
+    output: &IndexOutput,
+    reverse_imports: &mut HashMap<String, Vec<String>>,
+) {
+    for relation in &output.file_relations {
+        if relation.kind == "IMPORTS" {
+            record_file_reverse_import(reverse_imports, &relation.from, &relation.to);
+        }
+    }
 }
 
 fn write_json<T: Serialize, W: Write>(writer: &mut W, value: &T) -> serde_json::Result<()> {

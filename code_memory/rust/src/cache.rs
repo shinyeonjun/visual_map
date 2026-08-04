@@ -27,7 +27,9 @@ static FILE_CHECKSUM_CACHE: OnceLock<Mutex<HashMap<PathBuf, FileChecksumCacheEnt
 #[derive(Serialize, Deserialize)]
 struct SourceManifest {
     schema: String,
+    dependency_context_digest: u64,
     files: HashMap<String, u64>,
+    reverse_imports: HashMap<String, Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -40,12 +42,6 @@ struct CacheGenerationManifest {
 pub(crate) struct CacheImpact {
     pub(crate) force_all: bool,
     pub(crate) affected_paths: HashSet<String>,
-}
-
-#[derive(Deserialize)]
-struct PreviousIndex {
-    #[serde(default)]
-    file_relations: Vec<crate::FileRelationOutput>,
 }
 
 #[derive(Deserialize)]
@@ -251,11 +247,10 @@ pub(crate) fn project_cache_root(root: &Path) -> PathBuf {
 
 pub(crate) fn cache_impact(
     root: &Path,
-    output: &Path,
-    architecture_out: &Path,
     snapshot: &SourceSnapshot,
+    dependency_context_digest: u64,
 ) -> CacheImpact {
-    let manifest_path = project_cache_root(root).join("source-manifest-v1.json");
+    let manifest_path = project_cache_root(root).join("source-manifest-v2.json");
     let force_all = || CacheImpact {
         force_all: true,
         affected_paths: snapshot.file_hashes.keys().cloned().collect(),
@@ -263,7 +258,10 @@ pub(crate) fn cache_impact(
     let Some(manifest) = fs::read(&manifest_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<SourceManifest>(&bytes).ok())
-        .filter(|manifest| manifest.schema == "code-memory.source-manifest.v1")
+        .filter(|manifest| {
+            manifest.schema == "code-memory.source-manifest.v2"
+                && manifest.dependency_context_digest == dependency_context_digest
+        })
     else {
         return force_all();
     };
@@ -284,44 +282,10 @@ pub(crate) fn cache_impact(
         return CacheImpact::default();
     }
 
-    let mut reverse_imports: HashMap<String, Vec<String>> = HashMap::new();
-    let Some(previous) = fs::read(output)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<PreviousIndex>(&bytes).ok())
-    else {
-        return force_all();
-    };
-    for relation in previous.file_relations {
-        if relation.kind == "IMPORTS" {
-            reverse_imports
-                .entry(normalize_file_relation_path(&relation.to))
-                .or_default()
-                .push(normalize_file_relation_path(&relation.from));
-        }
-    }
-    let Some(previous) = fs::read(architecture_out)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<PreviousArchitecture>(&bytes).ok())
-    else {
-        return force_all();
-    };
-    for edge in previous.edges {
-        if edge.kind != "IMPORTS" {
-            continue;
-        }
-        let Some(from) = architecture_file_path(&edge.from) else {
-            continue;
-        };
-        let Some(to) = architecture_file_path(&edge.to) else {
-            continue;
-        };
-        reverse_imports.entry(to).or_default().push(from);
-    }
-
     let mut affected_paths = changed.clone();
     let mut pending: Vec<String> = changed.into_iter().collect();
     while let Some(path) = pending.pop() {
-        let Some(importers) = reverse_imports.get(&path) else {
+        let Some(importers) = manifest.reverse_imports.get(&path) else {
             continue;
         };
         for importer in importers {
@@ -336,19 +300,81 @@ pub(crate) fn cache_impact(
     }
 }
 
-pub(crate) fn write_source_manifest(root: &Path, snapshot: &SourceSnapshot) -> Result<(), String> {
-    let path = project_cache_root(root).join("source-manifest-v1.json");
+pub(crate) fn write_source_manifest(
+    root: &Path,
+    snapshot: &SourceSnapshot,
+    reverse_imports: &HashMap<String, Vec<String>>,
+    dependency_context_digest: u64,
+) -> Result<(), String> {
+    let cache_root = project_cache_root(root);
+    let path = cache_root.join("source-manifest-v2.json");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create source manifest cache: {error}"))?;
     }
     let manifest = SourceManifest {
-        schema: "code-memory.source-manifest.v1".to_string(),
+        schema: "code-memory.source-manifest.v2".to_string(),
+        dependency_context_digest,
         files: snapshot.file_hashes.clone(),
+        reverse_imports: reverse_imports.clone(),
     };
     let bytes = serde_json::to_vec(&manifest)
         .map_err(|error| format!("cannot serialize source manifest: {error}"))?;
-    fs::write(path, bytes).map_err(|error| format!("cannot write source manifest: {error}"))
+    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    write_cache_file(&temporary, &bytes)?;
+    let _ = fs::remove_file(&path);
+    if let Err(error) = fs::rename(&temporary, &path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("cannot promote source manifest: {error}"));
+    }
+    let _ = fs::remove_file(cache_root.join("source-manifest-v1.json"));
+    Ok(())
+}
+
+pub(crate) fn read_architecture_reverse_imports(
+    path: &Path,
+) -> Result<HashMap<String, Vec<String>>, String> {
+    let previous = serde_json::from_slice::<PreviousArchitecture>(
+        &fs::read(path).map_err(|error| format!("cannot read dependency cache: {error}"))?,
+    )
+    .map_err(|error| format!("cannot parse dependency cache: {error}"))?;
+    let mut reverse_imports = HashMap::new();
+    for edge in previous.edges {
+        if edge.kind == "IMPORTS" {
+            record_architecture_reverse_import(&mut reverse_imports, &edge.from, &edge.to);
+        }
+    }
+    canonicalize_reverse_imports(&mut reverse_imports);
+    Ok(reverse_imports)
+}
+
+pub(crate) fn record_architecture_reverse_import(
+    reverse_imports: &mut HashMap<String, Vec<String>>,
+    from: &str,
+    to: &str,
+) {
+    let (Some(from), Some(to)) = (architecture_file_path(from), architecture_file_path(to)) else {
+        return;
+    };
+    reverse_imports.entry(to).or_default().push(from);
+}
+
+pub(crate) fn record_file_reverse_import(
+    reverse_imports: &mut HashMap<String, Vec<String>>,
+    from: &str,
+    to: &str,
+) {
+    reverse_imports
+        .entry(normalize_file_relation_path(to))
+        .or_default()
+        .push(normalize_file_relation_path(from));
+}
+
+pub(crate) fn canonicalize_reverse_imports(reverse_imports: &mut HashMap<String, Vec<String>>) {
+    for importers in reverse_imports.values_mut() {
+        importers.sort();
+        importers.dedup();
+    }
 }
 
 pub(crate) fn commit_cache_generation(
@@ -493,14 +519,14 @@ fn is_content_addressed_cache_file(path: &Path) -> bool {
     digest.len() == 16 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn architecture_file_path(id: &str) -> Option<String> {
+    id.strip_prefix("file:").map(|path| path.replace('\\', "/"))
+}
+
 fn normalize_file_relation_path(path: &str) -> String {
     path.strip_prefix("file:")
         .unwrap_or(path)
         .replace('\\', "/")
-}
-
-fn architecture_file_path(id: &str) -> Option<String> {
-    id.strip_prefix("file:").map(|path| path.replace('\\', "/"))
 }
 pub(crate) fn cleanup_stale_provider_work(root: &Path, max_age: Duration) {
     let Ok(entries) = fs::read_dir(root) else {
@@ -535,6 +561,39 @@ pub(crate) fn project_config_files(root: &Path) -> Vec<PathBuf> {
 pub(crate) fn project_config_digest(root: &Path) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     hash_project_config_files(root, &mut hash);
+    for name in [
+        "CODE_MEMORY_OFFLINE",
+        "CODE_MEMORY_ALLOW_NETWORK",
+        "CODE_MEMORY_RUST_SEMANTIC_MAX_FILES",
+        "CODE_MEMORY_LSP_TIMEOUT_MS",
+        "CODE_MEMORY_LSP_MAX_REQUESTS",
+        "CODE_MEMORY_LSP_MAX_SECONDS",
+        "CODE_MEMORY_PROVIDER_TIMEOUT_SECONDS",
+        "CODE_MEMORY_LSP_REFERENCES",
+    ] {
+        checksum_update(&mut hash, name.as_bytes());
+        match env::var_os(name) {
+            Some(value) => checksum_update(&mut hash, value.to_string_lossy().as_bytes()),
+            None => checksum_update(&mut hash, b"<unset>"),
+        }
+    }
+    hash
+}
+
+pub(crate) fn source_dependency_context_digest(
+    providers_root: Option<&Path>,
+    project_config_digest: u64,
+) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    checksum_update(&mut hash, b"code-memory.source-dependency-context.v1");
+    checksum_update(&mut hash, &project_config_digest.to_le_bytes());
+    hash_current_executable(&mut hash, b"normalizer-executable");
+    if let Some(providers_root) = providers_root {
+        if let Some(manifest_hash) = cached_file_checksum(&providers_root.join("manifest.json")) {
+            checksum_update(&mut hash, b"provider-manifest");
+            checksum_update(&mut hash, &manifest_hash.to_le_bytes());
+        }
+    }
     hash
 }
 fn collect_project_config_files(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -917,7 +976,7 @@ mod generation_tests {
         let second = project.join("rust-2222222222222222.json");
         let third = project.join("rust-3333333333333333.json");
         let stale = project.join("rust-0000000000000000.json");
-        let source_manifest = project.join("source-manifest-v1.json");
+        let source_manifest = project.join("source-manifest-v2.json");
         fs::write(&first, b"first").unwrap();
         fs::write(&stale, b"stale").unwrap();
         fs::write(&source_manifest, b"source").unwrap();
