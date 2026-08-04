@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const COMPAT_TOOLS: &[&str] = &[
+    "provider_plan",
     "index_repository",
     "delete_project",
     "get_architecture",
@@ -32,6 +33,7 @@ pub(crate) fn run_cli(args: &[String]) -> Result<(), String> {
     .map_err(|e| format!("invalid cli args: {e}"))?;
 
     match tool {
+        "provider_plan" => provider_plan(&payload),
         "index_repository" => index_repository(&payload),
         "delete_project" => delete_project(&payload),
         "get_architecture" => print_json(&read_architecture(&payload)?),
@@ -42,6 +44,51 @@ pub(crate) fn run_cli(args: &[String]) -> Result<(), String> {
         "list_projects" => list_projects(),
         _ => unreachable!(),
     }
+}
+
+fn provider_plan(payload: &Value) -> Result<(), String> {
+    let root =
+        crate::source::canonical_project_root(Path::new(required_string(payload, "repo_path")?))?;
+    print_json(&provider_plan_value(&root))
+}
+
+fn provider_plan_value(root: &Path) -> Value {
+    let mut extensions = crate::LANGUAGES
+        .iter()
+        .flat_map(|language| language.extensions.iter().copied())
+        .collect::<HashSet<_>>();
+    extensions.insert("vue");
+    let files = crate::collect_files(root, &extensions.into_iter().collect::<Vec<_>>());
+    let mut languages = crate::LANGUAGES
+        .iter()
+        .filter(|language| {
+            files.iter().any(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        language
+                            .extensions
+                            .iter()
+                            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+                    })
+            })
+        })
+        .map(|language| language.id)
+        .collect::<Vec<_>>();
+    if files.iter().any(|path| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("vue"))
+    }) {
+        languages.push("typescript");
+    }
+    languages.sort_unstable();
+    languages.dedup();
+    json!({
+        "schema": "code-memory.provider-plan.v1",
+        "languages": languages,
+        "fileCount": files.len()
+    })
 }
 
 fn index_repository(payload: &Value) -> Result<(), String> {
@@ -1071,6 +1118,29 @@ fn print_json(value: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_plan_detects_only_languages_present_in_source_files() {
+        let root =
+            std::env::temp_dir().join(format!("code-memory-provider-plan-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join("main.ts"), "export const value = 1;").unwrap();
+        fs::write(root.join("worker.py"), "value = 1\n").unwrap();
+        fs::write(
+            root.join("component.vue"),
+            "<script setup lang=\"ts\"></script>",
+        )
+        .unwrap();
+        fs::write(root.join("node_modules/ignored.java"), "class Ignored {}").unwrap();
+
+        let plan = provider_plan_value(&root);
+
+        assert_eq!(plan["schema"], "code-memory.provider-plan.v1");
+        assert_eq!(plan["fileCount"], 3);
+        assert_eq!(plan["languages"], json!(["python", "typescript"]));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn inventory_export_contains_every_consumer_section_in_one_contract() {

@@ -38,6 +38,11 @@ New-Item -ItemType Directory -Path $sourceRoot,$cacheRoot -Force | Out-Null
 $bundledPacks = Join-Path $engineRoot "packs"
 if (Test-Path -LiteralPath (Join-Path $bundledPacks "framework") -PathType Container) {
     $env:CODE_MEMORY_PACKS_ROOT = $bundledPacks
+} else {
+    $sourcePacks = Join-Path $repoRoot "code_memory\packs"
+    if (Test-Path -LiteralPath (Join-Path $sourcePacks "framework") -PathType Container) {
+        $env:CODE_MEMORY_PACKS_ROOT = $sourcePacks
+    }
 }
 $bundledProviders = Join-Path $engineRoot "providers"
 if (-not $UseProviderBundles -and (Test-Path -LiteralPath $bundledProviders -PathType Container)) {
@@ -45,28 +50,47 @@ if (-not $UseProviderBundles -and (Test-Path -LiteralPath $bundledProviders -Pat
 } elseif ($RequireJavaProvider -or $UseProviderBundles) {
     $bundleRoot = Join-Path $engineRoot "provider-bundles"
     $bundleManifestPath = Join-Path $bundleRoot "providers-manifest.json"
+    $bundleSignaturePath = Join-Path $bundleRoot "providers-manifest.sig"
     if (-not (Test-Path -LiteralPath $bundleManifestPath -PathType Leaf)) {
         throw "Managed provider bundle manifest not found: $bundleManifestPath"
     }
+    if (-not (Test-Path -LiteralPath $bundleSignaturePath -PathType Leaf)) {
+        throw "Managed provider bundle signature not found: $bundleSignaturePath"
+    }
+    $publicKey = $env:VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY
+    if ([string]::IsNullOrWhiteSpace($publicKey)) {
+        $publicKey = "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+    }
+    & cargo run --quiet --locked --manifest-path (Join-Path $repoRoot "src-tauri\Cargo.toml") --bin provider-catalog-sign -- verify --catalog $bundleManifestPath --signature $bundleSignaturePath --public-key $publicKey
+    if ($LASTEXITCODE -ne 0) {
+        throw "Managed provider catalog signature verification failed."
+    }
     $providerRoot = Join-Path $fixtureRoot "providers"
+    $downloadRoot = Join-Path $fixtureRoot "provider-downloads"
     New-Item -ItemType Directory -Path $providerRoot -Force | Out-Null
     $bundleManifest = Get-Content -LiteralPath $bundleManifestPath -Raw | ConvertFrom-Json
-    foreach ($archiveName in "providers-core.zip", "providers-java.zip", "providers-node.zip") {
-        $archive = @($bundleManifest.archives) | Where-Object fileName -eq $archiveName | Select-Object -First 1
-        if ($null -eq $archive) {
-            throw "Managed provider bundle is missing: $archiveName"
+    foreach ($packId in "core", "java", "node") {
+        $pack = @($bundleManifest.packs) | Where-Object id -eq $packId | Select-Object -First 1
+        if ($null -eq $pack) {
+            throw "Managed provider catalog is missing: $packId"
         }
+        $archiveName = [string]$pack.fileName
         $archivePath = Join-Path $bundleRoot $archiveName
         if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
-            throw "Managed provider archive not found: $archivePath"
+            if ([string]::IsNullOrWhiteSpace([string]$pack.downloadUrl) -or -not ([string]$pack.downloadUrl).StartsWith("https://")) {
+                throw "Managed provider archive has no local file or HTTPS URL: $archiveName"
+            }
+            New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+            $archivePath = Join-Path $downloadRoot $archiveName
+            Invoke-WebRequest -Uri ([string]$pack.downloadUrl) -OutFile $archivePath
         }
         $actualHash = Get-Sha256 $archivePath
-        if ($actualHash -ne [string]$archive.sha256) {
+        if ($actualHash -ne [string]$pack.sha256 -or (Get-Item -LiteralPath $archivePath).Length -ne [uint64]$pack.compressedBytes) {
             throw "Managed provider archive checksum mismatch: $archiveName"
         }
         Expand-Archive -LiteralPath $archivePath -DestinationPath $providerRoot -Force
     }
-    foreach ($requiredProviderFile in "manifest.json", "checksums.json", "java\jdtls.cmd", "node\project-model.cjs", "node\runtime\node.exe") {
+    foreach ($requiredProviderFile in "manifest.json", "java\jdtls.cmd", "node\project-model.cjs", "node\runtime\node.exe") {
         $requiredPath = Join-Path $providerRoot $requiredProviderFile
         if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
             throw "Extracted provider root is incomplete: $requiredProviderFile"

@@ -351,7 +351,7 @@ pub(crate) fn index_project(
                     AnalysisUnitRun {
                         provider,
                         execution: "cache",
-                        elapsed_ms: u128::from(cache_read.io_ms + cache_read.deserialize_ms),
+                        elapsed_ms: cache_read.io_ms + cache_read.deserialize_ms,
                     },
                 );
                 let coverage = language_document_coverage(

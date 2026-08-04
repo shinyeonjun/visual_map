@@ -1,9 +1,19 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=BACKEND_VISUAL_MAP_BUILD_SCOPE");
     println!("cargo:rerun-if-env-changed=BACKEND_VISUAL_MAP_SKIP_PROVIDER_RESOURCES");
+    println!("cargo:rerun-if-env-changed=VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY");
     println!("cargo:rustc-check-cfg=cfg(backend_visual_map_internal_build)");
-    if std::env::var("BACKEND_VISUAL_MAP_BUILD_SCOPE").as_deref() == Ok("internal") {
+    let internal = std::env::var("BACKEND_VISUAL_MAP_BUILD_SCOPE").as_deref() == Ok("internal");
+    if internal {
         println!("cargo:rustc-cfg=backend_visual_map_internal_build");
+    }
+    if std::env::var("PROFILE").as_deref() == Ok("release")
+        && !internal
+        && std::env::var("VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY")
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+    {
+        panic!("release builds require VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY");
     }
     // Provider files are bundled for the desktop build, but debug/lint/test
     // builds do not need to copy or watch 68k files. Dev code resolves the

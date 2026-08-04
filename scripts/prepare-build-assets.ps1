@@ -45,8 +45,12 @@ try {
       & .\scripts\prepare-provider-assets.ps1 -VerifyOnly
     }
   } else {
+    $providerBundleMode = $env:VISUAL_MAP_PROVIDER_BUNDLE_MODE
+    if ([string]::IsNullOrWhiteSpace($providerBundleMode)) {
+      $providerBundleMode = if ([string]::IsNullOrWhiteSpace($env:VISUAL_MAP_PROVIDER_BASE_URL)) { "Full" } else { "Compact" }
+    }
     Invoke-Checked "managed language providers" {
-      & .\scripts\prepare-provider-assets.ps1
+      & .\scripts\prepare-provider-assets.ps1 -Release -BundleMode $providerBundleMode
     }
   }
   Invoke-Checked "frontend build" { & npm run build }

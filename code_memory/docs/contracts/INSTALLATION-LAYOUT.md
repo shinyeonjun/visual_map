@@ -19,7 +19,6 @@
 ```text
 %LOCALAPPDATA%\VisualMap\
   config\
-  providers\
   projects\
   cache\
   logs\
@@ -31,11 +30,10 @@
 기본 설치에서는 다음만 설치한다.
 
 ```text
-VisualMap.exe                 앱 본체
-resources\                    UI 리소스와 스키마
-config\settings.toml         사용자 설정 기본값
-providers\manifest.json      provider 목록과 실행 규칙
-logs\                        오류 로그 폴더
+VisualMap.exe                               앱 본체
+resources\engines\provider-bundles\       서명된 provider catalog
+config\settings.toml                       사용자 설정 기본값
+logs\                                      오류 로그 폴더
 ```
 
 프로젝트를 연결하기 전에는 프로젝트별 분석 결과나 언어별 대형 도구를
@@ -46,7 +44,7 @@ logs\                        오류 로그 폴더
 프로젝트에서 언어가 감지된 경우에만 필요한 provider를 준비한다.
 
 ```text
-%LOCALAPPDATA%\VisualMap\providers\
+%LOCALAPPDATA%\VisualMap\cache\provider-roots\<catalog-hash>\
   node\
   python\
   java\
@@ -58,18 +56,18 @@ logs\                        오류 로그 폴더
   ruby\
   dart\
   manifest.json
+  .packs\<pack-id>.ready
 ```
 
-각 provider에는 실행 파일, 필요한 최소 runtime, 라이선스, checksum,
-버전 정보만 둔다.
+catalog의 Ed25519 서명을 앱에 고정된 공개키로 먼저 검증한 뒤, 감지된 언어의
+pack만 HTTPS로 내려받는다. 각 ZIP의 크기와 SHA-256, 해제 크기와 핵심
+entrypoint의 SHA-256을 검증한 뒤 같은 볼륨에서 원자적으로 활성화한다.
+폐기 목록에 포함된 버전은 기존 캐시에 있어도 실행하지 않는다.
 
 ```text
-providers\java\
-  manifest.json
-  bin\
-  runtime\
-  LICENSES\
-  checksums.json
+cache\provider-downloads\<pack-sha256>.zip
+cache\provider-roots\<catalog-hash>\java\
+cache\provider-roots\<catalog-hash>\.packs\java.ready
 ```
 
 provider는 시스템 PATH나 레지스트리에 등록하지 않는다. Rust bridge가
@@ -150,4 +148,3 @@ Visual Map provider가 있어도 사용자 환경을 덮어쓰지 않는다.
 삭제 시 앱 실행 파일과 Visual Map이 만든 provider·cache·log만 삭제한다.
 프로젝트 원본, 사용자의 기존 개발환경, 기존 SDK는 삭제하지 않는다.
 프로젝트 분석 결과와 캐시 삭제는 별도 확인을 받는다.
-

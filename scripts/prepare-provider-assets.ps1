@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [string]$SourceRoot,
-    [string]$DestinationRoot,
+    [ValidateSet("Full", "Compact")]
+    [string]$BundleMode = "Full",
+    [string]$ProviderBaseUrl = $env:VISUAL_MAP_PROVIDER_BASE_URL,
+    [switch]$Release,
     [switch]$VerifyOnly
 )
 
@@ -17,22 +20,39 @@ if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
 if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
     $SourceRoot = Join-Path $repoRoot "code_memory\providers"
 }
-if ([string]::IsNullOrWhiteSpace($DestinationRoot)) {
-    $DestinationRoot = Join-Path $repoRoot "src-tauri\engines\providers"
+$SourceRoot = [IO.Path]::GetFullPath($SourceRoot)
+$BundleRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot "src-tauri\engines\provider-bundles"))
+$CatalogPath = Join-Path $BundleRoot "providers-manifest.json"
+$SignaturePath = Join-Path $BundleRoot "providers-manifest.sig"
+$DevelopmentPublicKey = "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+$SignerManifest = Join-Path $repoRoot "src-tauri\Cargo.toml"
+
+function Get-Sha256([string]$Path) {
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace("-", "")
+    } finally {
+        $algorithm.Dispose()
+        $stream.Dispose()
+    }
 }
 
-$SourceRoot = [IO.Path]::GetFullPath($SourceRoot)
-$DestinationRoot = [IO.Path]::GetFullPath($DestinationRoot)
-$BundleRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot "src-tauri\engines\provider-bundles"))
-
-function Compress-ProviderDirectory([string]$SourceDirectory, [string]$ArchivePath) {
-    $parent = Split-Path -Parent $SourceDirectory
-    $zip = [IO.Compression.ZipFile]::Open(
-        $ArchivePath,
-        [IO.Compression.ZipArchiveMode]::Create
-    )
+function Get-StringSha256([string]$Value) {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
     try {
-        foreach ($file in @(Get-ChildItem -LiteralPath $SourceDirectory -File -Recurse -Force)) {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
+        return ([BitConverter]::ToString($algorithm.ComputeHash($bytes))).Replace("-", "")
+    } finally {
+        $algorithm.Dispose()
+    }
+}
+
+function Compress-Directory([string]$SourceDirectory, [string]$ArchivePath) {
+    $parent = Split-Path -Parent $SourceDirectory
+    $zip = [IO.Compression.ZipFile]::Open($ArchivePath, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($file in @(Get-ChildItem -LiteralPath $SourceDirectory -File -Recurse -Force | Sort-Object FullName)) {
             $relativePath = $file.FullName.Substring($parent.Length + 1).Replace("\", "/")
             [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                 $zip,
@@ -46,17 +66,13 @@ function Compress-ProviderDirectory([string]$SourceDirectory, [string]$ArchivePa
     }
 }
 
-function Compress-ProviderRootFiles([string]$SourceDirectory, [string]$ArchivePath, [string[]]$FileNames) {
-    $zip = [IO.Compression.ZipFile]::Open(
-        $ArchivePath,
-        [IO.Compression.ZipArchiveMode]::Create
-    )
+function Compress-RootFiles([string]$SourceDirectory, [string]$ArchivePath, [string[]]$FileNames) {
+    $zip = [IO.Compression.ZipFile]::Open($ArchivePath, [IO.Compression.ZipArchiveMode]::Create)
     try {
         foreach ($fileName in $FileNames) {
-            $sourcePath = Join-Path $SourceDirectory $fileName
             [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                 $zip,
-                $sourcePath,
+                (Join-Path $SourceDirectory $fileName),
                 $fileName.Replace("\", "/"),
                 [IO.Compression.CompressionLevel]::Fastest
             ) | Out-Null
@@ -66,151 +82,197 @@ function Compress-ProviderRootFiles([string]$SourceDirectory, [string]$ArchivePa
     }
 }
 
-function Get-Sha256([string]$Path) {
-    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-    $algorithm = [Security.Cryptography.SHA256]::Create()
-    try {
-        return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace("-", "")
-    } finally {
-        $algorithm.Dispose()
-        $stream.Dispose()
+function Get-EntryPoint([string]$RelativePath) {
+    $path = Join-Path $SourceRoot $RelativePath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Required provider entrypoint was not found: $path"
     }
+    $file = Get-Item -LiteralPath $path
+    return [pscustomobject]@{
+        path = $RelativePath.Replace("\", "/")
+        sha256 = Get-Sha256 $path
+        bytes = [uint64]$file.Length
+    }
+}
+
+function Get-PublicKey {
+    if ($Release) {
+        if ([string]::IsNullOrWhiteSpace($env:VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY)) {
+            throw "Release provider catalogs require VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY."
+        }
+        return $env:VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY.Trim()
+    }
+    return $DevelopmentPublicKey
+}
+
+function Invoke-Signer([string[]]$Arguments) {
+    & cargo run --quiet --locked --manifest-path $SignerManifest --bin provider-catalog-sign -- @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Provider catalog signer failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Test-Catalog {
+    if (-not (Test-Path -LiteralPath $CatalogPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $SignaturePath -PathType Leaf)) {
+        throw "Signed provider catalog was not found in $BundleRoot"
+    }
+    $publicKey = Get-PublicKey
+    Invoke-Signer @(
+        "verify", "--catalog", $CatalogPath, "--signature", $SignaturePath,
+        "--public-key", $publicKey
+    )
+    $catalog = Get-Content -LiteralPath $CatalogPath -Raw | ConvertFrom-Json
+    if ([int]$catalog.schemaVersion -ne 2) {
+        throw "Unsupported provider catalog schema: $($catalog.schemaVersion)"
+    }
+    $declaredEntryPoints = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($pack in @($catalog.packs)) {
+        $archivePath = Join-Path $BundleRoot ([string]$pack.fileName)
+        if (Test-Path -LiteralPath $archivePath -PathType Leaf) {
+            if ((Get-Item -LiteralPath $archivePath).Length -ne [uint64]$pack.compressedBytes -or
+                (Get-Sha256 $archivePath) -ne [string]$pack.sha256) {
+                throw "Provider bundle verification failed: $archivePath"
+            }
+        } elseif ([string]::IsNullOrWhiteSpace([string]$pack.downloadUrl) -or
+            -not ([string]$pack.downloadUrl).StartsWith("https://", [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Provider pack has neither a local archive nor an HTTPS download URL: $($pack.id)"
+        }
+        foreach ($entryPoint in @($pack.entrypoints)) {
+            [void]$declaredEntryPoints.Add(([string]$entryPoint.path).Replace("\", "/"))
+        }
+    }
+    $providerManifest = Get-Content -LiteralPath (Join-Path $SourceRoot "manifest.json") -Raw | ConvertFrom-Json
+    foreach ($provider in @($providerManifest.providers)) {
+        $providerPath = ([string]$provider.path).Replace("\", "/")
+        if (-not $declaredEntryPoints.Contains($providerPath)) {
+            throw "Provider catalog does not verify declared provider entrypoint: $providerPath"
+        }
+    }
+    Write-Host "Verified signed provider catalog: $CatalogPath"
 }
 
 if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
     throw "Provider source directory was not found: $SourceRoot"
 }
-
-$requiredFiles = @(
-    "manifest.json",
-    "checksums.json",
-    "node\project-model.cjs",
-    "node\runtime\node.exe"
-)
-foreach ($relativePath in $requiredFiles) {
-    $path = Join-Path $SourceRoot $relativePath
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Required provider file was not found: $path"
-    }
+$providerManifestPath = Join-Path $SourceRoot "manifest.json"
+if (-not (Test-Path -LiteralPath $providerManifestPath -PathType Leaf)) {
+    throw "Provider manifest was not found: $providerManifestPath"
 }
-
+if ($BundleMode -eq "Compact") {
+    if ([string]::IsNullOrWhiteSpace($ProviderBaseUrl)) {
+        throw "Compact provider bundles require VISUAL_MAP_PROVIDER_BASE_URL or -ProviderBaseUrl."
+    }
+    $baseUri = [Uri]$ProviderBaseUrl
+    if ($baseUri.Scheme -ne "https") {
+        throw "Provider download base URL must use HTTPS."
+    }
+    $ProviderBaseUrl = $ProviderBaseUrl.TrimEnd("/")
+}
 if ($VerifyOnly) {
-    if (-not (Test-Path -LiteralPath $DestinationRoot -PathType Container)) {
-        throw "Staged provider directory was not found: $DestinationRoot"
-    }
-    foreach ($relativePath in $requiredFiles) {
-        $path = Join-Path $DestinationRoot $relativePath
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "Required staged provider file was not found: $path"
-        }
-    }
-    if (-not (Test-Path -LiteralPath $BundleRoot -PathType Container)) {
-        throw "Provider bundle directory was not found: $BundleRoot"
-    }
-    $bundleManifestPath = Join-Path $BundleRoot "providers-manifest.json"
-    if (-not (Test-Path -LiteralPath $bundleManifestPath -PathType Leaf)) {
-        throw "Provider bundle manifest was not found: $bundleManifestPath"
-    }
-    $bundleManifest = Get-Content -LiteralPath $bundleManifestPath -Raw | ConvertFrom-Json
-    $bundledEntries = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach ($archive in @($bundleManifest.archives)) {
-        $archivePath = Join-Path $BundleRoot ([string]$archive.fileName)
-        if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
-            throw "Provider bundle archive was not found: $archivePath"
-        }
-        $actualHash = Get-Sha256 $archivePath
-        if ($actualHash -ne [string]$archive.sha256) {
-            throw "Provider bundle checksum mismatch: $archivePath"
-        }
-        $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
-        try {
-            foreach ($entry in $zip.Entries) {
-                [void]$bundledEntries.Add($entry.FullName.Replace("\", "/"))
-            }
-        } finally {
-            $zip.Dispose()
-        }
-    }
-    foreach ($requiredEntry in "manifest.json", "checksums.json") {
-        if (-not $bundledEntries.Contains($requiredEntry)) {
-            throw "Provider bundles do not contain required root metadata: $requiredEntry"
-        }
-    }
-    $providerManifest = Get-Content -LiteralPath (Join-Path $DestinationRoot "manifest.json") -Raw | ConvertFrom-Json
-    foreach ($provider in @($providerManifest.providers)) {
-        $providerPath = ([string]$provider.path).Replace("\", "/")
-        if ([string]::IsNullOrWhiteSpace($providerPath) -or $providerPath -match "(^/|\.\.)") {
-            throw "Provider manifest contains an unsafe path: $providerPath"
-        }
-        if (-not (Test-Path -LiteralPath (Join-Path $DestinationRoot $providerPath) -PathType Leaf)) {
-            throw "Staged provider executable is missing: $providerPath"
-        }
-        if (-not $bundledEntries.Contains($providerPath)) {
-            throw "Provider bundles do not contain declared executable: $providerPath"
-        }
-    }
-    Write-Host "Verified staged providers: $DestinationRoot"
+    Test-Catalog
     exit 0
 }
 
-New-Item -ItemType Directory -Path $DestinationRoot -Force | Out-Null
-$reparseDirectories = @(
-    Get-ChildItem -LiteralPath $SourceRoot -Directory -Recurse -Force -Attributes ReparsePoint |
-        ForEach-Object { $_.FullName }
-)
-if ($reparseDirectories.Count -gt 0) {
-    Write-Warning "Skipping $($reparseDirectories.Count) provider junction(s); staged resources must be real files."
+$packLanguages = @{
+    core = [string[]]@()
+    node = [string[]]@("typescript", "javascript", "python")
+    java = [string[]]@("java")
+    dotnet = [string[]]@("csharp")
+    clang = [string[]]@("c", "cpp")
+    go = [string[]]@("go")
+    rust = [string[]]@("rust")
+    php = [string[]]@("php")
+    ruby = [string[]]@("ruby")
+    dart = [string[]]@("dart")
+    python = [string[]]@()
 }
-
-$robocopyArguments = @(
-    $SourceRoot, $DestinationRoot,
-    "/E", "/COPY:DAT", "/DCOPY:DAT", "/R:1", "/W:1", "/NP", "/NFL", "/NDL"
-)
-foreach ($directory in $reparseDirectories) {
-    $robocopyArguments += @("/XD", $directory)
-}
-& robocopy @robocopyArguments
-$exitCode = $LASTEXITCODE
-if ($exitCode -gt 7) {
-    throw "Provider staging failed with robocopy exit code $exitCode"
+$packEntryPoints = @{
+    core = [string[]]@("manifest.json")
+    node = [string[]]@("node/project-model.cjs", "node/runtime/node.exe", "node/scip-typescript.cmd", "node/pyright-langserver.cmd")
+    java = [string[]]@("java/jdtls.cmd", "java/runtime/bin/java.exe")
+    dotnet = [string[]]@("dotnet/scip-dotnet.exe", "dotnet/runtime/dotnet.exe")
+    clang = [string[]]@("clang/bin/clangd.exe")
+    go = [string[]]@("go/gopls.exe", "go/runtime/bin/go.exe")
+    rust = [string[]]@("rust/toolchain/bin/rust-analyzer.exe", "rust/toolchain/bin/cargo.exe", "rust/toolchain/bin/rustc.exe")
+    php = [string[]]@("php/scip-php.cmd", "php/runtime/php.exe")
+    ruby = [string[]]@("ruby/runtime/bin/ruby-lsp.bat", "ruby/runtime/bin/ruby.exe")
+    dart = [string[]]@("dart/sdk/bin/dart.exe")
+    python = [string[]]@("python/runtime/python.exe")
 }
 
 if (Test-Path -LiteralPath $BundleRoot) {
     Remove-Item -LiteralPath $BundleRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Path $BundleRoot -Force | Out-Null
-$rootMetadata = @("manifest.json", "checksums.json")
-if (Test-Path -LiteralPath (Join-Path $DestinationRoot "README.md") -PathType Leaf) {
-    $rootMetadata += "README.md"
+$packs = @()
+$rootMetadata = [Collections.Generic.List[string]]::new()
+$rootMetadata.Add("manifest.json")
+if (Test-Path -LiteralPath (Join-Path $SourceRoot "README.md") -PathType Leaf) {
+    $rootMetadata.Add("README.md")
 }
-$coreArchiveName = "providers-core.zip"
-$coreArchivePath = Join-Path $BundleRoot $coreArchiveName
-Write-Host "Compressing provider root metadata"
-Compress-ProviderRootFiles $DestinationRoot $coreArchivePath $rootMetadata
-$archives = @([pscustomobject]@{
-    fileName = $coreArchiveName
-    sha256 = Get-Sha256 $coreArchivePath
+$sources = @([pscustomobject]@{
+    id = "core"
+    path = $SourceRoot
+    files = [string[]]$rootMetadata.ToArray()
 })
-foreach ($providerDirectory in @(Get-ChildItem -LiteralPath $DestinationRoot -Directory -Force | Sort-Object Name)) {
-    $archiveName = "providers-$($providerDirectory.Name).zip"
+foreach ($directory in @(Get-ChildItem -LiteralPath $SourceRoot -Directory -Force | Sort-Object Name)) {
+    if (-not $packLanguages.ContainsKey($directory.Name)) {
+        throw "Provider directory has no catalog mapping: $($directory.Name)"
+    }
+    $sources += [pscustomobject]@{ id = $directory.Name; path = $directory.FullName; files = $null }
+}
+
+foreach ($source in $sources) {
+    $archiveName = "providers-$($source.id).zip"
     $archivePath = Join-Path $BundleRoot $archiveName
-    Write-Host "Compressing provider: $($providerDirectory.Name)"
-    Compress-ProviderDirectory $providerDirectory.FullName $archivePath
-    $archives += [pscustomobject]@{
+    Write-Host "Compressing provider pack: $($source.id)"
+    if ($source.id -eq "core") {
+        Compress-RootFiles $SourceRoot $archivePath $source.files
+        $unpackedBytes = [uint64](($source.files | ForEach-Object { (Get-Item -LiteralPath (Join-Path $SourceRoot $_)).Length } | Measure-Object -Sum).Sum)
+    } else {
+        Compress-Directory $source.path $archivePath
+        $unpackedBytes = [uint64]((Get-ChildItem -LiteralPath $source.path -File -Recurse -Force | Measure-Object Length -Sum).Sum)
+    }
+    $sha256 = Get-Sha256 $archivePath
+    $entryPoints = @($packEntryPoints[$source.id] | ForEach-Object { Get-EntryPoint $_ })
+    $downloadUrl = if ([string]::IsNullOrWhiteSpace($ProviderBaseUrl)) { $null } else { "$ProviderBaseUrl/$archiveName" }
+    $packs += [pscustomobject]@{
+        id = [string]$source.id
+        version = $sha256.Substring(0, 16).ToLowerInvariant()
         fileName = $archiveName
-        sha256 = Get-Sha256 $archivePath
+        sha256 = $sha256.ToLowerInvariant()
+        compressedBytes = [uint64](Get-Item -LiteralPath $archivePath).Length
+        unpackedBytes = $unpackedBytes
+        languages = [string[]]$packLanguages[$source.id]
+        dependencies = if ($source.id -eq "core") { [string[]]@() } else { [string[]]@("core") }
+        entrypoints = $entryPoints
+        downloadUrl = $downloadUrl
     }
 }
-$manifest = [pscustomobject]@{
-    schemaVersion = 1
-    archives = $archives
+
+$publicKey = Get-PublicKey
+$manifestHash = Get-Sha256 $providerManifestPath
+$catalog = [pscustomobject]@{
+    schemaVersion = 2
+    catalogVersion = $manifestHash.Substring(0, 16).ToLowerInvariant()
+    keyId = (Get-StringSha256 $publicKey).Substring(0, 16).ToLowerInvariant()
+    platform = "windows-x86_64"
+    packs = $packs
+    revocations = @()
 }
-$manifestJson = $manifest | ConvertTo-Json -Depth 5
 [IO.File]::WriteAllText(
-    (Join-Path $BundleRoot "providers-manifest.json"),
-    $manifestJson,
+    $CatalogPath,
+    ($catalog | ConvertTo-Json -Depth 8 -Compress),
     [Text.UTF8Encoding]::new($false)
 )
-
-Write-Host "Staged providers from $SourceRoot to $DestinationRoot"
-Write-Host "Created $($archives.Count) compressed provider bundles: $BundleRoot"
+if ($Release) {
+    Invoke-Signer @("sign", "--catalog", $CatalogPath, "--signature", $SignaturePath)
+} else {
+    Invoke-Signer @("sign", "--catalog", $CatalogPath, "--signature", $SignaturePath, "--development")
+}
+if ($BundleMode -eq "Compact") {
+    Get-ChildItem -LiteralPath $BundleRoot -Filter "providers-*.zip" -File | Remove-Item -Force
+}
+Test-Catalog
+Write-Host "Created $($packs.Count) signed provider pack records ($BundleMode): $BundleRoot"

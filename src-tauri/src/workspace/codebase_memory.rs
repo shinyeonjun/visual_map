@@ -63,6 +63,12 @@ struct InventoryExport {
     handles: Value,
 }
 
+#[derive(Debug, Deserialize)]
+struct ProviderPlan {
+    schema: String,
+    languages: Vec<String>,
+}
+
 pub(crate) struct CodebaseMemoryAdapter<'a> {
     engine: &'a engine::EngineAvailability,
     cache_dir: PathBuf,
@@ -110,12 +116,32 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         project_name: &str,
     ) -> Result<engine::EngineRunResult, String> {
         let payload = index_payload(repo_path, project_name);
-        self.invoke(
+        let plan = self.provider_plan(repo_path)?;
+        self.invoke_with_operation(
             CodebaseMemoryTool::IndexRepository,
             &payload,
             Duration::from_secs(6 * 60 * 60),
             Some(repo_path),
+            None,
+            Some(&plan.languages),
         )
+    }
+
+    fn provider_plan(&self, repo_path: &str) -> Result<ProviderPlan, String> {
+        let value = self.invoke_json(
+            CodebaseMemoryTool::ProviderPlan,
+            &json!({ "repo_path": repo_path }),
+            Duration::from_secs(5 * 60),
+        )?;
+        let plan: ProviderPlan = serde_json::from_value(value)
+            .map_err(|error| format!("provider plan 형식이 올바르지 않습니다: {error}"))?;
+        if plan.schema != "code-memory.provider-plan.v1" {
+            return Err(format!(
+                "지원하지 않는 provider plan입니다: {}",
+                plan.schema
+            ));
+        }
+        Ok(plan)
     }
 
     pub(crate) fn delete_project(&self, project: &str) -> Result<(), String> {
@@ -171,6 +197,7 @@ impl<'a> CodebaseMemoryAdapter<'a> {
             Duration::from_secs(60),
             None,
             operation_id,
+            None,
         )?;
 
         if !run.ok {
@@ -214,7 +241,7 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         timeout: Duration,
         allowed_root: Option<&str>,
     ) -> Result<engine::EngineRunResult, String> {
-        self.invoke_with_operation(tool, payload, timeout, allowed_root, None)
+        self.invoke_with_operation(tool, payload, timeout, allowed_root, None, None)
     }
 
     fn invoke_with_operation(
@@ -224,6 +251,7 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         timeout: Duration,
         allowed_root: Option<&str>,
         operation_id: Option<&str>,
+        required_languages: Option<&[String]>,
     ) -> Result<engine::EngineRunResult, String> {
         let request = ArgsFile::create(&self.cache_dir, payload)?;
         let request_path = request.path().display().to_string();
@@ -261,7 +289,7 @@ impl<'a> CodebaseMemoryAdapter<'a> {
                 #[cfg(debug_assertions)]
                 {
                     let source_dir =
-                        Path::new(env!("CARGO_MANIFEST_DIR")).join("engines/providers");
+                        Path::new(env!("CARGO_MANIFEST_DIR")).join("../code_memory/providers");
                     source_dir.is_dir().then_some(source_dir)
                 }
                 #[cfg(not(debug_assertions))]
@@ -271,12 +299,19 @@ impl<'a> CodebaseMemoryAdapter<'a> {
             });
         let provider_dir = match provider_dir {
             Some(path) => Some(path),
-            None => match (engine_dir, self.provider_cache_dir.as_deref()) {
-                (Some(engine_dir), Some(provider_cache_dir)) => {
-                    super::provider_bundle::ensure_provider_root(engine_dir, provider_cache_dir)?
+            None if tool.requires_providers() => {
+                match (engine_dir, self.provider_cache_dir.as_deref()) {
+                    (Some(engine_dir), Some(provider_cache_dir)) => {
+                        super::provider_bundle::ensure_provider_root(
+                            engine_dir,
+                            provider_cache_dir,
+                            required_languages.unwrap_or_default(),
+                        )?
+                    }
+                    _ => None,
                 }
-                _ => None,
-            },
+            }
+            None => None,
         };
         if let Some(path) = provider_dir {
             env_values.push((
@@ -318,6 +353,7 @@ impl<'a> CodebaseMemoryAdapter<'a> {
 
 #[derive(Clone, Copy)]
 enum CodebaseMemoryTool {
+    ProviderPlan,
     IndexRepository,
     DeleteProject,
     ExportInventory,
@@ -327,11 +363,16 @@ enum CodebaseMemoryTool {
 impl CodebaseMemoryTool {
     fn as_str(self) -> &'static str {
         match self {
+            Self::ProviderPlan => "provider_plan",
             Self::IndexRepository => "index_repository",
             Self::DeleteProject => "delete_project",
             Self::ExportInventory => "export_inventory",
             Self::SearchCode => "search_code",
         }
+    }
+
+    fn requires_providers(self) -> bool {
+        matches!(self, Self::IndexRepository)
     }
 }
 
