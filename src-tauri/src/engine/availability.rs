@@ -293,3 +293,19 @@ pub(crate) fn run_engine_command_with_env(
 
     run_command_with_env(Path::new(&engine.path), &arg_refs, timeout, envs)
 }
+
+pub(crate) fn run_engine_command_with_env_observer(
+    engine: &EngineAvailability,
+    args: &[String],
+    policy: EngineRunPolicy,
+    envs: &[(&str, &str)],
+    observer: Option<EngineObserver>,
+) -> Result<EngineRunResult, String> {
+    if !engine.available {
+        return Err(format!("읽기 도구가 없습니다: {}", engine.executable));
+    }
+
+    validate_sidecar_args(args)?;
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_command_with_env_observer(Path::new(&engine.path), &arg_refs, policy, envs, observer)
+}

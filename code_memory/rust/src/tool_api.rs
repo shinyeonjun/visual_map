@@ -11,6 +11,7 @@ const COMPAT_TOOLS: &[&str] = &[
     "delete_project",
     "get_architecture",
     "get_evidence",
+    "export_inventory",
     "query_graph",
     "search_code",
     "list_projects",
@@ -35,6 +36,7 @@ pub(crate) fn run_cli(args: &[String]) -> Result<(), String> {
         "delete_project" => delete_project(&payload),
         "get_architecture" => print_json(&read_architecture(&payload)?),
         "get_evidence" => get_evidence(&payload),
+        "export_inventory" => export_inventory(&payload),
         "query_graph" => query_graph(&payload),
         "search_code" => search_code(&payload),
         "list_projects" => list_projects(),
@@ -58,6 +60,7 @@ fn index_repository(payload: &Value) -> Result<(), String> {
     let (index_path, architecture_path) = project_paths(&project)?;
     let pack_root = framework_pack_root();
     let providers_root = optional_resource_root("CODE_MEMORY_PROVIDERS_ROOT", "providers");
+    crate::emit_progress("index", 0, 100, "코드 인덱스 준비 중");
     index_project(
         Path::new(root),
         &index_path,
@@ -65,6 +68,7 @@ fn index_repository(payload: &Value) -> Result<(), String> {
         &pack_root,
         providers_root.as_deref(),
     )?;
+    crate::emit_progress("collectors", 82, 100, "프로젝트 근거 수집 중");
     let report =
         crate::collectors::collect_project(Path::new(root), &pack_root, providers_root.as_deref())?;
     let report_path = collection_report_path(&project)?;
@@ -74,6 +78,7 @@ fn index_repository(payload: &Value) -> Result<(), String> {
             .map_err(|error| format!("cannot serialize collection report: {error}"))?,
     )
     .map_err(|error| format!("cannot write {}: {error}", report_path.display()))?;
+    crate::emit_progress("complete", 100, 100, "코드 분석 완료");
     print_json(&json!({ "project": project, "repo_path": root }))
 }
 
@@ -145,6 +150,10 @@ fn read_architecture(payload: &Value) -> Result<Value, String> {
 }
 
 fn get_evidence(payload: &Value) -> Result<(), String> {
+    print_json(&read_evidence(payload)?)
+}
+
+fn read_evidence(payload: &Value) -> Result<Value, String> {
     let project = required_string(payload, "project")?;
     let path = collection_report_path(project)?;
     let report: Value =
@@ -152,7 +161,25 @@ fn get_evidence(payload: &Value) -> Result<(), String> {
             format!("cannot read project evidence {}: {error}", path.display())
         })?)
         .map_err(|error| format!("invalid project evidence {}: {error}", path.display()))?;
-    print_json(&evidence_summary(&report))
+    Ok(evidence_summary(&report))
+}
+
+fn export_inventory(payload: &Value) -> Result<(), String> {
+    let index = read_index(payload)?;
+    let architecture = read_architecture(payload)?;
+    let evidence = read_evidence(payload)?;
+    print_json(&inventory_export_value(&index, architecture, evidence))
+}
+
+fn inventory_export_value(index: &Value, architecture: Value, evidence: Value) -> Value {
+    json!({
+        "schema": "code-memory.inventory-export.v1",
+        "architecture": architecture,
+        "evidence": evidence,
+        "nodes": inventory_query_result(index),
+        "calls": calls_query_result(index),
+        "handles": handles_query_result(index),
+    })
 }
 
 fn evidence_summary(report: &Value) -> Value {
@@ -207,54 +234,10 @@ fn query_graph(payload: &Value) -> Result<(), String> {
     let index = read_index(payload)?;
     let relationship_kind = query_relationship_kind(&query);
     if relationship_kind == Some("HANDLES") {
-        let endpoint_aliases = architecture_endpoint_aliases(&index);
-        let rows = index
-            .get("framework_relations")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|relation| relation.get("kind").and_then(Value::as_str) == Some("HANDLES"))
-            .map(|relation| {
-                let from = relation.get("from").cloned().unwrap_or(Value::Null);
-                let to = relation
-                    .get("to")
-                    .map(|value| normalize_endpoint(value, &endpoint_aliases))
-                    .unwrap_or(Value::Null);
-                json!([from, to,])
-            })
-            .collect::<Vec<_>>();
-        let total = rows.len();
-        return print_json(&json!({
-            "columns": ["source", "target"],
-            "rows": rows,
-            "total": total
-        }));
+        return print_json(&handles_query_result(&index));
     }
     if relationship_kind == Some("CALLS") {
-        let rows = index
-            .get("relations")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|relation| relation.get("kind").and_then(Value::as_str) == Some("CALLS"))
-            .map(|relation| {
-                json!([
-                    relation.get("from").cloned().unwrap_or(Value::Null),
-                    relation.get("to").cloned().unwrap_or(Value::Null),
-                    relation.get("confidence").cloned().unwrap_or(Value::Null),
-                    relation.get("strategy").cloned().unwrap_or(Value::Null),
-                    Value::Null,
-                    relation.get("path").cloned().unwrap_or(Value::Null),
-                    relation.get("range").cloned().unwrap_or(Value::Null),
-                ])
-            })
-            .collect::<Vec<_>>();
-        let total = rows.len();
-        return print_json(&json!({
-            "columns": ["source", "target", "confidence", "strategy", "call_expression", "path", "range"],
-            "rows": rows,
-            "total": total
-        }));
+        return print_json(&calls_query_result(&index));
     }
     if let Some(kind) = relationship_kind {
         let rows = index
@@ -282,13 +265,69 @@ fn query_graph(payload: &Value) -> Result<(), String> {
         }));
     }
 
-    let rows = inventory_rows(&index);
+    print_json(&inventory_query_result(&index))
+}
+
+fn inventory_query_result(index: &Value) -> Value {
+    let rows = inventory_rows(index);
     let total = rows.len();
-    print_json(&json!({
+    json!({
         "columns": inventory_columns(),
         "rows": rows,
         "total": total
-    }))
+    })
+}
+
+fn calls_query_result(index: &Value) -> Value {
+    let rows = index
+        .get("relations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|relation| relation.get("kind").and_then(Value::as_str) == Some("CALLS"))
+        .map(|relation| {
+            json!([
+                relation.get("from").cloned().unwrap_or(Value::Null),
+                relation.get("to").cloned().unwrap_or(Value::Null),
+                relation.get("confidence").cloned().unwrap_or(Value::Null),
+                relation.get("strategy").cloned().unwrap_or(Value::Null),
+                Value::Null,
+                relation.get("path").cloned().unwrap_or(Value::Null),
+                relation.get("range").cloned().unwrap_or(Value::Null),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let total = rows.len();
+    json!({
+        "columns": ["source", "target", "confidence", "strategy", "call_expression", "path", "range"],
+        "rows": rows,
+        "total": total
+    })
+}
+
+fn handles_query_result(index: &Value) -> Value {
+    let endpoint_aliases = architecture_endpoint_aliases(index);
+    let rows = index
+        .get("framework_relations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|relation| relation.get("kind").and_then(Value::as_str) == Some("HANDLES"))
+        .map(|relation| {
+            let from = relation.get("from").cloned().unwrap_or(Value::Null);
+            let to = relation
+                .get("to")
+                .map(|value| normalize_endpoint(value, &endpoint_aliases))
+                .unwrap_or(Value::Null);
+            json!([from, to])
+        })
+        .collect::<Vec<_>>();
+    let total = rows.len();
+    json!({
+        "columns": ["source", "target"],
+        "rows": rows,
+        "total": total
+    })
 }
 
 fn query_relationship_kind(query: &str) -> Option<&str> {
@@ -1032,6 +1071,33 @@ fn print_json(value: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_export_contains_every_consumer_section_in_one_contract() {
+        let value = inventory_export_value(
+            &json!({
+                "documents": [],
+                "relations": [{
+                    "kind": "CALLS", "from": "handler", "to": "service",
+                    "confidence": 1.0, "strategy": "provider", "path": "src/app.rs", "range": [1, 0, 1, 4]
+                }],
+                "framework_relations": [{
+                    "kind": "HANDLES", "from": "handler", "to": "route:test"
+                }],
+                "__architecture_nodes": [{"id": "entrypoint:test", "kind": "ENDPOINT"}],
+                "__architecture_edges": []
+            }),
+            json!({"schema": "architecture"}),
+            json!({"schema": "evidence"}),
+        );
+
+        assert_eq!(value["schema"], "code-memory.inventory-export.v1");
+        assert_eq!(value["nodes"]["total"], 1);
+        assert_eq!(value["calls"]["total"], 1);
+        assert_eq!(value["handles"]["total"], 1);
+        assert_eq!(value["architecture"]["schema"], "architecture");
+        assert_eq!(value["evidence"]["schema"], "evidence");
+    }
 
     #[test]
     fn evidence_summary_is_bounded_but_keeps_totals() {

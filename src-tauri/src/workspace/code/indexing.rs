@@ -3,6 +3,7 @@ fn index_code_repository_with_persistence(
     registry: &EngineRegistry,
     request: IndexCodeRequest,
     persist_workspace: bool,
+    observer: Option<engine::EngineObserver>,
 ) -> Result<CodeIndexResult, String> {
     validate_workspace_id(&request.workspace_id)?;
 
@@ -21,6 +22,10 @@ fn index_code_repository_with_persistence(
         &code_cache_path,
         paths.app_data_dir.join("providers"),
     )?;
+    let adapter = match observer {
+        Some(observer) => adapter.with_observer(observer),
+        None => adapter,
+    };
     let previous_project = workspace
         .code_project
         .clone()

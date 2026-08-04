@@ -1,4 +1,5 @@
 use crate::{engine, EngineRegistry};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::{
     fs::{self, OpenOptions},
@@ -43,9 +44,6 @@ pub(crate) const CODE_NODE_LABELS: &[&str] = &[
     "Package",
     "Resource",
 ];
-pub(crate) const CALLS_QUERY: &str = "MATCH (caller)-[rel:CALLS]->(callee) RETURN caller.qualified_name AS source, callee.qualified_name AS target, rel.confidence AS confidence, rel.strategy AS strategy, rel.callee AS call_expression, rel.path AS path, rel.range AS range LIMIT 100000";
-pub(crate) const HANDLES_QUERY: &str = "MATCH (handler)-[:HANDLES]->(route) RETURN handler.qualified_name AS source, route.qualified_name AS target LIMIT 100000";
-
 #[derive(Debug)]
 pub(crate) struct CodebaseMemoryInventory {
     pub architecture: Value,
@@ -55,10 +53,21 @@ pub(crate) struct CodebaseMemoryInventory {
     pub handles: Value,
 }
 
+#[derive(Debug, Deserialize)]
+struct InventoryExport {
+    schema: String,
+    architecture: Value,
+    evidence: Value,
+    nodes: Value,
+    calls: Value,
+    handles: Value,
+}
+
 pub(crate) struct CodebaseMemoryAdapter<'a> {
     engine: &'a engine::EngineAvailability,
     cache_dir: PathBuf,
     provider_cache_dir: Option<PathBuf>,
+    observer: Option<engine::EngineObserver>,
 }
 
 impl<'a> CodebaseMemoryAdapter<'a> {
@@ -76,6 +85,7 @@ impl<'a> CodebaseMemoryAdapter<'a> {
             engine,
             cache_dir: cache_dir.into(),
             provider_cache_dir: None,
+            observer: None,
         })
     }
 
@@ -89,6 +99,11 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         Ok(adapter)
     }
 
+    pub(crate) fn with_observer(mut self, observer: engine::EngineObserver) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
     pub(crate) fn index_repository(
         &self,
         repo_path: &str,
@@ -98,7 +113,7 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         self.invoke(
             CodebaseMemoryTool::IndexRepository,
             &payload,
-            Duration::from_secs(300),
+            Duration::from_secs(6 * 60 * 60),
             Some(repo_path),
         )
     }
@@ -113,31 +128,30 @@ impl<'a> CodebaseMemoryAdapter<'a> {
     }
 
     pub(crate) fn inventory(&self, project: &str) -> Result<CodebaseMemoryInventory, String> {
-        let architecture = self.invoke_json(
-            CodebaseMemoryTool::GetArchitecture,
+        let export = self.invoke_json(
+            CodebaseMemoryTool::ExportInventory,
             &json!({ "project": project }),
-            Duration::from_secs(60),
+            Duration::from_secs(10 * 60),
         )?;
-        let evidence = self.invoke_json(
-            CodebaseMemoryTool::GetEvidence,
-            &json!({ "project": project }),
-            Duration::from_secs(30),
-        )?;
-        let nodes =
-            normalize_inventory_nodes(&self.query_graph(project, &inventory_nodes_query())?)?;
+        let export: InventoryExport = serde_json::from_value(export)
+            .map_err(|error| format!("코드 엔진 inventory export가 올바르지 않습니다: {error}"))?;
+        if export.schema != "code-memory.inventory-export.v1" {
+            return Err(format!(
+                "지원하지 않는 코드 inventory export 계약입니다: {}",
+                export.schema
+            ));
+        }
+        let nodes = normalize_inventory_nodes(&export.nodes)?;
         ensure_result_below_limit(&nodes, "code nodes", MAX_CODE_NODES)?;
-
-        let calls = self.query_graph(project, CALLS_QUERY)?;
-        let handles = self.query_graph(project, HANDLES_QUERY)?;
-        ensure_result_below_limit(&calls, "CALLS", MAX_GRAPH_RELATIONSHIPS)?;
-        ensure_result_below_limit(&handles, "HANDLES", MAX_GRAPH_RELATIONSHIPS)?;
+        ensure_result_below_limit(&export.calls, "CALLS", MAX_GRAPH_RELATIONSHIPS)?;
+        ensure_result_below_limit(&export.handles, "HANDLES", MAX_GRAPH_RELATIONSHIPS)?;
 
         Ok(CodebaseMemoryInventory {
-            architecture,
-            evidence,
+            architecture: export.architecture,
+            evidence: export.evidence,
             nodes,
-            calls,
-            handles,
+            calls: export.calls,
+            handles: export.handles,
         })
     }
 
@@ -171,14 +185,6 @@ impl<'a> CodebaseMemoryAdapter<'a> {
             &run.stdout,
             &run.stderr,
             requested_limit.clamp(1, MAX_FOCUSED_SEARCH_LIMIT),
-        )
-    }
-
-    fn query_graph(&self, project: &str, query: &str) -> Result<Value, String> {
-        self.invoke_json(
-            CodebaseMemoryTool::QueryGraph,
-            &json!({ "project": project, "query": query }),
-            Duration::from_secs(60),
         )
     }
 
@@ -292,7 +298,21 @@ impl<'a> CodebaseMemoryAdapter<'a> {
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect::<Vec<_>>();
 
-        engine::run_engine_command_with_env(self.engine, &args, timeout, &envs)
+        let policy = if matches!(tool, CodebaseMemoryTool::IndexRepository) {
+            engine::EngineRunPolicy {
+                hard_timeout: timeout,
+                idle_timeout: Duration::from_secs(5 * 60),
+            }
+        } else {
+            engine::EngineRunPolicy::fixed(timeout)
+        };
+        engine::run_engine_command_with_env_observer(
+            self.engine,
+            &args,
+            policy,
+            &envs,
+            self.observer.clone(),
+        )
     }
 }
 
@@ -300,9 +320,7 @@ impl<'a> CodebaseMemoryAdapter<'a> {
 enum CodebaseMemoryTool {
     IndexRepository,
     DeleteProject,
-    GetArchitecture,
-    GetEvidence,
-    QueryGraph,
+    ExportInventory,
     SearchCode,
 }
 
@@ -311,9 +329,7 @@ impl CodebaseMemoryTool {
         match self {
             Self::IndexRepository => "index_repository",
             Self::DeleteProject => "delete_project",
-            Self::GetArchitecture => "get_architecture",
-            Self::GetEvidence => "get_evidence",
-            Self::QueryGraph => "query_graph",
+            Self::ExportInventory => "export_inventory",
             Self::SearchCode => "search_code",
         }
     }
@@ -370,17 +386,6 @@ pub(crate) fn index_payload(repo_path: &str, project_name: &str) -> Value {
         "name": project_name,
         "persistence": false
     })
-}
-
-pub(crate) fn inventory_nodes_query() -> String {
-    let labels = std::iter::once("Route")
-        .chain(CODE_NODE_LABELS.iter().copied())
-        .chain(std::iter::once("File"))
-        .collect::<Vec<_>>()
-        .join("|");
-    format!(
-        "MATCH (node:{labels}) RETURN labels(node) AS labels, node.name AS name, node.qualified_name AS qualified_name, node.file_path AS file_path, node.start_line AS start_line, node.start_column AS start_column, node.end_line AS end_line, node.end_column AS end_column, node.method AS method, node.source AS source, node.parent_qualified_name AS parent_qualified_name, node.parent_class AS parent_class, node.module AS module, node.namespace AS namespace, node.package AS package, node.route_path AS route_path, node.route_method AS route_method, node.signature AS signature, node.return_type AS return_type, node.is_test AS is_test, node.properties AS properties LIMIT {MAX_CODE_NODES}"
-    )
 }
 
 pub(crate) fn focused_code_search_payload(
@@ -617,9 +622,7 @@ mod tests {
         let tools = [
             CodebaseMemoryTool::IndexRepository,
             CodebaseMemoryTool::DeleteProject,
-            CodebaseMemoryTool::GetArchitecture,
-            CodebaseMemoryTool::GetEvidence,
-            CodebaseMemoryTool::QueryGraph,
+            CodebaseMemoryTool::ExportInventory,
             CodebaseMemoryTool::SearchCode,
         ]
         .map(CodebaseMemoryTool::as_str);
@@ -629,14 +632,29 @@ mod tests {
             [
                 "index_repository",
                 "delete_project",
-                "get_architecture",
-                "get_evidence",
-                "query_graph",
+                "export_inventory",
                 "search_code"
             ]
         );
         assert!(!tools.contains(&"semantic_query"));
         assert!(!tools.contains(&"manage_adr"));
+    }
+
+    #[test]
+    fn inventory_export_contract_deserializes_all_sections() {
+        let export: InventoryExport = serde_json::from_value(json!({
+            "schema": "code-memory.inventory-export.v1",
+            "architecture": {"schema": "architecture"},
+            "evidence": {"schema": "evidence"},
+            "nodes": {"columns": [], "rows": [], "total": 0},
+            "calls": {"columns": [], "rows": [], "total": 0},
+            "handles": {"columns": [], "rows": [], "total": 0}
+        }))
+        .unwrap();
+
+        assert_eq!(export.schema, "code-memory.inventory-export.v1");
+        assert_eq!(export.architecture["schema"], "architecture");
+        assert_eq!(export.evidence["schema"], "evidence");
     }
 
     #[test]

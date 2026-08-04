@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc, Arc, Mutex, OnceLock,
     },
     thread,
@@ -173,6 +173,29 @@ pub(crate) struct EngineRunResult {
     pub started_at: String,
     pub finished_at: String,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EngineRunPolicy {
+    pub hard_timeout: Duration,
+    pub idle_timeout: Duration,
+}
+
+impl EngineRunPolicy {
+    pub(crate) fn fixed(timeout: Duration) -> Self {
+        Self {
+            hard_timeout: timeout,
+            idle_timeout: timeout,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EngineProcessEvent {
+    pub stream: &'static str,
+    pub line: String,
+}
+
+pub(crate) type EngineObserver = Arc<dyn Fn(EngineProcessEvent) + Send + Sync>;
 
 pub(crate) const ENGINE_SPECS: &[EngineSpec] = &[
     EngineSpec {

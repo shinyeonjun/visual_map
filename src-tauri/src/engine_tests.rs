@@ -421,6 +421,37 @@ fn command_runner_reports_timeout() {
 
 #[cfg(windows)]
 #[test]
+fn command_runner_forwards_progress_and_stops_after_idle_timeout() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&events);
+    let observer: EngineObserver = Arc::new(move |event| {
+        observed.lock().unwrap().push(event);
+    });
+    let result = run_command_with_env_observer(
+        Path::new("node.exe"),
+        &[
+            "-e",
+            "console.error('@visual-map-progress {\"stage\":\"test\"}'); setTimeout(() => {}, 5000)",
+        ],
+        EngineRunPolicy {
+            hard_timeout: Duration::from_secs(5),
+            idle_timeout: Duration::from_millis(100),
+        },
+        &[],
+        Some(observer),
+    )
+    .unwrap();
+
+    assert!(!result.ok);
+    assert!(result.stderr.contains("진행 신호가 없어"));
+    assert_eq!(events.lock().unwrap()[0].stream, "stderr");
+    assert!(events.lock().unwrap()[0]
+        .line
+        .contains("\"stage\":\"test\""));
+}
+
+#[cfg(windows)]
+#[test]
 fn command_runner_kills_a_cancelled_operation() {
     let operation_id = format!("process-cancel-test-{}", std::process::id());
     let guard = begin_engine_operation(&operation_id).unwrap();

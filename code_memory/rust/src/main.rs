@@ -36,6 +36,18 @@ pub(crate) use source::{
 #[cfg(test)]
 mod tests;
 
+fn emit_progress(stage: &str, completed: usize, total: usize, label: &str) {
+    eprintln!(
+        "@visual-map-progress {}",
+        serde_json::json!({
+            "stage": stage,
+            "completed": completed,
+            "total": total.max(1),
+            "label": label,
+        })
+    );
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("code-memory-language: {error}");

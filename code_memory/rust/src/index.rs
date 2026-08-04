@@ -6,6 +6,7 @@ pub(crate) fn index_project(
     providers_root: Option<&Path>,
 ) -> Result<(), String> {
     let root = crate::source::canonical_project_root(root)?;
+    emit_progress("discovery", 3, 100, "소스 파일 찾는 중");
     let pack_root = pack_root
         .canonicalize()
         .unwrap_or_else(|_| pack_root.to_path_buf());
@@ -59,6 +60,7 @@ pub(crate) fn index_project(
     let file_walk_started = Instant::now();
     let all_source_files =
         collect_files(&root, &all_extensions.iter().copied().collect::<Vec<_>>());
+    emit_progress("manifest", 10, 100, "파일 목록과 변경 범위 계산 중");
     let file_walk_elapsed = file_walk_started.elapsed();
     let source_hash_started = Instant::now();
     let mut source_snapshot = load_source_snapshot_metadata_from_files(&root, &all_source_files);
@@ -111,6 +113,7 @@ pub(crate) fn index_project(
     enforce_managed_provider_policy(&output.provider_provenance, &discovered_files)?;
 
     let project_model_started = Instant::now();
+    emit_progress("project-model", 16, 100, "워크스페이스와 패키지 경계 분석 중");
     let mut typescript_units = Vec::new();
     let mut typescript_call_ranges = Arc::new(HashMap::new());
     if all_source_files.iter().any(|path| {
@@ -172,6 +175,7 @@ pub(crate) fn index_project(
         stage: "typescript_project_model",
         elapsed_ms: project_model_started.elapsed().as_millis(),
     });
+    emit_progress("planning", 24, 100, "언어별 분석 단위 계획 중");
 
     let cache_lookup_started = Instant::now();
     let mut cache_key_elapsed = Duration::ZERO;
@@ -441,6 +445,7 @@ pub(crate) fn index_project(
     let jobs = merge_provider_jobs(jobs);
 
     let provider_started = Instant::now();
+    emit_progress("providers", 35, 100, "언어 공급자 실행 중");
     let max_parallel = max_parallel_providers(jobs.len());
     let max_weight = max_provider_weight();
     let (result_sender, result_receiver) = mpsc::channel::<(usize, Vec<LanguageAnalysis>)>();
@@ -448,6 +453,8 @@ pub(crate) fn index_project(
     let mut next_job = 0usize;
     let mut active_jobs = 0usize;
     let mut active_weight = 0usize;
+    let total_jobs = jobs.len();
+    let mut completed_jobs = 0usize;
     while next_job < jobs.len() || active_jobs > 0 {
         while next_job < jobs.len() && active_jobs < max_parallel {
             let job = jobs[next_job].clone();
@@ -489,12 +496,30 @@ pub(crate) fn index_project(
             });
         }
 
-        let (weight, result) = result_receiver
-            .recv()
-            .map_err(|error| format!("language worker stopped unexpectedly: {error}"))?;
+        let (weight, result) = loop {
+            match result_receiver.recv_timeout(Duration::from_secs(5)) {
+                Ok(result) => break result,
+                Err(mpsc::RecvTimeoutError::Timeout) => emit_progress(
+                    "providers",
+                    35 + completed_jobs.saturating_mul(35) / total_jobs.max(1),
+                    100,
+                    "언어 공급자 실행 중",
+                ),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("language workers stopped unexpectedly".to_string())
+                }
+            }
+        };
         active_jobs -= 1;
         active_weight = active_weight.saturating_sub(weight);
+        completed_jobs += 1;
         analyses.extend(result);
+        emit_progress(
+            "providers",
+            35 + completed_jobs.saturating_mul(35) / total_jobs.max(1),
+            100,
+            "언어별 의미 분석 병합 중",
+        );
     }
     drop(result_sender);
     let (languages, documents, relations, diagnostics) = merge_language_analyses(analyses);
@@ -523,6 +548,7 @@ pub(crate) fn index_project(
     });
 
     let framework_started = Instant::now();
+    emit_progress("frameworks", 74, 100, "프레임워크 의미 분석 중");
     let framework_key = framework_cache_key(
         &root,
         &pack_root,
@@ -575,6 +601,7 @@ pub(crate) fn index_project(
     );
     canonicalize_index_output(&mut output);
 
+    emit_progress("architecture", 78, 100, "계층과 호출 구조 통합 중");
     write_index_outputs(
         &root,
         out,
@@ -590,5 +617,6 @@ pub(crate) fn index_project(
     if let Err(error) = write_source_manifest(&root, &source_snapshot) {
         eprintln!("source manifest cache unavailable: {error}");
     }
+    emit_progress("index-complete", 80, 100, "코드 인덱스 완료");
     Ok(())
 }

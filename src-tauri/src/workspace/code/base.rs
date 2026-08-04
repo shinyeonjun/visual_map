@@ -1,5 +1,5 @@
 use crate::paths::base_paths;
-use crate::EngineRegistry;
+use crate::{engine, EngineRegistry};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -27,13 +27,14 @@ pub(crate) fn index_code_repository(
     registry: &EngineRegistry,
     request: IndexCodeRequest,
 ) -> Result<CodeIndexResult, String> {
-    index_code_repository_with_persistence(app_data_dir, registry, request, true)
+    index_code_repository_with_persistence(app_data_dir, registry, request, true, None)
 }
 
-pub(crate) fn index_code_repository_without_persisting(
+pub(crate) fn index_code_repository_without_persisting_with_observer(
     app_data_dir: impl AsRef<Path>,
     registry: &EngineRegistry,
     request: IndexCodeRequest,
+    observer: engine::EngineObserver,
 ) -> Result<CodeIndexResult, String> {
-    index_code_repository_with_persistence(app_data_dir, registry, request, false)
+    index_code_repository_with_persistence(app_data_dir, registry, request, false, Some(observer))
 }
