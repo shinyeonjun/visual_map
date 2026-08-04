@@ -87,7 +87,6 @@ struct InitializeWorkspaceAnalysisResult {
 #[serde(rename_all = "camelCase")]
 struct AnalysisProgressEvent {
     workspace_id: String,
-    source: String,
     stage: String,
     completed: usize,
     total: usize,
@@ -99,7 +98,6 @@ struct AnalysisProgressEvent {
 fn emit_analysis_progress(
     app: &tauri::AppHandle,
     workspace_id: &str,
-    source: &str,
     stage: &str,
     completed: usize,
     total: usize,
@@ -110,7 +108,6 @@ fn emit_analysis_progress(
         "analysis-progress",
         AnalysisProgressEvent {
             workspace_id: workspace_id.to_string(),
-            source: source.to_string(),
             stage: stage.to_string(),
             completed,
             total: total.max(1),
@@ -154,7 +151,6 @@ fn code_progress_observer(
         emit_analysis_progress(
             &app,
             &workspace_id,
-            "code",
             stage,
             completed,
             total,

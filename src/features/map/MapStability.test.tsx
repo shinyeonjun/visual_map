@@ -128,6 +128,49 @@ describe("stable mode transitions", () => {
     expect(onToggleSourceManager).toHaveBeenCalledOnce();
   });
 
+  it("shows live analysis progress without hiding the last map", () => {
+    const { container } = render(
+      <WorkbenchTopBar
+        sourceManagerOpen={false}
+        onToggleSourceManager={vi.fn()}
+        analysisActive
+        analysisProgress={{ percent: 42, label: "호출 관계 분석 중", determinate: true }}
+        workspaceControls={
+          {
+            ...workspaceControls(),
+            initialized: true,
+            busy: true,
+            codeIndexing: true,
+            workspaces: [{ id: "workspace-1", name: "backend" }],
+            operationStatus: { phase: "running", label: "코드 분석", message: "코드 분석 중" },
+            openWorkspace: vi.fn(),
+          } as unknown as WorkspaceControls
+        }
+        dbProfileControls={dbProfileControls()}
+        visualMapControls={
+          {
+            searchQuery: "",
+            searchGroups: [],
+            snapshotSavedAt: "1",
+            snapshotStaleReasons: [],
+            setSearchQuery: vi.fn(),
+            openSearchPopover: vi.fn(),
+            closeSearchPopover: vi.fn(),
+            runSearch: vi.fn(),
+            selectSearchResult: vi.fn(),
+          } as unknown as VisualMapControls
+        }
+      />,
+    );
+
+    expect(screen.getByRole("status", { name: /호출 관계 분석 중/ })).toHaveAttribute(
+      "title",
+      "호출 관계 분석 중 · 완료 전까지 마지막 지도를 표시합니다.",
+    );
+    expect(screen.getByText("42%")).toBeInTheDocument();
+    expect(container.querySelector<HTMLElement>(".source-freshness-progress")?.style.width).toBe("42%");
+  });
+
   it("does not present a partial provider result as complete", () => {
     const controls = workspaceControls();
     render(

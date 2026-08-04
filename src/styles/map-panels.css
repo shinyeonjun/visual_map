@@ -1,6 +1,7 @@
 /* Floating layers, evidence, source controls and the one blocking setup dialog. */
 .source-freshness,
 .source-manager-trigger {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -11,6 +12,11 @@
   font: inherit;
   white-space: nowrap;
 }
+
+.source-freshness { overflow: hidden; }
+.source-freshness > span { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+.source-freshness > small { font-family: var(--mono); font-size: 9px; font-variant-numeric: tabular-nums; }
+.source-freshness-progress { position: absolute; left: 0; bottom: 0; height: 2px; border-radius: 0 2px 2px 0; background: currentColor; transition: width 180ms ease-out; }
 
 .source-freshness.fresh { border-color: var(--green-line); background: var(--green-soft); color: var(--green); }
 .source-freshness.stale { border-color: var(--orange-line); background: var(--orange-soft); color: var(--orange); }
@@ -179,6 +185,8 @@
 .status-truth,
 .status-engines,
 .status-metrics { display: flex; align-items: center; gap: 12px; }
+.status-source-revision { flex: 0 1 280px; max-width: 280px; color: var(--ink-3); }
+.statusbar .status-source-revision > span { display: block; overflow: hidden; text-overflow: ellipsis; }
 .status-truth { font-variant-numeric: tabular-nums; }
 .status-truth .confirmed { display: inline-flex; align-items: center; gap: 4px; color: var(--green); font-weight: 650; }
 .status-truth .candidate { color: var(--orange); font-weight: 650; }

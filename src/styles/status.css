@@ -195,6 +195,7 @@
   .statusbar { gap: 6px; }
   .engine-status { max-width: 152px; }
   .status-snapshot { display: none; }
+  .status-source-revision { display: none; }
   .at-legend-item:not(.primary) { display: none; }
   .at-cards { gap: var(--at-lane-gap, 18px); padding-right: var(--at-lane-pad-x, 10px); }
 }

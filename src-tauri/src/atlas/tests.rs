@@ -971,6 +971,7 @@ fn git_source_revision_stays_scoped_to_the_workspace_subdirectory() {
     git(&["init"]);
     git(&["config", "user.email", "test@example.com"]);
     git(&["config", "user.name", "Test"]);
+    git(&["branch", "-M", "source-label-test"]);
     git(&["add", "."]);
     git(&["commit", "-m", "initial"]);
 
@@ -999,6 +1000,14 @@ fn git_source_revision_stays_scoped_to_the_workspace_subdirectory() {
         )
     };
     let snapshot = code_snapshot("1");
+    assert!(snapshot
+        .metadata
+        .code
+        .as_ref()
+        .and_then(|metadata| metadata.source_revision_label.as_deref())
+        .is_some_and(
+            |label| label.starts_with("source-label-test@") && label.ends_with(" · clean")
+        ));
 
     fs::write(
         service_b.join("main.rs"),

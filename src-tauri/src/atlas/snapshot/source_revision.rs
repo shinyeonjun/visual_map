@@ -49,7 +49,12 @@ fn git_source_revision(root: &Path) -> Option<(String, String)> {
     } else {
         format!("변경 {}개", paths.len())
     };
-    Some((revision, format!("git {} · {state}", &head[..7])))
+    let branch = git_output(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .and_then(|value| String::from_utf8(value).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "detached".to_string());
+    Some((revision, format!("{branch}@{} · {state}", &head[..7])))
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {

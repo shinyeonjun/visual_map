@@ -29,7 +29,6 @@ import { MapWorkspace } from "./features/map/MapWorkspace";
 
 interface AnalysisProgressEvent {
   workspaceId: string;
-  source: string;
   stage: string;
   completed: number;
   total: number;
@@ -94,6 +93,11 @@ function App() {
     setBusyNotice(null);
     setLatestOperationAction(action);
     setBusyAction(action);
+    if (action === "code-index") {
+      setAnalysisProgress({ percent: 0, label: "코드 분석 준비 중", determinate: false });
+    } else if (action === "db-index") {
+      setAnalysisProgress({ percent: 0, label: "DB 분석 준비 중", determinate: false });
+    }
     try {
       await task();
     } finally {

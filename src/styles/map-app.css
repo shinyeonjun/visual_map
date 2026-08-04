@@ -691,5 +691,6 @@
   .map-floating-panel { animation: none; }
   .flow-toolbar,
   .map-coverage-overlay,
-  .flow-minimap { transition: none; }
+  .flow-minimap,
+  .source-freshness-progress { transition: none; }
 }

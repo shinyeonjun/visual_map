@@ -16,6 +16,7 @@ import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "..
 import { codeInventoryItemCount } from "../../types/workspace";
 import { searchScopeText } from "../../visual/search";
 import { SearchResultsPopover, focusFirstSearchResult } from "../../components/common/SearchResultsPopover";
+import type { AnalysisProgress } from "./AnalysisSetupDialog";
 
 export function MapTopBar({
   sourceManagerOpen,
@@ -23,12 +24,16 @@ export function MapTopBar({
   workspaceControls,
   dbProfileControls,
   visualMapControls,
+  analysisActive = false,
+  analysisProgress,
 }: {
   sourceManagerOpen: boolean;
   onToggleSourceManager: () => void;
   workspaceControls: WorkspaceControls;
   dbProfileControls: DbProfileControls;
   visualMapControls: VisualMapControls;
+  analysisActive?: boolean;
+  analysisProgress?: AnalysisProgress;
 }) {
   const hasWorkspace = Boolean(workspaceControls.currentWorkspace);
   const hasInventory =
@@ -40,8 +45,16 @@ export function MapTopBar({
     visualMapControls.setSearchQuery,
   );
   const partialDetail = sourcePartialDetail(workspaceControls, dbProfileControls);
-  const freshness = sourceFreshness(workspaceControls, visualMapControls, hasInventory, partialDetail);
+  const freshness = sourceFreshness(
+    workspaceControls,
+    visualMapControls,
+    hasInventory,
+    partialDetail,
+    analysisActive,
+    analysisProgress,
+  );
   const FreshnessIcon = freshness.icon;
+  const progressPercent = analysisProgress?.determinate ? Math.max(0, Math.min(100, analysisProgress.percent)) : null;
   const sourceManagerActive = sourceManagerOpen || (!hasWorkspace && workspaceControls.initialized);
 
   return (
@@ -88,6 +101,10 @@ export function MapTopBar({
       >
         <FreshnessIcon size={14} className={freshness.spin ? "spin" : undefined} />
         <span>{freshness.label}</span>
+        {analysisActive && progressPercent !== null ? <small>{progressPercent}%</small> : null}
+        {analysisActive && progressPercent !== null ? (
+          <i className="source-freshness-progress" aria-hidden="true" style={{ width: `${progressPercent}%` }} />
+        ) : null}
       </span>
 
       {dbProfileControls.inventory ? (
@@ -166,6 +183,8 @@ function sourceFreshness(
   visualMapControls: VisualMapControls,
   hasInventory: boolean,
   partialDetail: string | null,
+  analysisActive: boolean,
+  analysisProgress?: AnalysisProgress,
 ): {
   label: string;
   detail: string;
@@ -176,8 +195,25 @@ function sourceFreshness(
   if (!workspaceControls.initialized) {
     return { label: "프로젝트 없음", detail: "왼쪽에서 프로젝트를 연결하세요.", tone: "pending", icon: Folder };
   }
+  if (analysisActive) {
+    const label = analysisProgress?.label || "프로젝트 분석 중";
+    const retained = Boolean(visualMapControls.snapshotSavedAt || hasInventory);
+    return {
+      label,
+      detail: retained ? `${label} · 완료 전까지 마지막 지도를 표시합니다.` : label,
+      tone: "busy",
+      icon: RefreshCw,
+      spin: true,
+    };
+  }
   if (workspaceControls.busy) {
-    return { label: "분석 중", detail: "프로젝트 소스를 읽고 있습니다.", tone: "busy", icon: RefreshCw, spin: true };
+    return {
+      label: "작업 중",
+      detail: workspaceControls.operationStatus.message || "프로젝트 작업을 마치는 중입니다.",
+      tone: "busy",
+      icon: RefreshCw,
+      spin: true,
+    };
   }
   if (workspaceControls.operationStatus.phase === "error") {
     return {

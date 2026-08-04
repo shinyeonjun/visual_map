@@ -63,6 +63,12 @@ export function MapStatusBar({
         </div>
       ) : null}
       {evidence ? <ProjectEvidence evidence={evidence} /> : null}
+      {hasWorkspace && visualMapControls.snapshotSourceSummary ? (
+        <span className="status-source-revision" title={`마지막 분석 기준: ${visualMapControls.snapshotSourceSummary}`}>
+          <GitBranch size={12} />
+          <span>{visualMapControls.snapshotSourceSummary}</span>
+        </span>
+      ) : null}
       {/*
         Engine health belongs on the bar, not behind a disclosure: a reader who
         cannot see that an engine is down has no way to read a thin map right.

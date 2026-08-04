@@ -147,7 +147,6 @@ fn index_code_repository(
     emit_analysis_progress(
         &app,
         &workspace_id,
-        "system",
         "prepare",
         0,
         1,
@@ -264,7 +263,6 @@ fn initialize_workspace_analysis(
     emit_analysis_progress(
         &app,
         &workspace_id,
-        "system",
         "prepare",
         0,
         1,
@@ -311,7 +309,6 @@ fn initialize_workspace_analysis(
                 emit_analysis_progress(
                     &db_app,
                     &db_workspace_id,
-                    "db",
                     "db-index",
                     0,
                     1,
@@ -326,7 +323,6 @@ fn initialize_workspace_analysis(
                 emit_analysis_progress(
                     &db_app,
                     &db_workspace_id,
-                    "db",
                     "db-index",
                     1,
                     1,
@@ -353,7 +349,6 @@ fn initialize_workspace_analysis(
     emit_analysis_progress(
         &app,
         &workspace_id,
-        "system",
         "reduce",
         1,
         1,
@@ -498,7 +493,6 @@ fn initialize_workspace_analysis(
             emit_analysis_progress(
                 &app,
                 &workspace_id,
-                "system",
                 "snapshot",
                 0,
                 1,
@@ -565,7 +559,6 @@ fn initialize_workspace_analysis(
             emit_analysis_progress(
                 &app,
                 &workspace_id,
-                "system",
                 "complete",
                 1,
                 1,

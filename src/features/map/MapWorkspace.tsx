@@ -74,6 +74,7 @@ export function MapWorkspace({
     : visualMapControls;
   const inspectorVisible = Boolean(inspectorControls.selectedNode || inspectorControls.selectedEdge);
   const sourcePanelOpen = sourceManagerOpen && workspaceShellReady;
+  const analysisActive = analysisInitializing || workspaceControls.codeIndexing || dbProfileControls.indexing;
   const explorerPanelOpen = explorerOpen && workspaceShellReady && !sourcePanelOpen;
   const workspaceId = workspaceControls.currentWorkspace?.id ?? null;
   // Areas outlive any one selection: remembering the last overview is what lets
@@ -243,6 +244,8 @@ export function MapWorkspace({
         workspaceControls={workspaceControls}
         dbProfileControls={dbProfileControls}
         visualMapControls={visualMapControls}
+        analysisActive={analysisActive}
+        analysisProgress={analysisProgress}
       />
 
       <p

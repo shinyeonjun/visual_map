@@ -22,6 +22,16 @@ function Get-Sha256([byte[]]$Bytes) {
     finally { $sha.Dispose() }
 }
 
+function Get-FileSha256([string]$Path) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try { return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+    finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
+
 function Get-SemanticIndexHash([string]$Path) {
     $value = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
     [void]$value.PSObject.Properties.Remove('timings')
@@ -88,7 +98,7 @@ function Invoke-EngineRun([string]$CaseId, [string]$Root, [string]$RunName, [str
         engine_peak_working_set_bytes = $peakBytes
         progress_events = @($stderr | Where-Object { $_ -like '@visual-map-progress *' }).Count
         index_hash = Get-SemanticIndexHash $indexPath
-        architecture_hash = (Get-FileHash -LiteralPath $architecturePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        architecture_hash = Get-FileSha256 $architecturePath
         files_found = [int](@($index.languages) | Measure-Object -Property files_found -Sum).Sum
         files_indexed = [int](@($index.languages) | Measure-Object -Property files_indexed -Sum).Sum
         files_missing = [int](@($index.languages) | Measure-Object -Property files_missing -Sum).Sum
