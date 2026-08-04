@@ -435,7 +435,7 @@ fn command_runner_forwards_progress_and_stops_after_idle_timeout() {
         ],
         EngineRunPolicy {
             hard_timeout: Duration::from_secs(5),
-            idle_timeout: Duration::from_millis(100),
+            idle_timeout: Duration::from_millis(500),
         },
         &[],
         Some(observer),
@@ -460,7 +460,10 @@ fn command_runner_kills_a_cancelled_operation() {
         move || {
             run_command_with_env(
                 Path::new("node.exe"),
-                &["-e", "setTimeout(() => {}, 5000)"],
+                &[
+                    "-e",
+                    "require('child_process').spawn(process.execPath,['-e','setTimeout(()=>{},5000)'],{stdio:'inherit'});setTimeout(()=>{},5000)",
+                ],
                 Duration::from_secs(10),
                 &[("BACKEND_VISUAL_MAP_OPERATION_ID", operation_id.as_str())],
             )

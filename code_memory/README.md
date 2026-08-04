@@ -32,11 +32,14 @@ for the later Visual Map graph adapter, not the graph database itself.
 Indexing is precision-first: there is no separate fast mode. Each language is
 analyzed by its SCIP or native LSP provider, while generated files, dependency
 folders, build output, tests, docs, caches, and `.git` metadata are excluded.
-Providers run in parallel (default 3), write partial output after each language,
-and stop safely on a per-provider timeout. Results are cached under
+Providers run through a CPU- and available-memory-aware weighted scheduler
+(with a conservative concurrency fallback when memory telemetry is unavailable),
+write partial output after each language, and stop safely on a per-provider timeout.
+Results are cached under
 `%LOCALAPPDATA%\VisualMap\cache\code-memory` using source/config/provider
-checksums. Set `CODE_MEMORY_MAX_PARALLEL`, `CODE_MEMORY_PROVIDER_TIMEOUT_SECONDS`,
-or `CODE_MEMORY_LSP_MAX_SECONDS` only when a machine needs different limits.
+checksums. Set `CODE_MEMORY_MAX_PARALLEL`, `CODE_MEMORY_MAX_PROVIDER_WEIGHT`,
+`CODE_MEMORY_MEMORY_BUDGET_MB`, `CODE_MEMORY_PROVIDER_TIMEOUT_SECONDS`, or
+`CODE_MEMORY_LSP_MAX_SECONDS` only when a machine needs different limits.
 
 JavaScript and TypeScript projects without `tsconfig.json` or `jsconfig.json`
 are analyzed with a temporary inferred workspace in that cache; the project is

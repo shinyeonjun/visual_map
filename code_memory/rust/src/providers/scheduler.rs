@@ -80,15 +80,16 @@ pub(crate) fn max_parallel_providers(job_count: usize) -> usize {
     requested.min(job_count.max(1))
 }
 
-pub(crate) fn max_provider_weight() -> usize {
+fn max_provider_weight(memory_budget_mb: Option<usize>) -> usize {
     let detected = std::thread::available_parallelism()
         .map(|parallelism| parallelism.get())
         .unwrap_or(1);
-    env::var("CODE_MEMORY_MAX_PROVIDER_WEIGHT")
+    let cpu_weight = env::var("CODE_MEMORY_MAX_PROVIDER_WEIGHT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| (2..=32).contains(value))
-        .unwrap_or_else(|| detected.clamp(2, 4))
+        .unwrap_or_else(|| detected.clamp(2, 4));
+    provider_weight_budget(cpu_weight, memory_budget_mb)
 }
 
 pub(crate) fn provider_job_weight(job: &ProviderJob, max_weight: usize) -> usize {
@@ -125,12 +126,16 @@ pub(crate) fn run_provider_jobs(
     heartbeat: impl Fn(usize, usize),
 ) -> Result<Vec<ProviderJobResult>, String> {
     let max_parallel = max_parallel_providers(jobs.len());
-    let max_weight = max_provider_weight();
+    let memory_budget_mb = provider_memory_budget_mb();
+    let max_weight = max_provider_weight(memory_budget_mb);
     eprintln!(
-        "scheduler providers jobs={} max_parallel={} max_weight={}",
+        "scheduler providers jobs={} max_parallel={} max_weight={} memory_budget_mb={}",
         jobs.len(),
         max_parallel,
-        max_weight
+        max_weight,
+        memory_budget_mb
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
     );
     let (sender, receiver) = mpsc::channel();
     let mut next_job = 0usize;
@@ -217,6 +222,63 @@ fn default_provider_parallelism(detected: usize, job_count: usize) -> usize {
     detected.saturating_sub(1).clamp(1, 4).min(job_count.max(1))
 }
 
+const PROVIDER_MEMORY_TOKEN_MB: usize = 512;
+const SYSTEM_MEMORY_RESERVE_MB: usize = 1_024;
+const UNKNOWN_MEMORY_WEIGHT: usize = 2;
+
+fn provider_memory_budget_mb() -> Option<usize> {
+    env::var("CODE_MEMORY_MEMORY_BUDGET_MB")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| (PROVIDER_MEMORY_TOKEN_MB..=1_048_576).contains(value))
+        .or_else(|| {
+            available_memory_mb().map(|available| {
+                available
+                    .saturating_sub(SYSTEM_MEMORY_RESERVE_MB)
+                    .max(PROVIDER_MEMORY_TOKEN_MB)
+            })
+        })
+}
+
+fn provider_weight_budget(cpu_weight: usize, memory_budget_mb: Option<usize>) -> usize {
+    let memory_weight = memory_budget_mb
+        .map(|memory| (memory / PROVIDER_MEMORY_TOKEN_MB).max(1))
+        .unwrap_or(UNKNOWN_MEMORY_WEIGHT);
+    cpu_weight.min(memory_weight).max(1)
+}
+
+#[cfg(windows)]
+fn available_memory_mb() -> Option<usize> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: status points to an initialized MEMORYSTATUSEX with the required size.
+    (unsafe { GlobalMemoryStatusEx(&mut status) } != 0)
+        .then_some((status.ullAvailPhys / 1_048_576) as usize)
+}
+
+#[cfg(target_os = "linux")]
+fn available_memory_mb() -> Option<usize> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    meminfo.lines().find_map(|line| {
+        let value = line.strip_prefix("MemAvailable:")?;
+        value
+            .split_whitespace()
+            .next()?
+            .parse::<usize>()
+            .ok()
+            .map(|kib| kib / 1_024)
+    })
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn available_memory_mb() -> Option<usize> {
+    None
+}
+
 fn file_pressure_weight(file_count: usize, max_weight: usize) -> usize {
     file_count.div_ceil(2_000).clamp(1, max_weight.max(1))
 }
@@ -254,7 +316,9 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{can_start, default_provider_parallelism, file_pressure_weight};
+    use super::{
+        can_start, default_provider_parallelism, file_pressure_weight, provider_weight_budget,
+    };
 
     #[test]
     fn weighted_scheduler_runs_one_oversized_job_but_never_overcommits_active_jobs() {
@@ -272,5 +336,15 @@ mod tests {
         assert_eq!(file_pressure_weight(100, 4), 1);
         assert_eq!(file_pressure_weight(2_001, 4), 2);
         assert_eq!(file_pressure_weight(20_000, 4), 4);
+        assert_eq!(provider_weight_budget(4, Some(512)), 1);
+        assert_eq!(provider_weight_budget(4, Some(1_024)), 2);
+        assert_eq!(provider_weight_budget(4, Some(8_192)), 4);
+        assert_eq!(provider_weight_budget(4, None), 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_memory_admission_reads_available_physical_memory() {
+        assert!(super::available_memory_mb().is_some_and(|memory| memory > 0));
     }
 }

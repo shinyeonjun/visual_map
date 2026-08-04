@@ -74,17 +74,18 @@ pub(crate) fn run_command_with_env_observer(
     let mut child = command
         .spawn()
         .map_err(|error| format!("읽기 도구 실행 실패: {error}"))?;
+    let process_guard = EngineProcessGuard::attach(&child);
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
-            terminate_engine_process_tree(&mut child);
+            process_guard.terminate(&mut child);
             return Err("읽기 도구 stdout을 열지 못했습니다".to_string());
         }
     };
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
         None => {
-            terminate_engine_process_tree(&mut child);
+            process_guard.terminate(&mut child);
             return Err("읽기 도구 stderr를 열지 못했습니다".to_string());
         }
     };
@@ -120,7 +121,7 @@ pub(crate) fn run_command_with_env_observer(
         let status = match child.try_wait() {
             Ok(status) => status,
             Err(error) => {
-                terminate_engine_process_tree(&mut child);
+                process_guard.terminate(&mut child);
                 let _ = collect_process_streams(stdout_reader, stderr_reader);
                 return Err(format!("읽기 도구 상태 확인 실패: {error}"));
             }
@@ -129,7 +130,7 @@ pub(crate) fn run_command_with_env_observer(
             // A sidecar can exit while a descendant still owns the inherited
             // pipe. Ask the platform to terminate the tree before joining
             // readers; the bounded join below is the final no-hang guard.
-            terminate_engine_process_tree(&mut child);
+            process_guard.terminate(&mut child);
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
 
             return Ok(EngineRunResult {
@@ -143,7 +144,7 @@ pub(crate) fn run_command_with_env_observer(
         }
 
         if output_limit_reached.load(Ordering::Acquire) {
-            terminate_engine_process_tree(&mut child);
+            process_guard.terminate(&mut child);
             let _ = collect_process_streams(stdout_reader, stderr_reader);
             return Err(format!(
                 "읽기 도구 출력이 안전 한도({MAX_ENGINE_STREAM_BYTES} bytes)를 초과했습니다"
@@ -154,13 +155,13 @@ pub(crate) fn run_command_with_env_observer(
             .as_ref()
             .is_some_and(|value| value.load(Ordering::Acquire))
         {
-            terminate_engine_process_tree(&mut child);
+            process_guard.terminate(&mut child);
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
             return Ok(cancelled_engine_run(started_at, stdout, stderr));
         }
 
         if Instant::now() >= deadline {
-            terminate_engine_process_tree(&mut child);
+            process_guard.terminate(&mut child);
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
             let stderr = String::from_utf8_lossy(&stderr);
             let stderr = if stderr.trim().is_empty() {
@@ -185,7 +186,7 @@ pub(crate) fn run_command_with_env_observer(
         let elapsed_ms = process_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
         let idle_ms = policy.idle_timeout.as_millis().min(u128::from(u64::MAX)) as u64;
         if elapsed_ms.saturating_sub(last_activity_ms.load(Ordering::Acquire)) >= idle_ms {
-            terminate_engine_process_tree(&mut child);
+            process_guard.terminate(&mut child);
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
             let stderr = String::from_utf8_lossy(&stderr);
             let message = format!(
@@ -211,7 +212,85 @@ pub(crate) fn run_command_with_env_observer(
     }
 }
 
-fn terminate_engine_process_tree(child: &mut std::process::Child) {
+struct EngineProcessGuard {
+    #[cfg(windows)]
+    job: Option<std::os::windows::io::OwnedHandle>,
+}
+
+impl EngineProcessGuard {
+    fn attach(child: &std::process::Child) -> Self {
+        #[cfg(windows)]
+        {
+            let job = attach_windows_job(child).map_err(|error| {
+                eprintln!("Windows Job Object unavailable; using taskkill fallback: {error}")
+            });
+            Self { job: job.ok() }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = child;
+            Self {}
+        }
+    }
+
+    fn terminate(&self, child: &mut std::process::Child) {
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+
+            // SAFETY: the owned handle remains valid for this call.
+            if unsafe { TerminateJobObject(job.as_raw_handle() as _, 1) } != 0 {
+                let _ = child.wait();
+                return;
+            }
+        }
+        terminate_engine_process_tree_fallback(child);
+    }
+}
+
+#[cfg(windows)]
+fn attach_windows_job(
+    child: &std::process::Child,
+) -> Result<std::os::windows::io::OwnedHandle, String> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    // SAFETY: null security/name pointers request an unnamed job with defaults.
+    let raw_job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if raw_job.is_null() {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    // SAFETY: CreateJobObjectW returned an owned HANDLE.
+    let job = unsafe { OwnedHandle::from_raw_handle(raw_job as _) };
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: pointers reference initialized values for the documented call duration.
+    if unsafe {
+        SetInformationJobObject(
+            job.as_raw_handle() as _,
+            JobObjectExtendedLimitInformation,
+            std::ptr::addr_of!(limits).cast(),
+            std::mem::size_of_val(&limits) as u32,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    // SAFETY: both handles are valid and remain owned by their Rust values.
+    if unsafe { AssignProcessToJobObject(job.as_raw_handle() as _, child.as_raw_handle() as _) }
+        == 0
+    {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(job)
+}
+
+fn terminate_engine_process_tree_fallback(child: &mut std::process::Child) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
