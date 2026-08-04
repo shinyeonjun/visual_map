@@ -69,35 +69,39 @@ pub(crate) fn combined_job_files(jobs: &[LanguageJob]) -> Vec<PathBuf> {
 }
 
 pub(crate) fn max_parallel_providers(job_count: usize) -> usize {
+    let detected = std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(1);
     let requested = env::var("CODE_MEMORY_MAX_PARALLEL")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| (1..=8).contains(value))
-        .unwrap_or(3);
+        .unwrap_or_else(|| default_provider_parallelism(detected, job_count));
     requested.min(job_count.max(1))
 }
 
 pub(crate) fn max_provider_weight() -> usize {
+    let detected = std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(1);
     env::var("CODE_MEMORY_MAX_PROVIDER_WEIGHT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| (2..=32).contains(value))
-        .unwrap_or(4)
+        .unwrap_or_else(|| detected.clamp(2, 4))
 }
 
-pub(crate) fn provider_job_weight(job: &ProviderJob) -> usize {
-    if job.members.iter().any(|member| member.lang.id == "dart") {
+pub(crate) fn provider_job_weight(job: &ProviderJob, max_weight: usize) -> usize {
+    let provider_weight = if job.members.iter().any(|member| member.lang.id == "dart") {
         // Dart analysis_server keeps workspace state outside the LSP session;
         // concurrent sessions for one repository can contend on that state.
-        return 4;
-    }
-    if job.members.iter().any(|member| member.lang.id == "rust") {
+        4
+    } else if job.members.iter().any(|member| member.lang.id == "rust") {
         // rust-analyzer can still be reloading the Cargo graph while another
         // provider saturates the same repository. Keep its workspace session
         // isolated; this avoids empty semantic results from shutdown races.
-        return 4;
-    }
-    if job.members.iter().any(|member| {
+        4
+    } else if job.members.iter().any(|member| {
         matches!(
             member.lang.id,
             "go" | "rust" | "java" | "dart" | "ruby" | "c" | "cpp"
@@ -106,7 +110,14 @@ pub(crate) fn provider_job_weight(job: &ProviderJob) -> usize {
         2
     } else {
         1
-    }
+    };
+    let largest_unit = job
+        .members
+        .iter()
+        .map(|member| member.files.len())
+        .max()
+        .unwrap_or(0);
+    provider_weight.max(file_pressure_weight(largest_unit, max_weight))
 }
 
 pub(crate) fn run_provider_jobs(
@@ -115,6 +126,12 @@ pub(crate) fn run_provider_jobs(
 ) -> Result<Vec<ProviderJobResult>, String> {
     let max_parallel = max_parallel_providers(jobs.len());
     let max_weight = max_provider_weight();
+    eprintln!(
+        "scheduler providers jobs={} max_parallel={} max_weight={}",
+        jobs.len(),
+        max_parallel,
+        max_weight
+    );
     let (sender, receiver) = mpsc::channel();
     let mut next_job = 0usize;
     let mut active_jobs = 0usize;
@@ -126,7 +143,7 @@ pub(crate) fn run_provider_jobs(
     while next_job < jobs.len() || active_jobs > 0 {
         while next_job < jobs.len() && active_jobs < max_parallel {
             let job = jobs[next_job].clone();
-            let weight = provider_job_weight(&job);
+            let weight = provider_job_weight(&job, max_weight);
             if !can_start(active_jobs, active_weight, weight, max_parallel, max_weight) {
                 break;
             }
@@ -196,6 +213,14 @@ pub(crate) fn run_provider_jobs(
     Ok(results.into_iter().map(|(_, result)| result).collect())
 }
 
+fn default_provider_parallelism(detected: usize, job_count: usize) -> usize {
+    detected.saturating_sub(1).clamp(1, 4).min(job_count.max(1))
+}
+
+fn file_pressure_weight(file_count: usize, max_weight: usize) -> usize {
+    file_count.div_ceil(2_000).clamp(1, max_weight.max(1))
+}
+
 fn can_start(
     active_jobs: usize,
     active_weight: usize,
@@ -229,7 +254,7 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::can_start;
+    use super::{can_start, default_provider_parallelism, file_pressure_weight};
 
     #[test]
     fn weighted_scheduler_runs_one_oversized_job_but_never_overcommits_active_jobs() {
@@ -237,5 +262,15 @@ mod tests {
         assert!(can_start(1, 1, 2, 3, 4));
         assert!(!can_start(1, 3, 2, 3, 4));
         assert!(!can_start(3, 3, 1, 3, 4));
+    }
+
+    #[test]
+    fn defaults_follow_cpu_and_unit_pressure_without_project_size_modes() {
+        assert_eq!(default_provider_parallelism(1, 20), 1);
+        assert_eq!(default_provider_parallelism(8, 20), 4);
+        assert_eq!(default_provider_parallelism(8, 2), 2);
+        assert_eq!(file_pressure_weight(100, 4), 1);
+        assert_eq!(file_pressure_weight(2_001, 4), 2);
+        assert_eq!(file_pressure_weight(20_000, 4), 4);
     }
 }
