@@ -455,6 +455,24 @@ impl LspConnection {
         }
     }
 
+    fn optional_uncached_request(&mut self, method: &str, params: Value) -> Value {
+        if self.fatal_error.is_some() {
+            return Value::Null;
+        }
+        match self.request(method, params) {
+            Ok(value) => value,
+            Err(error) => {
+                if is_fatal_lsp_error(&error)
+                    && !error.contains("native LSP response timeout")
+                    && self.fatal_error.is_none()
+                {
+                    self.fatal_error = Some(error);
+                }
+                Value::Null
+            }
+        }
+    }
+
     pub(super) fn type_definitions(&mut self, uri: &str, line: u32, character: u32) -> Vec<Value> {
         self.optional_request(
             "textDocument/typeDefinition",
@@ -576,7 +594,10 @@ impl LspConnection {
             if Instant::now() >= self.deadline {
                 return Vec::new();
             }
-            let value = self.optional_request(
+            // Cold providers can answer before their semantic index is ready.
+            // An empty definition response must not poison the request cache;
+            // every bounded retry below needs to reach the provider.
+            let value = self.optional_uncached_request(
                 "textDocument/definition",
                 serde_json::json!({
                     "textDocument":{"uri":uri},

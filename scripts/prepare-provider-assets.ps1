@@ -58,7 +58,7 @@ function Compress-Directory([string]$SourceDirectory, [string]$ArchivePath) {
                 $zip,
                 $file.FullName,
                 $relativePath,
-                [IO.Compression.CompressionLevel]::Fastest
+                [IO.Compression.CompressionLevel]::SmallestSize
             ) | Out-Null
         }
     } finally {
@@ -74,7 +74,7 @@ function Compress-RootFiles([string]$SourceDirectory, [string]$ArchivePath, [str
                 $zip,
                 (Join-Path $SourceDirectory $fileName),
                 $fileName.Replace("\", "/"),
-                [IO.Compression.CompressionLevel]::Fastest
+                [IO.Compression.CompressionLevel]::SmallestSize
             ) | Out-Null
         }
     } finally {
@@ -128,6 +128,9 @@ function Test-Catalog {
     }
     $declaredEntryPoints = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($pack in @($catalog.packs)) {
+        if ([string]$pack.id -ne "core" -and @($pack.languages).Count -eq 0) {
+            throw "Provider catalog contains an unreachable pack: $($pack.id)"
+        }
         $archivePath = Join-Path $BundleRoot ([string]$pack.fileName)
         if (Test-Path -LiteralPath $archivePath -PathType Leaf) {
             if ((Get-Item -LiteralPath $archivePath).Length -ne [uint64]$pack.compressedBytes -or
@@ -185,7 +188,6 @@ $packLanguages = @{
     php = [string[]]@("php")
     ruby = [string[]]@("ruby")
     dart = [string[]]@("dart")
-    python = [string[]]@()
 }
 $packEntryPoints = @{
     core = [string[]]@("manifest.json")
@@ -198,8 +200,12 @@ $packEntryPoints = @{
     php = [string[]]@("php/scip-php.cmd", "php/runtime/php.exe")
     ruby = [string[]]@("ruby/runtime/bin/ruby-lsp.bat", "ruby/runtime/bin/ruby.exe")
     dart = [string[]]@("dart/sdk/bin/dart.exe")
-    python = [string[]]@("python/runtime/python.exe")
 }
+
+# Python semantics are provided by Pyright in the node pack. The standalone
+# Python runtime is not referenced by the provider manifest or any language.
+$unreferencedSourceDirectories = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+[void]$unreferencedSourceDirectories.Add("python")
 
 if (Test-Path -LiteralPath $BundleRoot) {
     Remove-Item -LiteralPath $BundleRoot -Recurse -Force
@@ -217,6 +223,9 @@ $sources = @([pscustomobject]@{
     files = [string[]]$rootMetadata.ToArray()
 })
 foreach ($directory in @(Get-ChildItem -LiteralPath $SourceRoot -Directory -Force | Sort-Object Name)) {
+    if ($unreferencedSourceDirectories.Contains($directory.Name)) {
+        continue
+    }
     if (-not $packLanguages.ContainsKey($directory.Name)) {
         throw "Provider directory has no catalog mapping: $($directory.Name)"
     }
@@ -271,8 +280,15 @@ if ($Release) {
 } else {
     Invoke-Signer @("sign", "--catalog", $CatalogPath, "--signature", $SignaturePath, "--development")
 }
+Test-Catalog
+if ($Release) {
+    & (Join-Path $PSScriptRoot "run-provider-bundle-gate.ps1") -Release
+    if ($LASTEXITCODE -ne 0) {
+        throw "Provider bundle reliability gate failed with exit code $LASTEXITCODE."
+    }
+}
 if ($BundleMode -eq "Compact") {
     Get-ChildItem -LiteralPath $BundleRoot -Filter "providers-*.zip" -File | Remove-Item -Force
+    Test-Catalog
 }
-Test-Catalog
 Write-Host "Created $($packs.Count) signed provider pack records ($BundleMode): $BundleRoot"

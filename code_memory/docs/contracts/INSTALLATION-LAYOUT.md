@@ -46,7 +46,6 @@ logs\                                      오류 로그 폴더
 ```text
 %LOCALAPPDATA%\VisualMap\cache\provider-roots\<catalog-hash>\
   node\
-  python\
   java\
   clang\
   dotnet\
@@ -58,6 +57,10 @@ logs\                                      오류 로그 폴더
   manifest.json
   .packs\<pack-id>.ready
 ```
+
+Python은 별도 runtime pack을 두지 않고 `node` pack의 Pyright를 사용한다.
+현재 Windows catalog는 공통 core 1개와 실제 사용 언어 pack 9개로 구성하며,
+언어가 하나도 연결되지 않은 pack은 release catalog에 포함하지 않는다.
 
 catalog의 Ed25519 서명을 앱에 고정된 공개키로 먼저 검증한 뒤, 감지된 언어의
 pack만 HTTPS로 내려받는다. 각 ZIP의 크기와 SHA-256, 해제 크기와 핵심

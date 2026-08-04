@@ -20,6 +20,9 @@ $outputRoot = Join-Path $PSScriptRoot '..\..\build\uniform-core-quality'
 $cases = @(
     # ponytail: keep the active fixture contract explicit until one canonical language manifest exists;
     # compare it with the bridge and framework catalog so drift fails loudly.
+    # Rust runs first because a freshly installed toolchain has the slowest
+    # semantic warm-up and must pass before cheaper provider checks proceed.
+    @{ Id = 'rust'; Path = 'native-lsp-rust'; Target = '#add@' },
     @{ Id = 'typescript'; Path = 'scip-typescript'; Target = 'add\(\)' },
     @{ Id = 'javascript'; Path = 'scip-javascript'; Target = 'add\(\)' },
     @{ Id = 'python'; Path = 'scip-python'; Target = '#add@' },
@@ -28,7 +31,6 @@ $cases = @(
     @{ Id = 'c'; Path = 'native-lsp-c'; Target = '#add@' },
     @{ Id = 'cpp'; Path = 'native-lsp-c'; Target = '#multiply@' },
     @{ Id = 'go'; Path = 'native-lsp-go'; Target = '#Add@' },
-    @{ Id = 'rust'; Path = 'native-lsp-rust'; Target = '#add@' },
     @{ Id = 'php'; Path = 'scip-php'; Target = 'add\(\)' },
     @{ Id = 'ruby'; Path = 'native-lsp-ruby'; Target = '#add@' },
     @{ Id = 'dart'; Path = 'native-lsp-dart'; Target = '#add@' }

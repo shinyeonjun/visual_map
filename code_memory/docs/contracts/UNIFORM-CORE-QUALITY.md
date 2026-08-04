@@ -64,6 +64,17 @@ The fixture is intentionally semantic rather than textual. Each language uses
 its own syntax to express the same behavior: a cross-file caller invokes a
 callee and the result can be traced back to source.
 
+The packaged release gate verifies the signed catalog, archive and entrypoint
+hashes, exact twelve-language coverage, and then runs this contract against a
+freshly extracted provider root:
+
+```powershell
+powershell -File scripts/run-provider-bundle-gate.ps1
+```
+
+Rust runs first so a cold toolchain must resolve a real call before cheaper
+provider checks can hide first-run readiness regressions.
+
 ## What this contract does not claim
 
 - It does not claim that dynamic dispatch, reflection, generated code, or every

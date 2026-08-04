@@ -15,6 +15,10 @@ code-memory-language supports exactly these twelve Windows language IDs:
 | Ruby | native ruby-lsp | Ruby project and gem metadata |
 | Dart | native Dart Analysis Server LSP | Dart project metadata |
 
+Python's Pyright executable and Node runtime share the `node` delivery pack;
+there is no separate Python runtime pack. This keeps the capability intact
+without installing an unused interpreter.
+
 The Rust bridge starts native LSP servers directly over JSON-RPC. It does not
 depend on the separately installed lsp-to-scip executable. Both SCIP and LSP
 results are normalized into code-memory.language-index.v2.
