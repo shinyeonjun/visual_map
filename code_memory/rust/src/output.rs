@@ -6,7 +6,7 @@ fn write_index_outputs(
     output: &IndexOutput,
     source_snapshot: &mut SourceSnapshot,
     project_config_digest: u64,
-) -> Result<(), String> {
+) -> Result<PathBuf, String> {
     let index_write_started = Instant::now();
     let file = fs::File::create(out).map_err(|e| format!("cannot write {}: {e}", out.display()))?;
     let mut writer = BufWriter::new(file);
@@ -46,7 +46,7 @@ fn write_index_outputs(
         );
         println!("wrote {}", out.display());
         println!("wrote {}", architecture_out.display());
-        return Ok(());
+        return Ok(architecture_cache);
     }
     load_source_contents(root, source_snapshot);
     let architecture = architecture::build_with_sources(root, output, source_snapshot);
@@ -61,14 +61,14 @@ fn write_index_outputs(
     if let Some(parent) = architecture_cache.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let _ = fs::copy(architecture_out, architecture_cache);
+    let _ = fs::copy(architecture_out, &architecture_cache);
     eprintln!(
         "timing stage=architecture_and_json elapsed_ms={} cached=false key={architecture_key}",
         architecture_started.elapsed().as_millis()
     );
     println!("wrote {}", out.display());
     println!("wrote {}", architecture_out.display());
-    Ok(())
+    Ok(architecture_cache)
 }
 
 fn write_json<T: Serialize, W: Write>(writer: &mut W, value: &T) -> serde_json::Result<()> {

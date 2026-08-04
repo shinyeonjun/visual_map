@@ -239,6 +239,70 @@ fn missing_inventory_snapshot_is_an_empty_state() {
 }
 
 #[test]
+fn snapshot_storage_is_compressed_and_round_trips() {
+    let root = temp_root("compressed-snapshot");
+    let mut snapshot = fixture_inventory("workspace-1".to_string());
+    for index in 0..2_000 {
+        snapshot.items.push(item(
+            &format!("code:file:generated-{index}"),
+            "file",
+            &format!("generated-{index}.rs"),
+            "code",
+            "code",
+            None,
+            Some("src/generated/repeated/path.rs"),
+        ));
+    }
+    let raw = serde_json::to_vec(&snapshot).unwrap();
+
+    save_inventory_snapshot(&root, &snapshot).unwrap();
+
+    let stored = fs::read(snapshot_path(&root, "workspace-1")).unwrap();
+    assert!(stored.starts_with(b"PK"));
+    assert!(stored.len() < raw.len() / 2);
+    let restored = load_inventory_snapshot(&root, "workspace-1").unwrap();
+    assert_eq!(restored.items.len(), snapshot.items.len());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_json_snapshot_is_loaded_and_migrated_on_save() {
+    let root = temp_root("legacy-json-snapshot");
+    let legacy = legacy_snapshot_path(&root, "workspace-1");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let first = fixture_inventory("workspace-1".to_string());
+    fs::write(&legacy, serde_json::to_vec(&first).unwrap()).unwrap();
+
+    let loaded = load_inventory_snapshot(&root, "workspace-1").unwrap();
+    assert_eq!(loaded.workspace_id, first.workspace_id);
+    assert_eq!(loaded.items.len(), first.items.len());
+
+    let mut second = first;
+    second.items.push(item(
+        "code:file:migrated",
+        "file",
+        "migrated.rs",
+        "code",
+        "code",
+        None,
+        Some("src/migrated.rs"),
+    ));
+    save_inventory_snapshot(&root, &second).unwrap();
+
+    let primary = snapshot_path(&root, "workspace-1");
+    let backup = snapshot_backup_path(&primary);
+    assert!(primary.is_file());
+    assert!(backup.is_file());
+    assert!(!legacy.exists());
+    assert!(!load_snapshot_file(&backup, "workspace-1")
+        .unwrap()
+        .items
+        .iter()
+        .any(|item| item.id == "code:file:migrated"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn removing_db_snapshot_preserves_code_and_scrubs_backups() {
     let root = temp_root("remove-db-snapshot");
     let mut snapshot = fixture_inventory("workspace-1".to_string());
@@ -251,8 +315,9 @@ fn removing_db_snapshot_preserves_code_and_scrubs_backups() {
     remove_db_inventory_snapshot(&root, "workspace-1").unwrap();
 
     let restored = load_inventory_snapshot(&root, "workspace-1").unwrap();
-    let backup: InventorySnapshot = serde_json::from_str(
-        &fs::read_to_string(snapshot_backup_path(&snapshot_path(&root, "workspace-1"))).unwrap(),
+    let backup = load_snapshot_file(
+        &snapshot_backup_path(&snapshot_path(&root, "workspace-1")),
+        "workspace-1",
     )
     .unwrap();
     assert!(restored.items.iter().all(|item| item.source != "db"));
@@ -1972,10 +2037,8 @@ fn atomic_save_retains_backup_and_loader_recovers_it() {
 
     let primary = snapshot_path(&root, "workspace-1");
     let backup = snapshot_backup_path(&primary);
-    let primary_snapshot: InventorySnapshot =
-        serde_json::from_str(&fs::read_to_string(&primary).unwrap()).unwrap();
-    let backup_snapshot: InventorySnapshot =
-        serde_json::from_str(&fs::read_to_string(&backup).unwrap()).unwrap();
+    let primary_snapshot = load_snapshot_file(&primary, "workspace-1").unwrap();
+    let backup_snapshot = load_snapshot_file(&backup, "workspace-1").unwrap();
     assert!(primary_snapshot
         .items
         .iter()
@@ -2001,10 +2064,8 @@ fn atomic_save_retains_backup_and_loader_recovers_it() {
     partial.metadata.db = None;
     save_inventory_snapshot(&root, &partial).unwrap();
 
-    let saved_partial: InventorySnapshot =
-        serde_json::from_str(&fs::read_to_string(&primary).unwrap()).unwrap();
-    let preserved_backup: InventorySnapshot =
-        serde_json::from_str(&fs::read_to_string(&backup).unwrap()).unwrap();
+    let saved_partial = load_snapshot_file(&primary, "workspace-1").unwrap();
+    let preserved_backup = load_snapshot_file(&backup, "workspace-1").unwrap();
     assert!(saved_partial
         .items
         .iter()
@@ -5604,7 +5665,8 @@ fn save_inventory_snapshot_redacts_secret_shapes_before_persisting() {
 
     save_inventory_snapshot(&root, &snapshot).unwrap();
 
-    let json = fs::read_to_string(snapshot_path(&root, "workspace-1")).unwrap();
+    let bytes = fs::read(snapshot_path(&root, "workspace-1")).unwrap();
+    let json = String::from_utf8(decode_snapshot_payload(&bytes).unwrap()).unwrap();
     assert!(!json.contains("atlas_pg_pw"));
     assert!(!json.contains("atlas_ado_pw"));
     assert!(!json.contains("atlas_short_pw"));

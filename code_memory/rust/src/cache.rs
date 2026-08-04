@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::source::is_managed_provider_root;
 use crate::{compile_database_dirs, find_tool, is_excluded_source_dir};
@@ -28,6 +28,12 @@ static FILE_CHECKSUM_CACHE: OnceLock<Mutex<HashMap<PathBuf, FileChecksumCacheEnt
 struct SourceManifest {
     schema: String,
     files: HashMap<String, u64>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CacheGenerationManifest {
+    schema: String,
+    files: Vec<String>,
 }
 
 #[derive(Default)]
@@ -343,6 +349,148 @@ pub(crate) fn write_source_manifest(root: &Path, snapshot: &SourceSnapshot) -> R
     let bytes = serde_json::to_vec(&manifest)
         .map_err(|error| format!("cannot serialize source manifest: {error}"))?;
     fs::write(path, bytes).map_err(|error| format!("cannot write source manifest: {error}"))
+}
+
+pub(crate) fn commit_cache_generation(
+    root: &Path,
+    active_files: impl IntoIterator<Item = PathBuf>,
+) -> Result<(), String> {
+    let cache_base = cache_root(root);
+    let manifest_dir = project_cache_root(root);
+    commit_cache_generation_in(&cache_base, &manifest_dir, active_files)
+}
+
+fn commit_cache_generation_in(
+    cache_base: &Path,
+    manifest_dir: &Path,
+    active_files: impl IntoIterator<Item = PathBuf>,
+) -> Result<(), String> {
+    fs::create_dir_all(manifest_dir)
+        .map_err(|error| format!("cannot create cache generation directory: {error}"))?;
+    let mut files = active_files
+        .into_iter()
+        .filter(|path| path.is_file())
+        .filter_map(|path| {
+            path.strip_prefix(cache_base)
+                .ok()
+                .map(normalized_cache_path)
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+
+    let current_path = manifest_dir.join("cache-generation-current-v1.json");
+    let previous_path = manifest_dir.join("cache-generation-previous-v1.json");
+    let previous_current = read_cache_generation(&current_path);
+    let previous_previous = read_cache_generation(&previous_path);
+    let manifest = CacheGenerationManifest {
+        schema: "code-memory.cache-generation.v1".to_string(),
+        files,
+    };
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = manifest_dir.join(format!(
+        "cache-generation.{}.{nonce}.tmp",
+        std::process::id()
+    ));
+    let bytes = serde_json::to_vec(&manifest)
+        .map_err(|error| format!("cannot serialize cache generation: {error}"))?;
+    write_cache_file(&temporary, &bytes)?;
+
+    if previous_current.is_some() {
+        let _ = fs::remove_file(&previous_path);
+        if let Err(error) = fs::rename(&current_path, &previous_path) {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("cannot rotate cache generation: {error}"));
+        }
+    } else {
+        let _ = fs::remove_file(&current_path);
+        let _ = fs::remove_file(&previous_path);
+    }
+    if let Err(error) = fs::rename(&temporary, &current_path) {
+        if previous_current.is_some() {
+            let _ = fs::rename(&previous_path, &current_path);
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("cannot promote cache generation: {error}"));
+    }
+
+    let mut retained = manifest.files.iter().cloned().collect::<HashSet<_>>();
+    if let Some(previous) = previous_current.as_ref() {
+        retained.extend(previous.files.iter().cloned());
+    }
+    let mut known = retained.clone();
+    if let Some(previous) = previous_previous {
+        known.extend(previous.files);
+    }
+    prune_managed_cache_files(cache_base, &known, &retained);
+    Ok(())
+}
+
+fn read_cache_generation(path: &Path) -> Option<CacheGenerationManifest> {
+    serde_json::from_slice::<CacheGenerationManifest>(&fs::read(path).ok()?)
+        .ok()
+        .filter(|manifest| manifest.schema == "code-memory.cache-generation.v1")
+}
+
+fn write_cache_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let file = fs::File::create(path)
+        .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(bytes)
+        .and_then(|_| writer.flush())
+        .and_then(|_| writer.get_ref().sync_all())
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))
+}
+
+fn normalized_cache_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn prune_managed_cache_files(
+    cache_base: &Path,
+    known_files: &HashSet<String>,
+    retained_files: &HashSet<String>,
+) {
+    let directories = known_files
+        .iter()
+        .filter_map(|relative| Path::new(relative).parent())
+        .map(|relative| cache_base.join(relative))
+        .collect::<HashSet<_>>();
+    for directory in directories {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() || !is_content_addressed_cache_file(&path) {
+                continue;
+            }
+            let Some(relative) = path
+                .strip_prefix(cache_base)
+                .ok()
+                .map(normalized_cache_path)
+            else {
+                continue;
+            };
+            if !retained_files.contains(&relative) {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+}
+
+fn is_content_addressed_cache_file(path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let Some((_, digest)) = stem.rsplit_once('-') else {
+        return false;
+    };
+    digest.len() == 16 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn normalize_file_relation_path(path: &str) -> String {
@@ -748,5 +896,47 @@ pub(crate) struct ProviderWorkGuard(pub(crate) PathBuf);
 impl Drop for ProviderWorkGuard {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod generation_tests {
+    use super::*;
+
+    #[test]
+    fn cache_gc_keeps_current_and_previous_complete_generations() {
+        let root = std::env::temp_dir().join(format!(
+            "code-memory-cache-generation-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let cache_base = root.join("cache");
+        let project = cache_base.join("0123456789abcdef");
+        fs::create_dir_all(&project).unwrap();
+        let first = project.join("rust-1111111111111111.json");
+        let second = project.join("rust-2222222222222222.json");
+        let third = project.join("rust-3333333333333333.json");
+        let stale = project.join("rust-0000000000000000.json");
+        let source_manifest = project.join("source-manifest-v1.json");
+        fs::write(&first, b"first").unwrap();
+        fs::write(&stale, b"stale").unwrap();
+        fs::write(&source_manifest, b"source").unwrap();
+
+        commit_cache_generation_in(&cache_base, &project, [first.clone()]).unwrap();
+        assert!(first.is_file());
+        assert!(!stale.exists());
+        assert!(source_manifest.is_file());
+
+        fs::write(&second, b"second").unwrap();
+        commit_cache_generation_in(&cache_base, &project, [second.clone()]).unwrap();
+        assert!(first.is_file());
+        assert!(second.is_file());
+
+        fs::write(&third, b"third").unwrap();
+        commit_cache_generation_in(&cache_base, &project, [third.clone()]).unwrap();
+        assert!(!first.exists());
+        assert!(second.is_file());
+        assert!(third.is_file());
+        fs::remove_dir_all(root).unwrap();
     }
 }

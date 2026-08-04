@@ -89,10 +89,25 @@ pub(crate) fn snapshot_path(app_data_dir: impl AsRef<Path>, workspace_id: &str) 
         .workspaces_dir
         .join(workspace_id)
         .join("atlas")
-        .join("inventory-snapshot.json")
+        .join("inventory-snapshot.json.zip")
 }
 
 pub(crate) fn snapshot_backup_path(path: &Path) -> PathBuf {
+    path.with_file_name("inventory-snapshot.backup.json.zip")
+}
+
+pub(crate) fn legacy_snapshot_path(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+) -> PathBuf {
+    base_paths(app_data_dir)
+        .workspaces_dir
+        .join(workspace_id)
+        .join("atlas")
+        .join("inventory-snapshot.json")
+}
+
+fn legacy_snapshot_backup_path(path: &Path) -> PathBuf {
     path.with_file_name("inventory-snapshot.backup.json")
 }
 

@@ -245,18 +245,18 @@ pub(crate) fn save_inventory_snapshot(
     snapshot: &InventorySnapshot,
 ) -> Result<(), String> {
     validate_workspace_id(&snapshot.workspace_id)?;
+    let app_data_dir = app_data_dir.as_ref();
     let path = snapshot_path(app_data_dir, &snapshot.workspace_id);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
 
     let snapshot = canonicalize_snapshot(snapshot.clone());
-    let json = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
-    atomic_save(
-        &path,
-        engine::redact_secrets(&json).as_bytes(),
-        &snapshot.workspace_id,
-    )?;
+    let json = serde_json::to_string(&snapshot).map_err(|error| error.to_string())?;
+    let redacted = engine::redact_secrets(&json);
+    let archive = encode_snapshot_archive(redacted.as_bytes())?;
+    atomic_save(&path, &archive, &snapshot.workspace_id)?;
+    migrate_legacy_snapshot_backup(app_data_dir, &snapshot.workspace_id, &path);
     invalidate_cached_snapshot(&path);
     invalidate_snapshot_freshness(&snapshot.workspace_id);
     super::linker::invalidate_candidate_links(&snapshot.workspace_id);
@@ -419,7 +419,12 @@ pub(crate) fn load_inventory_snapshot_optional_cached(
 ) -> Result<Option<Arc<InventorySnapshot>>, String> {
     validate_workspace_id(workspace_id)?;
     let path = snapshot_path(app_data_dir.as_ref(), workspace_id);
-    if !path.is_file() && !snapshot_backup_path(&path).is_file() {
+    let legacy = legacy_snapshot_path(app_data_dir.as_ref(), workspace_id);
+    if !path.is_file()
+        && !snapshot_backup_path(&path).is_file()
+        && !legacy.is_file()
+        && !legacy_snapshot_backup_path(&legacy).is_file()
+    {
         return Ok(None);
     }
     load_inventory_snapshot_cached(app_data_dir, workspace_id).map(Some)
@@ -478,9 +483,13 @@ pub(crate) fn remove_inventory_snapshot(
     workspace_id: &str,
 ) -> Result<(), String> {
     validate_workspace_id(workspace_id)?;
+    let app_data_dir = app_data_dir.as_ref();
     let path = snapshot_path(app_data_dir, workspace_id);
+    let legacy = legacy_snapshot_path(app_data_dir, workspace_id);
     remove_file_if_exists(&path)?;
     remove_file_if_exists(&snapshot_backup_path(&path))?;
+    remove_file_if_exists(&legacy)?;
+    remove_file_if_exists(&legacy_snapshot_backup_path(&legacy))?;
     invalidate_cached_snapshot(&path);
     invalidate_snapshot_freshness(workspace_id);
     super::linker::invalidate_candidate_links(workspace_id);
@@ -500,15 +509,23 @@ pub(crate) fn load_inventory_snapshot_cached(
     workspace_id: &str,
 ) -> Result<Arc<InventorySnapshot>, String> {
     validate_workspace_id(workspace_id)?;
+    let app_data_dir = app_data_dir.as_ref();
     let path = snapshot_path(app_data_dir, workspace_id);
     let primary = snapshot_file_state(&path);
     let backup_path = snapshot_backup_path(&path);
     let backup = snapshot_file_state(&backup_path);
+    let legacy_path = legacy_snapshot_path(app_data_dir, workspace_id);
+    let legacy_primary = snapshot_file_state(&legacy_path);
+    let legacy_backup = snapshot_file_state(&legacy_snapshot_backup_path(&legacy_path));
     let cache = SNAPSHOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
     if let Ok(cache) = cache.lock() {
         if let Some(entry) = cache.get(&path) {
-            if entry.primary == primary && entry.backup == backup {
+            if entry.primary == primary
+                && entry.backup == backup
+                && entry.legacy_primary == legacy_primary
+                && entry.legacy_backup == legacy_backup
+            {
                 return Ok(Arc::clone(&entry.snapshot));
             }
         }
@@ -529,6 +546,8 @@ pub(crate) fn load_inventory_snapshot_cached(
             CachedSnapshot {
                 primary,
                 backup,
+                legacy_primary,
+                legacy_backup,
                 snapshot: Arc::clone(&snapshot),
             },
         );
@@ -540,19 +559,37 @@ fn load_inventory_snapshot_uncached(
     path: &Path,
     workspace_id: &str,
 ) -> Result<InventorySnapshot, String> {
-    match load_snapshot_file(path, workspace_id) {
-        Ok(snapshot) => Ok(snapshot),
-        Err(primary_error) => {
-            let backup = snapshot_backup_path(path);
-            let mut snapshot = load_snapshot_file(&backup, workspace_id).map_err(|backup_error| {
-                format!(
-                    "스냅샷을 열 수 없습니다: {primary_error}; 백업도 열 수 없습니다: {backup_error}"
-                )
-            })?;
-            mark_reindex_required(&mut snapshot, BACKUP_REINDEX_NOTE);
-            Ok(snapshot)
+    let legacy = path.with_file_name("inventory-snapshot.json");
+    if path.is_file() {
+        match load_snapshot_file(path, workspace_id) {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(primary_error) => {
+                for backup in [
+                    snapshot_backup_path(path),
+                    legacy.clone(),
+                    legacy_snapshot_backup_path(&legacy),
+                ] {
+                    if let Ok(mut snapshot) = load_snapshot_file(&backup, workspace_id) {
+                        mark_reindex_required(&mut snapshot, BACKUP_REINDEX_NOTE);
+                        return Ok(snapshot);
+                    }
+                }
+                return Err(format!(
+                    "스냅샷을 열 수 없습니다: {primary_error}; 읽을 수 있는 백업이 없습니다"
+                ));
+            }
         }
     }
+    if legacy.is_file() {
+        return load_snapshot_file(&legacy, workspace_id);
+    }
+    for backup in [snapshot_backup_path(path), legacy_snapshot_backup_path(&legacy)] {
+        if let Ok(mut snapshot) = load_snapshot_file(&backup, workspace_id) {
+            mark_reindex_required(&mut snapshot, BACKUP_REINDEX_NOTE);
+            return Ok(snapshot);
+        }
+    }
+    Err("스냅샷과 읽을 수 있는 백업이 없습니다".to_string())
 }
 
 fn snapshot_file_state(path: &Path) -> SnapshotFileState {
@@ -580,9 +617,13 @@ fn invalidate_cached_snapshot(path: &Path) {
     }
 }
 
-fn load_snapshot_file(path: &Path, workspace_id: &str) -> Result<InventorySnapshot, String> {
-    let json = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let value: Value = serde_json::from_str(&json).map_err(|error| error.to_string())?;
+pub(crate) fn load_snapshot_file(
+    path: &Path,
+    workspace_id: &str,
+) -> Result<InventorySnapshot, String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    let json = decode_snapshot_payload(&bytes)?;
+    let value: Value = serde_json::from_slice(&json).map_err(|error| error.to_string())?;
     let version = value.get("schemaVersion");
     let mut snapshot = match version {
         None => {
@@ -602,6 +643,88 @@ fn load_snapshot_file(path: &Path, workspace_id: &str) -> Result<InventorySnapsh
     }
     snapshot = canonicalize_snapshot(snapshot);
     Ok(snapshot)
+}
+
+const SNAPSHOT_ARCHIVE_ENTRY: &str = "inventory-snapshot.json";
+const MAX_SNAPSHOT_JSON_BYTES: u64 = 1024 * 1024 * 1024;
+
+fn encode_snapshot_archive(json: &[u8]) -> Result<Vec<u8>, String> {
+    let cursor = Cursor::new(Vec::new());
+    let mut archive = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    archive
+        .start_file(SNAPSHOT_ARCHIVE_ENTRY, options)
+        .map_err(|error| error.to_string())?;
+    archive.write_all(json).map_err(|error| error.to_string())?;
+    archive
+        .finish()
+        .map(|cursor| cursor.into_inner())
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn decode_snapshot_payload(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    if bytes
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|byte| matches!(byte, b'{' | b'['))
+    {
+        return Ok(bytes.to_vec());
+    }
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
+    let mut entry = archive
+        .by_name(SNAPSHOT_ARCHIVE_ENTRY)
+        .map_err(|error| error.to_string())?;
+    if entry.size() > MAX_SNAPSHOT_JSON_BYTES {
+        return Err("압축 스냅샷이 안전한 해제 한도를 초과했습니다".to_string());
+    }
+    let mut json = Vec::with_capacity(usize::try_from(entry.size()).unwrap_or(0));
+    entry.read_to_end(&mut json).map_err(|error| error.to_string())?;
+    Ok(json)
+}
+
+fn migrate_legacy_snapshot_backup(app_data_dir: &Path, workspace_id: &str, primary: &Path) {
+    let legacy = legacy_snapshot_path(app_data_dir, workspace_id);
+    if !legacy.is_file() {
+        return;
+    }
+    let backup = snapshot_backup_path(primary);
+    if !backup.is_file() {
+        if let Ok(snapshot) = load_snapshot_file(&legacy, workspace_id) {
+            if let Ok(json) = serde_json::to_vec(&snapshot) {
+                let redacted = std::str::from_utf8(&json)
+                    .map(engine::redact_secrets)
+                    .unwrap_or_default();
+                if let Ok(archive) = encode_snapshot_archive(redacted.as_bytes()) {
+                    let _ = write_new_file_atomically(&backup, &archive);
+                }
+            }
+        }
+    }
+    if backup.is_file() {
+        let _ = remove_file_if_exists(&legacy);
+        let _ = remove_file_if_exists(&legacy_snapshot_backup_path(&legacy));
+    }
+}
+
+fn write_new_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_extension(format!("zip.{}.{}.tmp", std::process::id(), sequence));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = file.write_all(contents).and_then(|_| file.sync_all()) {
+        drop(file);
+        let _ = fs::remove_file(&temp);
+        return Err(error.to_string());
+    }
+    drop(file);
+    fs::rename(&temp, path).map_err(|error| {
+        let _ = fs::remove_file(&temp);
+        error.to_string()
+    })
 }
 
 fn incompatible_snapshot(value: &Value, version: Option<u64>) -> InventorySnapshot {

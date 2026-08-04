@@ -30,6 +30,8 @@ struct SnapshotFileState {
 struct CachedSnapshot {
     primary: SnapshotFileState,
     backup: SnapshotFileState,
+    legacy_primary: SnapshotFileState,
+    legacy_backup: SnapshotFileState,
     snapshot: Arc<InventorySnapshot>,
 }
 

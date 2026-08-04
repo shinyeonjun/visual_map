@@ -51,6 +51,7 @@ pub(crate) fn index_project(
     let mut planned_units = Vec::new();
     let mut unit_runs = HashMap::new();
     let mut language_files = HashMap::new();
+    let mut active_cache_files = HashSet::new();
     let mut all_extensions: HashSet<&str> = LANGUAGES
         .iter()
         .flat_map(|language| language.extensions.iter().copied())
@@ -147,6 +148,9 @@ pub(crate) fn index_project(
             providers_root.as_deref(),
             project_config_digest,
             &source_snapshot,
+        );
+        active_cache_files.insert(
+            project_cache_root(&root).join(format!("tsjs-project-model-{project_model_key}.json")),
         );
         match project_model::analyze_typescript_project(
             &root,
@@ -320,6 +324,7 @@ pub(crate) fn index_project(
                 project_config_digest,
                 &source_snapshot,
             );
+            active_cache_files.insert(language_cache_path(&module.root, lang, &cache_key));
             cache_key_elapsed += cache_key_started.elapsed();
             let module_affected = cache_impact_state.force_all
                 || module.files.iter().any(|file| {
@@ -533,6 +538,7 @@ pub(crate) fn index_project(
         project_config_digest,
     );
     let framework_cache = project_cache_root(&root).join(format!("framework-{framework_key}.json"));
+    active_cache_files.insert(framework_cache.clone());
     match load_framework_cache(&framework_cache) {
         Some(analysis) => {
             output.frameworks = analysis.frameworks;
@@ -578,7 +584,7 @@ pub(crate) fn index_project(
     canonicalize_index_output(&mut output);
 
     emit_progress("architecture", 78, 100, "계층과 호출 구조 통합 중");
-    write_index_outputs(
+    let architecture_cache = write_index_outputs(
         &root,
         out,
         architecture_out,
@@ -587,11 +593,15 @@ pub(crate) fn index_project(
         &mut source_snapshot,
         project_config_digest,
     )?;
+    active_cache_files.insert(architecture_cache);
     if env::var("CODE_MEMORY_STRICT").as_deref() == Ok("1") {
         enforce_quality_gate(&output)?;
     }
     if let Err(error) = write_source_manifest(&root, &source_snapshot) {
         eprintln!("source manifest cache unavailable: {error}");
+    }
+    if let Err(error) = commit_cache_generation(&root, active_cache_files) {
+        eprintln!("cache generation cleanup unavailable: {error}");
     }
     emit_progress("index-complete", 80, 100, "코드 인덱스 완료");
     Ok(())

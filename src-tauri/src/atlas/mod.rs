@@ -44,8 +44,9 @@ use linker::candidate_links;
 pub(crate) use model::InventoryItem;
 #[cfg(test)]
 pub(crate) use snapshot::{
-    item, load_inventory_snapshot, mark_snapshot_staleness, normalize_inventory,
-    snapshot_backup_path, snapshot_path,
+    decode_snapshot_payload, item, legacy_snapshot_path, load_inventory_snapshot,
+    load_snapshot_file, mark_snapshot_staleness, normalize_inventory, snapshot_backup_path,
+    snapshot_path,
 };
 #[cfg(test)]
 pub(crate) use visual_map::fixture_inventory;
