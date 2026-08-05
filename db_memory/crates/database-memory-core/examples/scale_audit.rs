@@ -7,9 +7,15 @@ use std::time::Instant;
 use database_memory_core::bench_support::{
     synthetic_schema_snapshot, synthetic_table_key, SyntheticSchemaConfig,
 };
-use database_memory_core::graph_builder::insert_schema_snapshot_graph;
+use database_memory_core::canonical::CanonicalSchemaSnapshot;
+use database_memory_core::certification::{
+    certify_schema_snapshot, fixture_discovery_counts, AdapterIdentity, CapabilityCheck,
+    IntrospectionScope, ServerIdentity,
+};
+use database_memory_core::graph_builder::insert_certified_schema_snapshot_graph;
 use database_memory_core::graph_store::GraphStore;
 use database_memory_core::impact_analysis::{impact_analysis_bounded, Direction};
+use database_memory_core::CapabilitySupport;
 use serde::Serialize;
 
 const SNAPSHOT_KEY: &str = "scale-audit";
@@ -30,6 +36,7 @@ struct ScaleEvidence {
     table_count: usize,
     columns_per_table: usize,
     generated_in_ms: u128,
+    certified_in_ms: u128,
     indexed_in_ms: u128,
     first_page_in_ms: u128,
     substring_search_in_ms: u128,
@@ -90,10 +97,40 @@ fn run() -> Result<ScaleEvidence, String> {
     let snapshot = synthetic_schema_snapshot(&config);
     let generated_in_ms = phase_started.elapsed().as_millis();
 
+    let phase_started = Instant::now();
+    let mut canonical = CanonicalSchemaSnapshot::from(snapshot);
+    canonical.schema.capabilities.views = CapabilitySupport::Supported;
+    canonical.schema.capabilities.triggers = CapabilitySupport::Supported;
+    canonical.schema.capabilities.routines = CapabilitySupport::Supported;
+    canonical.schema.capabilities.dependencies = CapabilitySupport::Supported;
+    let discovered = fixture_discovery_counts(&canonical);
+    let certified = certify_schema_snapshot(
+        canonical,
+        AdapterIdentity {
+            name: "scale-audit".to_owned(),
+            version: "1".to_owned(),
+        },
+        ServerIdentity {
+            product: "synthetic".to_owned(),
+            version: "1".to_owned(),
+        },
+        IntrospectionScope {
+            catalogs: vec![config.database_name.clone()],
+            schemas: vec![config.schema_name.clone()],
+        },
+        discovered,
+        vec![CapabilityCheck {
+            name: "synthetic-completeness".to_owned(),
+            evidence: "generated counts reconcile with emitted metadata".to_owned(),
+        }],
+    )
+    .map_err(|error| format!("could not certify synthetic schema: {error}"))?;
+    let certified_in_ms = phase_started.elapsed().as_millis();
+
     let store = GraphStore::open(&arguments.cache_path)
         .map_err(|error| format!("could not open scale cache: {error}"))?;
     let phase_started = Instant::now();
-    insert_schema_snapshot_graph(&store, SNAPSHOT_KEY, 0, &snapshot)
+    insert_certified_schema_snapshot_graph(&store, SNAPSHOT_KEY, 0, &certified)
         .map_err(|error| format!("could not index synthetic schema: {error}"))?;
     let indexed_in_ms = phase_started.elapsed().as_millis();
 
@@ -151,7 +188,7 @@ fn run() -> Result<ScaleEvidence, String> {
     }
 
     drop(store);
-    drop(snapshot);
+    drop(certified);
     let cache_bytes = fs::metadata(&arguments.cache_path)
         .map_err(|error| format!("could not inspect scale cache: {error}"))?
         .len();
@@ -163,6 +200,7 @@ fn run() -> Result<ScaleEvidence, String> {
         table_count,
         columns_per_table: COLUMNS_PER_TABLE,
         generated_in_ms,
+        certified_in_ms,
         indexed_in_ms,
         first_page_in_ms,
         substring_search_in_ms,

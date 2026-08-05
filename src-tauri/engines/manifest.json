@@ -45,7 +45,11 @@
       "licenseId": "MIT",
       "contractVersion": "2",
       "releaseReady": false,
-      "developmentArtifacts": []
+      "developmentArtifacts": [
+        {
+          "sha256": "0347371F85645C0067D54F39BC6104ED306FCB97FD4B1DBF88DB0B52524D76C4"
+        }
+      ]
     }
   ]
 }

@@ -588,7 +588,7 @@ pub fn emitted_relationship_counts(
     counts
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "bench-support"))]
 pub fn fixture_discovery_counts(snapshot: &CanonicalSchemaSnapshot) -> DiscoveryCounts {
     DiscoveryCounts {
         objects: emitted_object_counts(snapshot)

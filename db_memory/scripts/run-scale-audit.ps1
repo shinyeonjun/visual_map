@@ -7,14 +7,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $root = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$isWindowsHost = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+  [Runtime.InteropServices.OSPlatform]::Windows
+)
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
   $OutputPath = Join-Path $root "target\scale-audit\report.json"
 }
 $OutputPath = [IO.Path]::GetFullPath($OutputPath)
 
 function Assert-PathInsideRepository([string]$Path, [string]$Label) {
-  $relative = [IO.Path]::GetRelativePath($root, [IO.Path]::GetFullPath($Path))
-  if ([IO.Path]::IsPathRooted($relative) -or $relative -eq ".." -or $relative.StartsWith("..$([IO.Path]::DirectorySeparatorChar)")) {
+  $resolved = [IO.Path]::GetFullPath($Path)
+  $comparison = if ($isWindowsHost) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+  $rootPrefix = $root.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+  if (-not $resolved.Equals($root, $comparison) -and -not $resolved.StartsWith($rootPrefix, $comparison)) {
     throw "$Label must stay inside the repository: $Path"
   }
 }
@@ -40,7 +45,7 @@ if ($LASTEXITCODE -ne 0) {
   throw "Could not build the release scale audit binary."
 }
 
-$binaryName = if ($IsWindows) { "scale-audit.exe" } else { "scale-audit" }
+$binaryName = if ($isWindowsHost) { "scale-audit.exe" } else { "scale-audit" }
 $binary = Join-Path $root "target\release\examples\$binaryName"
 if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
   throw "Scale audit binary is missing: $binary"
@@ -65,10 +70,7 @@ foreach ($target in $targetValues) {
   $startInfo.CreateNoWindow = $true
   $startInfo.RedirectStandardOutput = $true
   $startInfo.RedirectStandardError = $true
-  $startInfo.ArgumentList.Add("--target")
-  $startInfo.ArgumentList.Add([string]$target)
-  $startInfo.ArgumentList.Add("--cache-path")
-  $startInfo.ArgumentList.Add($cachePath)
+  $startInfo.Arguments = "--target $target --cache-path `"$cachePath`""
 
   $process = [Diagnostics.Process]::Start($startInfo)
   $peakWorkingSet = 0L
@@ -78,7 +80,7 @@ foreach ($target in $targetValues) {
     $process.Refresh()
     $peakWorkingSet = [Math]::Max($peakWorkingSet, $process.PeakWorkingSet64)
     if ([DateTime]::UtcNow -ge $deadline) {
-      $process.Kill($true)
+      $process.Kill()
       throw "Scale target $target exceeded its $timeoutSeconds second process deadline."
     }
   }

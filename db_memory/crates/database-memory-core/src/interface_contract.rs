@@ -359,7 +359,7 @@ pub fn index_complete_source(
     cache_path: impl Into<String>,
 ) -> Result<IndexResult, InterfaceError> {
     let outcome = analyze_complete_source(request);
-    let certified = outcome.certified_snapshot().cloned().ok_or_else(|| {
+    let certified = outcome.certified_snapshot().ok_or_else(|| {
         InterfaceError::analysis(
             outcome
                 .failure()
@@ -389,7 +389,7 @@ pub fn index_complete_source(
         columns_indexed: schema.columns.len(),
         constraints_indexed: schema.constraints.len(),
         indexes_indexed: schema.indexes.len(),
-        completeness: certified.completeness,
+        completeness: certified.completeness.clone(),
     })
 }
 
