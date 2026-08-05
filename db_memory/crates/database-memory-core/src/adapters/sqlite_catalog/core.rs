@@ -80,8 +80,11 @@ fn discover_sqlite_path(
         AnalysisStage::Configuration,
     )?;
     validate_sqlite_scope(request)?;
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|error| sqlite_open_failure(request, error))?;
+    let conn = Connection::open_with_flags(
+        crate::sqlite_database_path(path),
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|error| sqlite_open_failure(request, error))?;
     cancellation.checkpoint(
         SQLITE_SOURCE,
         &request.connection_alias,
@@ -319,4 +322,3 @@ struct RawSqliteCatalog {
     foreign_keys: BTreeMap<String, Vec<RawForeignKey>>,
     triggers: Vec<RawTrigger>,
 }
-

@@ -19,9 +19,9 @@ pub(crate) use evidence::{
     enrich_composition_code_evidence, enrich_integrated_snapshot_code_evidence,
     enrich_snapshot_code_evidence, normalized_change_intent,
 };
-pub(crate) use inventory_query::{
-    inventory_bootstrap, search_inventory, InventoryBootstrap, InventorySearchResult,
-};
+#[cfg(test)]
+pub(crate) use inventory_query::search_inventory;
+pub(crate) use inventory_query::{inventory_bootstrap, InventoryBootstrap, InventorySearchResult};
 pub(crate) use linker::{apply_focused_code_evidence, record_code_search_gap};
 pub(crate) use model::{ChangeIntent, InventorySnapshot, VisualMap};
 pub(crate) use semantic_links::{
@@ -31,7 +31,8 @@ pub(crate) use snapshot::{
     build_inventory_snapshot, invalidate_snapshot_freshness, load_inventory_snapshot_cached,
     load_inventory_snapshot_optional, load_inventory_snapshot_optional_cached,
     remove_db_inventory_snapshot, remove_inventory_snapshot, replace_inventory_source,
-    save_inventory_snapshot, snapshot_staleness_reasons_cached, snapshot_with_metadata,
+    save_inventory_snapshot, search_inventory_snapshot, snapshot_staleness_reasons_cached,
+    snapshot_with_metadata,
 };
 pub(crate) use visual_map::visual_map_with_change;
 
@@ -44,9 +45,8 @@ use linker::candidate_links;
 pub(crate) use model::InventoryItem;
 #[cfg(test)]
 pub(crate) use snapshot::{
-    decode_snapshot_payload, item, legacy_snapshot_path, load_inventory_snapshot,
-    load_snapshot_file, mark_snapshot_staleness, normalize_inventory, snapshot_backup_path,
-    snapshot_path,
+    item, legacy_snapshot_path, load_inventory_snapshot, load_snapshot_file,
+    mark_snapshot_staleness, normalize_inventory, snapshot_backup_path, snapshot_path,
 };
 #[cfg(test)]
 pub(crate) use visual_map::fixture_inventory;

@@ -51,28 +51,88 @@ Rules:
 
 ## 2. Storage layers
 
-The logical output is stored as:
+The logical contract above is independent of its physical encoding. The desktop
+app currently stores it below the workspace so deleting a workspace also
+deletes its engine state:
 
 ```text
-<cache>/<project_id>/<snapshot_id>/
-  code-graph.sqlite
-  code-snapshot.json
-  code-gaps.json
-  code-capabilities.json
-  db-graph.sqlite
-  db-snapshot.json
-  db-capabilities.json
-  integrated-snapshot.json
+%LOCALAPPDATA%/VisualMap/workspaces/<workspace-id>/
+  atlas/
+    inventory-snapshot.sqlite
+    inventory-snapshot.backup.sqlite        # present after rotation
+  engines/
+    codebase-memory/0.1.0/contract-1/cache/
+      compat-projects/<project>/
+        current.json
+        previous.json                       # present after the second publish
+        generations/<generation-id>/
+          receipt.json
+          code-graph.sqlite
+      runtime/
+        <content-addressed provider caches>.json.gz
+    database-memory/0.2.0/contract-2/profiles/<profile-id>/
+      <database graph store>
 ```
 
-`graph.sqlite` is the source of truth for nodes and edges. JSON manifests hold
-generation status, capability limits, and gaps. `integrated-snapshot.json`
-contains only joins that were made from the two published snapshots; it is not
-allowed to mutate either engine's graph.
+### 2.1 Code generation store
 
-All graph facts must be deterministically ordered by stable key, edge type,
-source location, and target stable key. A new index creates a new snapshot
-directory rather than mutating a snapshot currently being read.
+`current.json` and `previous.json` use
+`code-memory.generation-receipt.v1`. A receipt names one immutable generation,
+its canonical database path, status, creation time, project root, and exact
+inventory/CALLS/HANDLES/architecture counts. The database metadata schema is
+`code-memory.graph-store.v3`.
+
+`code-graph.sqlite` keeps searchable identity columns in ordinary indexed
+tables and stores lossless payloads as GZip-compressed chunks of at most 512
+records. The thin tables cover inventory names and paths, relationship
+endpoints, and architecture node/edge identities. They are indexes, not a
+second semantic representation.
+
+Publishing is complete-or-failed:
+
+1. write a private `.staging-<generation-id>` directory;
+2. commit and sync `code-graph.sqlite`;
+3. rename the staging directory to `generations/<generation-id>`;
+4. atomically rotate `current.json` to `previous.json` and publish the new
+   current receipt;
+5. retain only the current and previous complete generations.
+
+A failed or interrupted generation never replaces `current.json`. Readers open
+the database read-only and verify the receipt schema, status, canonical path,
+workspace boundary, and stored counts before accepting it.
+
+### 2.2 Integrated Tauri snapshot store
+
+`inventory-snapshot.sqlite` uses `visual-map.snapshot-store.v1`. The snapshot
+header and lossless item/link/architecture payloads are GZip-compressed in
+chunks of at most 512 records. `item_index`, `link_index`,
+`architecture_node_index`, and `architecture_edge_index` contain only bounded,
+secret-redacted lookup fields. Search queries these indexes and decompresses
+only result chunks; views that need the full project may still materialize the
+complete snapshot.
+
+Save writes a temporary SQLite file, validates it, rotates a readable current
+file to `inventory-snapshot.backup.sqlite`, and renames the new file into place.
+The database is immutable after publication, so it does not require a WAL or
+background database service.
+
+### 2.3 Compatibility and ordering
+
+- Legacy code project files (`language-index.json`, `architecture.json`, and
+  `collection-report.json`) are migrated on first read. They are deleted only
+  after the new SQLite generation reopens successfully.
+- Legacy app snapshots (`inventory-snapshot.json.zip` and
+  `inventory-snapshot.json`) remain readable. The next successful save writes
+  SQLite, preserves one readable SQLite backup, then removes the legacy files.
+- Existing public interchange commands may still emit JSON. Those files are
+  export artifacts, not the desktop app's persistent hot path.
+- All graph facts remain deterministically ordered by stable key, relationship
+  type, source location, and target stable key before chunking. Compression and
+  chunk boundaries must not change logical output.
+
+A storage schema change is internal and does not by itself change
+`visual-map-index-data/1`. The logical contract version changes only when
+consumer-visible fields or semantics change.
 
 ## 3. Common graph record shape
 

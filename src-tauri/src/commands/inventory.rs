@@ -79,9 +79,8 @@ fn search_inventory(
     query: String,
 ) -> CommandResult<atlas::InventorySearchResult> {
     let app_data_dir = app_data_dir(&app)?;
-    let snapshot = atlas::load_inventory_snapshot_cached(&app_data_dir, &workspace_id)
-        .map_err(|error| format!("검색하려면 먼저 코드/DB 읽기 결과가 필요합니다: {error}"))?;
-    Ok(atlas::search_inventory(&snapshot, &query))
+    atlas::search_inventory_snapshot(&app_data_dir, &workspace_id, &query)
+        .map_err(|error| format!("검색하려면 먼저 코드/DB 읽기 결과가 필요합니다: {error}").into())
 }
 
 #[tauri::command(async)]

@@ -10,3 +10,8 @@
   `../artifacts/` or the local VisualMap cache, never in fixtures.
 - Framework support is defined in `contracts/FRAMEWORK-PACKS.md` and the
   manifests under `../packs/framework/`.
+- Current field POC: `../../docs/reports/poc-validation-2026-08-05.md`
+- Local generation and snapshot storage contract:
+  `../../docs/contracts/engine-index-data-contract.md`
+- Engine incidents and open blockers:
+  `../../docs/troubleshooting/code-memory-engine.md`

@@ -239,7 +239,7 @@ fn missing_inventory_snapshot_is_an_empty_state() {
 }
 
 #[test]
-fn snapshot_storage_is_compressed_and_round_trips() {
+fn snapshot_storage_is_chunked_compressed_sqlite_and_round_trips() {
     let root = temp_root("compressed-snapshot");
     let mut snapshot = fixture_inventory("workspace-1".to_string());
     for index in 0..2_000 {
@@ -258,8 +258,8 @@ fn snapshot_storage_is_compressed_and_round_trips() {
     save_inventory_snapshot(&root, &snapshot).unwrap();
 
     let stored = fs::read(snapshot_path(&root, "workspace-1")).unwrap();
-    assert!(stored.starts_with(b"PK"));
-    assert!(stored.len() < raw.len() / 2);
+    assert!(stored.starts_with(b"SQLite format 3\0"));
+    assert!(stored.len() < raw.len());
     let restored = load_inventory_snapshot(&root, "workspace-1").unwrap();
     assert_eq!(restored.items.len(), snapshot.items.len());
     fs::remove_dir_all(root).unwrap();
@@ -5686,7 +5686,13 @@ fn save_inventory_snapshot_redacts_secret_shapes_before_persisting() {
     save_inventory_snapshot(&root, &snapshot).unwrap();
 
     let bytes = fs::read(snapshot_path(&root, "workspace-1")).unwrap();
-    let json = String::from_utf8(decode_snapshot_payload(&bytes).unwrap()).unwrap();
+    let raw_database = String::from_utf8_lossy(&bytes);
+    assert!(!raw_database.contains("atlas_pg_pw"));
+    assert!(!raw_database.contains("atlas_ado_pw"));
+    assert!(!raw_database.contains("atlas_short_pw"));
+    assert!(!raw_database.contains("atlas_oracle_pw"));
+    let restored = load_inventory_snapshot(&root, "workspace-1").unwrap();
+    let json = serde_json::to_string(&restored).unwrap();
     assert!(!json.contains("atlas_pg_pw"));
     assert!(!json.contains("atlas_ado_pw"));
     assert!(!json.contains("atlas_short_pw"));

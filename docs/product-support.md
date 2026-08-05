@@ -1,7 +1,7 @@
 # Product Support Boundary
 
 Status: Current product contract
-Last updated: 2026-07-24
+Last updated: 2026-08-05
 
 Backend Visual Map separates three different claims:
 
@@ -22,16 +22,19 @@ set has one common core-quality gate, but framework/ORM end-to-end quality is
 still certified capability by capability rather than claimed for every project
 configuration.
 
-| Product validation set | Pinned fixture | Validated product fields |
-| --- | --- | --- |
-| Java / Spring | `spring-projects/spring-petclinic@51045d1` | routes, symbols, source locations, scored calls |
-| C# / .NET FastEndpoints | `ardalis/CleanArchitecture@a064d0b` | static `Configure` routes, exact `ExecuteAsync` / `HandleAsync` handlers, symbols, source locations, scored calls |
-| Python / FastAPI + TypeScript | `fastapi/full-stack-fastapi-template@4cd0d9e` | routes, symbols, source locations, scored calls, bounded static-import calls |
+| Product validation set        | Pinned fixture                                             | Route/handler result | Validated product fields                                                                     |
+| ----------------------------- | ---------------------------------------------------------- | -------------------: | -------------------------------------------------------------------------------------------- |
+| TypeScript / NestJS           | `brocoders/nestjs-boilerplate@549cc37a`                    |                24/24 | routes, exact handlers, symbols, source locations, scored calls                              |
+| Python / FastAPI + TypeScript | `fastapi/full-stack-fastapi-template@546f1846`             |                23/23 | routes, exact handlers, symbols, source locations, scored calls, bounded static-import calls |
+| Java / Spring                 | `spring-petclinic/spring-petclinic-microservices@305a1f13` |                16/16 | routes, exact handlers, symbols, source locations, scored calls                              |
+| C# / .NET                     | `jasontaylordev/CleanArchitecture@43831e20`                |                10/10 | static routes, exact handlers, symbols, source locations, scored calls                       |
 
-Other engine-readable languages remain available for inventory exploration,
-but their framework route extraction and end-to-end call quality are not
-product-certified. A missing route, handler, or call edge is shown as unknown;
-it is never inferred from a familiar name alone.
+Go, PHP, Dart, C++, Rust, Ruby, and large mixed JavaScript/TypeScript repositories
+also have field POC receipts, but their route-to-handler quality is partial and
+is not promoted to the table above. Exact counts and pinned commits are in
+[`docs/reports/poc-validation-2026-08-05.md`](reports/poc-validation-2026-08-05.md).
+A missing route, handler, or call edge is shown as unknown; it is never inferred
+from a familiar name alone.
 For FastEndpoints, the product accepts only one static HTTP registration in an
 indexed `Configure` method on an `Endpoint` type, one exact execution method in
 the same type, and either a literal route or an exact indexed `const string`.
@@ -113,18 +116,18 @@ runtime value, row contents, transaction outcome, or production execution.
 The bundled DB adapter is pinned to `database-memory 0.2.0 / contract 2`.
 Every source is metadata-only.
 
-| Source | Adapter-certified boundary | Desktop product evidence |
-| --- | --- | --- |
-| SQLite | bundled runtime, `main` catalog | contract and native product smoke |
-| SQLite DDL | SQLite-compatible schema DDL | contract, evidence, stale-source smoke |
-| PostgreSQL | 14-18, one database and selected schemas | PostgreSQL 16 live product smoke |
-| YugabyteDB YSQL | `15.12-YB-2025.2.3.2-b0` | product path implemented; no current live desktop receipt |
-| MySQL | 8.0, 8.4, 9.7, one database | MySQL 8.4 live product smoke |
-| MariaDB | 10.11, 11.4, 11.8, 12.3 | product path implemented; no current live desktop receipt |
-| SQL Server | 2017, 2019, 2022, 2025 Database Engine | SQL Server 2022 live product smoke |
-| Oracle | Oracle AI Database 26ai Free `23.26.2.0.0` | Oracle Free 23.26.2 via Instant Client 19.30 |
-| Generic ODBC | not exposed as a generic product source | SQL Server bridge only; other products are not claimed |
-| DB2 | unsupported | no adapter and no product path |
+| Source          | Adapter-certified boundary                 | Desktop product evidence                                                                  |
+| --------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| SQLite          | bundled runtime, `main` catalog            | contract and native product smoke                                                         |
+| SQLite DDL      | SQLite-compatible schema DDL               | contract, evidence, stale-source smoke                                                    |
+| PostgreSQL      | 14-18, one database and selected schemas   | PostgreSQL 16 BIGINT schema passed; `SERIAL/BIGSERIAL` currently blocked by PG-SERIAL-001 |
+| YugabyteDB YSQL | `15.12-YB-2025.2.3.2-b0`                   | product path implemented; no current live desktop receipt                                 |
+| MySQL           | 8.0, 8.4, 9.7, one database                | MySQL 8.4 live product smoke                                                              |
+| MariaDB         | 10.11, 11.4, 11.8, 12.3                    | product path implemented; no current live desktop receipt                                 |
+| SQL Server      | 2017, 2019, 2022, 2025 Database Engine     | SQL Server 2022 live product smoke                                                        |
+| Oracle          | Oracle AI Database 26ai Free `23.26.2.0.0` | Oracle Free 23.26.2 via Instant Client 19.30                                              |
+| Generic ODBC    | not exposed as a generic product source    | SQL Server bridge only; other products are not claimed                                    |
+| DB2             | unsupported                                | no adapter and no product path                                                            |
 
 Azure SQL variants, YCQL, compatible-but-different database products, and
 versions outside the certified adapter ranges fail closed or remain
@@ -164,6 +167,10 @@ two selected code components through the same unselected DB object.
   artifact and checksum are published and reverified.
 - Therefore an official public installer is intentionally blocked. This does
   not block local development or internal use.
+- An internal Demo 1.0 NSIS installer containing all provider packs was built
+  and checksummed on 2026-08-05. It is a validation artifact, not a signed public
+  release. Runtime extraction still installs only the packs required by the
+  detected language plan.
 
 ## Acceptance Rule
 

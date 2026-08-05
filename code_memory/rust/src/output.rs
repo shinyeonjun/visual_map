@@ -38,8 +38,8 @@ fn write_index_outputs(
         project_config_digest,
     );
     let architecture_cache =
-        project_cache_root(root).join(format!("architecture-{architecture_key}.json"));
-    if architecture_cache.is_file() {
+        project_cache_root(root).join(format!("architecture-{architecture_key}.json.gz"));
+    if architecture_cache.is_file() || architecture_cache.with_extension("").is_file() {
         let reverse_imports = capture_reverse_imports
             .then(|| {
                 let mut reverse_imports = read_architecture_reverse_imports(&architecture_cache)?;
@@ -49,13 +49,13 @@ fn write_index_outputs(
             })
             .transpose();
         if let Ok(reverse_imports) = reverse_imports {
-            fs::copy(&architecture_cache, architecture_out).map_err(|e| {
-                format!(
-                    "cannot copy architecture cache {} to {}: {e}",
-                    architecture_cache.display(),
-                    architecture_out.display()
-                )
+            let (bytes, legacy) = read_compressed_or_legacy(&architecture_cache)?;
+            fs::write(architecture_out, &bytes).map_err(|e| {
+                format!("cannot restore architecture cache to {}: {e}", architecture_out.display())
             })?;
+            if legacy && write_compressed_bytes(&architecture_cache, &bytes).is_ok() {
+                let _ = fs::remove_file(architecture_cache.with_extension(""));
+            }
             eprintln!(
                 "timing stage=architecture_and_json elapsed_ms={} cached=true key={architecture_key}",
                 architecture_started.elapsed().as_millis()
@@ -72,6 +72,7 @@ fn write_index_outputs(
             architecture_cache.display()
         );
         let _ = fs::remove_file(&architecture_cache);
+        let _ = fs::remove_file(architecture_cache.with_extension(""));
     }
     load_source_contents(root, source_snapshot);
     let architecture = architecture::build_with_sources(root, output, source_snapshot);
@@ -94,10 +95,7 @@ fn write_index_outputs(
     writer
         .flush()
         .map_err(|e| format!("cannot flush {}: {e}", architecture_out.display()))?;
-    if let Some(parent) = architecture_cache.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let _ = fs::copy(architecture_out, &architecture_cache);
+    let _ = write_compressed_json(&architecture_cache, &architecture);
     eprintln!(
         "timing stage=architecture_and_json elapsed_ms={} cached=false key={architecture_key}",
         architecture_started.elapsed().as_millis()

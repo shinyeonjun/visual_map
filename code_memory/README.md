@@ -35,9 +35,22 @@ folders, build output, tests, docs, caches, and `.git` metadata are excluded.
 Providers run through a CPU- and available-memory-aware weighted scheduler
 (with a conservative concurrency fallback when memory telemetry is unavailable),
 write partial output after each language, and stop safely on a per-provider timeout.
-Results are cached under
-`%LOCALAPPDATA%\VisualMap\cache\code-memory` using source/config/provider
-checksums. Set `CODE_MEMORY_MAX_PARALLEL`, `CODE_MEMORY_MAX_PROVIDER_WEIGHT`,
+The desktop app isolates results under the selected workspace instead of the
+old global cache:
+
+```text
+%LOCALAPPDATA%\VisualMap\workspaces\<workspace-id>\engines\
+  codebase-memory\0.1.0\contract-1\cache\
+```
+
+`CBM_CACHE_DIR` points at that directory and `CODE_MEMORY_CACHE_ROOT` points at
+its `runtime` child. Provider/framework/architecture caches use
+source/config/provider checksums and compressed `*.json.gz` payloads. Published
+app generations use immutable SQLite files and retain only the current and
+previous complete generation. The standalone CLI uses its temporary-directory
+fallback unless the caller sets those variables.
+
+Set `CODE_MEMORY_MAX_PARALLEL`, `CODE_MEMORY_MAX_PROVIDER_WEIGHT`,
 `CODE_MEMORY_MEMORY_BUDGET_MB`, `CODE_MEMORY_PROVIDER_TIMEOUT_SECONDS`, or
 `CODE_MEMORY_LSP_MAX_SECONDS` only when a machine needs different limits.
 
@@ -85,8 +98,8 @@ the terminal. Network-oriented package-manager environment is disabled unless
 
 ## Framework packs
 
-The supported framework catalog is under `packs/framework`. Validate all 85
-declared packs with:
+The supported framework catalog is under `packs/framework`. Validate every
+declared pack with:
 
 ```powershell
 .\tests\gates\run-framework-pack-gate.ps1
@@ -108,3 +121,8 @@ Native LSP commands are `pyright-langserver`, `jdtls`, `rust-analyzer`,
 `ruby-lsp`, and `dart`.
 The C/Tree-sitter extractor remains available even when an external semantic
 provider is missing.
+
+Current real-repository results, including partial route-to-handler coverage,
+are recorded in
+[`../docs/reports/poc-validation-2026-08-05.md`](../docs/reports/poc-validation-2026-08-05.md).
+Do not infer equal framework quality from the 12-language provider list.

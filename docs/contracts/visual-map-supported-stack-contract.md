@@ -1,9 +1,12 @@
 # Visual Map 공식 지원 스택 계약
 
-상태: 확정 범위 1.0
+상태: 분석 대상 catalog 1.0 — 실제 product validation은 capability별 판정
 
-이 문서는 Visual Map이 정적 분석과 기능 중심 시각화의 대상으로 공식 지원하는
-언어·프레임워크·ORM·공통 기술·데이터베이스 범위를 고정한다.
+이 문서는 Visual Map이 정적 분석과 기능 중심 시각화의 대상으로 유지하는
+언어·프레임워크·ORM·공통 기술·데이터베이스 catalog를 고정한다. catalog 등재는
+동일한 end-to-end 정확도 보장을 뜻하지 않는다. 실제 지원 판정은
+`engine-readable`, `product-validated`, `confirmed relationship`으로 나누며,
+현재 실측은 [2026-08-05 POC 보고서](../reports/poc-validation-2026-08-05.md)를 따른다.
 
 이 목록 밖의 파일을 읽을 수 있는 것과 제품이 해당 언어의 의미 분석을 지원하는
 것은 다르다. Tree-sitter grammar가 존재하더라도 아래 목록 밖의 언어는 Visual Map
@@ -15,22 +18,22 @@
 목록에는 남기되, provider·framework pack·동일한 uniform core gate가 준비되기
 전까지 active 지원으로 표시하지 않는다.
 
-| 언어 | 비고 |
-| --- | --- |
-| TypeScript | JSX/TSX 포함 |
-| JavaScript | JSX 포함 |
-| Python | 동기·비동기 코드 포함 |
-| Java | JVM 서버·기업 애플리케이션 중심 |
-| Kotlin | target — provider·pack·uniform gate 준비 전 |
-| C# | .NET 코드 포함 |
-| C | 네이티브·시스템 코드 중심 |
-| C++ | 네이티브·시스템·게임 코드 중심 |
-| Go | 서버·도구 코드 중심 |
-| Rust | 서버·시스템·도구 코드 중심 |
-| Swift | target — provider·pack·uniform gate 준비 전 |
-| PHP | 웹 애플리케이션 중심 |
-| Ruby | 웹 애플리케이션 중심 |
-| Dart | Flutter·서버 Dart 포함 |
+| 언어       | 비고                                        |
+| ---------- | ------------------------------------------- |
+| TypeScript | JSX/TSX 포함                                |
+| JavaScript | JSX 포함                                    |
+| Python     | 동기·비동기 코드 포함                       |
+| Java       | JVM 서버·기업 애플리케이션 중심             |
+| Kotlin     | target — provider·pack·uniform gate 준비 전 |
+| C#         | .NET 코드 포함                              |
+| C          | 네이티브·시스템 코드 중심                   |
+| C++        | 네이티브·시스템·게임 코드 중심              |
+| Go         | 서버·도구 코드 중심                         |
+| Rust       | 서버·시스템·도구 코드 중심                  |
+| Swift      | target — provider·pack·uniform gate 준비 전 |
+| PHP        | 웹 애플리케이션 중심                        |
+| Ruby       | 웹 애플리케이션 중심                        |
+| Dart       | Flutter·서버 Dart 포함                      |
 
 D, Lua, R, MATLAB, Perl, Haskell 등 현재 grammar에 존재하는 다른 언어는 이
 계약의 정밀 분석 지원 범위에 포함하지 않는다. 필요하면 이후 별도 계약 버전에서
@@ -41,22 +44,22 @@ D, Lua, R, MATLAB, Perl, Haskell 등 현재 grammar에 존재하는 다른 언�
 여기서 프레임워크·주요 라이브러리는 API, Handler, Controller, Middleware, DI,
 이벤트, 비동기 경계를 코드에서 식별하기 위한 분석 대상이다.
 
-| 언어 | 공식 분석 대상 |
-| --- | --- |
-| TypeScript | React, Next.js, Angular, Vue, Nuxt, SvelteKit, Express, Fastify, NestJS, Koa |
-| JavaScript | React, Next.js, Angular, Vue, Nuxt, SvelteKit, Express, Fastify, NestJS, Koa |
-| Python | Django, Flask, FastAPI, Starlette, Sanic |
-| Java | Spring, Spring Boot, Spring MVC, Spring WebFlux, Jakarta EE, Quarkus, Micronaut, Play |
-| Kotlin | target — Spring Boot, Ktor, Micronaut, Android, Jetpack Compose |
-| C# | ASP.NET Core, ASP.NET MVC, ASP.NET Web API, Minimal API, Blazor, .NET MAUI |
-| C | GTK/GLib, Qt, libuv, libevent, gRPC |
-| C++ | Qt, MFC, Boost.Asio, POCO, Unreal Engine, Drogon, Crow, gRPC |
-| Go | net/http, Gin, Echo, Fiber, Chi, Beego, gRPC |
-| Rust | Axum, Actix Web, Rocket, Warp, Poem, Tokio, Tonic |
-| Swift | target — SwiftUI, UIKit, Vapor, Hummingbird, SwiftNIO |
-| PHP | Laravel, Symfony, CodeIgniter, Laminas, Slim, CakePHP, API Platform |
-| Ruby | Rails, Sinatra, Hanami, Rack, Grape, Roda |
-| Dart | Flutter, Shelf, Serverpod, Dart Frog |
+| 언어       | 공식 분석 대상                                                                        |
+| ---------- | ------------------------------------------------------------------------------------- |
+| TypeScript | React, Next.js, Angular, Vue, Nuxt, SvelteKit, Express, Fastify, NestJS, Koa          |
+| JavaScript | React, Next.js, Angular, Vue, Nuxt, SvelteKit, Express, Fastify, NestJS, Koa          |
+| Python     | Django, Flask, FastAPI, Starlette, Sanic                                              |
+| Java       | Spring, Spring Boot, Spring MVC, Spring WebFlux, Jakarta EE, Quarkus, Micronaut, Play |
+| Kotlin     | target — Spring Boot, Ktor, Micronaut, Android, Jetpack Compose                       |
+| C#         | ASP.NET Core, ASP.NET MVC, ASP.NET Web API, Minimal API, Blazor, .NET MAUI            |
+| C          | GTK/GLib, Qt, libuv, libevent, gRPC                                                   |
+| C++        | Qt, MFC, Boost.Asio, POCO, Unreal Engine, Drogon, Crow, gRPC                          |
+| Go         | net/http, Gin, Echo, Fiber, Chi, Beego, gRPC                                          |
+| Rust       | Axum, Actix Web, Rocket, Warp, Poem, Tokio, Tonic                                     |
+| Swift      | target — SwiftUI, UIKit, Vapor, Hummingbird, SwiftNIO                                 |
+| PHP        | Laravel, Symfony, CodeIgniter, Laminas, Slim, CakePHP, API Platform                   |
+| Ruby       | Rails, Sinatra, Hanami, Rack, Grape, Roda                                             |
+| Dart       | Flutter, Shelf, Serverpod, Dart Frog                                                  |
 
 ## 3. 언어별 ORM·DB 접근 도구
 
@@ -64,22 +67,22 @@ ORM은 코드의 객체·모델·엔티티를 DB의 테이블·행·컬럼에 �
 아닌 SQL mapper, query builder, micro-ORM, typed SQL 도구도 코드에서 DB 접근을
 해석해야 하므로 같은 분석 범위에 포함한다.
 
-| 언어 | 공식 분석 대상 |
-| --- | --- |
-| TypeScript | Prisma, TypeORM, Sequelize, Drizzle, MikroORM, Mongoose |
-| JavaScript | Prisma, Sequelize, Drizzle, Mongoose, Knex |
-| Python | SQLAlchemy, Django ORM, SQLModel, Tortoise ORM, Peewee |
-| Java | Hibernate, JPA, Spring Data JPA, EclipseLink, MyBatis, jOOQ |
-| Kotlin | target — Exposed, Room, SQLDelight, Hibernate, JPA |
-| C# | Entity Framework Core, Dapper, NHibernate, linq2db |
-| C | ODBC, SQLite API, QtSql, SOCI |
-| C++ | SQLite, SOCI, sqlpp11, ODBC |
-| Go | GORM, Ent, Bun, sqlx, sqlc, SQLBoiler |
-| Rust | Diesel, SeaORM, SQLx, rbatis |
-| Swift | target — SwiftData, Core Data, Fluent, GRDB, SQLite.swift |
-| PHP | Eloquent, Doctrine ORM, Propel, Cycle ORM |
-| Ruby | ActiveRecord, Sequel, ROM-rb, Mongoid |
-| Dart | Drift, Floor, Realm, Isar, Hive |
+| 언어       | 공식 분석 대상                                              |
+| ---------- | ----------------------------------------------------------- |
+| TypeScript | Prisma, TypeORM, Sequelize, Drizzle, MikroORM, Mongoose     |
+| JavaScript | Prisma, Sequelize, Drizzle, Mongoose, Knex                  |
+| Python     | SQLAlchemy, Django ORM, SQLModel, Tortoise ORM, Peewee      |
+| Java       | Hibernate, JPA, Spring Data JPA, EclipseLink, MyBatis, jOOQ |
+| Kotlin     | target — Exposed, Room, SQLDelight, Hibernate, JPA          |
+| C#         | Entity Framework Core, Dapper, NHibernate, linq2db          |
+| C          | ODBC, SQLite API, QtSql, SOCI                               |
+| C++        | SQLite, SOCI, sqlpp11, ODBC                                 |
+| Go         | GORM, Ent, Bun, sqlx, sqlc, SQLBoiler                       |
+| Rust       | Diesel, SeaORM, SQLx, rbatis                                |
+| Swift      | target — SwiftData, Core Data, Fluent, GRDB, SQLite.swift   |
+| PHP        | Eloquent, Doctrine ORM, Propel, Cycle ORM                   |
+| Ruby       | ActiveRecord, Sequel, ROM-rb, Mongoid                       |
+| Dart       | Drift, Floor, Realm, Isar, Hive                             |
 
 C와 C++는 일반적인 ORM 생태계가 약하므로 ORM 이름 매칭보다 ODBC, SQLite,
 native driver, query builder, SQL 호출을 우선 분석한다.
@@ -89,14 +92,14 @@ native driver, query builder, SQL 호출을 우선 분석한다.
 언어에 종속되지 않고 기능 흐름과 외부 경계를 만드는 기술은 공통 어댑터로
 분석한다.
 
-| 영역 | 공식 분석 대상 |
-| --- | --- |
-| API 계약 | OpenAPI, Swagger, GraphQL |
-| RPC·직렬화 | gRPC, Protobuf |
-| 실시간 통신 | WebSocket |
-| 메시지·이벤트 | Kafka, RabbitMQ, NATS |
-| 캐시·외부 저장소 | Redis |
-| 외부 데이터 저장소 | MongoDB |
+| 영역               | 공식 분석 대상            |
+| ------------------ | ------------------------- |
+| API 계약           | OpenAPI, Swagger, GraphQL |
+| RPC·직렬화         | gRPC, Protobuf            |
+| 실시간 통신        | WebSocket                 |
+| 메시지·이벤트      | Kafka, RabbitMQ, NATS     |
+| 캐시·외부 저장소   | Redis                     |
+| 외부 데이터 저장소 | MongoDB                   |
 
 GraphQL과 Protobuf는 API·스키마의 진입점으로 분석하고, Kafka·RabbitMQ·NATS는
 producer·consumer·topic 관계로 분석한다.
@@ -158,7 +161,10 @@ CMake, Makefile, Meson, Dockerfile
 4. 코드 엔진은 코드에 나타난 SQL·ORM·DB client 사용 정보를 보존한다.
 5. 실제 테이블·컬럼·PK·FK·인덱스 존재 여부는 `database-memory`가 검증한다.
 6. Tomcat 같은 실행환경은 코드 흐름의 Framework 노드로 만들지 않는다.
-7. 이 목록은 UI의 확정·추정·모름 표시가 아니라 엔진이 책임지는 분석 범위 계약이다.
+7. 이 목록은 분석 adapter와 fixture를 유지해야 하는 범위다. UI의 확정·추정·모름과
+   실제 project validation은 별도 근거로 판정한다.
+8. framework 이름이 catalog에 있어도 pinned real-repository POC가 없거나 route-handler
+   해결률이 낮으면 product-validated로 표시하지 않는다.
 
 ## 8. 완료 기준
 

@@ -66,7 +66,10 @@ pub fn introspect_sqlite(
     path: &Path,
     connection_alias: &str,
 ) -> SqliteAdapterResult<SchemaSnapshot> {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let conn = Connection::open_with_flags(
+        crate::sqlite_database_path(path),
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
     conn.pragma_update(None, "query_only", true)?;
     discover_sqlite_connection(
         &conn,

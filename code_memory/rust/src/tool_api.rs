@@ -1,3 +1,6 @@
+use crate::generation_store::{
+    new_generation_id, open_current, publish_generation, GenerationReceipt, GenerationStore,
+};
 use crate::source::is_managed_provider_root;
 use crate::{index_project, is_excluded_source_dir};
 use serde_json::{json, Value};
@@ -104,37 +107,81 @@ fn index_repository(payload: &Value) -> Result<(), String> {
                 .unwrap_or("project")
         })
         .to_string();
-    let (index_path, architecture_path) = project_paths(&project)?;
+    let project_dir = project_directory(&project)?;
+    fs::create_dir_all(&project_dir)
+        .map_err(|error| format!("cannot create project store: {error}"))?;
+    let generation_id = new_generation_id();
+    let staging_dir = project_dir.join(format!(".staging-{generation_id}"));
+    fs::create_dir_all(&staging_dir)
+        .map_err(|error| format!("cannot create generation staging directory: {error}"))?;
+    let index_path = staging_dir.join("language-index.json");
+    let architecture_path = staging_dir.join("architecture.json");
+    let report_path = staging_dir.join("collection-report.json");
     let pack_root = framework_pack_root();
     let providers_root = optional_resource_root("CODE_MEMORY_PROVIDERS_ROOT", "providers");
-    crate::emit_progress("index", 0, 100, "코드 인덱스 준비 중");
-    index_project(
-        Path::new(root),
-        &index_path,
-        &architecture_path,
-        &pack_root,
-        providers_root.as_deref(),
-    )?;
-    crate::emit_progress("collectors", 82, 100, "프로젝트 근거 수집 중");
-    let report =
-        crate::collectors::collect_project(Path::new(root), &pack_root, providers_root.as_deref())?;
-    let report_path = collection_report_path(&project)?;
-    fs::write(
-        &report_path,
-        serde_json::to_vec(&report)
-            .map_err(|error| format!("cannot serialize collection report: {error}"))?,
-    )
-    .map_err(|error| format!("cannot write {}: {error}", report_path.display()))?;
-    crate::emit_progress("complete", 100, 100, "코드 분석 완료");
-    print_json(&json!({ "project": project, "repo_path": root }))
+    let result = (|| {
+        crate::emit_progress("index", 0, 100, "코드 인덱스 준비 중");
+        index_project(
+            Path::new(root),
+            &index_path,
+            &architecture_path,
+            &pack_root,
+            providers_root.as_deref(),
+        )?;
+        crate::emit_progress("collectors", 82, 100, "프로젝트 근거 수집 중");
+        let report = crate::collectors::collect_project(
+            Path::new(root),
+            &pack_root,
+            providers_root.as_deref(),
+        )?;
+        fs::write(
+            &report_path,
+            serde_json::to_vec(&report)
+                .map_err(|error| format!("cannot serialize collection report: {error}"))?,
+        )
+        .map_err(|error| format!("cannot write {}: {error}", report_path.display()))?;
+
+        let mut index = read_json_file(&index_path, "project index")?;
+        let architecture = read_json_file(&architecture_path, "project architecture")?;
+        attach_architecture(&mut index, &architecture);
+        let evidence = evidence_summary(
+            &serde_json::to_value(&report)
+                .map_err(|error| format!("cannot project collection report: {error}"))?,
+        );
+        let inventory = inventory_query_result(&index);
+        let calls = calls_query_result(&index);
+        let handles = handles_query_result(&index);
+        fs::remove_file(&index_path)
+            .and_then(|_| fs::remove_file(&architecture_path))
+            .and_then(|_| fs::remove_file(&report_path))
+            .map_err(|error| format!("cannot remove generation staging JSON: {error}"))?;
+        let receipt = publish_generation(
+            &project_dir,
+            &staging_dir,
+            &generation_id,
+            &project,
+            root,
+            &inventory,
+            &calls,
+            &handles,
+            &architecture,
+            &evidence,
+        )?;
+        crate::emit_progress("complete", 100, 100, "코드 분석 완료");
+        print_json(
+            &serde_json::to_value(receipt)
+                .map_err(|error| format!("cannot serialize generation receipt: {error}"))?,
+        )
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging_dir);
+    }
+    result
 }
 
 fn delete_project(payload: &Value) -> Result<(), String> {
     let project = required_string(payload, "project")?;
-    let (index_path, _) = project_paths(project)?;
-    if let Some(parent) = index_path.parent() {
-        let _ = fs::remove_dir_all(parent);
-    }
+    let _ = fs::remove_dir_all(project_directory(project)?);
     print_json(&json!({ "deleted": project }))
 }
 
@@ -181,6 +228,9 @@ fn read_index(payload: &Value) -> Result<Value, String> {
 
 fn read_architecture(payload: &Value) -> Result<Value, String> {
     let project = required_string(payload, "project")?;
+    if let Some(store) = open_project_generation(project)? {
+        return store.architecture();
+    }
     let (_, architecture_path) = project_paths(project)?;
     serde_json::from_slice(&fs::read(&architecture_path).map_err(|e| {
         format!(
@@ -202,6 +252,9 @@ fn get_evidence(payload: &Value) -> Result<(), String> {
 
 fn read_evidence(payload: &Value) -> Result<Value, String> {
     let project = required_string(payload, "project")?;
+    if let Some(store) = open_project_generation(project)? {
+        return store.evidence();
+    }
     let path = collection_report_path(project)?;
     let report: Value =
         serde_json::from_slice(&fs::read(&path).map_err(|error| {
@@ -212,6 +265,19 @@ fn read_evidence(payload: &Value) -> Result<Value, String> {
 }
 
 fn export_inventory(payload: &Value) -> Result<(), String> {
+    let project = required_string(payload, "project")?;
+    if let Some(store) = open_project_generation(project)? {
+        let value = json!({
+            "schema": "code-memory.inventory-export.v1",
+            "generation": store.receipt.clone(),
+            "architecture": store.architecture()?,
+            "evidence": store.evidence()?,
+            "nodes": store.inventory()?,
+            "calls": store.relationships("CALLS")?,
+            "handles": store.relationships("HANDLES")?,
+        });
+        return print_json(&value);
+    }
     let index = read_index(payload)?;
     let architecture = read_architecture(payload)?;
     let evidence = read_evidence(payload)?;
@@ -278,8 +344,15 @@ fn evidence_summary(report: &Value) -> Value {
 
 fn query_graph(payload: &Value) -> Result<(), String> {
     let query = required_string(payload, "query")?.to_ascii_uppercase();
-    let index = read_index(payload)?;
     let relationship_kind = query_relationship_kind(&query);
+    let project = required_string(payload, "project")?;
+    if let Some(store) = open_project_generation(project)? {
+        return match relationship_kind {
+            Some(kind) => print_json(&store.relationships(kind)?),
+            None => print_json(&store.inventory()?),
+        };
+    }
+    let index = read_index(payload)?;
     if relationship_kind == Some("HANDLES") {
         return print_json(&handles_query_result(&index));
     }
@@ -428,11 +501,21 @@ fn normalize_endpoint(value: &Value, aliases: &HashMap<String, String>) -> Value
 }
 
 fn search_code(payload: &Value) -> Result<(), String> {
-    let index = read_index(payload)?;
-    let root = index
-        .get("project_root")
-        .and_then(Value::as_str)
-        .ok_or("project index has no project_root")?;
+    let project = required_string(payload, "project")?;
+    let generation = open_project_generation(project)?;
+    let legacy_index = generation
+        .is_none()
+        .then(|| read_index(payload))
+        .transpose()?;
+    let root = match (&generation, &legacy_index) {
+        (Some(store), _) => store.project_root()?,
+        (_, Some(index)) => index
+            .get("project_root")
+            .and_then(Value::as_str)
+            .ok_or("project index has no project_root")?
+            .to_string(),
+        _ => unreachable!(),
+    };
     let identifier = extract_identifier(required_string(payload, "pattern")?);
     if identifier.is_empty() {
         return Err("search pattern does not contain an identifier".to_string());
@@ -443,9 +526,13 @@ fn search_code(payload: &Value) -> Result<(), String> {
         .and_then(Value::as_u64)
         .unwrap_or(32)
         .clamp(1, 32) as usize;
-    let documents = document_symbol_names(&index);
+    let documents = match (&generation, &legacy_index) {
+        (Some(store), _) => store.document_symbol_names()?,
+        (_, Some(index)) => document_symbol_names(index),
+        _ => unreachable!(),
+    };
     let (results, total_matches, total_results) = collect_search_matches(
-        &load_text_files(Path::new(root)),
+        &load_text_files(Path::new(&root)),
         &documents,
         &identifier,
         path_filter,
@@ -1019,9 +1106,22 @@ fn list_projects() -> Result<(), String> {
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|entry| entry.path().join("language-index.json").is_file())
+        .filter(|entry| {
+            entry.path().join("current.json").is_file()
+                || entry.path().join("language-index.json").is_file()
+        })
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(receipt) = fs::read(entry.path().join("current.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<GenerationReceipt>(&bytes).ok())
+            {
+                return Some(json!({
+                    "name": name,
+                    "project_root": receipt.repo_path,
+                    "generation": receipt.generation_id
+                }));
+            }
             let index = fs::read(entry.path().join("language-index.json")).ok()?;
             let value: Value = serde_json::from_slice(&index).ok()?;
             Some(json!({
@@ -1035,6 +1135,14 @@ fn list_projects() -> Result<(), String> {
 }
 
 fn project_paths(project: &str) -> Result<(PathBuf, PathBuf), String> {
+    let directory = project_directory(project)?;
+    Ok((
+        directory.join("language-index.json"),
+        directory.join("architecture.json"),
+    ))
+}
+
+fn project_directory(project: &str) -> Result<PathBuf, String> {
     let safe = project
         .chars()
         .map(|character| {
@@ -1051,16 +1159,96 @@ fn project_paths(project: &str) -> Result<(PathBuf, PathBuf), String> {
     let root = env::var_os("CBM_CACHE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| env::temp_dir().join("visual-map-code-memory"));
-    let directory = root.join("compat-projects").join(safe);
-    Ok((
-        directory.join("language-index.json"),
-        directory.join("architecture.json"),
-    ))
+    Ok(root.join("compat-projects").join(safe))
 }
 
 fn collection_report_path(project: &str) -> Result<PathBuf, String> {
     let (index_path, _) = project_paths(project)?;
     Ok(index_path.with_file_name("collection-report.json"))
+}
+
+fn open_project_generation(project: &str) -> Result<Option<GenerationStore>, String> {
+    let directory = project_directory(project)?;
+    if let Some(store) = open_current(&directory)? {
+        return Ok(Some(store));
+    }
+    if migrate_legacy_project(project, &directory).unwrap_or(false) {
+        return open_current(&directory);
+    }
+    Ok(None)
+}
+
+fn migrate_legacy_project(project: &str, directory: &Path) -> Result<bool, String> {
+    let index_path = directory.join("language-index.json");
+    let architecture_path = directory.join("architecture.json");
+    let report_path = directory.join("collection-report.json");
+    if !index_path.is_file() || !architecture_path.is_file() || !report_path.is_file() {
+        return Ok(false);
+    }
+    let mut index = read_json_file(&index_path, "legacy project index")?;
+    let architecture = read_json_file(&architecture_path, "legacy project architecture")?;
+    let report = read_json_file(&report_path, "legacy collection report")?;
+    let root = index
+        .get("project_root")
+        .and_then(Value::as_str)
+        .ok_or("legacy project index has no project_root")?
+        .to_string();
+    attach_architecture(&mut index, &architecture);
+    let generation_id = new_generation_id();
+    let staging_dir = directory.join(format!(".staging-{generation_id}"));
+    fs::create_dir_all(&staging_dir)
+        .map_err(|error| format!("cannot create legacy migration staging directory: {error}"))?;
+    let result = publish_generation(
+        directory,
+        &staging_dir,
+        &generation_id,
+        project,
+        &root,
+        &inventory_query_result(&index),
+        &calls_query_result(&index),
+        &handles_query_result(&index),
+        &architecture,
+        &evidence_summary(&report),
+    );
+    if let Err(error) = result {
+        let _ = fs::remove_dir_all(&staging_dir);
+        return Err(error);
+    }
+    if open_current(directory)?.is_none() {
+        return Err("migrated code generation is not readable".to_string());
+    }
+    for path in [index_path, architecture_path, report_path] {
+        fs::remove_file(&path)
+            .map_err(|error| format!("cannot remove migrated {}: {error}", path.display()))?;
+    }
+    Ok(true)
+}
+
+fn read_json_file(path: &Path, label: &str) -> Result<Value, String> {
+    serde_json::from_slice(
+        &fs::read(path)
+            .map_err(|error| format!("cannot read {label} {}: {error}", path.display()))?,
+    )
+    .map_err(|error| format!("invalid {label} {}: {error}", path.display()))
+}
+
+fn attach_architecture(index: &mut Value, architecture: &Value) {
+    if let Some(object) = index.as_object_mut() {
+        object.insert(
+            "__architecture_nodes".to_string(),
+            architecture
+                .get("nodes")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+        object.insert(
+            "__architecture_edges".to_string(),
+            architecture
+                .get("edges")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+    }
 }
 
 fn resource_root(variable: &str, name: &str) -> PathBuf {
@@ -1329,6 +1517,52 @@ mod tests {
 
         assert_eq!(rows[0][4], 3);
         assert_eq!(rows[0][6], 6);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_project_is_removed_only_after_sqlite_generation_is_readable() {
+        let root = std::env::temp_dir().join(format!(
+            "code-memory-legacy-migration-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("language-index.json"),
+            serde_json::to_vec(&json!({
+                "project_root": root,
+                "documents": [],
+                "relations": [],
+                "framework_relations": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("architecture.json"),
+            serde_json::to_vec(&json!({"nodes": [], "edges": []})).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("collection-report.json"),
+            serde_json::to_vec(&json!({
+                "schema": "code-memory.collection-report.v1",
+                "project_root": root,
+                "collectors": [],
+                "facts": [],
+                "relations": [],
+                "diagnostics": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(migrate_legacy_project("legacy", &root).unwrap());
+        assert!(open_current(&root).unwrap().is_some());
+        assert!(!root.join("language-index.json").exists());
+        assert!(!root.join("architecture.json").exists());
+        assert!(!root.join("collection-report.json").exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

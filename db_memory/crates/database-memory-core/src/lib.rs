@@ -19,12 +19,22 @@ pub mod schema_diff;
 pub mod snapshot_validation;
 
 use std::fmt::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
 pub const PRODUCT_BOUNDARY: &str = "RDB schema graph memory";
+
+pub(crate) fn sqlite_database_path(path: &Path) -> PathBuf {
+    if path.is_file() {
+        return path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    }
+    path.parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .and_then(|parent| path.file_name().map(|name| parent.join(name)))
+        .unwrap_or_else(|| path.to_path_buf())
+}
 
 pub fn product_boundary() -> &'static str {
     PRODUCT_BOUNDARY
@@ -855,5 +865,33 @@ mod tests {
         for kind in kinds {
             assert_eq!(kind.to_string().parse::<ObjectKind>().unwrap(), kind);
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn sqlite_storage_and_source_support_windows_long_paths() {
+        let mut root =
+            std::env::temp_dir().join(format!("database-memory-long-path-{}", std::process::id()));
+        while root.as_os_str().len() < 280 {
+            root.push("workspace-segment-0123456789abcdef");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let graph_path = root.join("graph.sqlite");
+        let store = graph_store::GraphStore::open(&graph_path).unwrap();
+        assert_eq!(store.snapshot_count().unwrap(), 0);
+        drop(store);
+
+        let source_path = root.join("source.sqlite");
+        let connection = rusqlite::Connection::open(sqlite_database_path(&source_path)).unwrap();
+        connection
+            .execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY);")
+            .unwrap();
+        drop(connection);
+        let snapshot = adapters::sqlite::introspect_sqlite(&source_path, "long-path").unwrap();
+        assert_eq!(snapshot.tables[0].name, "users");
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

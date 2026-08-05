@@ -6,7 +6,7 @@ use super::model::{InventoryItem, InventorySnapshot};
 const BOOTSTRAP_CODE_ITEMS_PER_GROUP: usize = 100;
 const BOOTSTRAP_DB_TABLES: usize = 100;
 const BOOTSTRAP_DB_DEPENDENTS: usize = 200;
-const SEARCH_RESULTS_PER_GROUP: usize = 4;
+pub(crate) const SEARCH_RESULTS_PER_GROUP: usize = 4;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -280,19 +280,23 @@ fn code_group(item: &InventoryItem, handler_ids: &HashSet<String>) -> String {
 }
 
 fn search_group(item: &InventoryItem) -> Option<&'static str> {
-    if item.is_code() {
-        if item.layer == "api" {
+    search_group_fields(&item.source, &item.kind, &item.layer)
+}
+
+pub(crate) fn search_group_fields(source: &str, kind: &str, layer: &str) -> Option<&'static str> {
+    if source == "code" {
+        if layer == "api" {
             Some("api")
-        } else if item.kind == "file" {
+        } else if kind == "file" {
             Some("file")
         } else {
             Some("code")
         }
-    } else if item.is_db() && item.kind == "table" {
+    } else if source == "db" && kind == "table" {
         Some("table")
-    } else if item.is_db() && item.kind == "column" {
+    } else if source == "db" && kind == "column" {
         Some("column")
-    } else if item.is_db() && matches!(item.kind.as_str(), "view" | "trigger" | "routine") {
+    } else if source == "db" && matches!(kind, "view" | "trigger" | "routine") {
         Some("db-object")
     } else {
         None
@@ -300,23 +304,27 @@ fn search_group(item: &InventoryItem) -> Option<&'static str> {
 }
 
 fn search_score(item: &InventoryItem, query: &str) -> u16 {
+    search_score_fields(
+        &item.name,
+        item.qualified_name.as_deref(),
+        item.path.as_deref(),
+        &item.id,
+        query,
+    )
+}
+
+pub(crate) fn search_score_fields(
+    name: &str,
+    qualified_name: Option<&str>,
+    path: Option<&str>,
+    id: &str,
+    query: &str,
+) -> u16 {
     [
-        field_score(&item.name, query, 400, 300, 200),
-        field_score(
-            item.qualified_name.as_deref().unwrap_or_default(),
-            query,
-            350,
-            250,
-            150,
-        ),
-        field_score(
-            item.path.as_deref().unwrap_or_default(),
-            query,
-            120,
-            100,
-            80,
-        ),
-        field_score(&item.id, query, 110, 90, 70),
+        field_score(name, query, 400, 300, 200),
+        field_score(qualified_name.unwrap_or_default(), query, 350, 250, 150),
+        field_score(path.unwrap_or_default(), query, 120, 100, 80),
+        field_score(id, query, 110, 90, 70),
     ]
     .into_iter()
     .max()

@@ -1,8 +1,9 @@
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -199,20 +200,18 @@ pub(crate) fn framework_cache_key(
     format!("{hash:016x}")
 }
 pub(crate) fn load_framework_cache(path: &Path) -> Option<crate::frameworks::Analysis> {
-    serde_json::from_slice(&fs::read(path).ok()?).ok()
+    let (bytes, legacy) = read_compressed_or_legacy(path).ok()?;
+    let analysis = serde_json::from_slice(&bytes).ok()?;
+    if legacy && write_compressed_json(path, &analysis).is_ok() {
+        let _ = fs::remove_file(path.with_extension(""));
+    }
+    Some(analysis)
 }
 pub(crate) fn write_framework_cache(
     path: &Path,
     analysis: &crate::frameworks::Analysis,
 ) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
-    }
-    let bytes = serde_json::to_vec(analysis)
-        .map_err(|e| format!("cannot serialize framework cache: {e}"))?;
-    fs::write(path, bytes)
-        .map_err(|e| format!("cannot write framework cache {}: {e}", path.display()))
+    write_compressed_json(path, analysis)
 }
 fn hash_pack_files(root: &Path, hash: &mut u64) {
     let Ok(entries) = fs::read_dir(root) else {
@@ -334,10 +333,9 @@ pub(crate) fn write_source_manifest(
 pub(crate) fn read_architecture_reverse_imports(
     path: &Path,
 ) -> Result<HashMap<String, Vec<String>>, String> {
-    let previous = serde_json::from_slice::<PreviousArchitecture>(
-        &fs::read(path).map_err(|error| format!("cannot read dependency cache: {error}"))?,
-    )
-    .map_err(|error| format!("cannot parse dependency cache: {error}"))?;
+    let (bytes, _) = read_compressed_or_legacy(path)?;
+    let previous = serde_json::from_slice::<PreviousArchitecture>(&bytes)
+        .map_err(|error| format!("cannot parse dependency cache: {error}"))?;
     let mut reverse_imports = HashMap::new();
     for edge in previous.edges {
         if edge.kind == "IMPORTS" {
@@ -452,6 +450,7 @@ fn commit_cache_generation_in(
         known.extend(previous.files);
     }
     prune_managed_cache_files(cache_base, &known, &retained);
+    prune_unreferenced_project_cache_dirs(cache_base, manifest_dir, &known, &retained);
     Ok(())
 }
 
@@ -470,6 +469,100 @@ fn write_cache_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .and_then(|_| writer.flush())
         .and_then(|_| writer.get_ref().sync_all())
         .map_err(|error| format!("cannot write {}: {error}", path.display()))
+}
+
+pub(crate) fn read_compressed_cache(path: &Path) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(path)
+        .map_err(|error| format!("cannot open compressed cache {}: {error}", path.display()))?;
+    let mut decoder = GzDecoder::new(file);
+    let mut bytes = Vec::new();
+    decoder
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read compressed cache {}: {error}", path.display()))?;
+    Ok(bytes)
+}
+
+pub(crate) fn write_compressed_json<T: Serialize + ?Sized>(
+    path: &Path,
+    value: &T,
+) -> Result<(), String> {
+    write_compressed(path, |encoder| {
+        serde_json::to_writer(encoder, value)
+            .map_err(|error| format!("cannot serialize compressed cache: {error}"))
+    })
+}
+
+pub(crate) fn write_compressed_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    write_compressed(path, |encoder| {
+        encoder
+            .write_all(bytes)
+            .map_err(|error| format!("cannot write compressed cache: {error}"))
+    })
+}
+
+fn write_compressed(
+    path: &Path,
+    write: impl FnOnce(&mut GzEncoder<BufWriter<fs::File>>) -> Result<(), String>,
+) -> Result<(), String> {
+    if path.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = path.with_extension(format!("gz.{}.{nonce}.tmp", std::process::id()));
+    let file = fs::File::create(&temporary)
+        .map_err(|error| format!("cannot create {}: {error}", temporary.display()))?;
+    let mut encoder = GzEncoder::new(BufWriter::new(file), Compression::fast());
+    if let Err(error) = write(&mut encoder) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    let mut writer = match encoder.finish() {
+        Ok(writer) => writer,
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("cannot finish compressed cache: {error}"));
+        }
+    };
+    if let Err(error) = writer.flush().and_then(|_| writer.get_ref().sync_all()) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("cannot flush compressed cache: {error}"));
+    }
+    if path.is_file() {
+        let _ = fs::remove_file(&temporary);
+        return Ok(());
+    }
+    fs::rename(&temporary, path).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        format!(
+            "cannot promote compressed cache {}: {error}",
+            path.display()
+        )
+    })
+}
+
+pub(crate) fn read_compressed_or_legacy(path: &Path) -> Result<(Vec<u8>, bool), String> {
+    match read_compressed_cache(path) {
+        Ok(bytes) => Ok((bytes, false)),
+        Err(compressed_error) => {
+            let legacy = path.with_extension("");
+            fs::read(&legacy)
+                .map(|bytes| (bytes, true))
+                .map_err(|legacy_error| {
+                    format!(
+                        "cannot read cache {} ({compressed_error}); legacy {}: {legacy_error}",
+                        path.display(),
+                        legacy.display()
+                    )
+                })
+        }
+    }
 }
 
 fn normalized_cache_path(path: &Path) -> String {
@@ -509,8 +602,43 @@ fn prune_managed_cache_files(
     }
 }
 
+fn prune_unreferenced_project_cache_dirs(
+    cache_base: &Path,
+    manifest_dir: &Path,
+    known_files: &HashSet<String>,
+    retained_files: &HashSet<String>,
+) {
+    let retained = retained_files
+        .iter()
+        .filter_map(|path| cache_project_directory(path))
+        .collect::<HashSet<_>>();
+    let candidates = known_files
+        .iter()
+        .filter_map(|path| cache_project_directory(path))
+        .collect::<HashSet<_>>();
+
+    for name in candidates.difference(&retained) {
+        let directory = cache_base.join(name);
+        if directory != manifest_dir && directory.parent() == Some(cache_base) {
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+}
+
+fn cache_project_directory(path: &str) -> Option<String> {
+    let name = Path::new(path).components().next()?.as_os_str().to_str()?;
+    (name.len() == 16 && name.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| name.to_string())
+}
+
 fn is_content_addressed_cache_file(path: &Path) -> bool {
-    let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let Some(stem) = name
+        .strip_suffix(".json.gz")
+        .or_else(|| name.strip_suffix(".json"))
+    else {
         return false;
     };
     let Some((_, digest)) = stem.rsplit_once('-') else {
@@ -861,7 +989,7 @@ fn checksum_range(state: &mut u64, range: &[i32]) {
     }
 }
 pub(crate) fn language_cache_path(root: &Path, lang: &LanguageSpec, key: &str) -> PathBuf {
-    project_cache_root(root).join(format!("{}-{key}.json", lang.id))
+    project_cache_root(root).join(format!("{}-{key}.json.gz", lang.id))
 }
 pub(crate) struct LanguageCacheRead {
     pub(crate) value: Option<CachedLanguageResult>,
@@ -875,7 +1003,8 @@ pub(crate) fn load_language_cache(
     key: &str,
 ) -> LanguageCacheRead {
     let io_started = Instant::now();
-    let Ok(value) = fs::read(language_cache_path(root, lang, key)) else {
+    let path = language_cache_path(root, lang, key);
+    let Ok((value, legacy)) = read_compressed_or_legacy(&path) else {
         return LanguageCacheRead {
             value: None,
             io_ms: io_started.elapsed().as_millis(),
@@ -891,6 +1020,13 @@ pub(crate) fn load_language_cache(
             && cached.key == key
             && !cached.documents.is_empty()
     });
+    if legacy {
+        if let Some(cached) = value.as_ref() {
+            if write_compressed_json(&path, cached).is_ok() {
+                let _ = fs::remove_file(path.with_extension(""));
+            }
+        }
+    }
     LanguageCacheRead {
         value,
         io_ms,
@@ -927,17 +1063,7 @@ pub(crate) fn write_language_cache(
             })
             .collect(),
     };
-    let path = language_cache_path(root, &lang, key);
-    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    let Ok(file) = fs::File::create(&temporary) else {
-        return;
-    };
-    let mut writer = BufWriter::new(file);
-    if serde_json::to_writer(&mut writer, &cached).is_ok() && writer.flush().is_ok() {
-        let _ = fs::rename(temporary, path);
-    } else {
-        let _ = fs::remove_file(temporary);
-    }
+    let _ = write_compressed_json(&language_cache_path(root, &lang, key), &cached);
 }
 
 pub(crate) struct ProviderWorkGuard(pub(crate) PathBuf);
@@ -986,6 +1112,43 @@ mod generation_tests {
         assert!(!first.exists());
         assert!(second.is_file());
         assert!(third.is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_gc_removes_lsp_workspace_after_its_generation_expires() {
+        let root =
+            std::env::temp_dir().join(format!("code-memory-lsp-generation-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let cache_base = root.join("cache");
+        let project = cache_base.join("aaaaaaaaaaaaaaaa");
+        let first_project = cache_base.join("1111111111111111");
+        let second_project = cache_base.join("2222222222222222");
+        let third_project = cache_base.join("3333333333333333");
+        fs::create_dir_all(first_project.join("lsp-workspaces/java-v2")).unwrap();
+        fs::write(first_project.join("rust-1111111111111111.json"), b"first").unwrap();
+        fs::write(
+            first_project.join("lsp-workspaces/java-v2/index.bin"),
+            b"lsp",
+        )
+        .unwrap();
+
+        let first = first_project.join("rust-1111111111111111.json");
+        commit_cache_generation_in(&cache_base, &project, [first]).unwrap();
+        fs::create_dir_all(&second_project).unwrap();
+        let second = second_project.join("rust-2222222222222222.json");
+        fs::write(&second, b"second").unwrap();
+        commit_cache_generation_in(&cache_base, &project, [second]).unwrap();
+        assert!(first_project.is_dir());
+
+        fs::create_dir_all(&third_project).unwrap();
+        let third = third_project.join("rust-3333333333333333.json");
+        fs::write(&third, b"third").unwrap();
+        commit_cache_generation_in(&cache_base, &project, [third]).unwrap();
+
+        assert!(!first_project.exists());
+        assert!(second_project.is_dir());
+        assert!(third_project.is_dir());
         fs::remove_dir_all(root).unwrap();
     }
 }

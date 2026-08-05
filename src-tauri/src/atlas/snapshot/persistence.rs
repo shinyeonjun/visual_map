@@ -252,10 +252,18 @@ pub(crate) fn save_inventory_snapshot(
     }
 
     let snapshot = canonicalize_snapshot(snapshot.clone());
-    let json = serde_json::to_string(&snapshot).map_err(|error| error.to_string())?;
-    let redacted = engine::redact_secrets(&json);
-    let archive = encode_snapshot_archive(redacted.as_bytes())?;
-    atomic_save(&path, &archive, &snapshot.workspace_id)?;
+    let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_file_name(format!(
+        "inventory-snapshot.{}.{}.{}.tmp.sqlite",
+        std::process::id(),
+        timestamp(),
+        sequence
+    ));
+    if let Err(error) = sqlite_store::write_snapshot_database(&temp, &snapshot) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    promote_snapshot_database(&path, &temp, &snapshot.workspace_id)?;
     migrate_legacy_snapshot_backup(app_data_dir, &snapshot.workspace_id, &path);
     invalidate_cached_snapshot(&path);
     invalidate_snapshot_freshness(&snapshot.workspace_id);
@@ -419,9 +427,12 @@ pub(crate) fn load_inventory_snapshot_optional_cached(
 ) -> Result<Option<Arc<InventorySnapshot>>, String> {
     validate_workspace_id(workspace_id)?;
     let path = snapshot_path(app_data_dir.as_ref(), workspace_id);
+    let archive = legacy_archive_snapshot_path(app_data_dir.as_ref(), workspace_id);
     let legacy = legacy_snapshot_path(app_data_dir.as_ref(), workspace_id);
     if !path.is_file()
         && !snapshot_backup_path(&path).is_file()
+        && !archive.is_file()
+        && !legacy_archive_snapshot_backup_path(&archive).is_file()
         && !legacy.is_file()
         && !legacy_snapshot_backup_path(&legacy).is_file()
     {
@@ -485,9 +496,12 @@ pub(crate) fn remove_inventory_snapshot(
     validate_workspace_id(workspace_id)?;
     let app_data_dir = app_data_dir.as_ref();
     let path = snapshot_path(app_data_dir, workspace_id);
+    let archive = legacy_archive_snapshot_path(app_data_dir, workspace_id);
     let legacy = legacy_snapshot_path(app_data_dir, workspace_id);
     remove_file_if_exists(&path)?;
     remove_file_if_exists(&snapshot_backup_path(&path))?;
+    remove_file_if_exists(&archive)?;
+    remove_file_if_exists(&legacy_archive_snapshot_backup_path(&archive))?;
     remove_file_if_exists(&legacy)?;
     remove_file_if_exists(&legacy_snapshot_backup_path(&legacy))?;
     invalidate_cached_snapshot(&path);
@@ -514,6 +528,10 @@ pub(crate) fn load_inventory_snapshot_cached(
     let primary = snapshot_file_state(&path);
     let backup_path = snapshot_backup_path(&path);
     let backup = snapshot_file_state(&backup_path);
+    let legacy_archive_path = legacy_archive_snapshot_path(app_data_dir, workspace_id);
+    let legacy_archive_primary = snapshot_file_state(&legacy_archive_path);
+    let legacy_archive_backup =
+        snapshot_file_state(&legacy_archive_snapshot_backup_path(&legacy_archive_path));
     let legacy_path = legacy_snapshot_path(app_data_dir, workspace_id);
     let legacy_primary = snapshot_file_state(&legacy_path);
     let legacy_backup = snapshot_file_state(&legacy_snapshot_backup_path(&legacy_path));
@@ -523,6 +541,8 @@ pub(crate) fn load_inventory_snapshot_cached(
         if let Some(entry) = cache.get(&path) {
             if entry.primary == primary
                 && entry.backup == backup
+                && entry.legacy_archive_primary == legacy_archive_primary
+                && entry.legacy_archive_backup == legacy_archive_backup
                 && entry.legacy_primary == legacy_primary
                 && entry.legacy_backup == legacy_backup
             {
@@ -546,6 +566,8 @@ pub(crate) fn load_inventory_snapshot_cached(
             CachedSnapshot {
                 primary,
                 backup,
+                legacy_archive_primary,
+                legacy_archive_backup,
                 legacy_primary,
                 legacy_backup,
                 snapshot: Arc::clone(&snapshot),
@@ -555,10 +577,28 @@ pub(crate) fn load_inventory_snapshot_cached(
     Ok(snapshot)
 }
 
+pub(crate) fn search_inventory_snapshot(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+    query: &str,
+) -> Result<super::inventory_query::InventorySearchResult, String> {
+    validate_workspace_id(workspace_id)?;
+    let app_data_dir = app_data_dir.as_ref();
+    let path = snapshot_path(app_data_dir, workspace_id);
+    if sqlite_store::is_snapshot_database(&path) {
+        if let Ok(result) = sqlite_store::search_snapshot_database(&path, workspace_id, query) {
+            return Ok(result);
+        }
+    }
+    let snapshot = load_inventory_snapshot_cached(app_data_dir, workspace_id)?;
+    Ok(super::inventory_query::search_inventory(&snapshot, query))
+}
+
 fn load_inventory_snapshot_uncached(
     path: &Path,
     workspace_id: &str,
 ) -> Result<InventorySnapshot, String> {
+    let archive = path.with_file_name("inventory-snapshot.json.zip");
     let legacy = path.with_file_name("inventory-snapshot.json");
     if path.is_file() {
         match load_snapshot_file(path, workspace_id) {
@@ -566,6 +606,8 @@ fn load_inventory_snapshot_uncached(
             Err(primary_error) => {
                 for backup in [
                     snapshot_backup_path(path),
+                    archive.clone(),
+                    legacy_archive_snapshot_backup_path(&archive),
                     legacy.clone(),
                     legacy_snapshot_backup_path(&legacy),
                 ] {
@@ -580,10 +622,17 @@ fn load_inventory_snapshot_uncached(
             }
         }
     }
+    if archive.is_file() {
+        return load_snapshot_file(&archive, workspace_id);
+    }
     if legacy.is_file() {
         return load_snapshot_file(&legacy, workspace_id);
     }
-    for backup in [snapshot_backup_path(path), legacy_snapshot_backup_path(&legacy)] {
+    for backup in [
+        snapshot_backup_path(path),
+        legacy_archive_snapshot_backup_path(&archive),
+        legacy_snapshot_backup_path(&legacy),
+    ] {
         if let Ok(mut snapshot) = load_snapshot_file(&backup, workspace_id) {
             mark_reindex_required(&mut snapshot, BACKUP_REINDEX_NOTE);
             return Ok(snapshot);
@@ -597,9 +646,9 @@ fn snapshot_file_state(path: &Path) -> SnapshotFileState {
         Ok(metadata) => SnapshotFileState {
             modified: metadata.modified().ok(),
             length: Some(metadata.len()),
-            digest: fs::read(path)
-                .ok()
-                .map(|bytes| Sha256::digest(bytes).into()),
+            digest: (!sqlite_store::is_snapshot_database(path))
+                .then(|| fs::read(path).ok().map(|bytes| Sha256::digest(bytes).into()))
+                .flatten(),
         },
         Err(_) => SnapshotFileState {
             modified: None,
@@ -621,6 +670,10 @@ pub(crate) fn load_snapshot_file(
     path: &Path,
     workspace_id: &str,
 ) -> Result<InventorySnapshot, String> {
+    if sqlite_store::is_snapshot_database(path) {
+        return sqlite_store::read_snapshot_database(path, workspace_id)
+            .map(canonicalize_snapshot);
+    }
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     let json = decode_snapshot_payload(&bytes)?;
     let value: Value = serde_json::from_slice(&json).map_err(|error| error.to_string())?;
@@ -648,20 +701,6 @@ pub(crate) fn load_snapshot_file(
 const SNAPSHOT_ARCHIVE_ENTRY: &str = "inventory-snapshot.json";
 const MAX_SNAPSHOT_JSON_BYTES: u64 = 1024 * 1024 * 1024;
 
-fn encode_snapshot_archive(json: &[u8]) -> Result<Vec<u8>, String> {
-    let cursor = Cursor::new(Vec::new());
-    let mut archive = ZipWriter::new(cursor);
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    archive
-        .start_file(SNAPSHOT_ARCHIVE_ENTRY, options)
-        .map_err(|error| error.to_string())?;
-    archive.write_all(json).map_err(|error| error.to_string())?;
-    archive
-        .finish()
-        .map(|cursor| cursor.into_inner())
-        .map_err(|error| error.to_string())
-}
-
 pub(crate) fn decode_snapshot_payload(bytes: &[u8]) -> Result<Vec<u8>, String> {
     if bytes
         .iter()
@@ -684,47 +723,37 @@ pub(crate) fn decode_snapshot_payload(bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 fn migrate_legacy_snapshot_backup(app_data_dir: &Path, workspace_id: &str, primary: &Path) {
+    let archive = legacy_archive_snapshot_path(app_data_dir, workspace_id);
+    let archive_backup = legacy_archive_snapshot_backup_path(&archive);
     let legacy = legacy_snapshot_path(app_data_dir, workspace_id);
-    if !legacy.is_file() {
+    let legacy_backup = legacy_snapshot_backup_path(&legacy);
+    let candidates = [&archive, &archive_backup, &legacy, &legacy_backup];
+    if !candidates.iter().any(|path| path.is_file()) {
         return;
     }
     let backup = snapshot_backup_path(primary);
     if !backup.is_file() {
-        if let Ok(snapshot) = load_snapshot_file(&legacy, workspace_id) {
-            if let Ok(json) = serde_json::to_vec(&snapshot) {
-                let redacted = std::str::from_utf8(&json)
-                    .map(engine::redact_secrets)
-                    .unwrap_or_default();
-                if let Ok(archive) = encode_snapshot_archive(redacted.as_bytes()) {
-                    let _ = write_new_file_atomically(&backup, &archive);
-                }
+        if let Some(snapshot) = candidates
+            .iter()
+            .find_map(|path| load_snapshot_file(path, workspace_id).ok())
+        {
+            let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+            let temp = backup.with_file_name(format!(
+                "inventory-snapshot.legacy.{}.{}.tmp.sqlite",
+                std::process::id(),
+                sequence
+            ));
+            if sqlite_store::write_snapshot_database(&temp, &snapshot).is_ok() {
+                let _ = fs::rename(&temp, &backup);
             }
+            let _ = fs::remove_file(temp);
         }
     }
-    if backup.is_file() {
-        let _ = remove_file_if_exists(&legacy);
-        let _ = remove_file_if_exists(&legacy_snapshot_backup_path(&legacy));
+    if backup.is_file() && load_snapshot_file(&backup, workspace_id).is_ok() {
+        for path in candidates {
+            let _ = remove_file_if_exists(path);
+        }
     }
-}
-
-fn write_new_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
-    let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
-    let temp = path.with_extension(format!("zip.{}.{}.tmp", std::process::id(), sequence));
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temp)
-        .map_err(|error| error.to_string())?;
-    if let Err(error) = file.write_all(contents).and_then(|_| file.sync_all()) {
-        drop(file);
-        let _ = fs::remove_file(&temp);
-        return Err(error.to_string());
-    }
-    drop(file);
-    fs::rename(&temp, path).map_err(|error| {
-        let _ = fs::remove_file(&temp);
-        error.to_string()
-    })
 }
 
 fn incompatible_snapshot(value: &Value, version: Option<u64>) -> InventorySnapshot {
@@ -756,52 +785,33 @@ fn incompatible_snapshot(value: &Value, version: Option<u64>) -> InventorySnapsh
     snapshot
 }
 
-fn atomic_save(path: &Path, contents: &[u8], workspace_id: &str) -> Result<(), String> {
-    let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
-    let temp = path.with_file_name(format!(
-        "inventory-snapshot.{}.{}.{}.tmp",
-        std::process::id(),
-        timestamp(),
-        sequence
-    ));
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temp)
-        .map_err(|error| error.to_string())?;
-    if let Err(error) = file.write_all(contents).and_then(|_| file.sync_all()) {
-        drop(file);
-        let _ = fs::remove_file(&temp);
-        return Err(error.to_string());
-    }
-    drop(file);
-
+fn promote_snapshot_database(path: &Path, temp: &Path, workspace_id: &str) -> Result<(), String> {
     let backup = snapshot_backup_path(path);
     let had_current = path.is_file();
     let rotate_current = had_current && load_snapshot_file(path, workspace_id).is_ok();
     if rotate_current {
         if backup.exists() {
             fs::remove_file(&backup).map_err(|error| {
-                let _ = fs::remove_file(&temp);
+                let _ = fs::remove_file(temp);
                 error.to_string()
             })?;
         }
         fs::rename(path, &backup).map_err(|error| {
-            let _ = fs::remove_file(&temp);
+            let _ = fs::remove_file(temp);
             error.to_string()
         })?;
     } else if had_current {
         fs::remove_file(path).map_err(|error| {
-            let _ = fs::remove_file(&temp);
+            let _ = fs::remove_file(temp);
             error.to_string()
         })?;
     }
 
-    if let Err(error) = fs::rename(&temp, path) {
+    if let Err(error) = fs::rename(temp, path) {
         if rotate_current {
             let _ = fs::rename(&backup, path);
         }
-        let _ = fs::remove_file(&temp);
+        let _ = fs::remove_file(temp);
         return Err(error.to_string());
     }
     Ok(())

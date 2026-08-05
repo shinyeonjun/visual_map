@@ -1,4 +1,5 @@
 # Database Memory engine
+
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Database Memory MCP is a metadata-only RDB schema graph CLI and MCP server. It indexes relational database metadata into a local graph so people and agents can answer schema structure, dependency, diff, and impact questions without exposing table rows.
@@ -13,10 +14,10 @@ It is not a live SQL query tool, row-data assistant, deployment tool, or migrati
 
 Build this engine from source with Rust, or use the binary prepared by the parent Visual Map build. Then index the included sample DDL and inspect its impact graph:
 
-~~~powershell
+```powershell
 database-memory index --source ddl-sqlite --path examples/sample-schema.sql --alias shop --cache-path examples/shop-cache.sqlite
 database-memory impact-analysis ddl-sqlite:shop --object-key sqlite:shop:main:main:table:orders --max-depth 3 --limit 50 --format json --cache-path examples/shop-cache.sqlite
-~~~
+```
 
 For installation and MCP client configuration, see [docs/install.md](docs/install.md).
 
@@ -53,6 +54,10 @@ The repository-wide security assumptions and residual risks are documented in
 maintenance exceptions are in
 [docs/security/dependency-exceptions.md](docs/security/dependency-exceptions.md).
 
+The latest Visual Map integration POC, including the open PostgreSQL
+`SERIAL/BIGSERIAL` blocker, is recorded in
+[`../docs/reports/poc-validation-2026-08-05.md`](../docs/reports/poc-validation-2026-08-05.md).
+
 ## Build and packaging
 
 The parent `visual_map` repository owns the application bundle and release
@@ -61,7 +66,7 @@ engine-specific installation/security/testing references linked below.
 
 The CLI exposes the same versioned metadata-only contract as MCP. The generic v2 surface is `contract`, `index`, `list-snapshots`, `describe-snapshot`, `list-objects`, `find-objects`, and `describe-object`. The table-specific commands remain compatibility aliases.
 
-~~~powershell
+```powershell
 database-memory contract --format json
 database-memory list-snapshots --format json --cache-path examples/shop-cache.sqlite
 database-memory list-objects ddl-sqlite:shop --kind table --format json --cache-path examples/shop-cache.sqlite
@@ -71,7 +76,7 @@ database-memory inventory ddl-sqlite:shop --limit 100 --format json --cache-path
 database-memory inventory ddl-sqlite:shop --offset 100 --limit 100 --format json --cache-path examples/shop-cache.sqlite
 database-memory impact-analysis ddl-sqlite:shop --object-key sqlite:shop:main:main:table:orders --max-depth 3 --limit 50 --format json --cache-path examples/shop-cache.sqlite
 database-memory trace-relationships ddl-sqlite:shop sqlite:shop:main:main:table:orders --max-depth 4 --limit 20 --format json --cache-path examples/shop-cache.sqlite
-~~~
+```
 
 The contract reports `metadata_only: true`, `row_data_access: false`, exact certified versions/scopes, ODBC build availability, bounded limits, and the intentionally deferred DB2 boundary.
 Inventory responses use stable table-key ordering and report `offset`, `has_more`, and `next_offset`, so callers can continue without treating the first page as the complete schema.
@@ -81,15 +86,15 @@ Define a profile with only its source in `.database-memory/config.toml`, then
 provide `DATABASE_MEMORY_<ALIAS>_CONNECTION_STRING` at runtime. Non-alphanumeric
 alias characters become `_` and the environment variable name is uppercase.
 
-~~~toml
+```toml
 [warehouse]
 source = "postgres"
-~~~
+```
 
-~~~powershell
+```powershell
 $env:DATABASE_MEMORY_WAREHOUSE_CONNECTION_STRING = "postgresql://user:password@host/database"
 database-memory index --alias warehouse --cache-path .database-memory/warehouse.sqlite
-~~~
+```
 
 The explicit `--connection-string` flag remains available for disposable local
 development, but it can be exposed by shell history or process inspection.
@@ -98,7 +103,7 @@ development, but it can be exposed by shell history or process inspection.
 
 Use the built MCP stdio server binary. Full platform notes and alternate client shapes are in [docs/install.md](docs/install.md).
 
-~~~json
+```json
 {
   "mcpServers": {
     "database-memory": {
@@ -110,7 +115,7 @@ Use the built MCP stdio server binary. Full platform notes and alternate client 
     }
   }
 }
-~~~
+```
 
 On Windows, point command at `database-memory-mcp.exe` and separate multiple
 allowed roots with `;`. Without this environment variable, the MCP server
@@ -122,32 +127,32 @@ The example schema is a small shop database in [examples/sample-schema.sql](exam
 
 Index it directly from DDL:
 
-~~~powershell
+```powershell
 database-memory index --source ddl-sqlite --path examples/sample-schema.sql --alias shop --cache-path examples/shop-cache.sqlite
-~~~
+```
 
 The complete index output includes the stable snapshot key, total object and relationship counts, adapter/server identity, selected scope, and the full completeness proof. A concise text run starts like this:
 
-~~~text
+```text
 snapshot indexed: ddl-sqlite:shop
 status: complete
 objects indexed: <verified total>
 graph edges indexed: <verified projection total>
 semantic relationships verified: <certified relationship total>
 cache path: examples/shop-cache.sqlite
-~~~
+```
 
 DDL imports use the snapshot key ddl-sqlite:<alias>. The graph object keys still use sqlite:<alias>:... because the DDL source applies the SQL to an in-memory SQLite database and reuses SQLite metadata introspection. The DDL authorizer rejects external database attachment and extension loading.
 
 Describe a table:
 
-~~~powershell
+```powershell
 database-memory describe-table ddl-sqlite:shop orders --cache-path examples/shop-cache.sqlite
-~~~
+```
 
 Captured output:
 
-~~~text
+```text
 table: orders
 columns:
   id INTEGER nullable: no
@@ -162,35 +167,35 @@ foreign keys:
     fk_order_items_1: order_items(order_id) -> orders(id)
 indexes:
   idx_orders_customer_id: customer_id unique: no primary: no
-~~~
+```
 
 Find tables and columns:
 
-~~~powershell
+```powershell
 database-memory find-table ddl-sqlite:shop order --cache-path examples/shop-cache.sqlite
-~~~
+```
 
-~~~text
+```text
 order_items
 orders
-~~~
+```
 
-~~~powershell
+```powershell
 database-memory find-column ddl-sqlite:shop customer --cache-path examples/shop-cache.sqlite
-~~~
+```
 
-~~~text
+```text
 orders.customer_id
-~~~
+```
 
 Use `--format json` when the caller needs stable column/table keys, database and schema identity, type, nullability, default value, ordinal position, or generated-column state.
 
 You can also materialize the schema yourself with SQLite, then index the resulting database file with --source sqlite.
 
-~~~powershell
+```powershell
 sqlite3 examples/shop.sqlite ".read examples/sample-schema.sql"
 database-memory index --source sqlite --path examples/shop.sqlite --alias shop --cache-path examples/shop-cache.sqlite
-~~~
+```
 
 ## Example MCP Questions
 
@@ -203,7 +208,7 @@ After indexing the example schema, an agent can ask:
 
 The MCP client may call impact_analysis like this:
 
-~~~json
+```json
 {
   "alias": "ddl-sqlite:shop",
   "table": "orders",
@@ -212,11 +217,11 @@ The MCP client may call impact_analysis like this:
   "max_depth": 2,
   "cache_path": "examples/shop-cache.sqlite"
 }
-~~~
+```
 
 Representative decoded tool text (bounded-response metadata and edge endpoints are abbreviated below):
 
-~~~json
+```json
 {
   "direction": "outbound",
   "max_depth": 2,
@@ -265,11 +270,11 @@ Representative decoded tool text (bounded-response metadata and edge endpoints a
   ],
   "capability_warnings": []
 }
-~~~
+```
 
 For relationship tracing from the same column, call trace_relationships with:
 
-~~~json
+```json
 {
   "alias": "ddl-sqlite:shop",
   "start_object_key": "sqlite:shop:main:main:column:orders:customer_id",
@@ -277,7 +282,7 @@ For relationship tracing from the same column, call trace_relationships with:
   "max_depth": 2,
   "cache_path": "examples/shop-cache.sqlite"
 }
-~~~
+```
 
 The captured result includes paths from the column to idx_orders_customer_id, to fk_orders_0, and through that FK to customers.id.
 
@@ -285,15 +290,15 @@ The captured result includes paths from the column to idx_orders_customer_id, to
 
 Every accepted source is metadata-only and must pass exact product/version detection, scope and privilege proof, stable catalog reads, canonical validation, and independent discovered-versus-emitted reconciliation. `database-memory contract --format json` is the machine-readable source of truth.
 
-| Source | Certified versions | Scope and boundary |
-| --- | --- | --- |
-| `sqlite` | Bundled runtime used by this binary | Read-only `main` catalog/schema. |
-| `ddl-sqlite` | SQLite-compatible schema DDL | Isolated `main` catalog/schema; no row statements or external resources. |
-| `postgres` | PostgreSQL 14, 15, 16, 17, 18 | One connected database and selected schemas. Compatible products are rejected. |
-| `yugabytedb` | YSQL `15.12-YB-2025.2.3.2-b0` | One connected database and selected schemas. Tablet, split, colocation, tablegroup, tablespace, and placement metadata are preserved. YCQL and other releases are rejected. |
-| `mysql` | MySQL 8.0, 8.4, 9.7 | One selected database. MariaDB identity is rejected at this entrypoint. |
-| `mariadb` | MariaDB 10.11, 11.4, 11.8, 12.3 | One selected database. MySQL identity is rejected at this entrypoint. |
-| `sqlserver` | SQL Server 2017, 2019, 2022, 2025 Database Engine | One connected database and selected schemas. Azure variants are not claimed yet. |
-| `oracle` | Oracle AI Database 26ai Free `23.26.2.0.0` | One connected PDB/non-CDB and selected owner schemas; Oracle Client 11.2+ is required. |
-| `odbc` | Runtime-negotiated SQL Server bridge for the native-certified versions | Optional `odbc` build feature plus a matching 64-bit driver. Other products fail closed until a product strategy is live-certified. |
-| `db2` | Not supported | Deliberately deferred because implementation/testing requires a separate IBM license/EULA decision the owner declined. |
+| Source       | Certified versions                                                     | Scope and boundary                                                                                                                                                          |
+| ------------ | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sqlite`     | Bundled runtime used by this binary                                    | Read-only `main` catalog/schema.                                                                                                                                            |
+| `ddl-sqlite` | SQLite-compatible schema DDL                                           | Isolated `main` catalog/schema; no row statements or external resources.                                                                                                    |
+| `postgres`   | PostgreSQL 14, 15, 16, 17, 18                                          | One connected database and selected schemas. Compatible products are rejected.                                                                                              |
+| `yugabytedb` | YSQL `15.12-YB-2025.2.3.2-b0`                                          | One connected database and selected schemas. Tablet, split, colocation, tablegroup, tablespace, and placement metadata are preserved. YCQL and other releases are rejected. |
+| `mysql`      | MySQL 8.0, 8.4, 9.7                                                    | One selected database. MariaDB identity is rejected at this entrypoint.                                                                                                     |
+| `mariadb`    | MariaDB 10.11, 11.4, 11.8, 12.3                                        | One selected database. MySQL identity is rejected at this entrypoint.                                                                                                       |
+| `sqlserver`  | SQL Server 2017, 2019, 2022, 2025 Database Engine                      | One connected database and selected schemas. Azure variants are not claimed yet.                                                                                            |
+| `oracle`     | Oracle AI Database 26ai Free `23.26.2.0.0`                             | One connected PDB/non-CDB and selected owner schemas; Oracle Client 11.2+ is required.                                                                                      |
+| `odbc`       | Runtime-negotiated SQL Server bridge for the native-certified versions | Optional `odbc` build feature plus a matching 64-bit driver. Other products fail closed until a product strategy is live-certified.                                         |
+| `db2`        | Not supported                                                          | Deliberately deferred because implementation/testing requires a separate IBM license/EULA decision the owner declined.                                                      |

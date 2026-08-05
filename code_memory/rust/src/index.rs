@@ -543,7 +543,8 @@ pub(crate) fn index_project(
         &source_snapshot,
         project_config_digest,
     );
-    let framework_cache = project_cache_root(&root).join(format!("framework-{framework_key}.json"));
+    let framework_cache =
+        project_cache_root(&root).join(format!("framework-{framework_key}.json.gz"));
     active_cache_files.insert(framework_cache.clone());
     match load_framework_cache(&framework_cache) {
         Some(analysis) => {

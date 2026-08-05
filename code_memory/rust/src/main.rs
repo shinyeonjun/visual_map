@@ -13,6 +13,7 @@ mod architecture;
 mod cache;
 mod collectors;
 mod frameworks;
+mod generation_store;
 mod model;
 mod module_plan;
 mod project_model;

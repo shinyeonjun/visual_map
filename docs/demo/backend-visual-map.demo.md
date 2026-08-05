@@ -1,64 +1,61 @@
-# Backend Visual Map 3-Minute Demo
+# Backend Visual Map 3분 데모
 
-## Goal
+## 목표
 
-Show how Backend Visual Map turns a real backend repository plus DB metadata into a navigable Korean-first architecture map without reading DB row data.
+코드를 직접 열기 전에 한 캔버스에서 전체 구조를 보고, API 또는 코드를 선택해 근거가
+있는 다음 단계까지 내려가는 흐름을 보여준다. 연결이 없으면 만들어내지 않고 미확인으로
+남긴다.
 
-## Demo Inputs
+## 준비
 
-- Repository: `D:\meeting-overlay-assistant`
-- DB source: SQLite DDL
-- DDL path: `D:\meeting-overlay-assistant\server\app\infrastructure\persistence\postgresql\drawsql\030_drawsql_schema.sql`
-- Workspace name: `meeting-overlay-demo`
+- 최신 엔진으로 읽은 데모 저장소
+- 가능하면 metadata-only DB snapshot
+- stale 경고가 없는 현재 snapshot
+- 데모 전에 검색 필터와 선택 상태 초기화
 
-## Three-Minute Script
+실제 제품 품질을 보여주는 데모이므로 mock node, 임의 연결, 가짜 성능·트래픽 수치를
+사용하지 않는다.
 
-1. Open Backend Visual Map.
-   - Point out that `codebase-memory` and `database-memory` show as 정상.
-   - Say: "이 앱은 로컬 코드와 DB 메타데이터만 인덱싱합니다. row data는 읽지 않습니다."
+## 진행
 
-2. In Workbench, create or open the demo workspace.
-   - Name: `meeting-overlay-demo`
-   - Repo path: `D:\meeting-overlay-assistant`
-   - Click `생성` if the workspace does not exist.
+### 0:00–0:30 — 프로젝트 열기
 
-3. Index and load code metadata.
-   - Click `저장소 인덱싱`.
-   - Click `코드 불러오기`.
-   - Expected demo counts from the Phase 72 smoke: 50 API routes, 80 services, 12 files.
+1. 로컬 프로젝트 폴더를 연다.
+2. 상단에서 현재 project, 마지막 분석 시각과 snapshot 상태를 확인한다.
+3. 코드 또는 DB가 바뀐 경우에만 다시 읽는다.
 
-4. Save, index, and load DB metadata.
-   - Source: `SQLite DDL`
-   - Profile name: `meeting-overlay-ddl`
-   - DDL path: `D:\meeting-overlay-assistant\server\app\infrastructure\persistence\postgresql\drawsql\030_drawsql_schema.sql`
-   - Click `DB 프로필 저장`, `메타데이터 인덱싱`, then `테이블 불러오기`.
-   - Expected demo count from the Phase 72 smoke: 18 tables.
+### 0:30–1:10 — 전체 구조 읽기
 
-5. Show Workbench map.
-   - The canvas should show grouped nodes, not a raw full graph.
-   - Point out that code-to-DB links are candidate links unless direct evidence proves them.
+1. `전체 프로젝트` overview를 보여준다.
+2. 패키지 카드의 API·코드·DB 개수와 연결 상태를 설명한다.
+3. zoom, minimap, `선택 영역 맞춤`으로 큰 구조를 이동한다.
 
-6. Switch to Atlas.
-   - Show the three bands: API routes, code, and database schema.
-   - Use the overview to explain the product in one sentence: "요청 흐름과 DB 스키마를 한 화면에서 좁혀 보는 로컬 백엔드 지도입니다."
+### 1:10–2:10 — 같은 캔버스에서 단계적으로 펼치기
 
-7. Show the three focused stories.
-   - API Flow: choose the API mode and use `/api/v1/sessions` as the spoken example.
-   - Table Usage: choose dependency/schema mode and point to `sessions`.
-   - Column Impact: choose impact mode and point to `sessions.id`.
+1. 패키지 하나를 선택해 제자리에서 펼친다.
+2. 모듈을 선택해 내부 코드/API 항목을 표시한다.
+3. breadcrumb가 `전체 프로젝트 > 패키지 > 모듈`로 바뀌는지 확인한다.
+4. 형제 패키지와 상위 구조가 사라지지 않는 것을 보여준다.
 
-## Timing
+### 2:10–2:40 — 왼쪽 레이어에서 빠르게 찾기
 
-- 0:00-0:30: app purpose and local/privacy boundary.
-- 0:30-1:20: workspace, code metadata, DB metadata.
-- 1:20-2:10: Workbench grouped map.
-- 2:10-3:00: Atlas overview plus API/table/column focused story.
+1. API 또는 코드 레이어를 연다.
+2. 검색으로 항목 하나를 찾는다.
+3. 선택 결과가 별도 화면으로 이동하지 않고 중앙의 같은 캔버스에서 해당
+   패키지·모듈까지 펼쳐지는지 확인한다.
 
-## Pass Criteria
+### 2:40–3:00 — 근거와 한계 확인
 
-- The demo can be repeated in 3 minutes with the paths above.
-- Counts are shown honestly from metadata/index output.
-- The canvas never shows a fake current state while data is missing or stale.
-- No DB row data is queried.
-- DB passwords are not entered or persisted.
-- No MCP server is registered into Codex, Claude, or another AI tool.
+1. 오른쪽 인스펙터에서 source path, line, relation evidence를 연다.
+2. 확정·후보·미확인을 구분한다.
+3. DB snapshot이 있으면 실제 table/column 관계를 확인한다.
+4. 직접 근거가 없는 관계는 비어 있거나 미확인으로 남는다고 설명한다.
+
+## 통과 기준
+
+- 화면 전환 없이 한 캔버스에서 세 단계 이상 내려간다.
+- 왼쪽 항목 선택이 중앙 구조의 동일한 expansion path를 사용한다.
+- source evidence가 실제 파일·라인으로 연결된다.
+- 확정과 후보가 같은 선·표현으로 섞이지 않는다.
+- stale 또는 partial 상태를 현재 완료 결과처럼 보여주지 않는다.
+- 닫기, breadcrumb, fit-selection으로 원래 구조에 돌아갈 수 있다.

@@ -4,7 +4,7 @@
 
 ## Why it exists
 
-큰 백엔드 저장소에서 "이 API가 어떤 테이블과 컬럼에 영향을 주는가?"를 코드·스키마를 오가며 추적하는 비용을 줄입니다. raw dependency graph를 그대로 던지지 않고, Workbench와 Atlas에서 API Flow, Table Usage, Column Impact를 focused view로 보여줍니다.
+큰 백엔드 저장소에서 "이 API가 어떤 코드와 데이터 경계를 통과하는가?"를 코드·스키마를 오가며 추적하는 비용을 줄입니다. raw dependency graph를 그대로 던지지 않고, 하나의 캔버스에서 프로젝트 → 패키지 → 모듈 → 코드 구조를 펼치고 선택 대상의 근거와 연결 경로를 확인합니다.
 
 **Product boundary:** row data는 읽지 않고, DB 비밀번호·토큰·연결 secret은 workspace 파일에 저장하지 않습니다.
 
@@ -109,7 +109,8 @@ powershell -File scripts/release-smoke.ps1
 - DB row data를 읽지 않습니다.
 - DB 비밀번호/토큰/연결 secret을 워크스페이스 파일에 저장하지 않습니다.
 - DB 연결 문자열은 네트워크 DB 인덱싱 실행 중 세션 입력으로만 사용합니다.
-- 저장되는 파일은 워크스페이스 설정, engine cache 경로, 인벤토리 스냅샷입니다.
+- 저장되는 파일은 workspace별 설정, content-addressed engine cache, 현재·이전 불변
+  generation SQLite, 통합 inventory snapshot SQLite입니다.
 - code-to-DB 관계는 직접 증거가 없는 한 후보(candidate)로 표시합니다. 확정 관계는 실행 호출에 직접 전달된 정적 SQL과 유일하게 식별된 테이블/컬럼이 있을 때만 만듭니다.
 - 코드 CALLS는 직접 FastAPI import 근거로 보강된 경우 또는 엔진 신뢰도 85% 이상만 확정 경로에 포함하며, 70~84%는 후보, 그 아래나 점수 없음은 미확인으로 분리합니다.
 
@@ -119,15 +120,19 @@ powershell -File scripts/release-smoke.ps1
 - 외부 DB smoke는 로컬 환경에 해당 DB와 드라이버/연결 문자열이 있을 때만 통과할 수 있습니다.
 - SQLite DDL 입력에 지원하지 않는 문법이 있으면 완전한 결과로 가장하지 않고 읽기를 실패 처리합니다.
 - 동적 SQL과 ORM 생성 쿼리는 직접 실행 근거로 확정하지 않으며 후보 또는 미확인으로 남깁니다.
-- 공식 Windows 설치 파일 배포는 현재 제품 범위가 아닙니다.
+- 모든 provider를 포함한 내부 Demo installer는 검증했습니다. 코드 서명과
+  `releaseReady` manifest를 갖춘 공개 Windows 배포는 아직 차단되어 있습니다.
 - 현재 제품 목표는 Windows desktop입니다.
 
 ## 문서
 
+- [문서 안내와 현재 기준](docs/README.md)
+- [2026-08-05 엔진·UI POC 검증 결과](docs/reports/poc-validation-2026-08-05.md)
 - [제품 지원 범위와 확정 근거 규칙](docs/product-support.md)
 - [Visual Map 코드 지능 계약](docs/contracts/visual-map-code-intelligence-contract.md)
 - [코드·DB 엔진 인덱스 데이터 계약](docs/contracts/engine-index-data-contract.md)
 - [공식 지원 스택](docs/contracts/visual-map-supported-stack-contract.md)
 - [3분 데모](docs/demo/backend-visual-map.demo.md)
 - [문제 해결](docs/troubleshooting.md)
+- [엔진 트러블슈팅 기록](docs/troubleshooting/code-memory-engine.md)
 - [보안·개인정보 경계](docs/security-privacy.md)

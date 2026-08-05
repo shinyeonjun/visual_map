@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use database_memory_core::graph_builder::insert_schema_snapshot_graph;
@@ -855,9 +856,14 @@ fn key_for(
 }
 
 fn temp_cache_path() -> std::path::PathBuf {
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("database-memory-mcp-{nanos}.sqlite"))
+    let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "database-memory-mcp-{}-{nanos}-{id}.sqlite",
+        std::process::id()
+    ))
 }

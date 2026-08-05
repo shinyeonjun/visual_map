@@ -45,13 +45,12 @@ An explicitly selected live test fails immediately when its required variable
 is absent. Do not run an unfiltered `cargo test -- --ignored` unless every live
 database and administrative connection is configured.
 
-The authoritative full matrix is
-[`.github/workflows/live-adapters.yml`](../.github/workflows/live-adapters.yml).
-It provisions disposable PostgreSQL, YugabyteDB, MySQL, and MariaDB services;
-creates the extra YugabyteDB colocated database; and supplies separate
-administrative MySQL-family connections for privilege fixtures. SQL Server,
-Oracle, and ODBC certification runs only through the explicitly requested
-licensed self-hosted job.
+The checked-in release gate is
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml). It
+provisions disposable PostgreSQL 16 and MySQL 8.4 services for the required
+product smoke. The broader YugabyteDB, MySQL/MariaDB version, SQL Server,
+Oracle, and ODBC live tests below are environment-gated and are not currently
+claimed as an automated full CI matrix.
 
 The live environment families are:
 

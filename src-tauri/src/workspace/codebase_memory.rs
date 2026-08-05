@@ -1,9 +1,11 @@
 use crate::{engine, EngineRegistry};
+use flate2::read::GzDecoder;
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process,
     sync::atomic::{AtomicU64, Ordering},
@@ -20,6 +22,10 @@ const MAX_FOCUSED_SEARCH_TERM_BYTES: usize = 512;
 const MAX_FOCUSED_PATH_FILTER_BYTES: usize = 512;
 const SEARCH_CODE_GREP_LIMIT: usize = 500;
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn runtime_cache_root(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("runtime")
+}
 
 // `Union` is an upstream Cypher keyword; supporting it would force an unbounded all-node scan.
 pub(crate) const CODE_NODE_LABELS: &[&str] = &[
@@ -61,6 +67,26 @@ struct InventoryExport {
     nodes: Value,
     calls: Value,
     handles: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeGenerationCounts {
+    nodes: usize,
+    calls: usize,
+    handles: usize,
+    architecture_nodes: usize,
+    architecture_edges: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeGenerationReceipt {
+    schema: String,
+    generation_id: String,
+    status: String,
+    database_path: String,
+    counts: CodeGenerationCounts,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,6 +180,9 @@ impl<'a> CodebaseMemoryAdapter<'a> {
     }
 
     pub(crate) fn inventory(&self, project: &str) -> Result<CodebaseMemoryInventory, String> {
+        if let Some(inventory) = self.generation_inventory(project)? {
+            return Ok(inventory);
+        }
         let export = self.invoke_json(
             CodebaseMemoryTool::ExportInventory,
             &json!({ "project": project }),
@@ -179,6 +208,136 @@ impl<'a> CodebaseMemoryAdapter<'a> {
             calls: export.calls,
             handles: export.handles,
         })
+    }
+
+    fn generation_inventory(
+        &self,
+        project: &str,
+    ) -> Result<Option<CodebaseMemoryInventory>, String> {
+        let project_dir = self
+            .cache_dir
+            .join("compat-projects")
+            .join(safe_project_name(project)?);
+        let current = project_dir.join("current.json");
+        if !current.is_file() {
+            return Ok(None);
+        }
+        let receipt: CodeGenerationReceipt = serde_json::from_slice(
+            &fs::read(&current)
+                .map_err(|error| format!("코드 세대 receipt를 읽지 못했습니다: {error}"))?,
+        )
+        .map_err(|error| format!("코드 세대 receipt가 올바르지 않습니다: {error}"))?;
+        if receipt.schema != "code-memory.generation-receipt.v1" || receipt.status != "complete" {
+            return Err("완료되지 않은 코드 세대는 읽을 수 없습니다".to_string());
+        }
+        let expected = project_dir
+            .join("generations")
+            .join(&receipt.generation_id)
+            .join("code-graph.sqlite");
+        let expected = fs::canonicalize(&expected).map_err(|error| {
+            format!(
+                "코드 세대 데이터베이스를 찾을 수 없습니다({}): {error}",
+                expected.display()
+            )
+        })?;
+        let advertised = fs::canonicalize(&receipt.database_path)
+            .map_err(|error| format!("receipt의 코드 데이터베이스 경로가 없습니다: {error}"))?;
+        let cache_root = fs::canonicalize(&self.cache_dir)
+            .map_err(|error| format!("코드 캐시 경로를 확인할 수 없습니다: {error}"))?;
+        if advertised != expected || !expected.starts_with(&cache_root) {
+            return Err(
+                "receipt의 코드 데이터베이스 경로가 워크스페이스 캐시를 벗어났습니다".to_string(),
+            );
+        }
+        let connection = Connection::open_with_flags(
+            &expected,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| format!("코드 세대 데이터베이스를 열지 못했습니다: {error}"))?;
+        connection
+            .pragma_update(None, "query_only", true)
+            .map_err(|error| format!("코드 세대를 읽기 전용으로 열지 못했습니다: {error}"))?;
+        verify_generation_counts(&connection, &receipt.counts)?;
+        let store_schema = generation_metadata(&connection, "schema")?;
+        if !matches!(
+            store_schema.as_str(),
+            Some(
+                "code-memory.graph-store.v1"
+                    | "code-memory.graph-store.v2"
+                    | "code-memory.graph-store.v3"
+            )
+        ) {
+            return Err(format!(
+                "지원하지 않는 코드 세대 저장 형식입니다: {store_schema}"
+            ));
+        }
+        ensure_count_below_limit(receipt.counts.nodes, "code nodes", MAX_CODE_NODES)?;
+        ensure_count_below_limit(receipt.counts.calls, "CALLS", MAX_GRAPH_RELATIONSHIPS)?;
+        ensure_count_below_limit(receipt.counts.handles, "HANDLES", MAX_GRAPH_RELATIONSHIPS)?;
+
+        let chunked = store_schema.as_str() == Some("code-memory.graph-store.v3");
+        let (nodes, calls, handles) = if chunked {
+            (
+                generation_chunk_rows_result(&connection, "inventory_columns", "inventory")?,
+                generation_chunk_rows_result(&connection, "calls_columns", "calls")?,
+                generation_chunk_rows_result(&connection, "handles_columns", "handles")?,
+            )
+        } else {
+            (
+                generation_rows_result(
+                    &connection,
+                    "inventory_columns",
+                    "SELECT row_json FROM inventory_nodes ORDER BY ordinal",
+                    None,
+                )?,
+                generation_rows_result(
+                    &connection,
+                    "calls_columns",
+                    "SELECT row_json FROM relationships WHERE kind = ?1 ORDER BY ordinal",
+                    Some("CALLS"),
+                )?,
+                generation_rows_result(
+                    &connection,
+                    "handles_columns",
+                    "SELECT row_json FROM relationships WHERE kind = ?1 ORDER BY ordinal",
+                    Some("HANDLES"),
+                )?,
+            )
+        };
+        let nodes = normalize_inventory_nodes(&nodes)?;
+        let mut architecture = generation_metadata(&connection, "architecture_header")?;
+        let architecture_object = architecture
+            .as_object_mut()
+            .ok_or("코드 architecture header가 객체가 아닙니다")?;
+        let (architecture_nodes, architecture_edges) = if chunked {
+            (
+                generation_chunk_rows(&connection, "architecture_nodes")?,
+                generation_chunk_rows(&connection, "architecture_edges")?,
+            )
+        } else {
+            (
+                generation_json_rows(
+                    &connection,
+                    "SELECT node_json FROM architecture_nodes ORDER BY ordinal",
+                    None,
+                )?,
+                generation_json_rows(
+                    &connection,
+                    "SELECT edge_json FROM architecture_edges ORDER BY ordinal",
+                    None,
+                )?,
+            )
+        };
+        architecture_object.insert("nodes".to_string(), Value::Array(architecture_nodes));
+        architecture_object.insert("edges".to_string(), Value::Array(architecture_edges));
+
+        Ok(Some(CodebaseMemoryInventory {
+            architecture,
+            evidence: generation_metadata(&connection, "evidence")?,
+            nodes,
+            calls,
+            handles,
+        }))
     }
 
     pub(crate) fn search_code_with_operation(
@@ -257,10 +416,16 @@ impl<'a> CodebaseMemoryAdapter<'a> {
         let request_path = request.path().display().to_string();
         let args =
             engine::sidecar_args(["cli", tool.as_str(), "--args-file", request_path.as_str()])?;
-        let mut env_values = vec![(
-            "CBM_CACHE_DIR".to_string(),
-            self.cache_dir.display().to_string(),
-        )];
+        let mut env_values = vec![
+            (
+                "CBM_CACHE_DIR".to_string(),
+                self.cache_dir.display().to_string(),
+            ),
+            (
+                "CODE_MEMORY_CACHE_ROOT".to_string(),
+                runtime_cache_root(&self.cache_dir).display().to_string(),
+            ),
+        ];
         let engine_dir = Path::new(&self.engine.path).parent();
         if let Some(path) = engine_dir
             .map(|directory| directory.join("packs"))
@@ -654,6 +819,182 @@ fn ensure_result_below_limit(value: &Value, kind: &str, limit: usize) -> Result<
     }
 }
 
+fn ensure_count_below_limit(total: usize, kind: &str, limit: usize) -> Result<(), String> {
+    if total >= limit {
+        Err(format!(
+            "{kind} 결과가 안전 한도({limit})에 도달해 잘렸을 수 있습니다"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn safe_project_name(project: &str) -> Result<String, String> {
+    let safe = project
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if safe.is_empty() || matches!(safe.as_str(), "." | "..") {
+        Err("코드 프로젝트 이름이 올바르지 않습니다".to_string())
+    } else {
+        Ok(safe)
+    }
+}
+
+fn verify_generation_counts(
+    connection: &Connection,
+    expected: &CodeGenerationCounts,
+) -> Result<(), String> {
+    let actual = [
+        (
+            "nodes",
+            "SELECT COUNT(*) FROM inventory_nodes",
+            expected.nodes,
+        ),
+        (
+            "calls",
+            "SELECT COUNT(*) FROM relationships WHERE kind = 'CALLS'",
+            expected.calls,
+        ),
+        (
+            "handles",
+            "SELECT COUNT(*) FROM relationships WHERE kind = 'HANDLES'",
+            expected.handles,
+        ),
+        (
+            "architecture nodes",
+            "SELECT COUNT(*) FROM architecture_nodes",
+            expected.architecture_nodes,
+        ),
+        (
+            "architecture edges",
+            "SELECT COUNT(*) FROM architecture_edges",
+            expected.architecture_edges,
+        ),
+    ];
+    for (label, sql, expected) in actual {
+        let count = connection
+            .query_row(sql, [], |row| row.get::<_, usize>(0))
+            .map_err(|error| format!("코드 세대 {label} 수를 읽지 못했습니다: {error}"))?;
+        if count != expected {
+            return Err(format!(
+                "코드 세대 {label} 수가 receipt와 다릅니다({expected} != {count})"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn generation_metadata(connection: &Connection, key: &str) -> Result<Value, String> {
+    let value = connection
+        .query_row(
+            "SELECT value_json FROM metadata WHERE key = ?1",
+            [key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("코드 세대 메타데이터를 읽지 못했습니다: {error}"))?
+        .ok_or_else(|| format!("코드 세대 메타데이터 '{key}'가 없습니다"))?;
+    serde_json::from_str(&value)
+        .map_err(|error| format!("코드 세대 메타데이터 '{key}'가 올바르지 않습니다: {error}"))
+}
+
+fn generation_rows_result(
+    connection: &Connection,
+    columns_key: &str,
+    sql: &str,
+    parameter: Option<&str>,
+) -> Result<Value, String> {
+    let rows = generation_json_rows(connection, sql, parameter)?;
+    let total = rows.len();
+    Ok(json!({
+        "columns": generation_metadata(connection, columns_key)?,
+        "rows": rows,
+        "total": total
+    }))
+}
+
+fn generation_chunk_rows_result(
+    connection: &Connection,
+    columns_key: &str,
+    kind: &str,
+) -> Result<Value, String> {
+    let rows = generation_chunk_rows(connection, kind)?;
+    let total = rows.len();
+    Ok(json!({
+        "columns": generation_metadata(connection, columns_key)?,
+        "rows": rows,
+        "total": total
+    }))
+}
+
+fn generation_chunk_rows(connection: &Connection, kind: &str) -> Result<Vec<Value>, String> {
+    let mut statement = connection
+        .prepare("SELECT payload FROM chunks WHERE kind = ?1 ORDER BY chunk_index")
+        .map_err(|error| format!("코드 세대 청크 질의를 준비하지 못했습니다: {error}"))?;
+    let rows = statement
+        .query_map([kind], |row| Ok(row.get_ref(0)?.as_bytes()?.to_vec()))
+        .map_err(|error| format!("코드 세대 청크를 질의하지 못했습니다: {error}"))?;
+    let mut values = Vec::new();
+    for row in rows {
+        let bytes = row.map_err(|error| format!("코드 세대 청크를 읽지 못했습니다: {error}"))?;
+        let value = decode_generation_json(&bytes)?;
+        let chunk = value.as_array().ok_or("코드 세대 청크가 배열이 아닙니다")?;
+        values.extend(chunk.iter().cloned());
+    }
+    Ok(values)
+}
+
+fn generation_json_rows(
+    connection: &Connection,
+    sql: &str,
+    parameter: Option<&str>,
+) -> Result<Vec<Value>, String> {
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|error| format!("코드 세대 질의를 준비하지 못했습니다: {error}"))?;
+    let mut rows = match parameter {
+        Some(value) => statement.query([value]),
+        None => statement.query([]),
+    }
+    .map_err(|error| format!("코드 세대를 질의하지 못했습니다: {error}"))?;
+    let mut values = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| format!("코드 세대 행을 읽지 못했습니다: {error}"))?
+    {
+        let value = row
+            .get_ref(0)
+            .map_err(|error| format!("코드 세대 JSON을 읽지 못했습니다: {error}"))?;
+        let value = value
+            .as_bytes()
+            .map_err(|error| format!("코드 세대 JSON 형식이 올바르지 않습니다: {error}"))?;
+        values.push(decode_generation_json(value)?);
+    }
+    Ok(values)
+}
+
+fn decode_generation_json(value: &[u8]) -> Result<Value, String> {
+    let json = if value.starts_with(&[0x1f, 0x8b]) {
+        let mut decoder = GzDecoder::new(value);
+        let mut json = Vec::new();
+        decoder
+            .read_to_end(&mut json)
+            .map_err(|error| format!("코드 세대 JSON 압축을 풀지 못했습니다: {error}"))?;
+        json
+    } else {
+        value.to_vec()
+    };
+    serde_json::from_slice(&json)
+        .map_err(|error| format!("코드 세대 JSON이 올바르지 않습니다: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,6 +1052,19 @@ mod tests {
         drop(request);
         assert!(!path.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn code_engine_runtime_cache_stays_inside_workspace_cache() {
+        let cache = Path::new("workspaces")
+            .join("workspace-1")
+            .join("engines")
+            .join("codebase-memory")
+            .join("cache");
+
+        let runtime = runtime_cache_root(&cache);
+        assert_eq!(runtime, cache.join("runtime"));
+        assert!(runtime.starts_with(&cache));
     }
 
     #[test]

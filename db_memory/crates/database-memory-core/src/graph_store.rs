@@ -131,7 +131,7 @@ pub struct GraphStore {
 
 impl GraphStore {
     pub fn open(path: impl AsRef<Path>) -> GraphStoreResult<Self> {
-        let conn = Connection::open(path)?;
+        let conn = Connection::open(crate::sqlite_database_path(path.as_ref()))?;
         Self::from_connection(conn)
     }
 
