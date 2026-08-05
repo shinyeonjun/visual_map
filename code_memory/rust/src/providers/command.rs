@@ -212,7 +212,7 @@ pub(crate) fn tool_command(
             command.env(key, value);
         }
     }
-    apply_offline_environment(&mut command);
+    apply_provider_environment(&mut command);
     hide_console_window(&mut command);
     Ok(command)
 }
@@ -229,8 +229,14 @@ fn hide_console_window(command: &mut Command) {
 #[cfg(not(windows))]
 fn hide_console_window(_command: &mut Command) {}
 
-fn apply_offline_environment(command: &mut Command) {
-    if env::var("CODE_MEMORY_ALLOW_NETWORK").as_deref() == Ok("1") {
+fn apply_provider_environment(command: &mut Command) {
+    let offline = env::var("CODE_MEMORY_ALLOW_NETWORK").as_deref() != Ok("1");
+    command.env("MSBUILDDISABLENODEREUSE", "1");
+    command.env(
+        "GRADLE_OPTS",
+        provider_gradle_options(&env::var("GRADLE_OPTS").unwrap_or_default(), offline),
+    );
+    if !offline {
         return;
     }
     command.env("CODE_MEMORY_OFFLINE", "1");
@@ -250,15 +256,23 @@ fn apply_offline_environment(command: &mut Command) {
     command.env("PIP_NO_INDEX", "1");
     command.env("UV_OFFLINE", "1");
     command.env("MAVEN_ARGS", "-o");
-    let gradle_opts = env::var("GRADLE_OPTS").unwrap_or_default();
-    let gradle_opts = if gradle_opts.is_empty() {
-        "-Dorg.gradle.offline=true".to_string()
-    } else if gradle_opts.contains("org.gradle.offline") {
-        gradle_opts
-    } else {
-        format!("{gradle_opts} -Dorg.gradle.offline=true")
-    };
-    command.env("GRADLE_OPTS", gradle_opts);
+}
+
+fn provider_gradle_options(existing: &str, offline: bool) -> String {
+    let mut options = existing.trim().to_string();
+    for option in [
+        Some("-Dorg.gradle.daemon=false"),
+        offline.then_some("-Dorg.gradle.offline=true"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !options.is_empty() {
+            options.push(' ');
+        }
+        options.push_str(option);
+    }
+    options
 }
 
 pub(crate) fn provider_ready(lang: &LanguageSpec, providers_root: Option<&Path>) -> bool {
@@ -718,5 +732,22 @@ pub(crate) fn missing_tool_message(lang: &LanguageSpec) -> String {
         }
         ProviderKind::Scip => format!("{} needs {} on PATH", lang.name, lang.tool),
         ProviderKind::Lsp => format!("{} needs native LSP {} on PATH", lang.name, lang.tool),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::provider_gradle_options;
+
+    #[test]
+    fn provider_gradle_options_disable_persistent_daemons_in_every_mode() {
+        assert_eq!(
+            provider_gradle_options("-Xmx2g", false),
+            "-Xmx2g -Dorg.gradle.daemon=false"
+        );
+        assert_eq!(
+            provider_gradle_options("", true),
+            "-Dorg.gradle.daemon=false -Dorg.gradle.offline=true"
+        );
     }
 }

@@ -163,6 +163,18 @@ fn extract_routes_with_index(
             pending_prefix = None;
             continue;
         }
+        if pack.id == "aspnet-mvc" && route_code.contains("MapControllerRoute(") {
+            extract_aspnet_controller_route(
+                pack,
+                path,
+                index,
+                &route_line,
+                symbol_index,
+                facts,
+            );
+            pending_prefix = None;
+            continue;
+        }
         let Some(method) =
             configured_route_method(&route_line).or_else(|| route_method(&route_code))
         else {
@@ -655,6 +667,105 @@ fn extract_file_system_route(
     }
 }
 
+fn extract_aspnet_controller_route(
+    pack: &FrameworkPack,
+    path: &str,
+    line_index: usize,
+    route_line: &str,
+    symbol_index: &FrameworkSymbolIndex,
+    facts: &mut Vec<FrameworkFact>,
+) {
+    let Some((route_path, controller, action, end)) = aspnet_controller_route(route_line) else {
+        return;
+    };
+    let route_path = combine_route_prefix(None, &route_path);
+    let controller = format!("{}Controller", controller.trim_end_matches("Controller"));
+    let handler =
+        resolve_method_in_type_near_path_indexed(symbol_index, path, &controller, &action);
+    let source_line = line_index + 1;
+    facts.push(FrameworkFact {
+        id: format!(
+            "route:{}:{}:{}:ANY:{}",
+            pack.id, path, source_line, route_path
+        ),
+        kind: "HTTP_ROUTE".to_string(),
+        framework: pack.id.clone(),
+        symbol: handler,
+        method: Some("ANY".to_string()),
+        path: Some(route_path),
+        source_file: path.to_string(),
+        source_line,
+        source_end_line: source_line + route_line.lines().count().saturating_sub(1),
+        source_range: source_range_for_text(line_index, &route_line[..end]),
+        evidence: vec!["aspnet_controller_route_registration".to_string()],
+        properties: BTreeMap::new(),
+    });
+}
+
+fn aspnet_controller_route(route_line: &str) -> Option<(String, String, String, usize)> {
+    let marker = "MapControllerRoute(";
+    let open = route_line.find(marker)? + marker.len() - 1;
+    let close = matching_parenthesis(route_line, open)?;
+    let arguments = &route_line[open + 1..close];
+    let pattern = named_top_level_argument(arguments, "pattern")
+        .or_else(|| top_level_argument(arguments, 1).map(|(_, value)| value))
+        .and_then(csharp_static_string)?;
+    let defaults = named_top_level_argument(arguments, "defaults")
+        .or_else(|| top_level_argument(arguments, 2).map(|(_, value)| value))?;
+    let controller = csharp_named_string_assignment(defaults, "controller")?;
+    let action = csharp_named_string_assignment(defaults, "action")?;
+    Some((pattern, controller, action, close + 1))
+}
+
+fn named_top_level_argument<'a>(arguments: &'a str, name: &str) -> Option<&'a str> {
+    (0..16).find_map(|index| {
+        let (_, argument) = top_level_argument(arguments, index)?;
+        let (candidate, value) = argument.split_once(':')?;
+        (candidate.trim() == name).then(|| value.trim())
+    })
+}
+
+fn csharp_named_string_assignment(input: &str, name: &str) -> Option<String> {
+    input.match_indices(name).find_map(|(start, _)| {
+        let before = input[..start].chars().next_back();
+        let after = input[start + name.len()..].chars().next();
+        if before.is_some_and(|value| value.is_ascii_alphanumeric() || value == '_')
+            || after.is_some_and(|value| value.is_ascii_alphanumeric() || value == '_')
+        {
+            return None;
+        }
+        let value = input[start + name.len()..].trim_start().strip_prefix('=')?;
+        csharp_static_string(value.trim_start())
+    })
+}
+
+fn csharp_static_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    let quote = value.find('"')?;
+    let prefix = &value[..quote];
+    if !prefix.chars().all(|character| matches!(character, '$' | '@')) {
+        return None;
+    }
+    let end = value[quote + 1..].find('"')? + quote + 1;
+    let body = &value[quote + 1..end];
+    if !prefix.contains('$') {
+        return Some(body.to_string());
+    }
+
+    let mut literal = String::with_capacity(body.len());
+    let mut characters = body.chars().peekable();
+    while let Some(character) = characters.next() {
+        if matches!(character, '{' | '}') {
+            if characters.peek() != Some(&character) {
+                return None;
+            }
+            characters.next();
+        }
+        literal.push(character);
+    }
+    Some(literal)
+}
+
 fn java_mapping_annotation(source: &str) -> bool {
     [
         "@RequestMapping",
@@ -836,7 +947,8 @@ fn pack_owns_route_registration(pack: &FrameworkPack, source: &str, line: &str) 
             "[HttpOptions",
         ]
         .iter()
-        .any(|marker| line.contains(marker)),
+        .any(|marker| line.contains(marker))
+            || pack.id == "aspnet-mvc" && line.contains("MapControllerRoute("),
 
         ("javascript" | "typescript", "nestjs") => [
             "@Get", "@Post", "@Put", "@Patch", "@Delete", "@Head", "@Options",

@@ -173,6 +173,52 @@ pub(crate) fn resolve_symbol_indexed(
     select_indexed_definition(index, index.definitions_by_name.get(&short_name))
 }
 
+pub(crate) fn resolve_method_in_type_near_path_indexed(
+    index: &FrameworkSymbolIndex,
+    path: &str,
+    type_name: &str,
+    method_name: &str,
+) -> Option<String> {
+    let mut ranked = index
+        .definitions_by_file_name
+        .iter()
+        .filter(|((_, name), _)| name == method_name)
+        .flat_map(|((definition_path, _), symbols)| {
+            symbols.iter().filter_map(move |symbol| {
+                let (owner, _) = symbol.rsplit_once('#')?;
+                let owner = owner.rsplit('/').next()?.trim_end_matches('`');
+                owner.eq_ignore_ascii_case(type_name).then(|| {
+                    (
+                        source_path_distance(path, definition_path),
+                        definition_path,
+                        symbol,
+                    )
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    ranked.sort();
+    ranked.dedup();
+    let (distance, _, symbol) = ranked.first()?;
+    if ranked.get(1).is_some_and(|(next, _, _)| next == distance) {
+        return None;
+    }
+    Some((*symbol).clone())
+}
+
+fn source_path_distance(left: &str, right: &str) -> usize {
+    let mut left = left.split(['/', '\\']).collect::<Vec<_>>();
+    let mut right = right.split(['/', '\\']).collect::<Vec<_>>();
+    left.pop();
+    right.pop();
+    let shared = left
+        .iter()
+        .zip(&right)
+        .take_while(|(left, right)| left.eq_ignore_ascii_case(right))
+        .count();
+    left.len() + right.len() - shared * 2
+}
+
 pub(crate) fn resolve_symbol_at_indexed(
     index: &FrameworkSymbolIndex,
     path: &str,

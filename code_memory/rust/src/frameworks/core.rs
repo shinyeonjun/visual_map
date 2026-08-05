@@ -201,6 +201,20 @@ pub(crate) fn analyze_with_sources(
             .map(|(path, _)| *path)
             .filter(|path| matched_files.contains(*path))
             .collect();
+        let language_metadata_roots: Vec<String> = metadata_sources
+            .iter()
+            .filter(|(path, _)| metadata_matches_language(path, &pack.language))
+            .map(|(path, _)| metadata_scope(path))
+            .collect();
+        for source_path in &source_signal_files {
+            if let Some(root) = language_metadata_roots
+                .iter()
+                .filter(|root| path_is_in_scope(source_path, root))
+                .max_by_key(|root| root.len())
+            {
+                matched_metadata_roots.insert(root.clone());
+            }
+        }
         let restrict_to_signal_files = !source_signal_files.is_empty();
         let has_route_rules = pack.rules.iter().any(|rule| rule == "HTTP_ROUTE");
         let candidate_sources: Vec<(&str, &str)> = sources
@@ -391,6 +405,7 @@ pub(crate) fn analyze_with_sources(
     }
 
     dedupe_java_facts(&mut frameworks, &mut relations);
+    dedupe_django_drf_routes(&mut frameworks, &mut relations);
 
     Ok(Analysis {
         frameworks,

@@ -165,6 +165,50 @@ fn dedupe_java_facts(frameworks: &mut [FrameworkOutput], relations: &mut Vec<Fra
     });
 }
 
+fn dedupe_django_drf_routes(
+    frameworks: &mut [FrameworkOutput],
+    relations: &mut Vec<FrameworkRelation>,
+) {
+    let drf_routes = frameworks
+        .iter()
+        .filter(|framework| framework.id == "drf")
+        .flat_map(|framework| &framework.facts)
+        .filter(|fact| fact.kind == "HTTP_ROUTE")
+        .map(|fact| {
+            (
+                fact.source_file.clone(),
+                fact.source_line,
+                fact.method.clone(),
+                fact.path.clone(),
+            )
+        })
+        .collect::<HashSet<_>>();
+    if drf_routes.is_empty() {
+        return;
+    }
+
+    let mut removed = HashSet::new();
+    for framework in frameworks
+        .iter_mut()
+        .filter(|framework| framework.id == "django")
+    {
+        framework.facts.retain(|fact| {
+            let duplicate = fact.kind == "HTTP_ROUTE"
+                && drf_routes.contains(&(
+                    fact.source_file.clone(),
+                    fact.source_line,
+                    fact.method.clone(),
+                    fact.path.clone(),
+                ));
+            if duplicate {
+                removed.insert(fact.id.clone());
+            }
+            !duplicate
+        });
+    }
+    relations.retain(|relation| !removed.contains(&relation.to));
+}
+
 fn java_modules_with_markers(
     sources: &[(String, String)],
     metadata: &[(String, String)],
@@ -225,7 +269,10 @@ fn pack_owns_routes(
             // ASP.NET Core is the shared host/component model. Attribute MVC
             // and Minimal API are the concrete route owners.
             "aspnet-core" => false,
-            "aspnet-mvc" => !legacy_web_api && attribute_route,
+            "aspnet-mvc" => {
+                !legacy_web_api
+                    && (attribute_route || source.contains("MapControllerRoute("))
+            }
             "aspnet-web-api" => legacy_web_api && attribute_route,
             "minimal-api" => ["MapGet(", "MapPost(", "MapPut(", "MapPatch(", "MapDelete("]
                 .iter()
@@ -359,6 +406,7 @@ fn has_route_syntax_candidate(source: &str, language: &str) -> bool {
         "MapPut(",
         "MapPatch(",
         "MapDelete(",
+        "MapControllerRoute(",
         "HttpGet(",
         "HttpPost(",
         "HttpPut(",

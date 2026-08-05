@@ -1898,6 +1898,13 @@ app.MapPut("/orders/{orderId}", () => "ok");
 "#,
     )
     .expect("write Minimal API fixture");
+    fs::write(
+        root.join("RouteProvider.cs"),
+        r#"endpointRouteBuilder.MapControllerRoute(name: RouteNames.ESTIMATE_SHIPPING,
+    pattern: $"cart/estimateshipping",
+    defaults: new { controller = "Orders", action = "Get" });"#,
+    )
+    .expect("write conventional route fixture");
 
     let analysis = analyze(&root, &[], pack_root).expect("analyze ASP.NET fixture");
     let owners = analysis
@@ -1907,6 +1914,158 @@ app.MapPut("/orders/{orderId}", () => "ok");
         .map(|framework| framework.id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(owners, vec!["aspnet-mvc", "minimal-api"]);
+    let mvc = analysis
+        .frameworks
+        .iter()
+        .find(|framework| framework.id == "aspnet-mvc")
+        .expect("ASP.NET MVC framework");
+    assert!(mvc.facts.iter().any(|fact| {
+        fact.path.as_deref() == Some("/cart/estimateshipping")
+            && fact.method.as_deref() == Some("ANY")
+    }));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn aspnet_conventional_route_resolves_static_defaults_without_guessing_interpolation() {
+    let pack = FrameworkPack {
+        id: "aspnet-mvc".to_string(),
+        language: "csharp".to_string(),
+        name: "ASP.NET MVC".to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["HTTP_ROUTE".to_string(), "HANDLES".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let controller = "scip-dotnet . . . Controllers/ShoppingCartController#";
+    let action = "scip-dotnet . . . Controllers/ShoppingCartController#GetEstimateShipping().";
+    let admin_controller = "scip-dotnet . . . Areas/Admin/ShoppingCartController#";
+    let admin_action =
+        "scip-dotnet . . . Areas/Admin/ShoppingCartController#GetEstimateShipping().";
+    let documents = vec![
+        DocumentOutput {
+            language: "csharp".to_string(),
+            path: "src/Presentation/Nop.Web/Controllers/ShoppingCartController.cs".to_string(),
+            symbols: Vec::new(),
+            occurrences: vec![
+                OccurrenceOutput {
+                    symbol: controller.to_string(),
+                    range: vec![0, 0, 4, 0],
+                    enclosing_range: Vec::new(),
+                    definition: true,
+                    import: false,
+                    read: false,
+                    write: false,
+                },
+                OccurrenceOutput {
+                    symbol: action.to_string(),
+                    range: vec![1, 4, 3, 0],
+                    enclosing_range: Vec::new(),
+                    definition: true,
+                    import: false,
+                    read: false,
+                    write: false,
+                },
+            ],
+        },
+        DocumentOutput {
+            language: "csharp".to_string(),
+            path: "src/Presentation/Nop.Web/Areas/Admin/Controllers/ShoppingCartController.cs"
+                .to_string(),
+            symbols: Vec::new(),
+            occurrences: vec![
+                OccurrenceOutput {
+                    symbol: admin_controller.to_string(),
+                    range: vec![0, 0, 4, 0],
+                    enclosing_range: Vec::new(),
+                    definition: true,
+                    import: false,
+                    read: false,
+                    write: false,
+                },
+                OccurrenceOutput {
+                    symbol: admin_action.to_string(),
+                    range: vec![1, 4, 3, 0],
+                    enclosing_range: Vec::new(),
+                    definition: true,
+                    import: false,
+                    read: false,
+                    write: false,
+                },
+            ],
+        },
+    ];
+    let source = r#"routes.MapControllerRoute(
+        name: "estimate-shipping",
+        pattern: $"cart/estimate/{{zipCode}}",
+        defaults: new { controller = "ShoppingCart", action = "GetEstimateShipping" });
+routes.MapControllerRoute(
+        name: "dynamic-language",
+        pattern: $"{lang}/cart/",
+        defaults: new { controller = "ShoppingCart", action = "GetEstimateShipping" });"#;
+    let mut facts = Vec::new();
+
+    extract_routes(
+        &pack,
+        "src/Presentation/Nop.Web/Infrastructure/RouteProvider.cs",
+        source,
+        &documents,
+        None,
+        &mut facts,
+    );
+
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].path.as_deref(), Some("/cart/estimate/{zipCode}"));
+    assert_eq!(facts[0].method.as_deref(), Some("ANY"));
+    assert_eq!(facts[0].symbol.as_deref(), Some(action));
+}
+
+#[test]
+fn aspnet_conventional_routes_follow_the_controller_project_scope() {
+    let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-aspnet-conventional-scope-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Libraries/Core")).expect("create library fixture");
+    fs::create_dir_all(root.join("Presentation/Web/Controllers"))
+        .expect("create web fixture");
+    fs::write(
+        root.join("Libraries/Core/Core.csproj"),
+        r#"<Project><ItemGroup><PackageReference Include="Microsoft.AspNetCore.Mvc" /></ItemGroup></Project>"#,
+    )
+    .expect("write unrelated dependency scope");
+    fs::write(
+        root.join("Presentation/Web/Web.csproj"),
+        r#"<Project Sdk="Microsoft.NET.Sdk.Web" />"#,
+    )
+    .expect("write web project scope");
+    fs::write(
+        root.join("Presentation/Web/Controllers/OrdersController.cs"),
+        "using Microsoft.AspNetCore.Mvc;\n[HttpPost]\npublic class OrdersController {}\n",
+    )
+    .expect("write controller signal fixture");
+    fs::write(
+        root.join("Presentation/Web/RouteProvider.cs"),
+        r#"routes.MapControllerRoute(name: Routes.ORDERS,
+    pattern: $"orders",
+    defaults: new { controller = "Orders", action = "List" });"#,
+    )
+    .expect("write conventional route fixture");
+
+    let analysis = analyze(&root, &[], pack_root).expect("analyze scoped ASP.NET fixture");
+    let mvc = analysis
+        .frameworks
+        .iter()
+        .find(|framework| framework.id == "aspnet-mvc")
+        .expect("ASP.NET MVC framework");
+    assert!(mvc
+        .facts
+        .iter()
+        .any(|fact| fact.path.as_deref() == Some("/orders")));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2097,6 +2256,63 @@ fn duplicate_framework_routes_keep_one_fact_and_handle_relation() {
     );
     assert_eq!(relations.len(), 1);
     assert_eq!(relations[0].to, "spring-route");
+}
+
+#[test]
+fn drf_routes_replace_identical_django_routes() {
+    let route = |id: &str, framework: &str, path: &str| FrameworkFact {
+        id: id.to_string(),
+        kind: "HTTP_ROUTE".to_string(),
+        framework: framework.to_string(),
+        symbol: Some("python#AssetView".to_string()),
+        method: Some("GET".to_string()),
+        path: Some(path.to_string()),
+        source_file: "app/urls.py".to_string(),
+        source_line: 12,
+        source_end_line: 12,
+        source_range: vec![11, 0, 11, 40],
+        evidence: vec!["http_route_syntax".to_string()],
+        properties: BTreeMap::new(),
+    };
+    let output = |id: &str, facts: Vec<FrameworkFact>| FrameworkOutput {
+        id: id.to_string(),
+        language: "python".to_string(),
+        name: id.to_string(),
+        kind: "web".to_string(),
+        adapter: "annotation-routing".to_string(),
+        status: "detected".to_string(),
+        matched_signals: Vec::new(),
+        files: vec!["app/urls.py".to_string()],
+        facts,
+    };
+    let mut frameworks = vec![
+        output(
+            "django",
+            vec![
+                route("django-shared", "django", "/assets"),
+                route("django-only", "django", "/admin"),
+            ],
+        ),
+        output("drf", vec![route("drf-shared", "drf", "/assets")]),
+    ];
+    let mut relations = vec![FrameworkRelation {
+        from: "python#AssetView".to_string(),
+        to: "django-shared".to_string(),
+        kind: "HANDLES".to_string(),
+        framework: "django".to_string(),
+        path: "app/urls.py".to_string(),
+        range: vec![11, 0, 11, 40],
+        evidence: Vec::new(),
+    }];
+
+    dedupe_django_drf_routes(&mut frameworks, &mut relations);
+
+    let ids = frameworks
+        .iter()
+        .flat_map(|framework| framework.facts.iter().map(|fact| fact.id.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["django-only", "drf-shared"]);
+    assert!(relations.is_empty());
 }
 
 #[test]
