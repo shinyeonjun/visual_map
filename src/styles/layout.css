@@ -274,28 +274,6 @@
   overflow: hidden;
 }
 
-/* ============================================================
-   Workspace frame
-   ============================================================ */
-.workspace { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
-
-.side {
-  width: clamp(260px, 24vw, 300px);
-  flex: 0 0 clamp(260px, 24vw, 300px);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px;
-  background: var(--bg-panel);
-  min-height: 0;
-}
-.side-left { border-right: 1px solid var(--line); overflow: auto; scrollbar-gutter: stable; }
-.side-right { border-left: 1px solid var(--line); width: clamp(280px, 27vw, 340px); flex-basis: clamp(280px, 27vw, 340px); }
-.side-right > .side-card:first-child {
-  flex: 0 0 clamp(380px, 52vh, 476px);
-  max-height: clamp(380px, 52vh, 476px);
-  overflow: hidden;
-}
 .side-card {
   min-height: 0;
   overflow: hidden;

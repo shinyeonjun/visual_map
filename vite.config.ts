@@ -25,8 +25,9 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // Native engines are built independently; watching their locked executables
+      // can crash the Windows dev server while Cargo replaces them.
+      ignored: ["**/src-tauri/**", "**/code_memory/**", "**/db_memory/**"],
     },
   },
 }));

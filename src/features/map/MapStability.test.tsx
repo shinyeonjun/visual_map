@@ -6,7 +6,7 @@ import { CodeSource as CodeSourceSection } from "./CodeSource";
 import { DatabaseSource as DatabaseSourceSection } from "./DatabaseSource";
 import { MapInspector as InspectorPanel } from "./MapInspector";
 import { WorkspaceSource as WorkspaceCard } from "./WorkspaceSource";
-import { MapTopBar as WorkbenchTopBar } from "./MapTopBar";
+import { MapTopBar } from "./MapTopBar";
 
 describe("stable mode transitions", () => {
   it("keeps the evidence sections mounted while their values reload", () => {
@@ -87,7 +87,7 @@ describe("stable mode transitions", () => {
   it("keeps source status informational and source management explicit", () => {
     const onToggleSourceManager = vi.fn();
     render(
-      <WorkbenchTopBar
+      <MapTopBar
         sourceManagerOpen={false}
         onToggleSourceManager={onToggleSourceManager}
         workspaceControls={
@@ -130,7 +130,7 @@ describe("stable mode transitions", () => {
 
   it("shows live analysis progress without hiding the last map", () => {
     const { container } = render(
-      <WorkbenchTopBar
+      <MapTopBar
         sourceManagerOpen={false}
         onToggleSourceManager={vi.fn()}
         analysisActive
@@ -174,7 +174,7 @@ describe("stable mode transitions", () => {
   it("does not present a partial provider result as complete", () => {
     const controls = workspaceControls();
     render(
-      <WorkbenchTopBar
+      <MapTopBar
         sourceManagerOpen={false}
         onToggleSourceManager={vi.fn()}
         workspaceControls={
@@ -225,7 +225,7 @@ describe("stable mode transitions", () => {
   it("does not activate background search while source management is open", () => {
     const openSearchPopover = vi.fn();
     render(
-      <WorkbenchTopBar
+      <MapTopBar
         sourceManagerOpen
         onToggleSourceManager={vi.fn()}
         workspaceControls={
@@ -267,7 +267,7 @@ describe("stable mode transitions", () => {
     const selectSearchResult = vi.fn();
     const runSearch = vi.fn();
     render(
-      <WorkbenchTopBar
+      <MapTopBar
         sourceManagerOpen={false}
         onToggleSourceManager={vi.fn()}
         workspaceControls={
@@ -308,7 +308,7 @@ describe("stable mode transitions", () => {
   it("lists each project once in the project switcher", () => {
     const openWorkspace = vi.fn();
     render(
-      <WorkbenchTopBar
+      <MapTopBar
         sourceManagerOpen={false}
         onToggleSourceManager={vi.fn()}
         workspaceControls={

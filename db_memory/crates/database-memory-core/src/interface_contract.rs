@@ -368,11 +368,11 @@ pub fn index_complete_source(
         )
     })?;
     let snapshot_key = format!("{}:{}", request.source, request.alias);
-    insert_certified_schema_snapshot_graph(store, &snapshot_key, captured_at_unix_ms, &certified)
+    insert_certified_schema_snapshot_graph(store, &snapshot_key, captured_at_unix_ms, certified)
         .map_err(|error| InterfaceError::storage("could not persist certified snapshot", error))?;
 
     let schema = &certified.snapshot.schema;
-    let projection = certified_graph_projection_counts(&certified);
+    let projection = certified_graph_projection_counts(certified);
     Ok(IndexResult {
         contract_version: INTERFACE_CONTRACT_VERSION,
         status: CompletionStatus::Complete,

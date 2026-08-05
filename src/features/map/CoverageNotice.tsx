@@ -77,7 +77,9 @@ export function analysisCoverageNotice(codeInventory: CodeInventory | null | und
 function percentText(part: number, whole: number): string {
   if (whole <= 0) return "0%";
   const share = (part / whole) * 100;
-  return share > 0 && share < 1 ? "1% 미만" : `${Math.round(share)}%`;
+  if (share > 0 && share < 1) return "1% 미만";
+  if (part < whole && Math.round(share) === 100) return `${Math.floor(share * 10) / 10}%`;
+  return `${Math.round(share)}%`;
 }
 
 export function CoverageNotice({

@@ -103,9 +103,9 @@ describe("MapWorkspace canvas transitions", () => {
 
     expect(screen.getByRole("region", { name: /구조 흐름/ })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "캔버스 도구" })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "레이어 탐색기" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "레이어 탐색기" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "프로젝트를 지도에 올리세요" })).not.toBeInTheDocument();
-    expect(container.querySelector(".map-app-shell")).toHaveAttribute("data-left-panel", "layers");
+    expect(container.querySelector(".map-app-shell")).toHaveAttribute("data-left-panel", "closed");
   });
 
   it("keeps the committed layout until the requested map commits", async () => {
@@ -218,6 +218,7 @@ describe("MapWorkspace canvas transitions", () => {
   it("opens an inventory target through its package and module on the same canvas", async () => {
     const { container } = render(<TargetDrillHarness />);
 
+    fireEvent.click(screen.getByRole("button", { name: "레이어 열기" }));
     fireEvent.click(screen.getByRole("button", { name: "/api/orders" }));
 
     await waitFor(() => {

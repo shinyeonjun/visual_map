@@ -248,6 +248,9 @@ fn confirmed_handler_ids(snapshot: &InventorySnapshot) -> HashSet<String> {
 }
 
 fn code_group(item: &InventoryItem, handler_ids: &HashSet<String>) -> String {
+    if item.kind == "ui-route" {
+        return "ui-routes".to_string();
+    }
     if item.layer == "api" {
         return "routes".to_string();
     }

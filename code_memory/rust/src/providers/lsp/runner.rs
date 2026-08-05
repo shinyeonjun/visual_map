@@ -122,10 +122,11 @@ fn run_native_lsp_with_server_mode(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("{} native LSP could not start: {e}", lang.name))?;
+    let process_guard = ProviderProcessGuard::attach(&child);
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
         None => {
-            terminate_process_tree(&mut child);
+            process_guard.terminate(&mut child);
             return Err("native LSP stderr unavailable".to_string());
         }
     };
@@ -133,19 +134,20 @@ fn run_native_lsp_with_server_mode(
     let stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => {
-            terminate_process_tree(&mut child);
+            process_guard.terminate(&mut child);
             return Err("native LSP stdin unavailable".to_string());
         }
     };
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
-            terminate_process_tree(&mut child);
+            process_guard.terminate(&mut child);
             return Err("native LSP stdout unavailable".to_string());
         }
     };
     let mut connection = LspConnection::new(
         child,
+        process_guard,
         stdin,
         BufReader::new(stdout),
         lsp_request_timeout(),

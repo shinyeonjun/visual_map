@@ -1784,6 +1784,23 @@ fn code_inventory_keeps_no_route_empty_instead_of_fabricating_one() {
 }
 
 #[test]
+fn code_inventory_summary_excludes_ui_navigation_routes() {
+    let routes = serde_json::json!({
+        "results": [
+            { "name": "GET /api/users", "qualified_name": "routes.users", "label": "Route", "file_path": "src/api.rs" },
+            { "name": "/settings", "qualified_name": "routes.settings", "label": "Route", "file_path": "src/pages/settings.tsx", "routeSurface": "ui-navigation" }
+        ]
+    });
+    let empty = serde_json::json!({ "results": [] });
+    let mut inventory =
+        extract_code_inventory("shop-api".to_string(), None, &routes, &empty, &empty).unwrap();
+    downgrade_unverified_routes(&mut inventory);
+
+    assert_eq!(inventory.routes.len(), 2);
+    assert_eq!(inventory.summary.routes, 1);
+}
+
+#[test]
 fn code_inventory_normalizes_handles_from_handler_to_route_rows() {
     let routes = serde_json::json!({
         "results": [

@@ -1,6 +1,7 @@
 [package]
 name = "backend-visual-map"
-version = "0.1.0"
+version = "1.0.0-demo.1"
+default-run = "backend-visual-map"
 license = "MIT"
 description = "Local desktop visual map for backend systems"
 authors = []

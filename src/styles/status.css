@@ -1,5 +1,5 @@
 /* ============================================================
-   Status bar (workbench)
+   Status bar
    ============================================================ */
 .statusbar {
   height: 28px;
@@ -189,28 +189,16 @@
    Narrow window fallback
    ============================================================ */
 @media (max-width: 1360px) {
-  .side { width: 300px; flex-basis: 300px; }
-  .side-right { width: 340px; flex-basis: 340px; }
   .select-shell select { max-width: 132px; }
   .statusbar { gap: 6px; }
   .engine-status { max-width: 152px; }
   .status-snapshot { display: none; }
   .status-source-revision { display: none; }
-  .at-legend-item:not(.primary) { display: none; }
-  .at-cards { gap: var(--at-lane-gap, 18px); padding-right: var(--at-lane-pad-x, 10px); }
 }
 
 @media (max-width: 1120px) {
   .statusbar .dev-diag {
     display: none;
-  }
-  .side-left {
-    width: 260px;
-    flex-basis: 260px;
-  }
-  .side-right {
-    width: 300px;
-    flex-basis: 300px;
   }
 }
 
@@ -229,43 +217,5 @@
   }
   .statusbar .engine-status {
     max-width: 132px;
-  }
-  .side-left {
-    width: 248px;
-    flex-basis: 248px;
-  }
-  .side-right {
-    width: 288px;
-    flex-basis: 288px;
-  }
-  .side-right .answer-summary {
-    gap: 4px;
-    padding: 6px;
-  }
-  .side-right .answer-summary p {
-    -webkit-line-clamp: 2;
-  }
-  .side-right .answer-summary > small {
-    display: none;
-  }
-}
-
-@media (max-width: 860px) {
-  .side-left {
-    width: 220px;
-    flex-basis: 220px;
-  }
-  .side-right {
-    width: 260px;
-    flex-basis: 260px;
-  }
-  .side-right .answer-head {
-    grid-template-columns: 50px minmax(0, 1fr) 38px;
-    gap: 4px;
-  }
-  .side-right .answer-head span,
-  .side-right .answer-verdict {
-    padding-inline: 4px;
-    font-size: var(--fs-2xs);
   }
 }

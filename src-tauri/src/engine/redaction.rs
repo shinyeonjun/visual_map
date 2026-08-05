@@ -72,7 +72,7 @@ fn secret_value_range(input: &str, key_start: usize, key_end: usize) -> Option<(
     let bytes = input.as_bytes();
     if key_start > 0 {
         let previous = bytes[key_start - 1];
-        if previous.is_ascii_alphanumeric() || previous == b'_' {
+        if previous.is_ascii_alphanumeric() || matches!(previous, b'_' | b'-' | b'/' | b'\\') {
             return None;
         }
     }
@@ -160,7 +160,16 @@ fn redact_oracle_connect_strings(input: &str) -> String {
 
         if let Some(slash_offset) = token.rfind('/') {
             let password_start = token_start + slash_offset + 1;
-            if password_start < at && slash_offset > 0 {
+            let username = &token[..slash_offset];
+            let host_starts_valid = output[at + 1..]
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_alphanumeric() || character == '[');
+            if password_start < at
+                && !username.is_empty()
+                && !username.contains('/')
+                && host_starts_valid
+            {
                 output.replace_range(password_start..at, "[REDACTED]");
                 search_from = password_start + "[REDACTED]".len() + 1;
                 continue;

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useSearchHotkey } from "../../hooks/useSearchHotkey";
 import type { DbProfileControls, VisualMapControls, WorkspaceControls } from "../../types/controls";
+import { codeInventoryRouteCount, codeInventorySymbolCount } from "../../types/workspace";
 import { searchScopeText } from "../../visual/search";
 import { SearchResultsPopover, focusFirstSearchResult } from "../../components/common/SearchResultsPopover";
 import { buildTargetCatalog, type TargetCatalog, type TargetItem } from "./targetModel";
@@ -51,6 +52,8 @@ export function MapExplorer({
   const apiItems = filteredItems(catalog, "api", normalizedQuery);
   const codeItems = filteredItems(catalog, "code", normalizedQuery);
   const tableItems = filteredItems(catalog, "table", normalizedQuery);
+  const apiCount = normalizedQuery ? apiItems.length : codeInventoryRouteCount(workspaceControls.codeInventory);
+  const codeCount = normalizedQuery ? codeItems.length : codeInventorySymbolCount(workspaceControls.codeInventory);
   const externalCalls = externalCallPreview(workspaceControls.codeInventory);
 
   return (
@@ -111,21 +114,31 @@ export function MapExplorer({
           icon={<Braces size={14} />}
           kind="api"
           label="API 라우트"
-          count={apiItems.length}
+          count={apiCount}
           revealed={revealedLayer === "api"}
           onReveal={() => toggleReveal("api")}
         >
-          <ApiTreeItems items={apiItems} activeFocusIds={activeFocusIds} onSelect={selectTarget} />
+          <ApiTreeItems
+            items={apiItems}
+            totalCount={apiCount}
+            activeFocusIds={activeFocusIds}
+            onSelect={selectTarget}
+          />
         </LayerSection>
         <LayerSection
           icon={<Code2 size={14} />}
           kind="code"
           label="코드"
-          count={codeItems.length}
+          count={codeCount}
           revealed={revealedLayer === "code"}
           onReveal={() => toggleReveal("code")}
         >
-          <CodeTreeItems items={codeItems} activeFocusIds={activeFocusIds} onSelect={selectTarget} />
+          <CodeTreeItems
+            items={codeItems}
+            totalCount={codeCount}
+            activeFocusIds={activeFocusIds}
+            onSelect={selectTarget}
+          />
         </LayerSection>
         <LayerSection
           icon={<Database size={14} />}
@@ -253,10 +266,12 @@ function targetRevealLayer(item: TargetItem): CanvasRevealLayer {
 
 function ApiTreeItems({
   items,
+  totalCount,
   activeFocusIds,
   onSelect,
 }: {
   items: TargetItem[];
+  totalCount: number;
   activeFocusIds: string[];
   onSelect: (item: TargetItem) => void;
 }) {
@@ -266,8 +281,8 @@ function ApiTreeItems({
       {items.slice(0, LAYER_PREVIEW_LIMIT).map((item) => (
         <ApiEndpointItem key={item.id} item={item} active={activeFocusIds.includes(item.focusId)} onSelect={onSelect} />
       ))}
-      {items.length > LAYER_PREVIEW_LIMIT ? (
-        <p className="explorer-more">… {items.length - LAYER_PREVIEW_LIMIT}개 더보기 · 검색으로 좁히기</p>
+      {totalCount > LAYER_PREVIEW_LIMIT ? (
+        <p className="explorer-more">… {totalCount - LAYER_PREVIEW_LIMIT}개 더보기 · 검색으로 좁히기</p>
       ) : null}
     </div>
   );
@@ -304,25 +319,29 @@ function ApiEndpointItem({
 
 function CodeTreeItems({
   items,
+  totalCount,
   activeFocusIds,
   onSelect,
 }: {
   items: TargetItem[];
+  totalCount: number;
   activeFocusIds: string[];
   onSelect: (item: TargetItem) => void;
 }) {
   if (items.length === 0) return <p className="explorer-empty">표시할 코드가 없습니다.</p>;
   // TargetTreeItems already reports the remainder; repeating it here printed the
   // same "…N개 더보기" line twice under every code section.
-  return <TargetTreeItems items={items} activeFocusIds={activeFocusIds} onSelect={onSelect} />;
+  return <TargetTreeItems items={items} totalCount={totalCount} activeFocusIds={activeFocusIds} onSelect={onSelect} />;
 }
 
 function TargetTreeItems({
   items,
+  totalCount = items.length,
   activeFocusIds,
   onSelect,
 }: {
   items: TargetItem[];
+  totalCount?: number;
   activeFocusIds: string[];
   onSelect: (item: TargetItem) => void;
 }) {
@@ -372,8 +391,8 @@ function TargetTreeItems({
           </span>
         </button>
       ))}
-      {items.length > LAYER_PREVIEW_LIMIT ? (
-        <small className="explorer-more">… {items.length - LAYER_PREVIEW_LIMIT}개 더보기 · 검색으로 좁히기</small>
+      {totalCount > LAYER_PREVIEW_LIMIT ? (
+        <small className="explorer-more">… {totalCount - LAYER_PREVIEW_LIMIT}개 더보기 · 검색으로 좁히기</small>
       ) : null}
     </div>
   );

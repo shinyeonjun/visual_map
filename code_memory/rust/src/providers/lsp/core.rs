@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use crate::{
     find_tool, prepare_clangd_compile_database, project_cache_root, provider_timeout, range_parts,
-    range_span, terminate_process_tree, tool_command, Diagnostic, DiagnosticCode, LanguageSpec,
+    range_span, tool_command, Diagnostic, DiagnosticCode, LanguageSpec, ProviderProcessGuard,
 };
 
 fn bundled_java_home(jdtls_path: &Path) -> Option<PathBuf> {

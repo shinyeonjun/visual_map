@@ -327,7 +327,32 @@ fn redaction_preserves_json_with_secret_like_code_paths() {
 
     assert_eq!(value["password"], "[REDACTED]");
     assert_eq!(value["token"], "[REDACTED]");
+    assert_eq!(value["name"], "forgot-password:module");
     assert!(value["children"][0]["path"].is_string());
+}
+
+#[test]
+fn redaction_preserves_code_graph_paths_and_import_aliases() {
+    let input = r#"{
+        "id": "edge:IMPORTS:apps/web/accounts/forgot-password:@/hooks",
+        "target": "module:typescript:apps/admin/app/authentication/@/components",
+        "library": "module:typescript:packages/ui/src/form-fields/password:external:npm:react"
+    }"#;
+    let redacted = redact_secrets(input);
+    let value = serde_json::from_str::<serde_json::Value>(&redacted).unwrap();
+
+    assert_eq!(
+        value["id"],
+        "edge:IMPORTS:apps/web/accounts/forgot-password:@/hooks"
+    );
+    assert_eq!(
+        value["target"],
+        "module:typescript:apps/admin/app/authentication/@/components"
+    );
+    assert_eq!(
+        value["library"],
+        "module:typescript:packages/ui/src/form-fields/password:external:npm:react"
+    );
 }
 
 #[test]

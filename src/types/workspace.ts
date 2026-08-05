@@ -480,7 +480,8 @@ export function codeInventoryItemCount(inventory: CodeInventory | null | undefin
 }
 
 export function codeInventoryRouteCount(inventory: CodeInventory | null | undefined): number {
-  return codeInventoryBackendRoutes(inventory).length;
+  if (!inventory) return 0;
+  return inventory.partial ? inventory.summary.routes : codeInventoryBackendRoutes(inventory).length;
 }
 
 export function codeInventoryFileCount(inventory: CodeInventory | null | undefined): number {

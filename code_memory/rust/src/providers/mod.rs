@@ -20,7 +20,7 @@ pub(crate) use command::{
 #[cfg(test)]
 pub(crate) use command::{compile_database_dir, has_compile_context, managed_provider_root};
 pub(crate) use lsp::*;
-pub(crate) use process::{provider_timeout, run_bounded_command, terminate_process_tree};
+pub(crate) use process::{provider_timeout, run_bounded_command, ProviderProcessGuard};
 pub(crate) use scheduler::{
     combined_job_files, merge_provider_jobs, run_provider_jobs, ProviderJob,
 };

@@ -1,8 +1,8 @@
 /* Canvas-first application shell. The map owns the viewport; tools float over it. */
 .map-app-shell {
   --map-panel-left: 68px;
-  --map-panel-width: 312px;
-  --map-inspector-width: 372px;
+  --map-panel-width: 300px;
+  --map-inspector-width: 340px;
   --map-tools-left: 76px;
   --map-tools-right: 18px;
   height: 100vh;
@@ -14,8 +14,12 @@
 }
 
 .map-app-shell[data-left-panel="layers"],
-.map-app-shell[data-left-panel="sources"] { --map-tools-left: 394px; }
-.map-app-shell[data-inspector="open"] { --map-tools-right: 392px; }
+.map-app-shell[data-left-panel="sources"] {
+  --map-tools-left: 380px;
+}
+.map-app-shell[data-inspector="open"] {
+  --map-tools-right: 360px;
+}
 
 .map-live-status {
   position: absolute;
@@ -91,7 +95,9 @@
   text-overflow: ellipsis;
 }
 
-.map-app-shell .top-select > svg:last-child { margin-left: auto; }
+.map-app-shell .top-select > svg:last-child {
+  margin-left: auto;
+}
 
 .map-app-shell .source-freshness {
   height: 28px;
@@ -100,7 +106,9 @@
   font-size: 11px;
 }
 
-.map-app-shell .topbar-chip { display: none; }
+.map-app-shell .topbar-chip {
+  display: none;
+}
 
 .map-app-shell .product-search-access {
   position: relative;
@@ -144,7 +152,9 @@
   border-radius: 7px;
 }
 
-.map-app-shell .source-manager-trigger > span { display: none; }
+.map-app-shell .source-manager-trigger > span {
+  display: none;
+}
 
 /* Full viewport map plane. */
 .map-workspace {
@@ -190,11 +200,13 @@
   display: flex;
   justify-content: center;
   pointer-events: none;
-  transition: left 160ms ease, right 160ms ease;
+  transition:
+    left 160ms ease,
+    right 160ms ease;
 }
 
 .map-coverage-overlay .analysis-coverage-notice {
-  width: min(920px, 100%);
+  width: min(520px, 100%);
   max-height: 42px;
   margin: 0;
   padding: 8px 10px;
@@ -207,7 +219,9 @@
 }
 
 .map-coverage-overlay .analysis-coverage-list,
-.map-coverage-overlay .analysis-coverage-basis { display: none; }
+.map-coverage-overlay .analysis-coverage-basis {
+  display: none;
+}
 
 /* Left rail and overlay drawers. */
 .map-tool-rail {
@@ -265,7 +279,9 @@
   width: var(--map-panel-width);
 }
 
-.map-source-panel { width: 350px; }
+.map-source-panel {
+  width: 340px;
+}
 
 .map-inspector-panel {
   right: 16px;
@@ -289,8 +305,13 @@
   gap: 1px;
 }
 
-.map-floating-panel-head strong { font-size: 13px; }
-.map-floating-panel-head small { color: var(--ink-4); font-size: 10px; }
+.map-floating-panel-head strong {
+  font-size: 13px;
+}
+.map-floating-panel-head small {
+  color: var(--ink-4);
+  font-size: 10px;
+}
 
 .map-explorer-panel .project-explorer {
   height: auto;
@@ -300,7 +321,9 @@
   background: transparent;
 }
 
-.map-explorer-panel .layers-title { display: none; }
+.map-explorer-panel .layers-title {
+  display: none;
+}
 
 .map-source-panel .source-panel-content,
 .map-onboarding .source-panel-content {
@@ -316,7 +339,9 @@
   box-shadow: none;
 }
 
-.map-source-panel .side-card + .side-card { margin-top: 8px; }
+.map-source-panel .side-card + .side-card {
+  margin-top: 8px;
+}
 
 .map-inspector-panel > .side-card,
 .map-inspector-panel .side-card.inspector {
@@ -328,7 +353,9 @@
   box-shadow: none;
 }
 
-.map-inspector-panel .panel-header { min-height: 50px; }
+.map-inspector-panel .panel-header {
+  min-height: 50px;
+}
 
 /* Empty project still lives on the map, not on a separate setup page. */
 .map-onboarding {
@@ -382,8 +409,12 @@
   overflow: visible;
 }
 
-.map-onboarding .workspace-source { grid-row: 1 / span 2; }
-.map-onboarding .database-source { min-height: 180px; }
+.map-onboarding .workspace-source {
+  grid-row: 1 / span 2;
+}
+.map-onboarding .database-source {
+  min-height: 180px;
+}
 
 /* Structure canvas toolbar and world. */
 .map-app-shell .flow-canvas-shell {
@@ -413,7 +444,9 @@
   border-radius: 9px;
   background: rgba(255, 255, 255, 0.96);
   box-shadow: var(--shadow-md);
-  transition: left 160ms ease, right 160ms ease;
+  transition:
+    left 160ms ease,
+    right 160ms ease;
 }
 
 .flow-toolbar-group {
@@ -477,9 +510,16 @@
   font-weight: 700;
 }
 
-.flow-legend-popover { position: relative; }
-.flow-legend-popover > summary::-webkit-details-marker { display: none; }
-.flow-legend-popover[open] > summary { background: var(--blue-soft); color: var(--blue); }
+.flow-legend-popover {
+  position: relative;
+}
+.flow-legend-popover > summary::-webkit-details-marker {
+  display: none;
+}
+.flow-legend-popover[open] > summary {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
 .flow-legend-popover .flow-legend {
   position: absolute;
   top: 38px;
@@ -500,21 +540,26 @@
   cursor: default;
 }
 
-.flow-canvas-shell[data-tool="pan"] .flow-stage { cursor: grab; }
-.flow-stage[data-panning="true"] { cursor: grabbing; user-select: none; }
+.flow-canvas-shell[data-tool="pan"] .flow-stage {
+  cursor: grab;
+}
+.flow-stage[data-panning="true"] {
+  cursor: grabbing;
+  user-select: none;
+}
 
 .flow-world {
   width: max-content;
   min-width: 100%;
   min-height: 100%;
-  padding: 94px 100px 120px;
+  padding: 94px 72px 120px;
   transform-origin: top left;
 }
 
 .map-app-shell .flow-canvas {
   position: relative;
   width: max-content;
-  min-width: min(1180px, calc(100vw - 180px));
+  min-width: min(1180px, calc(100vw - 144px));
   min-height: 560px;
   overflow: visible;
   padding: 18px;
@@ -527,14 +572,15 @@
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: repeat(4, minmax(214px, 270px));
+  grid-template-columns: repeat(4, minmax(228px, 270px));
+  grid-auto-flow: row dense;
   align-items: start;
   gap: 24px 28px;
 }
 
 .map-app-shell .flow-box {
   min-width: 0;
-  min-height: 102px;
+  min-height: 110px;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
   align-items: start;
@@ -549,15 +595,26 @@
   text-align: left;
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(22, 32, 58, 0.06);
-  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
 }
 
 .map-app-shell .flow-box.package,
 .map-app-shell .flow-box.module,
-.map-app-shell .flow-box.api { border-left-color: var(--blue); }
-.map-app-shell .flow-box.code { border-left-color: var(--violet); }
-.map-app-shell .flow-box.db { border-left-color: var(--green); }
-.map-app-shell .flow-box.external { border-left-color: var(--orange); }
+.map-app-shell .flow-box.api {
+  border-left-color: var(--blue);
+}
+.map-app-shell .flow-box.code {
+  border-left-color: var(--violet);
+}
+.map-app-shell .flow-box.db {
+  border-left-color: var(--green);
+}
+.map-app-shell .flow-box.external {
+  border-left-color: var(--orange);
+}
 
 .map-app-shell button.flow-box:hover,
 .map-app-shell button.flow-box:focus-visible {
@@ -568,8 +625,9 @@
 
 .map-app-shell .flow-box.is-open {
   grid-column: 1 / -1;
-  min-width: min(980px, calc(100vw - 160px));
-  min-height: 260px;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
   display: block;
   padding: 0;
   border-color: var(--blue);
@@ -580,7 +638,38 @@
 }
 
 .map-app-shell .flow-box.is-open > .flow-level {
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  width: 100%;
+  grid-template-columns: repeat(4, minmax(190px, 1fr));
+}
+
+.map-app-shell .flow-more {
+  min-height: 110px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 5px;
+  padding: 14px;
+  border: 1px dashed var(--blue-line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--blue-ink);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.map-app-shell .flow-more:hover,
+.map-app-shell .flow-more:focus-visible {
+  border-style: solid;
+  background: var(--blue-soft);
+}
+
+.map-app-shell .flow-more small {
+  color: var(--ink-4);
+  font-size: 9px;
+  font-weight: 600;
 }
 
 .map-app-shell .flow-box-collapse {
@@ -636,8 +725,13 @@
   border-radius: 2px;
   background: #d8e3f5;
 }
-.flow-minimap-map i.active { background: var(--blue); }
-.flow-minimap small { font-size: 9px; text-align: right; }
+.flow-minimap-map i.active {
+  background: var(--blue);
+}
+.flow-minimap small {
+  font-size: 9px;
+  text-align: right;
+}
 
 .workspace-initializing {
   min-height: 180px;
@@ -660,37 +754,81 @@
 }
 
 @keyframes map-panel-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @media (max-width: 1180px) {
-  .map-app-shell { --map-panel-width: 282px; --map-inspector-width: 330px; }
+  .map-app-shell {
+    --map-panel-width: 282px;
+    --map-inspector-width: 320px;
+  }
   .map-app-shell[data-left-panel="layers"],
-  .map-app-shell[data-left-panel="sources"] { --map-tools-left: 364px; }
-  .map-app-shell[data-inspector="open"] { --map-tools-right: 350px; }
-  .map-app-shell .product-identity { width: 44px; flex-basis: 44px; }
-  .map-app-shell .product-name { display: none; }
-  .map-app-shell .source-freshness > span { display: none; }
-  .map-app-shell .flow-level { grid-template-columns: repeat(3, minmax(200px, 250px)); }
+  .map-app-shell[data-left-panel="sources"] {
+    --map-tools-left: 364px;
+  }
+  .map-app-shell[data-inspector="open"] {
+    --map-tools-right: 340px;
+  }
+  .map-app-shell .product-identity {
+    width: 44px;
+    flex-basis: 44px;
+  }
+  .map-app-shell .product-name {
+    display: none;
+  }
+  .map-app-shell .source-freshness > span {
+    display: none;
+  }
+  .map-app-shell .flow-level,
+  .map-app-shell .flow-box.is-open > .flow-level {
+    grid-template-columns: repeat(3, minmax(200px, 250px));
+  }
 }
 
 @media (max-width: 860px) {
-  .map-app-shell { --map-panel-width: min(310px, calc(100vw - 88px)); }
+  .map-app-shell {
+    --map-panel-width: min(310px, calc(100vw - 88px));
+  }
   .map-app-shell[data-left-panel="layers"],
-  .map-app-shell[data-left-panel="sources"] { --map-tools-left: 76px; }
-  .map-app-shell[data-inspector="open"] { --map-tools-right: 18px; }
-  .map-floating-panel { top: 66px; }
-  .map-inspector-panel { width: min(360px, calc(100vw - 88px)); }
-  .flow-toolbar { right: 18px; }
-  .map-app-shell .product-search-access { min-width: 120px; }
-  .map-app-shell .flow-level { grid-template-columns: repeat(2, minmax(190px, 230px)); }
+  .map-app-shell[data-left-panel="sources"] {
+    --map-tools-left: 76px;
+  }
+  .map-app-shell[data-inspector="open"] {
+    --map-tools-right: 18px;
+  }
+  .map-floating-panel {
+    top: 66px;
+  }
+  .map-inspector-panel {
+    width: min(360px, calc(100vw - 88px));
+  }
+  .flow-toolbar {
+    right: 18px;
+  }
+  .map-app-shell .product-search-access {
+    min-width: 120px;
+  }
+  .map-app-shell .flow-level,
+  .map-app-shell .flow-box.is-open > .flow-level {
+    grid-template-columns: repeat(2, minmax(190px, 230px));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .map-floating-panel { animation: none; }
+  .map-floating-panel {
+    animation: none;
+  }
   .flow-toolbar,
   .map-coverage-overlay,
   .flow-minimap,
-  .source-freshness-progress { transition: none; }
+  .source-freshness-progress {
+    transition: none;
+  }
 }

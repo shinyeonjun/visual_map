@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use crate::{
     capture_provider_stderr, collect_files, find_tool, javascript_workspace, project_cache_root,
-    provider_timeout, range_contains, terminate_process_tree, tool_command,
-    typescript_config_files, Diagnostic, DiagnosticCode, DocumentOutput, LanguageSpec,
-    OccurrenceOutput, RelationOutput, SymbolOutput,
+    provider_timeout, range_contains, tool_command, typescript_config_files, Diagnostic,
+    DiagnosticCode, DocumentOutput, LanguageSpec,
+    OccurrenceOutput, ProviderProcessGuard, RelationOutput, SymbolOutput,
 };
 
 type SourceRange = (i32, i32, i32, i32);
@@ -49,6 +49,7 @@ pub(crate) fn run_command(
     let mut child = command
         .spawn()
         .map_err(|e| format!("{} indexer could not start: {e}", language))?;
+    let process_guard = ProviderProcessGuard::attach(&child);
     let stderr_task = child
         .stderr
         .take()
@@ -57,6 +58,7 @@ pub(crate) fn run_command(
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                process_guard.terminate(&mut child);
                 if status.success() {
                     let _ = stderr_task.map(|task| task.join());
                     return Ok(());
@@ -68,7 +70,7 @@ pub(crate) fn run_command(
                 ));
             }
             Ok(None) if Instant::now() >= deadline => {
-                terminate_process_tree(&mut child);
+                process_guard.terminate(&mut child);
                 return Err(provider_failure(
                     language,
                     format!(
@@ -81,7 +83,7 @@ pub(crate) fn run_command(
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(250)),
             Err(error) => {
-                terminate_process_tree(&mut child);
+                process_guard.terminate(&mut child);
                 return Err(provider_failure(
                     language,
                     format!("{} indexer wait failed: {error}", language),

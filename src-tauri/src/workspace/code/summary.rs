@@ -1,6 +1,10 @@
 fn code_inventory_summary(inventory: &CodeInventory) -> CodeInventorySummary {
     CodeInventorySummary {
-        routes: inventory.routes.len(),
+        routes: inventory
+            .routes
+            .iter()
+            .filter(|item| !code_item_is_ui(item))
+            .count(),
         handlers: inventory.handlers.len(),
         services: inventory.services.len(),
         repositories: inventory.repositories.len(),

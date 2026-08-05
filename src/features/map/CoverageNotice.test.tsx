@@ -116,6 +116,25 @@ describe("analysisCoverageNotice", () => {
     expect(model).toMatchObject({ severity: "partial", headline: "일부 언어가 지도에 없습니다" });
   });
 
+  it("never rounds incomplete coverage up to 100 percent", () => {
+    const model = analysisCoverageNotice(
+      inventory([
+        {
+          id: "python",
+          name: "Python",
+          provider: "native-lsp",
+          files_found: 3973,
+          files_indexed: 3971,
+          files_excluded: 2,
+          files_missing: 0,
+          status: "indexed",
+        },
+      ]),
+    );
+
+    expect(model?.summary).toContain("(99.9%)");
+  });
+
   it("says nothing when every found file reached the index", () => {
     expect(
       analysisCoverageNotice(

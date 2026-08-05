@@ -38,36 +38,6 @@ input:focus-visible,
 h2, h3 { margin: 0; }
 code, pre { font-family: var(--mono); }
 
-.workbench-answer-status {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-
-.workbench-busy-notice {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 40;
-  max-width: min(360px, calc(100vw - 36px));
-  margin: 0;
-  padding: 8px 11px;
-  border: 1px solid color-mix(in srgb, var(--orange) 42%, var(--line-2));
-  border-radius: var(--r-md);
-  background: var(--bg-raised);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
-  color: var(--orange);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -78,16 +48,6 @@ code, pre { font-family: var(--mono); }
     transition-duration: 0.01ms !important;
   }
 }
-
-.app-shell {
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-app);
-}
-
-.app-shell[data-view="workbench"] { --accent: var(--teal); --accent-deep: var(--teal-deep); --accent-ink: var(--teal-ink); --accent-soft: rgba(76, 201, 220, 0.14); }
-.app-shell[data-view="atlas"] { --accent: var(--blue); --accent-deep: var(--blue-deep); --accent-ink: var(--blue-ink); --accent-soft: rgba(91, 157, 255, 0.14); }
 
 .app-fatal {
   min-height: 100vh;

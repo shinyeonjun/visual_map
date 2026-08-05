@@ -3,18 +3,19 @@ use super::{
     lsp_item_symbol, lsp_max_requests, lsp_message_length_allowed, lsp_session_timeout,
     parse_lsp_range, uri_to_relative_path, LspSymbol, NEXT_LSP_ID,
 };
-use crate::{Diagnostic, DiagnosticCode};
+use crate::{Diagnostic, DiagnosticCode, ProviderProcessGuard};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{ChildStdin, ChildStdout};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 pub(super) struct LspConnection {
     child: std::process::Child,
+    process_guard: ProviderProcessGuard,
     stdin: ChildStdin,
     messages: Receiver<Value>,
     timeout: Duration,
@@ -44,6 +45,7 @@ pub(super) struct LspReference {
 impl LspConnection {
     pub(super) fn new(
         child: std::process::Child,
+        process_guard: ProviderProcessGuard,
         stdin: ChildStdin,
         stdout: BufReader<ChildStdout>,
         timeout: Duration,
@@ -90,6 +92,7 @@ impl LspConnection {
         });
         Ok(Self {
             child,
+            process_guard,
             stdin,
             messages,
             timeout,
@@ -670,30 +673,13 @@ impl Drop for LspConnection {
         // misleading worker panic even though indexing succeeded.
         for _ in 0..100 {
             match self.child.try_wait() {
-                Ok(Some(_)) => return,
+                Ok(Some(_)) => break,
                 Ok(None) => std::thread::sleep(Duration::from_millis(100)),
                 Err(_) => break,
             }
         }
 
-        #[cfg(windows)]
-        {
-            if self.child.try_wait().ok().flatten().is_none() {
-                use std::os::windows::process::CommandExt;
-                let mut command = Command::new("taskkill");
-                let _ = command
-                    .creation_flags(0x08000000)
-                    .args(["/PID", &self.child.id().to_string(), "/T", "/F"])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
-        }
-        if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.child.kill();
-        }
-        let _ = self.child.wait();
+        self.process_guard.terminate(&mut self.child);
     }
 }
 

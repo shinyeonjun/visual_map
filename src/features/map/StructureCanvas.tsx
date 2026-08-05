@@ -1,7 +1,13 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Box,
+  Boxes,
+  Braces,
   ChevronDown,
   ChevronRight,
+  Cloud,
+  Code2,
+  Database,
   Hand,
   Home,
   LocateFixed,
@@ -18,14 +24,8 @@ import { buildStructureTree, deriveModules, flattenStructure, isDerived, resolve
 import type { StructureNode } from "./structureModel";
 import { useStructureViewport } from "./useStructureViewport";
 
-const TONE_SYMBOL: Record<string, string> = {
-  package: "▣",
-  module: "▦",
-  api: "{ }",
-  code: "</>",
-  db: "▤",
-  external: "◎",
-};
+const ROOT_PAGE_SIZE = 24;
+const CHILD_PAGE_SIZE = 12;
 
 /**
  * One canvas, four depths.
@@ -45,6 +45,8 @@ export function StructureCanvas({
   revealPath,
   edges = [],
   map = null,
+  revealedNode = null,
+  loading = false,
   onExpandArea,
   onExpandNode,
   onCollapse,
@@ -56,6 +58,8 @@ export function StructureCanvas({
   revealPath?: string[];
   edges?: VisualEdge[];
   map?: VisualMap | null;
+  revealedNode?: VisualNode | null;
+  loading?: boolean;
   onExpandArea: (node: VisualNode) => void;
   onExpandNode?: (node: VisualNode) => void;
   onCollapse?: () => void;
@@ -64,6 +68,7 @@ export function StructureCanvas({
 }) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [tool, setTool] = useState<"select" | "pan">("select");
+  const [rootLimit, setRootLimit] = useState(ROOT_PAGE_SIZE);
   const viewport = useStructureViewport(map?.workspaceId ?? "empty-map");
   /*
     The expansion path is the canvas's own state, not the map's. The map holds
@@ -106,6 +111,7 @@ export function StructureCanvas({
   if (map && pendingId) {
     const engineGroups = map.nodes.filter((node) => node.kind === "group-domain" && node.parentId === pendingId);
     const members = map.nodes.filter((node) => node.id !== pendingId && node.kind !== "group-domain");
+    if (revealedNode && !members.some((node) => node.id === revealedNode.id)) members.push(revealedNode);
     const focusedGroup = map.nodes.find((node) => node.id === pendingId && node.kind === "group-domain");
 
     if (engineGroups.length > 0) {
@@ -143,6 +149,9 @@ export function StructureCanvas({
     () => (areas.length > 0 ? areas : (map?.nodes ?? []).filter((node) => node.kind !== "group-domain")),
     [areas, map],
   );
+  const rootSignature = roots.map((node) => node.id).join("|");
+  useEffect(() => setRootLimit(ROOT_PAGE_SIZE), [rootSignature]);
+  const visibleRoots = useMemo(() => takeWithActive(roots, activePath[0], rootLimit), [activePath, rootLimit, roots]);
   for (const root of roots) ownerRef.current.delete(root.id);
 
   const childrenOf = useCallback((id: string) => membersRef.current.get(id) ?? [], []);
@@ -155,9 +164,9 @@ export function StructureCanvas({
     .map(([id, children]) => `${id}:${children.map((child) => child.id).join(",")}`)
     .join("|");
   const tree = useMemo(
-    () => buildStructureTree(roots, childrenOf, activePath),
+    () => buildStructureTree(visibleRoots, childrenOf, activePath),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- cacheSignature stands in for the ref contents
-    [roots, childrenOf, activePath, cacheSignature],
+    [visibleRoots, childrenOf, activePath, cacheSignature],
   );
   const visible = useMemo(() => flattenStructure(tree), [tree]);
 
@@ -368,8 +377,26 @@ export function StructureCanvas({
 
             <div className="flow-level" data-level="0">
               {tree.map((node) => (
-                <FlowBox key={node.id} node={node} openPath={activePath} onOpen={open} onClose={close} />
+                <FlowBox
+                  key={node.id}
+                  node={node}
+                  openPath={activePath}
+                  loading={loading}
+                  onOpen={open}
+                  onClose={close}
+                />
               ))}
+              {roots.length > visibleRoots.length ? (
+                <button
+                  className="flow-more"
+                  type="button"
+                  onClick={() => setRootLimit((limit) => limit + ROOT_PAGE_SIZE)}
+                >
+                  <Plus size={15} aria-hidden="true" />
+                  영역 {Math.min(ROOT_PAGE_SIZE, roots.length - visibleRoots.length).toLocaleString("ko-KR")}개 더 보기
+                  <small>전체 {roots.length.toLocaleString("ko-KR")}개</small>
+                </button>
+              ) : null}
             </div>
 
             {tree.length === 0 ? <p className="flow-empty">아직 지도에 표시할 구조가 없습니다.</p> : null}
@@ -380,11 +407,11 @@ export function StructureCanvas({
       {tree.length > 0 ? (
         <button className="flow-minimap" type="button" onClick={viewport.fitCanvas} aria-label="미니맵에서 화면 맞춤">
           <span className="flow-minimap-map" aria-hidden="true">
-            {tree.slice(0, 24).map((node) => (
+            {roots.slice(0, 24).map((node) => (
               <i key={node.id} className={activePath[0] === node.id ? "active" : ""} />
             ))}
           </span>
-          <small>{tree.length.toLocaleString("ko-KR")}개 영역</small>
+          <small>{roots.length.toLocaleString("ko-KR")}개 영역</small>
         </button>
       ) : null}
     </div>
@@ -394,15 +421,19 @@ export function StructureCanvas({
 function FlowBox({
   node,
   openPath,
+  loading,
   onOpen,
   onClose,
 }: {
   node: StructureNode;
   openPath: string[];
+  loading: boolean;
   onOpen: (node: StructureNode) => void;
   onClose: (node: StructureNode) => void;
 }) {
   const isOpen = openPath[node.depth] === node.id;
+  const [childLimit, setChildLimit] = useState(CHILD_PAGE_SIZE);
+  const visibleChildren = takeWithActive(node.children, openPath[node.depth + 1], childLimit);
 
   if (!isOpen) {
     return (
@@ -412,7 +443,7 @@ function FlowBox({
         type="button"
         onClick={() => onOpen(node)}
         aria-expanded={node.expandable ? false : undefined}
-        aria-label={`${node.title} ${node.kindLabel} 펼치기`}
+        aria-label={`${node.title} ${node.kindLabel} ${node.expandable ? "펼치기" : "선택"}`}
       >
         <BoxFace node={node} />
       </button>
@@ -423,14 +454,15 @@ function FlowBox({
     <section className={`flow-box ${node.tone} is-open`} data-flow-id={node.id}>
       <header className="flow-box-head">
         <span className="flow-box-icon" aria-hidden="true">
-          {TONE_SYMBOL[node.tone] ?? "▣"}
+          <BoxKindIcon tone={node.tone} />
         </span>
         <span className="flow-box-title">
           <strong>{node.title}</strong>
           <small>{node.meta}</small>
         </span>
         <span className="flow-box-depth">
-          {node.kindLabel} · depth {node.depth}
+          {node.kindLabel}
+          {node.children.length > 0 ? ` · 하위 ${node.children.length.toLocaleString("ko-KR")}개` : ""}
         </span>
         <button
           className="flow-box-collapse"
@@ -445,12 +477,33 @@ function FlowBox({
       </header>
       {node.children.length > 0 ? (
         <div className="flow-level" data-level={node.depth + 1}>
-          {node.children.map((child) => (
-            <FlowBox key={child.id} node={child} openPath={openPath} onOpen={onOpen} onClose={onClose} />
+          {visibleChildren.map((child) => (
+            <FlowBox
+              key={child.id}
+              node={child}
+              openPath={openPath}
+              loading={loading}
+              onOpen={onOpen}
+              onClose={onClose}
+            />
           ))}
+          {node.children.length > visibleChildren.length ? (
+            <button
+              className="flow-more"
+              type="button"
+              onClick={() => setChildLimit((limit) => limit + CHILD_PAGE_SIZE)}
+            >
+              <Plus size={15} aria-hidden="true" />
+              {Math.min(CHILD_PAGE_SIZE, node.children.length - visibleChildren.length).toLocaleString("ko-KR")}개 더
+              보기
+              <small>전체 {node.children.length.toLocaleString("ko-KR")}개</small>
+            </button>
+          ) : null}
         </div>
       ) : (
-        <p className="flow-box-pending">이 안에서 더 펼칠 구조를 찾지 못했습니다.</p>
+        <p className="flow-box-pending">
+          {loading ? "하위 구조를 불러오는 중입니다." : "이 단계의 하위 구조는 없습니다."}
+        </p>
       )}
     </section>
   );
@@ -460,14 +513,55 @@ function BoxFace({ node }: { node: StructureNode }) {
   return (
     <>
       <span className="flow-box-icon" aria-hidden="true">
-        {TONE_SYMBOL[node.tone] ?? "▣"}
+        <BoxKindIcon tone={node.tone} />
       </span>
       <span className="flow-box-title">
         <span className="flow-box-kicker">{node.kindLabel}</span>
         <strong>{node.title}</strong>
         {node.meta ? <small>{node.meta}</small> : null}
       </span>
-      {node.metric ? <span className="flow-box-metric">{node.metric}</span> : null}
+      <BoxMetrics node={node} />
     </>
   );
+}
+
+function BoxKindIcon({ tone }: { tone: StructureNode["tone"] }) {
+  if (tone === "package") return <Boxes size={15} />;
+  if (tone === "module") return <Box size={15} />;
+  if (tone === "api") return <Braces size={15} />;
+  if (tone === "db") return <Database size={15} />;
+  if (tone === "external") return <Cloud size={15} />;
+  return <Code2 size={15} />;
+}
+
+function BoxMetrics({ node }: { node: StructureNode }) {
+  const metrics = node.node.metrics;
+  if (!metrics && !node.metric) return null;
+  return (
+    <span className="flow-box-metric">
+      {metrics ? (
+        <>
+          <span>API {metrics.apiCount.toLocaleString("ko-KR")}</span>
+          <span>코드 {metrics.codeCount.toLocaleString("ko-KR")}</span>
+          <span>DB {metrics.dbCount.toLocaleString("ko-KR")}</span>
+          {(metrics.inDegree ?? 0) + (metrics.outDegree ?? 0) > 0 ? (
+            <span className="relations">
+              연결 {(metrics.inDegree ?? 0).toLocaleString("ko-KR")}← ·{" "}
+              {(metrics.outDegree ?? 0).toLocaleString("ko-KR")}→
+            </span>
+          ) : null}
+        </>
+      ) : (
+        node.metric
+      )}
+    </span>
+  );
+}
+
+function takeWithActive<T extends { id: string }>(items: T[], activeId: string | undefined, limit: number): T[] {
+  if (items.length <= limit) return items;
+  const visible = items.slice(0, limit);
+  if (!activeId || visible.some((item) => item.id === activeId)) return visible;
+  const active = items.find((item) => item.id === activeId);
+  return active ? [...visible.slice(0, Math.max(0, limit - 1)), active] : visible;
 }

@@ -57,7 +57,7 @@ export function MapWorkspace({
   dbConnectionError?: string | null;
   onOpenDbConnection?: () => void;
 }) {
-  const [explorerOpen, setExplorerOpen] = useState(true);
+  const [explorerOpen, setExplorerOpen] = useState(false);
   const [dbConnectionModalOpen, setDbConnectionModalOpen] = useState(false);
   const [targetReveal, setTargetReveal] = useState<TargetReveal | null>(null);
   const [targetRevealPath, setTargetRevealPath] = useState<string[] | undefined>();
@@ -122,7 +122,7 @@ export function MapWorkspace({
       ? `답 준비 완료: ${answerTargetTitle(visualMapControls, committedAnswerFocus)}`
       : "";
   useLayoutEffect(() => {
-    setExplorerOpen(Boolean(workspaceId));
+    setExplorerOpen(false);
     setTargetReveal(null);
     setTargetRevealPath(undefined);
     setInventorySelection(null);
@@ -141,6 +141,7 @@ export function MapWorkspace({
   }
 
   function openTargetInCanvas(item: TargetItem) {
+    if (window.innerWidth < 1600) setExplorerOpen(false);
     setInventorySelection(null);
     visualMapControls.clearSelection();
     const area = findAreaForTarget(item, overviewAreas);
@@ -306,11 +307,14 @@ export function MapWorkspace({
                 revealPath={targetRevealPath}
                 edges={overviewMap?.edges ?? []}
                 map={visualMapControls.currentMap}
+                revealedNode={inventorySelection}
+                loading={visualMapControls.loading}
                 onSelectEdge={(edge) => {
                   setInventorySelection(null);
                   visualMapControls.selectEdge(edge);
                 }}
                 onSelectNode={(node) => {
+                  if (window.innerWidth < 1600) setExplorerOpen(false);
                   setInventorySelection(null);
                   visualMapControls.selectNode(node);
                 }}

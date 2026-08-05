@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { codeInventoryAnalysisQuality, dbInventoryTableCount, type CodeInventory } from "./workspace";
+import {
+  codeInventoryAnalysisQuality,
+  codeInventoryRouteCount,
+  dbInventoryTableCount,
+  type CodeInventory,
+} from "./workspace";
 
 describe("codeInventoryAnalysisQuality", () => {
   it("normalizes engine quality summaries and preserves partial states", () => {
@@ -133,5 +138,17 @@ describe("dbInventoryTableCount", () => {
         totalTables: 1,
       }),
     ).toBe(1);
+  });
+});
+
+describe("codeInventoryRouteCount", () => {
+  it("uses the exact summary when the returned route list is bounded", () => {
+    const inventory = {
+      routes: [{ kind: "api", detail: {} }],
+      summary: { routes: 649 },
+      partial: true,
+    } as CodeInventory;
+
+    expect(codeInventoryRouteCount(inventory)).toBe(649);
   });
 });

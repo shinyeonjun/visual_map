@@ -102,6 +102,32 @@ describe("StructureCanvas", () => {
     expect(container.querySelector(".flow-box.is-open")).toHaveAttribute("data-flow-id", "group:order");
   });
 
+  it("keeps a selected sidebar target visible when a bounded module omitted it", () => {
+    const module = { ...area("group:module:order:api", "api"), parentId: "group:order", depth: 1 };
+    const target = member("api:schema", "ANY /schema/", "src/order/api/schema.py");
+    const { rerender } = render(
+      <StructureCanvas
+        areas={areas}
+        revealPath={["group:order"]}
+        map={mapWith([area("group:order", "주문"), module])}
+        onExpandArea={vi.fn()}
+      />,
+    );
+
+    rerender(
+      <StructureCanvas
+        areas={areas}
+        revealPath={["group:order", module.id]}
+        map={mapWith([module, member("api:other", "GET /other", "src/order/api/other.py")], module.id)}
+        revealedNode={target}
+        onExpandArea={vi.fn()}
+      />,
+    );
+
+    expect(boxNamed("ANY /schema/")).toBeInTheDocument();
+    expect(boxNamed("GET /other")).toBeInTheDocument();
+  });
+
   it("puts a module level between a package and its members when there are many", () => {
     // Without this a package with 35 routes opens onto 35 boxes at once. The
     // engine computes these boundaries; until the desktop layer reads them,

@@ -1126,6 +1126,15 @@ fn inventory_bootstrap_caps_code_but_keeps_exact_counts_and_full_search() {
         Some("src/routes.rs"),
     ));
     items.push(item(
+        "code:route:settings",
+        "ui-route",
+        "/settings",
+        "api",
+        "code",
+        None,
+        Some("src/pages/settings.tsx"),
+    ));
+    items.push(item(
         "db:table:public.users",
         "table",
         "users",
@@ -1146,6 +1155,8 @@ fn inventory_bootstrap_caps_code_but_keeps_exact_counts_and_full_search() {
 
     let bootstrap = inventory_bootstrap(&snapshot);
     assert_eq!(bootstrap.summary.sources["code"].groups["functions"], 150);
+    assert_eq!(bootstrap.summary.sources["code"].groups["routes"], 1);
+    assert_eq!(bootstrap.summary.sources["code"].groups["ui-routes"], 1);
     assert_eq!(
         bootstrap
             .snapshot

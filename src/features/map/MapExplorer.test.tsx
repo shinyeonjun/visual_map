@@ -63,6 +63,30 @@ describe("MapExplorer", () => {
     expect(showMode).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "코드1" })).toHaveAttribute("data-revealed", "true");
   });
+
+  it("shows exact totals while previewing a bounded inventory", () => {
+    const codeInventory = inventory();
+    codeInventory.partial = true;
+    codeInventory.summary.routes = 649;
+    codeInventory.summary.functions = 71_902;
+    codeInventory.functions = [
+      { id: "function-visible", kind: "function", name: "visible", filePath: "src/app.ts", detail: null },
+    ];
+
+    render(
+      <MapExplorer
+        workspaceControls={{ ...workspaceControls(), codeInventory } as WorkspaceControls}
+        dbProfileControls={{ inventory: null } as DbProfileControls}
+        visualMapControls={visualControls(vi.fn())}
+        onOpenDatabase={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "API 라우트649" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "코드71902" })).toBeInTheDocument();
+    expect(screen.getByText("… 645개 더보기 · 검색으로 좁히기")).toBeInTheDocument();
+    expect(screen.getByText("… 71898개 더보기 · 검색으로 좁히기")).toBeInTheDocument();
+  });
 });
 
 function workspaceControls(): WorkspaceControls {
