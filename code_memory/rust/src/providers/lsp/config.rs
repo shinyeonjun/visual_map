@@ -35,6 +35,12 @@ fn rust_analyzer_settings() -> Value {
             "checkOnSave": {"enable": false},
             "cargo": {
                 "noDeps": true,
+                // The bundled rust-src Cargo manifests reference crates.io
+                // packages that are not part of a user's project. Loading
+                // that sysroot in offline mode can stall or empty otherwise
+                // valid project semantics, so keep the provider focused on
+                // the repository graph.
+                "sysroot": null,
                 "allTargets": false,
                 "autoreload": false,
                 "buildScripts": {"enable": false},

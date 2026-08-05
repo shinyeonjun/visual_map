@@ -8,7 +8,6 @@ use std::{
     io::{Read, Write},
     path::{Component, Path, PathBuf},
     sync::{Mutex, OnceLock},
-    time::Duration,
 };
 use zip::ZipArchive;
 
@@ -25,8 +24,6 @@ struct ProviderCatalog {
     key_id: String,
     platform: String,
     packs: Vec<ProviderPack>,
-    #[serde(default)]
-    revocations: Vec<ProviderRevocation>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -40,11 +37,7 @@ struct ProviderPack {
     unpacked_bytes: u64,
     #[serde(default)]
     languages: Vec<String>,
-    #[serde(default)]
-    dependencies: Vec<String>,
     entrypoints: Vec<ProviderEntrypoint>,
-    #[serde(default)]
-    download_url: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -53,13 +46,6 @@ struct ProviderEntrypoint {
     path: String,
     bytes: u64,
     sha256: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProviderRevocation {
-    pack_id: String,
-    versions: Vec<String>,
 }
 
 pub(crate) fn ensure_provider_root(
@@ -181,13 +167,6 @@ fn validate_catalog(catalog: &ProviderCatalog) -> Result<(), String> {
                 pack.id
             ));
         }
-        if let Some(url) = pack.download_url.as_deref() {
-            let url = reqwest::Url::parse(url)
-                .map_err(|error| format!("provider URL이 올바르지 않습니다: {error}"))?;
-            if url.scheme() != "https" {
-                return Err("provider 다운로드는 HTTPS만 허용합니다".to_string());
-            }
-        }
         let mut entrypoints = HashSet::new();
         for entry in &pack.entrypoints {
             if !is_safe_relative_path(&entry.path)
@@ -213,18 +192,6 @@ fn validate_catalog(catalog: &ProviderCatalog) -> Result<(), String> {
     if !ids.contains("core") {
         return Err("provider catalog에 core pack이 없습니다".to_string());
     }
-    for pack in &catalog.packs {
-        if pack
-            .dependencies
-            .iter()
-            .any(|dependency| dependency == &pack.id || !ids.contains(dependency.as_str()))
-        {
-            return Err(format!(
-                "provider dependency가 올바르지 않습니다: {}",
-                pack.id
-            ));
-        }
-    }
     Ok(())
 }
 
@@ -232,12 +199,7 @@ fn resolve_required_packs(
     catalog: &ProviderCatalog,
     required_languages: &[String],
 ) -> Result<Vec<String>, String> {
-    let packs = catalog
-        .packs
-        .iter()
-        .map(|pack| (pack.id.as_str(), pack))
-        .collect::<HashMap<_, _>>();
-    let mut selected = HashSet::from(["core".to_string()]);
+    let mut selected = vec!["core".to_string()];
     for language in required_languages {
         let matches = catalog
             .packs
@@ -248,63 +210,13 @@ fn resolve_required_packs(
         if matches.is_empty() {
             return Err(format!("{language}용 managed provider pack이 없습니다"));
         }
-        selected.extend(matches);
-    }
-    let mut pending = selected.iter().cloned().collect::<Vec<_>>();
-    while let Some(pack_id) = pending.pop() {
-        let pack = packs
-            .get(pack_id.as_str())
-            .ok_or_else(|| format!("provider pack을 찾을 수 없습니다: {pack_id}"))?;
-        if catalog.revocations.iter().any(|revocation| {
-            revocation.pack_id == pack.id
-                && revocation
-                    .versions
-                    .iter()
-                    .any(|version| version == &pack.version)
-        }) {
-            return Err(format!(
-                "폐기된 provider pack은 실행할 수 없습니다: {}",
-                pack.id
-            ));
-        }
-        for dependency in &pack.dependencies {
-            if selected.insert(dependency.clone()) {
-                pending.push(dependency.clone());
+        for pack_id in matches {
+            if !selected.contains(&pack_id) {
+                selected.push(pack_id);
             }
         }
     }
-    let mut ordered = Vec::new();
-    let mut visiting = HashSet::new();
-    let mut visited = HashSet::new();
-    for pack_id in selected {
-        visit_pack(&pack_id, &packs, &mut visiting, &mut visited, &mut ordered)?;
-    }
-    Ok(ordered)
-}
-
-fn visit_pack(
-    pack_id: &str,
-    packs: &HashMap<&str, &ProviderPack>,
-    visiting: &mut HashSet<String>,
-    visited: &mut HashSet<String>,
-    ordered: &mut Vec<String>,
-) -> Result<(), String> {
-    if visited.contains(pack_id) {
-        return Ok(());
-    }
-    if !visiting.insert(pack_id.to_string()) {
-        return Err(format!("provider dependency cycle이 있습니다: {pack_id}"));
-    }
-    let pack = packs
-        .get(pack_id)
-        .ok_or_else(|| format!("provider pack을 찾을 수 없습니다: {pack_id}"))?;
-    for dependency in &pack.dependencies {
-        visit_pack(dependency, packs, visiting, visited, ordered)?;
-    }
-    visiting.remove(pack_id);
-    visited.insert(pack_id.to_string());
-    ordered.push(pack_id.to_string());
-    Ok(())
+    Ok(selected)
 }
 
 fn ensure_pack(
@@ -317,7 +229,7 @@ fn ensure_pack(
     if pack_is_ready(destination, catalog_hash, pack) {
         return Ok(());
     }
-    let archive = acquire_archive(bundle_dir, cache_dir, pack)?;
+    let archive = acquire_archive(bundle_dir, pack)?;
     let temporary = cache_dir.join(format!(
         "provider-pack.tmp-{}-{}",
         std::process::id(),
@@ -342,87 +254,14 @@ fn ensure_pack(
     result
 }
 
-fn acquire_archive(
-    bundle_dir: &Path,
-    cache_dir: &Path,
-    pack: &ProviderPack,
-) -> Result<PathBuf, String> {
+fn acquire_archive(bundle_dir: &Path, pack: &ProviderPack) -> Result<PathBuf, String> {
     let bundled = bundle_dir.join(&pack.file_name);
-    if archive_matches(&bundled, pack) {
-        return Ok(bundled);
+    if !bundled.is_file() {
+        return Err(format!("설치 파일에 provider pack이 없습니다: {}", pack.id));
     }
-    let download_dir = cache_dir.join("provider-downloads");
-    fs::create_dir_all(&download_dir)
-        .map_err(|error| format!("provider 다운로드 캐시를 만들지 못했습니다: {error}"))?;
-    let cached = download_dir.join(format!("{}.zip", pack.sha256.to_ascii_lowercase()));
-    if archive_matches(&cached, pack) {
-        return Ok(cached);
-    }
-    let url = pack.download_url.as_deref().ok_or_else(|| {
-        format!(
-            "provider pack이 설치되어 있지 않고 다운로드 URL도 없습니다: {}",
-            pack.id
-        )
-    })?;
-    let temporary = cached.with_extension(format!("zip.{}.tmp", std::process::id()));
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(30 * 60))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| format!("provider 다운로드 클라이언트를 만들지 못했습니다: {error}"))?;
-    let mut response = client
-        .get(url)
-        .send()
-        .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|error| format!("provider pack을 다운로드하지 못했습니다: {error}"))?;
-    if response
-        .content_length()
-        .is_some_and(|length| length != pack.compressed_bytes)
-    {
-        return Err(format!(
-            "provider 다운로드 크기가 catalog와 다릅니다: {}",
-            pack.id
-        ));
-    }
-    let mut output = File::create(&temporary)
-        .map_err(|error| format!("provider 다운로드 파일을 만들지 못했습니다: {error}"))?;
-    let copied = copy_with_limit(&mut response, &mut output, pack.compressed_bytes)
-        .map_err(|error| format!("provider 다운로드를 저장하지 못했습니다: {error}"))?;
-    if copied != pack.compressed_bytes {
-        drop(output);
-        let _ = fs::remove_file(&temporary);
-        return Err(format!(
-            "provider 다운로드 크기가 catalog와 다릅니다: {}",
-            pack.id
-        ));
-    }
-    output
-        .sync_all()
-        .map_err(|error| format!("provider 다운로드를 확정하지 못했습니다: {error}"))?;
-    drop(output);
-    if !archive_matches(&temporary, pack) {
-        let _ = fs::remove_file(&temporary);
-        return Err(format!(
-            "다운로드한 provider pack 검증에 실패했습니다: {}",
-            pack.id
-        ));
-    }
-    let _ = fs::remove_file(&cached);
-    fs::rename(&temporary, &cached)
-        .map_err(|error| format!("provider 다운로드를 활성화하지 못했습니다: {error}"))?;
-    Ok(cached)
-}
-
-fn copy_with_limit(
-    source: &mut impl Read,
-    destination: &mut impl Write,
-    expected_bytes: u64,
-) -> std::io::Result<u64> {
-    std::io::copy(
-        &mut source.take(expected_bytes.saturating_add(1)),
-        destination,
-    )
+    archive_matches(&bundled, pack)
+        .then_some(bundled)
+        .ok_or_else(|| format!("설치된 provider pack 검증에 실패했습니다: {}", pack.id))
 }
 
 fn archive_matches(path: &Path, pack: &ProviderPack) -> bool {
@@ -672,18 +511,6 @@ mod tests {
     use zip::{write::SimpleFileOptions, ZipWriter};
 
     #[test]
-    fn provider_download_copy_stops_after_the_declared_size() {
-        let mut source = std::io::Cursor::new(b"oversized".to_vec());
-        let mut destination = Vec::new();
-
-        assert_eq!(
-            copy_with_limit(&mut source, &mut destination, 4).unwrap(),
-            5
-        );
-        assert_eq!(destination, b"overs");
-    }
-
-    #[test]
     fn installs_only_the_packs_required_by_the_provider_plan() {
         let root = test_root("selective");
         let bundle_dir = root.join("engines/provider-bundles");
@@ -703,7 +530,7 @@ mod tests {
             "java",
             &[("java/runtime/bin/java.exe", b"java")],
         );
-        write_catalog(&bundle_dir, vec![core, node, java], Vec::new());
+        write_catalog(&bundle_dir, vec![core, node, java]);
 
         let provider_root = ensure_provider_root(
             &root.join("engines"),
@@ -731,34 +558,38 @@ mod tests {
     }
 
     #[test]
-    fn rejects_tampered_and_revoked_catalogs() {
+    fn rejects_tampered_catalog() {
         let root = test_root("trust");
         let bundle_dir = root.join("engines/provider-bundles");
         fs::create_dir_all(&bundle_dir).unwrap();
         let core = create_pack(&bundle_dir, "core", &[("manifest.json", b"{}")]);
-        let rust = create_pack(
-            &bundle_dir,
-            "rust",
-            &[("rust/toolchain/bin/rust-analyzer.exe", b"rust")],
-        );
-        let rust_version = rust.version.clone();
-        write_catalog(
-            &bundle_dir,
-            vec![core, rust],
-            vec![serde_json::json!({ "packId": "rust", "versions": [rust_version] })],
-        );
-        let error = ensure_provider_root(
-            &root.join("engines"),
-            &root.join("cache"),
-            &["rust".to_string()],
-        )
-        .unwrap_err();
-        assert!(error.contains("폐기된 provider"));
+        write_catalog(&bundle_dir, vec![core]);
 
         fs::write(bundle_dir.join("providers-manifest.json"), b"{}").unwrap();
         let error =
             ensure_provider_root(&root.join("engines"), &root.join("cache"), &[]).unwrap_err();
         assert!(error.contains("서명이 일치하지 않습니다"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_missing_bundled_pack_without_network_fallback() {
+        let root = test_root("missing-bundle");
+        let bundle_dir = root.join("engines/provider-bundles");
+        fs::create_dir_all(&bundle_dir).unwrap();
+        let core = create_pack(&bundle_dir, "core", &[("manifest.json", b"{}")]);
+        let node = create_pack(&bundle_dir, "node", &[("node/runtime/node.exe", b"node")]);
+        let node_archive = bundle_dir.join(&node.file_name);
+        write_catalog(&bundle_dir, vec![core, node]);
+        fs::remove_file(node_archive).unwrap();
+
+        let error = ensure_provider_root(
+            &root.join("engines"),
+            &root.join("cache"),
+            &["typescript".to_string()],
+        )
+        .unwrap_err();
+        assert!(error.contains("설치 파일에 provider pack이 없습니다"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -802,7 +633,7 @@ mod tests {
         }
     }
 
-    fn write_catalog(bundle_dir: &Path, packs: Vec<TestPack>, revocations: Vec<serde_json::Value>) {
+    fn write_catalog(bundle_dir: &Path, packs: Vec<TestPack>) {
         let packs = packs
             .into_iter()
             .map(|pack| {
@@ -820,9 +651,7 @@ mod tests {
                     "compressedBytes": pack.compressed_bytes,
                     "unpackedBytes": pack.unpacked_bytes,
                     "languages": languages,
-                    "dependencies": if languages.is_empty() { Vec::<&str>::new() } else { vec!["core"] },
-                    "entrypoints": pack.entrypoints,
-                    "downloadUrl": null
+                    "entrypoints": pack.entrypoints
                 })
             })
             .collect::<Vec<_>>();
@@ -831,8 +660,7 @@ mod tests {
             "catalogVersion": "test-v1",
             "keyId": "development-v1",
             "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
-            "packs": packs,
-            "revocations": revocations
+            "packs": packs
         }))
         .unwrap();
         let signature = SigningKey::from_bytes(&[0x42; 32]).sign(&catalog);

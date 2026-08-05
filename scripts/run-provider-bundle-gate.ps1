@@ -74,7 +74,10 @@ try {
             (Get-Sha256 $archivePath) -ne ([string]$pack.sha256).ToLowerInvariant()) {
             throw "Provider archive checksum mismatch: $archivePath"
         }
-        Expand-Archive -LiteralPath $archivePath -DestinationPath $providersRoot -Force
+        & tar.exe -xf $archivePath -C $providersRoot
+        if ($LASTEXITCODE -ne 0) {
+            throw "Provider archive extraction failed: $archivePath"
+        }
         foreach ($language in @($pack.languages)) {
             if (-not $actualLanguages.Add([string]$language)) {
                 throw "Provider language is assigned more than once: $language"

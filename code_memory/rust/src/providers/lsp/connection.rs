@@ -340,10 +340,16 @@ impl LspConnection {
         } else {
             serde_json::json!({"workspaceFolders": true})
         };
-        let initialization_options = if language == "java" {
-            serde_json::json!({"settings": self.workspace_settings})
-        } else {
-            Value::Null
+        let initialization_options = match language {
+            "java" => serde_json::json!({"settings": self.workspace_settings}),
+            // rust-analyzer reads restart-only settings such as cargo.sysroot
+            // before the later workspace/configuration exchange.
+            "rust" => self
+                .workspace_settings
+                .get("rust-analyzer")
+                .cloned()
+                .unwrap_or(Value::Null),
+            _ => Value::Null,
         };
         let response = self.request(
             "initialize",

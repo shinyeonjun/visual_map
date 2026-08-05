@@ -27,21 +27,22 @@
 
 ## 처음 설치할 때 생성되는 것
 
-기본 설치에서는 다음만 설치한다.
+설치 EXE는 앱과 모든 언어 provider 압축본을 함께 설치한다.
 
 ```text
 VisualMap.exe                               앱 본체
-resources\engines\provider-bundles\       서명된 provider catalog
+resources\engines\provider-bundles\       서명된 catalog와 모든 provider ZIP
 config\settings.toml                       사용자 설정 기본값
 logs\                                      오류 로그 폴더
 ```
 
 프로젝트를 연결하기 전에는 프로젝트별 분석 결과나 언어별 대형 도구를
-강제로 만들지 않는다.
+해제하지 않는다. Provider ZIP은 설치 리소스에 압축된 상태로 대기한다.
 
 ## 언어 provider
 
-프로젝트에서 언어가 감지된 경우에만 필요한 provider를 준비한다.
+프로젝트에서 언어가 감지된 경우에만 설치 리소스의 해당 provider를 앱 전용
+캐시로 한 번 해제한다. 네트워크 다운로드는 수행하지 않는다.
 
 ```text
 %LOCALAPPDATA%\VisualMap\cache\provider-roots\<catalog-hash>\
@@ -63,12 +64,10 @@ Python은 별도 runtime pack을 두지 않고 `node` pack의 Pyright를 사용�
 언어가 하나도 연결되지 않은 pack은 release catalog에 포함하지 않는다.
 
 catalog의 Ed25519 서명을 앱에 고정된 공개키로 먼저 검증한 뒤, 감지된 언어의
-pack만 HTTPS로 내려받는다. 각 ZIP의 크기와 SHA-256, 해제 크기와 핵심
+pack만 설치 리소스에서 읽는다. 각 ZIP의 크기와 SHA-256, 해제 크기와 핵심
 entrypoint의 SHA-256을 검증한 뒤 같은 볼륨에서 원자적으로 활성화한다.
-폐기 목록에 포함된 버전은 기존 캐시에 있어도 실행하지 않는다.
 
 ```text
-cache\provider-downloads\<pack-sha256>.zip
 cache\provider-roots\<catalog-hash>\java\
 cache\provider-roots\<catalog-hash>\.packs\java.ready
 ```
@@ -135,16 +134,13 @@ Visual Map provider가 있어도 사용자 환경을 덮어쓰지 않는다.
 - 프로젝트 의존성의 전역 설치
 - WSL, Docker, 별도 서버
 
-## 설치 모드
+## 설치 방식
 
-기본 모드는 온라인 로컬 설치로 한다.
-
-- 기본 설치: 앱 본체만 설치
-- 프로젝트 연결: 필요한 provider만 앱 전용 폴더에 준비
-- 오프라인 설치: 모든 provider를 포함한 별도 대형 설치 파일 제공
-
-온라인 모드에서도 사용자는 별도의 언어 도구 설치 프로그램을 실행하지
-않는다. provider 준비는 Visual Map이 자체 폴더에서 처리한다.
+- 단일 오프라인 설치 EXE에 모든 provider를 포함한다.
+- 프로젝트 연결 시 감지된 언어 provider만 앱 전용 캐시에 해제한다.
+- 분석 실행 시 감지된 언어 provider만 프로세스로 실행한다.
+- provider가 누락되거나 손상되면 다운로드로 우회하지 않고 설치 오류를 명확히
+  보고한다.
 
 ## 삭제
 

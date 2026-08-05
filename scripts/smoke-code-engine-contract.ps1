@@ -66,7 +66,6 @@ if (-not $UseProviderBundles -and (Test-Path -LiteralPath $bundledProviders -Pat
         throw "Managed provider catalog signature verification failed."
     }
     $providerRoot = Join-Path $fixtureRoot "providers"
-    $downloadRoot = Join-Path $fixtureRoot "provider-downloads"
     New-Item -ItemType Directory -Path $providerRoot -Force | Out-Null
     $bundleManifest = Get-Content -LiteralPath $bundleManifestPath -Raw | ConvertFrom-Json
     foreach ($packId in "core", "java", "node") {
@@ -77,18 +76,16 @@ if (-not $UseProviderBundles -and (Test-Path -LiteralPath $bundledProviders -Pat
         $archiveName = [string]$pack.fileName
         $archivePath = Join-Path $bundleRoot $archiveName
         if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
-            if ([string]::IsNullOrWhiteSpace([string]$pack.downloadUrl) -or -not ([string]$pack.downloadUrl).StartsWith("https://")) {
-                throw "Managed provider archive has no local file or HTTPS URL: $archiveName"
-            }
-            New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
-            $archivePath = Join-Path $downloadRoot $archiveName
-            Invoke-WebRequest -Uri ([string]$pack.downloadUrl) -OutFile $archivePath
+            throw "Managed provider archive is missing from the installer bundle: $archiveName"
         }
         $actualHash = Get-Sha256 $archivePath
         if ($actualHash -ne [string]$pack.sha256 -or (Get-Item -LiteralPath $archivePath).Length -ne [uint64]$pack.compressedBytes) {
             throw "Managed provider archive checksum mismatch: $archiveName"
         }
-        Expand-Archive -LiteralPath $archivePath -DestinationPath $providerRoot -Force
+        & tar.exe -xf $archivePath -C $providerRoot
+        if ($LASTEXITCODE -ne 0) {
+            throw "Managed provider archive extraction failed: $archiveName"
+        }
     }
     foreach ($requiredProviderFile in "manifest.json", "java\jdtls.cmd", "node\project-model.cjs", "node\runtime\node.exe") {
         $requiredPath = Join-Path $providerRoot $requiredProviderFile

@@ -1,9 +1,6 @@
 [CmdletBinding()]
 param(
     [string]$SourceRoot,
-    [ValidateSet("Full", "Compact")]
-    [string]$BundleMode = "Full",
-    [string]$ProviderBaseUrl = $env:VISUAL_MAP_PROVIDER_BASE_URL,
     [switch]$Release,
     [switch]$VerifyOnly
 )
@@ -132,14 +129,12 @@ function Test-Catalog {
             throw "Provider catalog contains an unreachable pack: $($pack.id)"
         }
         $archivePath = Join-Path $BundleRoot ([string]$pack.fileName)
-        if (Test-Path -LiteralPath $archivePath -PathType Leaf) {
-            if ((Get-Item -LiteralPath $archivePath).Length -ne [uint64]$pack.compressedBytes -or
-                (Get-Sha256 $archivePath) -ne [string]$pack.sha256) {
-                throw "Provider bundle verification failed: $archivePath"
-            }
-        } elseif ([string]::IsNullOrWhiteSpace([string]$pack.downloadUrl) -or
-            -not ([string]$pack.downloadUrl).StartsWith("https://", [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Provider pack has neither a local archive nor an HTTPS download URL: $($pack.id)"
+        if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+            throw "Provider archive is missing from the installer bundle: $archivePath"
+        }
+        if ((Get-Item -LiteralPath $archivePath).Length -ne [uint64]$pack.compressedBytes -or
+            (Get-Sha256 $archivePath) -ne [string]$pack.sha256) {
+            throw "Provider bundle verification failed: $archivePath"
         }
         foreach ($entryPoint in @($pack.entrypoints)) {
             [void]$declaredEntryPoints.Add(([string]$entryPoint.path).Replace("\", "/"))
@@ -161,16 +156,6 @@ if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
 $providerManifestPath = Join-Path $SourceRoot "manifest.json"
 if (-not (Test-Path -LiteralPath $providerManifestPath -PathType Leaf)) {
     throw "Provider manifest was not found: $providerManifestPath"
-}
-if ($BundleMode -eq "Compact") {
-    if ([string]::IsNullOrWhiteSpace($ProviderBaseUrl)) {
-        throw "Compact provider bundles require VISUAL_MAP_PROVIDER_BASE_URL or -ProviderBaseUrl."
-    }
-    $baseUri = [Uri]$ProviderBaseUrl
-    if ($baseUri.Scheme -ne "https") {
-        throw "Provider download base URL must use HTTPS."
-    }
-    $ProviderBaseUrl = $ProviderBaseUrl.TrimEnd("/")
 }
 if ($VerifyOnly) {
     Test-Catalog
@@ -245,7 +230,6 @@ foreach ($source in $sources) {
     }
     $sha256 = Get-Sha256 $archivePath
     $entryPoints = @($packEntryPoints[$source.id] | ForEach-Object { Get-EntryPoint $_ })
-    $downloadUrl = if ([string]::IsNullOrWhiteSpace($ProviderBaseUrl)) { $null } else { "$ProviderBaseUrl/$archiveName" }
     $packs += [pscustomobject]@{
         id = [string]$source.id
         version = $sha256.Substring(0, 16).ToLowerInvariant()
@@ -254,9 +238,7 @@ foreach ($source in $sources) {
         compressedBytes = [uint64](Get-Item -LiteralPath $archivePath).Length
         unpackedBytes = $unpackedBytes
         languages = [string[]]$packLanguages[$source.id]
-        dependencies = if ($source.id -eq "core") { [string[]]@() } else { [string[]]@("core") }
         entrypoints = $entryPoints
-        downloadUrl = $downloadUrl
     }
 }
 
@@ -268,7 +250,6 @@ $catalog = [pscustomobject]@{
     keyId = (Get-StringSha256 $publicKey).Substring(0, 16).ToLowerInvariant()
     platform = "windows-x86_64"
     packs = $packs
-    revocations = @()
 }
 [IO.File]::WriteAllText(
     $CatalogPath,
@@ -287,8 +268,4 @@ if ($Release) {
         throw "Provider bundle reliability gate failed with exit code $LASTEXITCODE."
     }
 }
-if ($BundleMode -eq "Compact") {
-    Get-ChildItem -LiteralPath $BundleRoot -Filter "providers-*.zip" -File | Remove-Item -Force
-    Test-Catalog
-}
-Write-Host "Created $($packs.Count) signed provider pack records ($BundleMode): $BundleRoot"
+Write-Host "Created $($packs.Count) signed provider packs for the offline installer: $BundleRoot"
