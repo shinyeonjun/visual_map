@@ -1,9 +1,11 @@
 #[cfg(test)]
 mod tests {
+    use super::connection::initialization_options;
     use super::{
         bundled_java_home, java_home_is_usable, java_language_server_settings,
-        default_lsp_request_timeout, lsp_message_length_allowed, lsp_reference_enrichment_enabled,
-        symbol_string, uri_to_relative_path, MAX_LSP_MESSAGE_BYTES,
+        default_lsp_request_timeout, large_workspace_workload, lsp_message_length_allowed,
+        lsp_reference_enrichment_enabled, rust_analyzer_settings, symbol_string,
+        uri_to_relative_path, MAX_LSP_MESSAGE_BYTES,
     };
     use std::fs;
     use std::path::Path;
@@ -37,6 +39,13 @@ mod tests {
         assert!(lsp_reference_enrichment_enabled("rust"));
         assert!(lsp_reference_enrichment_enabled("ruby"));
         assert!(!lsp_reference_enrichment_enabled("typescript"));
+    }
+
+    #[test]
+    fn semantic_query_volume_promotes_few_large_files_to_large_workspace_mode() {
+        assert!(!large_workspace_workload("rust-analyzer", 62, 500));
+        assert!(large_workspace_workload("rust-analyzer", 62, 501));
+        assert!(large_workspace_workload("gopls", 251, 0));
     }
 
     #[cfg(windows)]
@@ -79,6 +88,19 @@ mod tests {
         assert_eq!(
             settings.pointer("/java/project/importOnFirstTimeStartup"),
             Some(&serde_json::Value::String("disabled".to_string()))
+        );
+    }
+
+    #[test]
+    fn rust_restart_only_settings_are_sent_during_initialize() {
+        let options = initialization_options("rust", &rust_analyzer_settings());
+        assert_eq!(
+            options.pointer("/cargo/sysroot"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(
+            options.pointer("/checkOnSave/enable"),
+            Some(&serde_json::Value::Bool(false))
         );
     }
 

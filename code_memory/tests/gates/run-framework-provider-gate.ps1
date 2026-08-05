@@ -184,6 +184,31 @@ def handler(request):
 urlpatterns = [path("/fixture", handler)]
 "@
             }
+            'drf' {
+                @"
+from rest_framework.decorators import action, api_view
+from rest_framework.routers import DefaultRouter
+from rest_framework.viewsets import ViewSet
+
+@api_view(["GET", "POST"])
+def health(request):
+    return None
+
+class handler(ViewSet):
+    def list(self, request):
+        return None
+
+    def retrieve(self, request, pk=None):
+        return None
+
+    @action(methods=["post"], detail=True, url_path="publish")
+    def publish(self, request, pk=None):
+        return None
+
+router = DefaultRouter()
+router.register("projects", handler, basename="project")
+"@
+            }
             'flask' {
                 @"
 from flask import Flask

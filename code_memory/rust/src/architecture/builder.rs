@@ -892,8 +892,13 @@ impl ArchitectureBuilder {
         flows
     }
 
-    pub(crate) fn finish(self) -> ArchitectureOutput {
+    pub(crate) fn finish(mut self) -> ArchitectureOutput {
         let flows = self.build_flows();
+        for edge in self.edges.values_mut() {
+            edge.evidence.sort_by(|left, right| {
+                (&left.path, &left.range, &left.note).cmp(&(&right.path, &right.range, &right.note))
+            });
+        }
         ArchitectureOutput {
             schema: "code-memory.architecture-index.v3",
             project_root: self.root,
@@ -911,6 +916,33 @@ impl ArchitectureBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finish_canonicalizes_edge_evidence_order() {
+        let mut builder = ArchitectureBuilder::new(Path::new("."), HashMap::new(), Vec::new());
+        for path in ["z.rs", "a.rs"] {
+            builder.edge(
+                "from",
+                "to",
+                "CALLS",
+                "summary",
+                BTreeMap::new(),
+                ArchitectureEvidence {
+                    path: path.to_string(),
+                    range: vec![0, 0, 0, 1],
+                    note: None,
+                },
+            );
+        }
+
+        let output = builder.finish();
+        let paths: Vec<_> = output.edges[0]
+            .evidence
+            .iter()
+            .map(|evidence| evidence.path.as_str())
+            .collect();
+        assert_eq!(paths, ["a.rs", "z.rs"]);
+    }
 
     #[test]
     fn flow_cap_reports_every_hidden_node_without_dangling_edges() {

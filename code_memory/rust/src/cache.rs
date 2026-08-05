@@ -916,16 +916,6 @@ pub(crate) fn write_language_cache(
         relations: relations.to_vec(),
         diagnostics: diagnostics
             .iter()
-            .filter(|diagnostic| {
-                diagnostic.path.is_some()
-                    || matches!(
-                        diagnostic.code,
-                        DiagnosticCode::ProviderTimeout
-                            | DiagnosticCode::LargeWorkspacePartial
-                            | DiagnosticCode::JavaSourceFallback
-                            | DiagnosticCode::TypescriptSourceFallback
-                    )
-            })
             .map(|diagnostic| CachedDiagnostic {
                 language: diagnostic.language.clone(),
                 level: diagnostic.level.to_string(),

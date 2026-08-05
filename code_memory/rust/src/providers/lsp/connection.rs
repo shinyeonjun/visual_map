@@ -136,6 +136,12 @@ impl LspConnection {
         Ok(())
     }
 
+    pub(super) fn extend_session_for_large_workspace(&mut self) {
+        self.deadline = self
+            .deadline
+            .max(Instant::now() + lsp_session_timeout(true));
+    }
+
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         if Instant::now() >= self.deadline {
             return Err("native LSP session timeout".to_string());
@@ -340,17 +346,8 @@ impl LspConnection {
         } else {
             serde_json::json!({"workspaceFolders": true})
         };
-        let initialization_options = match language {
-            "java" => serde_json::json!({"settings": self.workspace_settings}),
-            // rust-analyzer reads restart-only settings such as cargo.sysroot
-            // before the later workspace/configuration exchange.
-            "rust" => self
-                .workspace_settings
-                .get("rust-analyzer")
-                .cloned()
-                .unwrap_or(Value::Null),
-            _ => Value::Null,
-        };
+        let initialization_options =
+            initialization_options(language, &self.workspace_settings);
         let response = self.request(
             "initialize",
             serde_json::json!({
@@ -650,6 +647,19 @@ impl LspConnection {
             .as_ref()
             .map(|error| Err(error.clone()))
             .unwrap_or(Ok(()))
+    }
+}
+
+pub(super) fn initialization_options(language: &str, workspace_settings: &Value) -> Value {
+    match language {
+        "java" => serde_json::json!({"settings": workspace_settings}),
+        // rust-analyzer reads restart-only settings such as cargo.sysroot
+        // before the later workspace/configuration exchange.
+        "rust" => workspace_settings
+            .get("rust-analyzer")
+            .cloned()
+            .unwrap_or(Value::Null),
+        _ => Value::Null,
     }
 }
 

@@ -908,6 +908,57 @@ fn language_cache_path_isolated_per_module_key() {
 }
 
 #[test]
+fn language_cache_preserves_pathless_provider_diagnostics() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-cache-diagnostics-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create cache diagnostic fixture");
+    let language = LANGUAGES
+        .iter()
+        .find(|language| language.id == "dart")
+        .copied()
+        .expect("dart language");
+    let documents = vec![DocumentOutput {
+        language: "dart".to_string(),
+        path: "lib/main.dart".to_string(),
+        symbols: Vec::new(),
+        occurrences: Vec::new(),
+    }];
+    let diagnostics = vec![Diagnostic {
+        language: "dart".to_string(),
+        level: "warning",
+        code: DiagnosticCode::ProviderDiagnostic,
+        message: "workspace warning".to_string(),
+        detail: None,
+        path: None,
+        line: None,
+    }];
+
+    write_language_cache(
+        &root,
+        language,
+        "diagnostic-key",
+        &documents,
+        &[],
+        &diagnostics,
+    );
+    let cached = load_language_cache(&root, &language, "diagnostic-key")
+        .value
+        .expect("read language cache");
+
+    assert_eq!(cached.diagnostics.len(), 1);
+    assert_eq!(
+        cached.diagnostics[0].code,
+        DiagnosticCode::ProviderDiagnostic
+    );
+    assert_eq!(cached.diagnostics[0].message, "workspace warning");
+    let _ = fs::remove_dir_all(project_cache_root(&root));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn large_source_snapshot_keeps_the_path_without_loading_content() {
     let root = std::env::temp_dir().join(format!(
         "code-memory-large-source-snapshot-{}",

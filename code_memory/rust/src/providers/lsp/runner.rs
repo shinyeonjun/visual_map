@@ -207,25 +207,10 @@ fn run_native_lsp_with_server_mode(
     // most expensive reference/lexical passes. Map-boundary symbols still get
     // provider call/type queries; the ceiling is query breadth, not guessed
     // replacement edges.
-    let large_workspace = semantic_files.len() > 500
-        || (server == "clangd" && semantic_files.len() > 250)
-        // gopls rebuilds package/type state for many per-symbol requests; a
-        // 400-file module can hit the normal session ceiling before the map
-        // is complete. Keep exported package boundaries and provider-backed
-        // calls, while skipping private-symbol fan-out.
-        || (server == "gopls" && semantic_files.len() > 250);
+    let file_large_workspace = large_workspace_workload(server, semantic_files.len(), 0);
     let dart_synthetic_package_map = dart_package_config
         .as_ref()
         .is_some_and(|path| path.ends_with("package_config.synthetic.json"));
-    let large_map_enrichment = large_workspace
-        && large_map_enrichment_language(lang.id)
-        && !(server == "dart" && dart_synthetic_package_map);
-    // Large-workspace call queries are already restricted below to map-boundary
-    // symbols. Keep that provider-backed boundary pass for Rust as well; the
-    // previous Rust-only skip removed too much of the VisualMap flow layer.
-    let large_call_enrichment = large_map_enrichment;
-    let skip_large_workspace_type_enrichment = large_workspace && !large_map_enrichment;
-    let skip_large_workspace_call_enrichment = large_workspace && !large_call_enrichment;
     let mut source_cache = HashMap::<String, String>::new();
     let mut symbol_cache = HashMap::<String, Vec<LspSymbol>>::new();
     let mut document_symbol_files = HashSet::new();
@@ -234,11 +219,11 @@ fn run_native_lsp_with_server_mode(
     // is only needed if a provider version proves it needs editor buffers.
     const DART_LARGE_OPEN_LIMIT: usize = 256;
     const RUST_LARGE_OPEN_LIMIT: usize = 256;
-    let open_limit = if server == "dart" && large_workspace {
+    let open_limit = if server == "dart" && file_large_workspace {
         Some(DART_LARGE_OPEN_LIMIT)
-    } else if server == "rust-analyzer" && large_workspace {
+    } else if server == "rust-analyzer" && file_large_workspace {
         Some(RUST_LARGE_OPEN_LIMIT)
-    } else if server == "jdtls" && large_workspace {
+    } else if server == "jdtls" && file_large_workspace {
         // JDTLS indexes source files from the workspace. Sending thousands of
         // didOpen buffers duplicates that state and slows Gradle reactors.
         Some(256)
@@ -280,7 +265,7 @@ fn run_native_lsp_with_server_mode(
             // large package graph. Throttle notifications before the pipe
             // buffer fills; this keeps the session deadline effective instead
             // of blocking inside write_all on large workspaces.
-            if server == "dart" && large_workspace && (opened_index + 1) % 8 == 0 {
+            if server == "dart" && file_large_workspace && (opened_index + 1) % 8 == 0 {
                 connection.wait_for_retry(Duration::from_millis(50))?;
             }
         }
@@ -297,7 +282,7 @@ fn run_native_lsp_with_server_mode(
 
     let semantic_file_count = semantic_files.len();
     let mut workspace_symbol_mode = false;
-    if server == "jdtls" && large_workspace {
+    if server == "jdtls" && file_large_workspace {
         match connection.workspace_symbols() {
             Ok(symbols) if !symbols.is_empty() => {
                 for (uri, symbol) in symbols {
@@ -341,7 +326,7 @@ fn run_native_lsp_with_server_mode(
             .replace('\\', "/");
         let uri = path_to_uri(file);
         let mut symbols: Vec<LspSymbol> = Vec::new();
-        let retries = if large_workspace && lang.id != "rust" {
+        let retries = if file_large_workspace && lang.id != "rust" {
             1
         } else if lang.id == "rust" {
             // Small Cargo projects can publish a partial document-symbol tree
@@ -407,6 +392,28 @@ fn run_native_lsp_with_server_mode(
             document_symbol_files.contains(&relative)
         });
     }
+    let semantic_query_symbols = symbol_cache
+        .values()
+        .flatten()
+        .filter(|symbol| is_callable_kind(symbol.kind) || is_type_hierarchy_kind(symbol.kind))
+        .count();
+    let large_workspace = large_workspace_workload(
+        server,
+        semantic_files.len(),
+        semantic_query_symbols,
+    );
+    if large_workspace && !file_large_workspace {
+        connection.extend_session_for_large_workspace();
+    }
+    let large_map_enrichment = large_workspace
+        && large_map_enrichment_language(lang.id)
+        && !(server == "dart" && dart_synthetic_package_map);
+    // Large-workspace call queries are restricted below to stable map-boundary
+    // symbols. This makes the work set deterministic instead of processing
+    // arbitrary symbols until the wall-clock deadline happens to expire.
+    let large_call_enrichment = large_map_enrichment;
+    let skip_large_workspace_type_enrichment = large_workspace && !large_map_enrichment;
+    let skip_large_workspace_call_enrichment = large_workspace && !large_call_enrichment;
     // A cold language server can publish declarations before definition and
     // call-hierarchy indexes are ready. Retry only provider-resolvable local
     // names, under one small session-wide budget; never replace a missing

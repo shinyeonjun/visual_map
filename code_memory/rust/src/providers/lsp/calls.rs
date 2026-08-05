@@ -11,6 +11,18 @@ fn has_callable_body(source: &str, symbol: &LspSymbol) -> bool {
         .any(|line| line.contains('{'))
 }
 
+pub(crate) fn large_workspace_workload(
+    server: &str,
+    source_files: usize,
+    semantic_query_symbols: usize,
+) -> bool {
+    source_files > 500
+        || (matches!(server, "clangd" | "gopls") && source_files > 250)
+        // Per-symbol LSP calls dominate runtime even when a project keeps a
+        // large amount of code in relatively few files.
+        || semantic_query_symbols > 500
+}
+
 pub(crate) fn rust_large_symbol_is_public(source: &str, symbol: &LspSymbol) -> bool {
     if symbol.name == "main" {
         return true;
