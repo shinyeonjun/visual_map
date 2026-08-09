@@ -1,9 +1,12 @@
 mod support;
 
 use codebase_semantic_compiler::{
-    compile_semantic_plan_with_policy, merge_verified_partitions, verify_base_proposal,
-    SemanticCompileErrorCode, SemanticPartitionPolicy, VerifiedSemanticPartition,
+    compile_global_reconciliation_prompt, compile_semantic_plan_with_policy,
+    parse_and_verify_global_reconciliation, verify_base_proposal, SemanticCompileErrorCode,
+    SemanticPartitionPolicy, VerifiedSemanticPartition,
 };
+use codebase_semantic_model::AreaCategory;
+use serde_json::json;
 use std::collections::BTreeSet;
 use support::{fixture_draft, structural_proposal};
 
@@ -110,11 +113,92 @@ fn source_evidence_is_sent_only_to_its_own_local_partition() {
 }
 
 #[test]
-fn verified_local_results_merge_deterministically_without_a_global_ai_prompt() {
+fn compact_global_reconciliation_can_merge_meaning_across_partition_boundaries() {
     let (draft, _) = fixture_draft();
     let plan = compile_semantic_plan_with_policy(draft, forced_partition_policy(1)).unwrap();
-    let mut verified = plan
-        .partitions
+    let verified = verified_structural_partitions(&plan);
+    let compiled = compile_global_reconciliation_prompt(&plan.base, &verified).unwrap();
+    let rendered = compiled.prompt.rendered_prompt();
+
+    assert!(rendered.len() < 64 * 1024);
+    assert!(rendered.contains("boundaryRelations"));
+    assert!(rendered.contains("r0000"));
+    assert!(rendered.contains("r0001"));
+    assert!(!rendered.contains(plan.base.packet.input.regions[0].region_id.as_str()));
+
+    let raw = serde_json::to_string(&json!({
+        "schemaVersion": 1,
+        "snapshotId": plan.base.packet.snapshot_id,
+        "semanticInputDigest": plan.base.packet.semantic_input_digest,
+        "projectSummary": "주문 처리와 요청 인증을 제공하는 커머스 백엔드입니다.",
+        "areas": [{
+            "proposalKey": "commerce",
+            "parentProposalKey": null,
+            "level": 0,
+            "label": "주문·인증",
+            "summary": "주문 요청 처리와 요청 인증을 함께 담당합니다.",
+            "category": "domain",
+            "directMemberRegionKeys": ["r0000", "r0001"],
+            "aliases": []
+        }],
+        "unassignedRegions": [],
+        "warnings": []
+    }))
+    .unwrap();
+    let revision = parse_and_verify_global_reconciliation(&compiled, &raw).unwrap();
+
+    assert_eq!(revision.areas.len(), 1);
+    assert_eq!(revision.assignments.len(), 2);
+    assert_eq!(revision.areas[0].category, AreaCategory::Structural);
+    assert_eq!(revision.areas[0].effective_member_region_ids.len(), 2);
+}
+
+#[test]
+fn compact_global_reconciliation_rejects_duplicate_region_assignment() {
+    let (draft, _) = fixture_draft();
+    let plan = compile_semantic_plan_with_policy(draft, forced_partition_policy(1)).unwrap();
+    let verified = verified_structural_partitions(&plan);
+    let compiled = compile_global_reconciliation_prompt(&plan.base, &verified).unwrap();
+    let raw = serde_json::to_string(&json!({
+        "schemaVersion": 1,
+        "snapshotId": plan.base.packet.snapshot_id,
+        "semanticInputDigest": plan.base.packet.semantic_input_digest,
+        "projectSummary": "현재 커머스 백엔드 구조입니다.",
+        "areas": [
+            {
+                "proposalKey": "one",
+                "parentProposalKey": null,
+                "level": 0,
+                "label": "첫 영역",
+                "summary": "첫 번째 현재 책임입니다.",
+                "category": "domain",
+                "directMemberRegionKeys": ["r0000"],
+                "aliases": []
+            },
+            {
+                "proposalKey": "two",
+                "parentProposalKey": null,
+                "level": 0,
+                "label": "둘째 영역",
+                "summary": "두 번째 현재 책임입니다.",
+                "category": "domain",
+                "directMemberRegionKeys": ["r0000", "r0001"],
+                "aliases": []
+            }
+        ],
+        "unassignedRegions": [],
+        "warnings": []
+    }))
+    .unwrap();
+
+    let error = parse_and_verify_global_reconciliation(&compiled, &raw).unwrap_err();
+    assert_eq!(error.code, SemanticCompileErrorCode::DuplicateIdentifier);
+}
+
+fn verified_structural_partitions(
+    plan: &codebase_semantic_compiler::CompiledSemanticPlan,
+) -> Vec<VerifiedSemanticPartition> {
+    plan.partitions
         .iter()
         .map(|partition| {
             let proposal = structural_proposal(&partition.prompt);
@@ -126,19 +210,7 @@ fn verified_local_results_merge_deterministically_without_a_global_ai_prompt() {
                 revision,
             }
         })
-        .collect::<Vec<_>>();
-    let first = merge_verified_partitions(&plan.base, &verified).unwrap();
-    verified.reverse();
-    let second = merge_verified_partitions(&plan.base, &verified).unwrap();
-
-    assert_eq!(first, second);
-    assert_eq!(
-        first.semantic_input_digest,
-        plan.base.packet.semantic_input_digest
-    );
-    assert_eq!(first.assignments.len(), 2);
-    assert_eq!(first.areas.len(), 2);
-    assert!(first.project.summary.contains("검증된 코드 영역 2개"));
+        .collect()
 }
 
 #[test]

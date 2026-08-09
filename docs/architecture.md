@@ -122,11 +122,14 @@ Large semantic inputs use adaptive, disjoint local Map jobs. The planner derives
 the partition shape from the complete prompt byte size, static region count,
 and the per-request safety budget; it does not target a fixed job count. Each
 local result is verified independently against its exact region scope. After
-all partitions pass, code joins them in stable partition/area-ID order and runs
-the ordinary full-packet verifier once. No fan-in Reduce provider calls and no
-final global AI call are used. This makes the final join linear, deterministic,
-and independent of model latency while preserving exact region coverage and
-citation checks.
+all partitions pass, one compact global coordinator receives only short region
+aliases, structural summaries, verified local area hints, and selected boundary
+counts. It may merge responsibilities across partition boundaries, but it never
+receives or emits canonical fact, evidence, or trace IDs. Deterministic code maps
+the aliases back to canonical regions, attaches only eligible citations and
+traces, and runs the ordinary full-packet verifier before publication. This
+avoids the former fan-in Reduce tree without degrading L0/L1 into partition-local
+hierarchies.
 
 Provider concurrency is also calculated at runtime from the current job count,
 logical CPU count, and available memory. Optional environment values are safety

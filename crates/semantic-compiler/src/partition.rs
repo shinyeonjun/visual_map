@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const LOCAL_PARTITION_POLICY: &str = r#"This request is one complete, disjoint local partition of a larger repository.
 Describe and group only the regions present in PAYLOAD_JSON. Do not invent missing repository areas or treat this local project summary as the final repository summary.
-The local result is an evidence-verified input to a later global reconciliation and is never published directly."#;
+The local result is an evidence-verified input to a later compact global reconciliation and is never published directly."#;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SemanticPartitionPolicy {
