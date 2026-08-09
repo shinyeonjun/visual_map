@@ -1,5 +1,10 @@
 # 정적 분석 전체 진행도 — 2026-08-08
 
+> 역사적 감사 스냅샷입니다. 2026-08-09 canonical hard cut 이후의 현재
+> 계약과 실행 방법은 `../README.md`, `LANGUAGE-SEMANTICS.md`,
+> `CANONICAL-FACT-BUNDLE.md`를 따릅니다. 아래의 compatibility 출력과 삭제된
+> PowerShell gate 설명은 당시 결함을 재현하기 위한 기록이지 현재 경로가 아닙니다.
+
 마지막 코드·설치본 재검증: **2026-08-08**
 
 ## 결론

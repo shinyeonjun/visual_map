@@ -12,8 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::source::is_managed_provider_root;
 use crate::{compile_database_dirs, find_tool, is_excluded_source_dir};
 use crate::{
-    Diagnostic, DiagnosticCode, DocumentOutput, IndexOutput, LanguageSpec, RelationOutput,
-    SourceSnapshot,
+    Diagnostic, DiagnosticCode, DocumentOutput, LanguageSpec, RelationOutput, SourceSnapshot,
 };
 
 #[derive(Clone)]
@@ -22,7 +21,6 @@ struct FileChecksumCacheEntry {
     modified: Option<SystemTime>,
     checksum: u64,
 }
-
 static FILE_CHECKSUM_CACHE: OnceLock<Mutex<HashMap<PathBuf, FileChecksumCacheEntry>>> =
     OnceLock::new();
 
@@ -53,19 +51,6 @@ pub(crate) struct CacheImpact {
     pub(crate) affected_paths: HashSet<String>,
 }
 
-#[derive(Deserialize)]
-struct PreviousArchitecture {
-    #[serde(default)]
-    edges: Vec<PreviousArchitectureEdge>,
-}
-
-#[derive(Deserialize)]
-struct PreviousArchitectureEdge {
-    from: String,
-    to: String,
-    kind: String,
-}
-
 #[derive(Serialize, Deserialize)]
 pub(crate) struct CachedLanguageResult {
     pub(crate) schema: String,
@@ -90,109 +75,6 @@ pub(crate) struct CachedDiagnostic {
     pub(crate) line: Option<u32>,
 }
 
-pub(crate) fn architecture_cache_key(
-    root: &Path,
-    pack_root: &Path,
-    output: &IndexOutput,
-    source_snapshot: &SourceSnapshot,
-    project_config_digest: u64,
-) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
-    // Bump this whenever architecture projection behavior changes. The
-    // Serialized language index can stay identical while the desktop
-    // projection changes (for example, preserving an unresolved route node).
-    checksum_update(&mut hash, b"code-memory-architecture-cache.v23");
-    checksum_update(&mut hash, root.to_string_lossy().as_bytes());
-    checksum_update(&mut hash, pack_root.to_string_lossy().as_bytes());
-    for document in &output.documents {
-        checksum_update(&mut hash, document.path.as_bytes());
-        for symbol in &document.symbols {
-            checksum_update(&mut hash, symbol.symbol.as_bytes());
-            checksum_update(&mut hash, symbol.kind.as_bytes());
-            if let Some(enclosing) = &symbol.enclosing_symbol {
-                checksum_update(&mut hash, enclosing.as_bytes());
-            }
-        }
-        for occurrence in &document.occurrences {
-            checksum_update(&mut hash, occurrence.symbol.as_bytes());
-            checksum_range(&mut hash, &occurrence.range);
-            checksum_update(&mut hash, &[u8::from(occurrence.definition)]);
-            checksum_update(&mut hash, &[u8::from(occurrence.import)]);
-        }
-    }
-    for relation in &output.relations {
-        checksum_update(&mut hash, relation.from.as_bytes());
-        checksum_update(&mut hash, relation.to.as_bytes());
-        checksum_update(&mut hash, relation.kind.as_bytes());
-        checksum_update(&mut hash, relation.path.as_bytes());
-        checksum_range(&mut hash, &relation.range);
-    }
-    for relation in &output.file_relations {
-        checksum_update(&mut hash, relation.from.as_bytes());
-        checksum_update(&mut hash, relation.to.as_bytes());
-        checksum_update(&mut hash, relation.kind.as_bytes());
-        checksum_update(&mut hash, relation.path.as_bytes());
-        checksum_range(&mut hash, &relation.range);
-        for (key, value) in &relation.properties {
-            checksum_update(&mut hash, key.as_bytes());
-            checksum_update(&mut hash, value.as_bytes());
-        }
-    }
-    for path in &output.project_model_files {
-        checksum_update(&mut hash, path.as_bytes());
-    }
-    for framework in &output.frameworks {
-        checksum_update(&mut hash, framework.id.as_bytes());
-        checksum_update(&mut hash, framework.language.as_bytes());
-        for fact in &framework.facts {
-            checksum_update(&mut hash, fact.id.as_bytes());
-            checksum_update(&mut hash, fact.kind.as_bytes());
-            checksum_update(&mut hash, fact.source_file.as_bytes());
-            checksum_update(&mut hash, format!("{:?}", fact.source_range).as_bytes());
-            if let Some(symbol) = &fact.symbol {
-                checksum_update(&mut hash, symbol.as_bytes());
-            }
-            if let Some(method) = &fact.method {
-                checksum_update(&mut hash, method.as_bytes());
-            }
-            if let Some(path) = &fact.path {
-                checksum_update(&mut hash, path.as_bytes());
-            }
-            for evidence in &fact.evidence {
-                checksum_update(&mut hash, evidence.as_bytes());
-            }
-            for (key, value) in &fact.properties {
-                checksum_update(&mut hash, key.as_bytes());
-                checksum_update(&mut hash, value.as_bytes());
-            }
-        }
-    }
-    for coverage in &output.coverage {
-        checksum_update(&mut hash, coverage.language.as_bytes());
-        checksum_update(&mut hash, coverage.path.as_bytes());
-        checksum_update(&mut hash, coverage.status.as_bytes());
-        if let Some(reason) = &coverage.reason {
-            checksum_update(&mut hash, reason.as_bytes());
-        }
-    }
-    for diagnostic in &output.diagnostics {
-        checksum_update(&mut hash, diagnostic.language.as_bytes());
-        checksum_update(&mut hash, diagnostic.level.as_bytes());
-        checksum_update(&mut hash, diagnostic.code.as_str().as_bytes());
-        checksum_update(&mut hash, diagnostic.message.as_bytes());
-        if let Some(path) = &diagnostic.path {
-            checksum_update(&mut hash, path.as_bytes());
-        }
-        if let Some(line) = diagnostic.line {
-            checksum_update(&mut hash, line.to_string().as_bytes());
-        }
-    }
-    hash_source_snapshot(source_snapshot, &mut hash);
-    checksum_update(&mut hash, b"project-config-digest");
-    checksum_update(&mut hash, &project_config_digest.to_le_bytes());
-    hash_pack_files(&pack_root.join("packs").join("framework"), &mut hash);
-    format!("{hash:016x}")
-}
 pub(crate) fn framework_cache_key(
     root: &Path,
     pack_root: &Path,
@@ -417,51 +299,6 @@ pub(crate) fn write_source_manifest(
     Ok(())
 }
 
-pub(crate) fn read_architecture_reverse_imports(
-    path: &Path,
-) -> Result<HashMap<String, Vec<String>>, String> {
-    let (bytes, _) = read_compressed_or_legacy(path)?;
-    let previous = serde_json::from_slice::<PreviousArchitecture>(&bytes)
-        .map_err(|error| format!("cannot parse dependency cache: {error}"))?;
-    let mut reverse_imports = HashMap::new();
-    for edge in previous.edges {
-        if edge.kind == "IMPORTS" {
-            record_architecture_reverse_import(&mut reverse_imports, &edge.from, &edge.to);
-        }
-    }
-    canonicalize_reverse_imports(&mut reverse_imports);
-    Ok(reverse_imports)
-}
-
-pub(crate) fn record_architecture_reverse_import(
-    reverse_imports: &mut HashMap<String, Vec<String>>,
-    from: &str,
-    to: &str,
-) {
-    let (Some(from), Some(to)) = (architecture_file_path(from), architecture_file_path(to)) else {
-        return;
-    };
-    reverse_imports.entry(to).or_default().push(from);
-}
-
-pub(crate) fn record_file_reverse_import(
-    reverse_imports: &mut HashMap<String, Vec<String>>,
-    from: &str,
-    to: &str,
-) {
-    reverse_imports
-        .entry(normalize_file_relation_path(to))
-        .or_default()
-        .push(normalize_file_relation_path(from));
-}
-
-pub(crate) fn canonicalize_reverse_imports(reverse_imports: &mut HashMap<String, Vec<String>>) {
-    for importers in reverse_imports.values_mut() {
-        importers.sort();
-        importers.dedup();
-    }
-}
-
 pub(crate) fn commit_cache_generation(
     root: &Path,
     active_files: impl IntoIterator<Item = PathBuf>,
@@ -576,14 +413,6 @@ pub(crate) fn write_compressed_json<T: Serialize + ?Sized>(
     write_compressed(path, |encoder| {
         serde_json::to_writer(encoder, value)
             .map_err(|error| format!("cannot serialize compressed cache: {error}"))
-    })
-}
-
-pub(crate) fn write_compressed_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    write_compressed(path, |encoder| {
-        encoder
-            .write_all(bytes)
-            .map_err(|error| format!("cannot write compressed cache: {error}"))
     })
 }
 
@@ -734,15 +563,6 @@ fn is_content_addressed_cache_file(path: &Path) -> bool {
     digest.len() == 16 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn architecture_file_path(id: &str) -> Option<String> {
-    id.strip_prefix("file:").map(|path| path.replace('\\', "/"))
-}
-
-fn normalize_file_relation_path(path: &str) -> String {
-    path.strip_prefix("file:")
-        .unwrap_or(path)
-        .replace('\\', "/")
-}
 pub(crate) fn cleanup_stale_provider_work(root: &Path, max_age: Duration) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
@@ -1168,11 +988,6 @@ fn checksum_update(state: &mut u64, bytes: &[u8]) {
     }
 }
 
-fn checksum_range(state: &mut u64, range: &[i32]) {
-    for value in range {
-        checksum_update(state, &value.to_le_bytes());
-    }
-}
 pub(crate) fn language_cache_path(root: &Path, lang: &LanguageSpec, key: &str) -> PathBuf {
     project_cache_root(root).join(format!("{}-{key}.json.gz", lang.id))
 }

@@ -18,7 +18,6 @@ pub(crate) struct LanguageJob {
     pub(crate) root: PathBuf,
     pub(crate) work: PathBuf,
     pub(crate) providers_root: Option<PathBuf>,
-    pub(crate) analysis_unit_id: String,
     pub(crate) execution_scope_id: String,
     pub(crate) provider_config: Option<PathBuf>,
     pub(crate) call_ranges: Arc<HashMap<String, Vec<Vec<i32>>>>,
@@ -348,8 +347,8 @@ mod tests {
     }
 
     #[test]
-    fn indexed_relation_dedupe_matches_the_legacy_first_match_contract() {
-        fn legacy(mut relations: Vec<RelationOutput>) -> Vec<RelationOutput> {
+    fn indexed_relation_dedupe_preserves_the_stable_first_match_contract() {
+        fn stable_first_match(mut relations: Vec<RelationOutput>) -> Vec<RelationOutput> {
             let mut unique = Vec::with_capacity(relations.len());
             for relation in relations.drain(..) {
                 let duplicate = unique.iter().position(|existing: &RelationOutput| {
@@ -384,7 +383,7 @@ mod tests {
         let mut another_target = call(vec![4, 4, 4, 25]);
         another_target.to = "repository".to_string();
         inputs.insert(1, another_target);
-        let expected = serde_json::to_value(legacy(inputs.clone())).unwrap();
+        let expected = serde_json::to_value(stable_first_match(inputs.clone())).unwrap();
 
         dedupe_provider_relations(&mut inputs);
 

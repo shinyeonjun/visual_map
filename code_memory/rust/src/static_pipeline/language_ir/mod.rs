@@ -1,9 +1,10 @@
-//! Typed bridge from current provider results to transient Language IR.
+//! Typed bridge from provider results to authoritative Language IR.
 //!
 //! `ProviderUnitBatch` is the sole Language IR authority. The validated stream
-//! is written once to process-local staging for the canonical linker. The old
-//! `language-index.v2` remains only as a compatibility projection for legacy
-//! framework consumers; it is never converted back into a second IR stream.
+//! is written once to process-local staging for the canonical linker. A bounded
+//! provider snapshot remains in process only for deterministic framework
+//! analyzers that still need document occurrences; it is never published as a
+//! parallel index or converted back into a second IR stream.
 //! This module never calls AI and never guesses a symbol target.
 
 mod adapter;

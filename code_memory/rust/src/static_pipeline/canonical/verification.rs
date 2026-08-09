@@ -209,16 +209,16 @@ pub(super) fn ingest_test_relations(
     }
 
     for (unit_id, unit) in units {
-        let donor = test_ir
+        let test_audit = test_ir
             .unit_audit
             .get(unit_id)
             .ok_or_else(|| format!("Test IR omitted unit audit {unit_id}"))?;
         let result = unit_results
             .get(unit_id)
             .expect("canonical Test IR unit audit");
-        let detected = donor.detected_test_case_count;
+        let detected = test_audit.detected_test_case_count;
         let linked = result.linked_cases.len() as u64;
-        let inventory_failed = donor.inventory_failed_file_count > 0;
+        let inventory_failed = test_audit.inventory_failed_file_count > 0;
         let (execution_state, precision, denominator) = if detected == 0 && !inventory_failed {
             (
                 CapabilityExecutionState::NotApplicable,

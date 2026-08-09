@@ -1,19 +1,16 @@
 use serde::Serialize;
 use serde_json::Value;
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const _: &str = codebase_fact_model::ContractSchema::LanguageIrV2.as_str();
 
-mod architecture;
 mod cache;
-mod collectors;
 mod frameworks;
 mod model;
 mod project_model;
@@ -84,60 +81,25 @@ fn run() -> Result<(), String> {
             let pack_root = optional_path(&rest, "--packs-root")
                 .unwrap_or(env::current_dir().map_err(|e| e.to_string())?);
             let providers_root = optional_path(&rest, "--providers-root");
-            let out = optional_path(&rest, "--out")
-                .unwrap_or_else(|| root.join(r".code_memory\language-index.json"));
-            let out = if out.is_absolute() {
-                out
-            } else {
-                env::current_dir()
-                    .map_err(|e| format!("cannot resolve output path: {e}"))?
-                    .join(out)
-            };
-            let architecture_out = optional_path(&rest, "--architecture-out")
-                .map(resolve_output_path)
-                .transpose()?
-                .unwrap_or_else(|| default_architecture_output(&out));
-            index_project(
-                &root,
-                &out,
-                &architecture_out,
-                &pack_root,
-                providers_root.as_deref(),
-            )
-        }
-        Some("collect") => {
-            let rest: Vec<String> = args.collect();
-            let root = required_path(&rest, "--root")?;
-            let providers_root = optional_path(&rest, "--providers-root");
-            let out = optional_path(&rest, "--out")
-                .unwrap_or_else(|| root.join(r".code_memory\collection-report.json"));
-            let out = resolve_output_path(out)?;
-            if let Some(parent) = out.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+            if optional_path(&rest, "--out").is_some()
+                || optional_path(&rest, "--architecture-out").is_some()
+            {
+                return Err(
+                    "--out and --architecture-out were removed; index publishes one immutable canonical Fact bundle"
+                        .to_string(),
+                );
             }
-            let report = collectors::collect_project(&root, providers_root.as_deref())?;
-            let file = fs::File::create(&out)
-                .map_err(|error| format!("cannot write {}: {error}", out.display()))?;
-            let mut writer = BufWriter::new(file);
-            write_json(&mut writer, &report)
-                .map_err(|error| format!("cannot serialize collection report: {error}"))?;
-            writer
-                .flush()
-                .map_err(|error| format!("cannot flush {}: {error}", out.display()))?;
-            println!("wrote {}", out.display());
-            Ok(())
+            index_project(&root, &pack_root, providers_root.as_deref())
         }
         Some(command) => Err(format!(
-            "unknown command '{command}'. Use list, doctor, compare-scip, index, or collect."
+            "unknown command '{command}'. Use list, doctor, compare-scip, or index."
         )),
-        None => {
-            Err("missing command. Use list, doctor, compare-scip, index, or collect.".to_string())
-        }
+        None => Err("missing command. Use list, doctor, compare-scip, or index.".to_string()),
     }
 }
 
 include!("cli.rs");
+include!("provider_planning.rs");
 include!("index.rs");
+include!("publication.rs");
 include!("analysis.rs");
-include!("output.rs");

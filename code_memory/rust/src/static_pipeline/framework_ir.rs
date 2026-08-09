@@ -1,7 +1,7 @@
 //! Typed, fail-closed framework boundary records.
 //!
-//! The legacy framework analyzer remains a donor while its validated route
-//! facts are migrated. This adapter is the only path from that donor into the
+//! The framework analyzer emits raw source-backed candidates. This adapter is
+//! the only path from those internal candidates into the
 //! canonical Fact Graph; framework detection signals alone never become facts.
 
 use crate::frameworks::Analysis;
@@ -58,9 +58,10 @@ pub(crate) struct FrameworkUnitAudit {
 pub(crate) struct FrameworkIrReceipt {
     pub(crate) schema: &'static str,
     pub(crate) snapshot_id: SnapshotId,
-    /// Raw `HTTP_ROUTE` facts reported by the legacy donor before exact
+    /// Raw `HTTP_ROUTE` facts reported by the analyzer before exact
     /// duplicate removal or Analysis Plan expansion.
-    pub(crate) donor_candidate_count: u64,
+    #[serde(rename = "donorCandidateCount")]
+    pub(crate) raw_candidate_count: u64,
     /// Unique unit-scoped registrations. Emitted plus rejected records must
     /// equal this denominator.
     pub(crate) planned_route_record_count: u64,
@@ -104,7 +105,7 @@ impl FrameworkIr {
             receipt: FrameworkIrReceipt {
                 schema: FRAMEWORK_IR_SCHEMA,
                 snapshot_id: snapshot_id.clone(),
-                donor_candidate_count: 0,
+                raw_candidate_count: 0,
                 planned_route_record_count: 0,
                 emitted_route_record_count: 0,
                 rejected_route_record_count: 0,
@@ -176,7 +177,7 @@ pub(crate) fn adapt_framework_routes(
         .iter()
         .map(|unit| (unit.id.clone(), FrameworkUnitAudit::default()))
         .collect::<BTreeMap<_, _>>();
-    let mut donor_candidate_count = 0_u64;
+    let mut raw_candidate_count = 0_u64;
 
     for framework in &analysis.frameworks {
         let language = language_from_id(&framework.language).ok_or_else(|| {
@@ -190,7 +191,7 @@ pub(crate) fn adapt_framework_routes(
             .iter()
             .filter(|fact| fact.kind == "HTTP_ROUTE")
         {
-            donor_candidate_count += 1;
+            raw_candidate_count += 1;
             let source_path = RepositoryPath::parse(fact.source_file.clone()).map_err(|error| {
                 format!(
                     "framework {} returned invalid route path {}: {error}",
@@ -308,7 +309,7 @@ pub(crate) fn adapt_framework_routes(
     let routes = routes.into_values().collect::<Vec<_>>();
     let evidence = evidence.into_values().collect::<Vec<_>>();
     canonicalize_gaps(&mut gaps);
-    // Audit only the canonicalized unit-scoped records. The donor can report
+    // Audit only the canonicalized unit-scoped records. The analyzer can report
     // the same registration more than once; those duplicates must not inflate
     // either the capability denominator or its covered count.
     for route in &routes {
@@ -367,7 +368,7 @@ pub(crate) fn adapt_framework_routes(
     let receipt = FrameworkIrReceipt {
         schema: FRAMEWORK_IR_SCHEMA,
         snapshot_id: snapshot_id.clone(),
-        donor_candidate_count,
+        raw_candidate_count,
         planned_route_record_count,
         emitted_route_record_count: routes.len() as u64,
         rejected_route_record_count,

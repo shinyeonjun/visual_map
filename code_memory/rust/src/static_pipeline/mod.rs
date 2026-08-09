@@ -3,6 +3,7 @@
 pub(crate) mod analysis_unit_planner;
 pub(crate) mod canonical;
 pub(crate) mod context_dimensions;
+pub(crate) mod dependency_manifest;
 pub(crate) mod framework_ir;
 pub(crate) mod language_ir;
 pub(crate) mod provider_schedule;

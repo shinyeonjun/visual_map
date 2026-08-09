@@ -41,15 +41,30 @@ if ([string]::IsNullOrWhiteSpace($PacksRoot)) {
     }
 }
 
-$fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ("codebase-workspace-determinism-" + [guid]::NewGuid().ToString("N"))
+$tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$fixtureRoot = Join-Path $tempBase ("codebase-workspace-determinism-" + [guid]::NewGuid().ToString("N"))
 $cacheOne = Join-Path $fixtureRoot "cache-one"
 $cacheTwo = Join-Path $fixtureRoot "cache-two"
-$outOne = Join-Path $fixtureRoot "index-one.json"
-$outTwo = Join-Path $fixtureRoot "index-two.json"
-$architectureOne = Join-Path $fixtureRoot "architecture-one.json"
-$architectureTwo = Join-Path $fixtureRoot "architecture-two.json"
 $sourceRoot = Join-Path $fixtureRoot "repo"
 New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
+
+function Remove-SafeFixtureTree([string]$Path) {
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $tempPrefix = $tempBase.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([IO.Path]::GetFileName($resolved)).StartsWith('codebase-workspace-determinism-', [StringComparison]::Ordinal)) {
+        throw "Refusing to remove a path outside the determinism temp scope: $resolved"
+    }
+    if (-not [IO.Directory]::Exists($resolved)) {
+        return
+    }
+    $deletePath = if ($env:OS -eq 'Windows_NT' -and -not $resolved.StartsWith('\\?\', [StringComparison]::Ordinal)) {
+        '\\?\' + $resolved
+    } else {
+        $resolved
+    }
+    [IO.Directory]::Delete($deletePath, $true)
+}
 
 try {
     New-Item -ItemType Directory -Path (Join-Path $sourceRoot "src") -Force | Out-Null
@@ -69,13 +84,12 @@ try {
         [Text.UTF8Encoding]::new($false)
     )
 
-    function Invoke-Index([string]$CacheRoot, [string]$OutputPath, [string]$ArchitecturePath) {
+    function Invoke-Index([string]$CacheRoot) {
         $env:CODE_MEMORY_CACHE_ROOT = $CacheRoot
+        $env:CODE_MEMORY_STRICT = "1"
         $arguments = @(
             "index",
             "--root", $sourceRoot,
-            "--out", $OutputPath,
-            "--architecture-out", $ArchitecturePath,
             "--packs-root", ([IO.Path]::GetFullPath($PacksRoot))
         )
         if (-not [string]::IsNullOrWhiteSpace($ProvidersRoot)) {
@@ -84,7 +98,8 @@ try {
         $previousPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            & $EnginePath @arguments 2>&1 | ForEach-Object { Write-Host ([string]$_) }
+            $engineLines = @(& $EnginePath @arguments 2>&1)
+            $engineLines | ForEach-Object { Write-Host ([string]$_) }
             $engineExitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $previousPreference
@@ -92,56 +107,50 @@ try {
         if ($engineExitCode -ne 0) {
             throw "Determinism index run failed with exit code $engineExitCode"
         }
-        if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
-            throw "Determinism index run did not write $OutputPath"
+        $prefix = "@codebase-workspace-canonical-fact-bundle "
+        $marker = @($engineLines | ForEach-Object { [string]$_ } | Where-Object {
+            $_.StartsWith($prefix, [StringComparison]::Ordinal)
+        }) | Select-Object -Last 1
+        if ([string]::IsNullOrWhiteSpace($marker)) {
+            throw "Determinism index run did not publish a canonical Fact bundle receipt"
+        }
+        $artifact = $marker.Substring($prefix.Length) | ConvertFrom-Json
+        if ($artifact.schema -ne "codebase-workspace.canonical-fact-bundle-artifact.v1" -or
+            -not (Test-Path -LiteralPath $artifact.bundlePath -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $artifact.manifestPath -PathType Leaf)) {
+            throw "Determinism index run published an invalid canonical Fact artifact"
+        }
+        $manifest = Get-Content -LiteralPath $artifact.manifestPath -Raw | ConvertFrom-Json
+        [pscustomobject]@{
+            Artifact = $artifact
+            Manifest = $manifest
+            BundleHash = (Get-FileHash -LiteralPath $artifact.bundlePath -Algorithm SHA256).Hash
         }
     }
 
-    Invoke-Index $cacheOne $outOne $architectureOne
-    Invoke-Index $cacheTwo $outTwo $architectureTwo
-
-    $first = Get-Content -LiteralPath $outOne -Raw | ConvertFrom-Json
-    $second = Get-Content -LiteralPath $outTwo -Raw | ConvertFrom-Json
-    $firstLanguage = @($first.languages | Where-Object id -eq "typescript") | Select-Object -First 1
-    $secondLanguage = @($second.languages | Where-Object id -eq "typescript") | Select-Object -First 1
-    if ($null -eq $firstLanguage -or $firstLanguage.status -ne "indexed" -or
-        $null -eq $secondLanguage -or $secondLanguage.status -ne "indexed") {
-        throw "Determinism gate requires an indexed TypeScript provider in both runs."
+    $first = Invoke-Index $cacheOne
+    $second = Invoke-Index $cacheTwo
+    $stableManifestFields = @(
+        "snapshotId", "sourceManifestDigest", "configDigest", "analysisPlanDigest",
+        "providerSetDigest", "executionContextSetDigest", "semanticDigest", "bundleDigest",
+        "analysisUnitReceiptCount", "nodeCount", "edgeCount", "evidenceCount",
+        "fileCoverageCount", "sourceScopeCoverageCount", "capabilityReceiptCount",
+        "gapCount", "issueCount"
+    )
+    foreach ($field in $stableManifestFields) {
+        if ($first.Manifest.$field -ne $second.Manifest.$field) {
+            throw "Canonical Fact manifest field changed between identical runs: $field"
+        }
+    }
+    if ($first.BundleHash -ne $second.BundleHash) {
+        throw "Canonical SQLite bundle bytes changed between identical independent runs."
     }
 
-    $first.timings = @()
-    $second.timings = @()
-    foreach ($unit in @($first.analysis_units)) {
-        $unit.elapsed_ms = 0
-    }
-    foreach ($unit in @($second.analysis_units)) {
-        $unit.elapsed_ms = 0
-    }
-    $firstCanonical = $first | ConvertTo-Json -Compress -Depth 100
-    $secondCanonical = $second | ConvertTo-Json -Compress -Depth 100
-    if ($firstCanonical -ne $secondCanonical) {
-        throw "Language index changed between identical independent runs."
-    }
-
-    $firstArchitecture = Get-Content -LiteralPath $architectureOne -Raw | ConvertFrom-Json
-    $secondArchitecture = Get-Content -LiteralPath $architectureTwo -Raw | ConvertFrom-Json
-    foreach ($unit in @($firstArchitecture.analysis_units)) {
-        $unit.elapsed_ms = 0
-    }
-    foreach ($unit in @($secondArchitecture.analysis_units)) {
-        $unit.elapsed_ms = 0
-    }
-    $firstArchitectureCanonical = $firstArchitecture | ConvertTo-Json -Compress -Depth 100
-    $secondArchitectureCanonical = $secondArchitecture | ConvertTo-Json -Compress -Depth 100
-    if ($firstArchitectureCanonical -ne $secondArchitectureCanonical) {
-        throw "Architecture index changed between identical independent runs."
-    }
-
-    Write-Host "PASS deterministic code and architecture indexes"
+    Write-Host "PASS deterministic canonical Fact bundles"
 }
 finally {
     if (-not $KeepFixture -and (Test-Path -LiteralPath $fixtureRoot)) {
-        Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
+        Remove-SafeFixtureTree $fixtureRoot
     } elseif ($KeepFixture) {
         Write-Host "Kept determinism fixture: $fixtureRoot"
     }

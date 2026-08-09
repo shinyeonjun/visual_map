@@ -1,1 +1,0 @@
-const localValue = 31;

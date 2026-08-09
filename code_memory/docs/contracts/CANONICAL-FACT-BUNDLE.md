@@ -1,11 +1,11 @@
 # Canonical Fact Bundle Contract
 
-Status: active code-language + backend HTTP framework path, 2026-08-08
+Status: active code-language and backend HTTP framework path, 2026-08-09.
 
 This contract defines the deterministic boundary between provider-specific
-Language IR and the desktop product's future published Fact Graph. It is a
-static fact artifact, not an AI semantic map and not the active Tauri
-generation store.
+Language IR and the desktop's published Fact Graph. It is a static fact
+artifact, not an AI semantic map. Tauri verifies and copies the immutable
+artifact into workspace-owned storage, then swaps a tamper-evident pointer.
 
 ## Inputs and identity
 
@@ -160,35 +160,24 @@ bundle digest when operational wording differs.
 
 ## Executable gates
 
-Every ground-truth invocation validates the canonical receipt, manifest,
-artifact path, byte digest, accounting, and invariants. Definition and
-CALLS/CONSTRUCTS gates additionally require two-run semantic and SQLite byte
-digest equality across all ten supported languages. The same checks run with
-one provider-visible source per language expanded beyond 1.1 MB.
+Rust characterization tests validate exact definitions, calls/construction,
+imports/exports, type relations, tests, framework routes/handlers, evidence,
+gaps, relevance, and linker invariants through the real Language IR and bundle
+writer. The canonical ten-language provider gate validates a non-empty bundle
+for every supported language family. `smoke-code-determinism.ps1` runs two
+independent caches and requires equal stable manifest fields and identical
+SQLite bytes.
 
-Current closed-corpus receipts:
-
-- Code Memory unit tests: 283/283;
-- shared fact-model: 17/17;
-- definitions: 117/117;
-- CALLS/CONSTRUCTS: 35/35;
-- imports/exports: 39/39;
-- type relations: 90/90 plus 22 reviewed negatives;
-- framework flow: 10/10; nine backend HTTP cases validate typed Framework IR,
-  canonical `HttpRoute`, `Exposes`, and `Handles`, while the C GTK/GLib case
-  remains an event donor-flow check;
-- canonical invariant failures: 0.
-
-These numbers are scoped regression evidence, not arbitrary-repository
-accuracy.
+Closed fixture results are scoped regression evidence, not
+arbitrary-repository accuracy. Historical counts belong in dated audit records,
+not in this version-independent contract.
 
 ## Deliberate remaining boundary
 
-This bundle currently contains the canonical language path and the backend
-static HTTP route/handler baseline. Middleware, RPC, GraphQL, frontend
-route/action/API-client, ORM/static SQL, test, event/queue/cache/external/config
-adapters and the independent database catalog still need typed canonical
-integration. Tauri does not yet validate/import this bundle or atomically
-publish an active generation. Clean-versus-incremental equivalence, retention,
-crash injection, and frozen multi-unit/large-repository gates remain separate
-work.
+This bundle currently contains the canonical language path, test relations,
+and backend static HTTP route/handler baseline. Middleware, RPC, GraphQL,
+frontend route/action/API-client, ORM/static SQL, event/queue/cache/external
+resource adapters, and the independent database catalog require separate typed
+canonical integration before the UI may claim them. Clean-versus-incremental
+equivalence, retention stress, crash injection, and frozen multi-unit/large
+repository gates remain separate measured work.

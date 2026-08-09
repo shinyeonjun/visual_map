@@ -7,6 +7,8 @@ import type {
   FactGraphStatus,
   ProviderKind,
   ReasoningEffort,
+  SourceActionResult,
+  SourceEditor,
   Workspace,
 } from "./contracts";
 import type { MapView, Selection } from "./map/types";
@@ -56,6 +58,26 @@ export async function getFactGraphStatus(workspaceId: string): Promise<FactGraph
 export async function analyzeWorkspace(workspaceId: string): Promise<AnalyzeWorkspaceResult> {
   return invoke<AnalyzeWorkspaceResult>("analyze_workspace", {
     request: { workspaceId },
+  });
+}
+
+export async function cancelWorkspaceAnalysis(workspaceId: string): Promise<boolean> {
+  return invoke<boolean>("cancel_workspace_analysis", { workspaceId });
+}
+
+export async function deleteWorkspace(workspaceId: string): Promise<void> {
+  return invoke<void>("delete_workspace", { workspaceId });
+}
+
+export async function openSourceLocation(
+  workspaceId: string,
+  path: string,
+  line: number | null,
+  column: number | null = null,
+  editor: SourceEditor = "vscode",
+): Promise<SourceActionResult> {
+  return invoke<SourceActionResult>("open_source_location", {
+    request: { workspaceId, path, line, column, editor },
   });
 }
 

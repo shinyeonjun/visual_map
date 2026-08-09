@@ -115,25 +115,23 @@ The Rust loader checks the same files at runtime:
 cargo run --manifest-path rust\Cargo.toml -- framework-packs --root .
 ```
 
-The pack boundary and shared adapter families are implemented. The catalog,
-semantic, and provider-backed gates all pass for all 72 packs. The provider
-gate validates each pack through its configured language provider, source range,
-fact, and relation contract. This does not claim that every version-specific or
-framework-specific DSL in every real project is understood; those remain
-compatibility coverage work, not a license to fabricate relations.
-
-The canonical flow gate executes one reviewed flow for each supported language
-and validates final bundle output for every HTTP case:
+The pack boundary and shared adapter families are implemented. Catalog and
+semantic gates cover every declared pack. Rust characterization tests validate
+provider-backed source ranges and the Framework IR to canonical
+`HttpRoute`/`Exposes`/`Handles` mapping, including missing and ambiguous handler
+negatives. The canonical ten-language gate then proves that the real packaged
+providers can publish non-empty canonical bundles:
 
 ```powershell
-.\tests\gates\run-framework-flow-gate.ps1
+.\tests\gates\run-uniform-core-quality-gate.ps1 `
+  -Bridge .\rust\target\release\code-memory-language.exe `
+  -ProvidersRoot .\providers
 ```
 
-It currently passes 10/10 flows: JavaScript/TypeScript Express, Go Gin, Rust
-Axum, C++ Crow, C# ASP.NET Core, Dart Shelf, Python FastAPI, Java Spring MVC,
-and C GTK/GLib. The nine HTTP cases require Framework IR plus canonical
-`HttpRoute`/`Exposes`/`Handles`; C validates the event donor flow only until a
-typed canonical event adapter exists.
+This does not claim that every framework version or DSL in arbitrary projects
+is understood. Unsupported syntax remains a typed coverage gap; it never
+licenses a fabricated route, handler, or flow. There is no separate legacy
+framework-flow JSON gate.
 
 The supported stack boundary is defined by the language and database support
 contracts in

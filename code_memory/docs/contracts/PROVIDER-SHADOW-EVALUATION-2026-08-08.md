@@ -1,5 +1,9 @@
 # 10-language provider shadow evaluation — 2026-08-08
 
+> Historical provider-selection audit. The `language-index` command examples
+> below describe the evaluation harness used on that date, not the active
+> canonical-only product output.
+
 ## 1. 결론
 
 지원 중인 열 언어를 같은 기준으로 다시 비교했다. 이번 조사에서 production provider를 새 후보로

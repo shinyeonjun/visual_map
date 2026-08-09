@@ -91,9 +91,14 @@ fn analyze_workspace(
 ) -> CommandResult<analysis::AnalyzeWorkspaceResult> {
     let app_data_dir = app_data_dir(&app)?;
     let workspace = workspace::open_workspace(&app_data_dir, &request.workspace_id)?;
-    let _analysis_guard = analysis::begin_workspace_analysis(&workspace.id)?;
+    let analysis_guard = analysis::begin_workspace_analysis(&workspace.id)?;
     let previous_pointer = fact_graph::checkpoint_published_pointer(&app_data_dir, &workspace.id)?;
-    let fact_graph = analysis::run_code_analysis(&app, &app_data_dir, &workspace)?;
+    let fact_graph = analysis::run_code_analysis(
+        &app,
+        &app_data_dir,
+        &workspace,
+        analysis_guard.operation_id(),
+    )?;
     let _ = app.emit(
         "analysis-progress",
         analysis::AnalysisProgressEvent {
@@ -120,6 +125,7 @@ fn analyze_workspace(
         &app_data_dir,
         &workspace,
         providers.inner(),
+        analysis_guard.operation_id(),
         Some(&semantic_progress),
     );
     match semantic {
@@ -142,6 +148,11 @@ fn analyze_workspace(
             })
         }
     }
+}
+
+#[tauri::command]
+fn cancel_workspace_analysis(workspace_id: String) -> CommandResult<bool> {
+    analysis::cancel_workspace_analysis(&workspace_id).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -253,6 +264,7 @@ pub fn run() {
             get_app_paths,
             get_engine_availability,
             analyze_workspace,
+            cancel_workspace_analysis,
             list_ai_providers,
             list_workspaces,
             create_workspace,

@@ -6,7 +6,7 @@ Codebase Workspace는 로컬 코드베이스를 정적 분석해 검증 가능�
 
 > **현재 상태**
 >
-> 코드 전용 vertical slice는 폴더 선택부터 정적 분석, canonical SQLite bundle, AI 의미 분석, Fluent 기반 지도 표시까지 연결되어 있습니다. 아직 일반 배포용 완성본은 아닙니다. DB 통합, 앱 내 대화, 대형 저장소용 계층형 의미 통합, 구형 compatibility 출력 제거가 남아 있습니다.
+> 코드 전용 vertical slice는 폴더 선택부터 정적 분석, canonical SQLite bundle, AI 의미 분석, Fluent 기반 지도 표시까지 연결되어 있습니다. 구형 JSON/architecture/collector 출력은 제거되어 실행 경로가 canonical 하나로 통합됐습니다. 아직 일반 배포용 완성본은 아니며, 대형 저장소 실측 최적화, 계층형 의미 통합, DB 통합과 앱 내 대화가 남아 있습니다.
 
 ## 제품 원칙
 
@@ -110,6 +110,8 @@ npm run typecheck
 npm test
 npm run lint
 npm run deadcode
+npm run format:check
+npm run build
 
 cargo fmt --manifest-path code_memory/rust/Cargo.toml -- --check
 cargo clippy --manifest-path code_memory/rust/Cargo.toml --all-targets -- -D warnings
@@ -119,6 +121,7 @@ cargo test --locked --manifest-path crates/fact-model/Cargo.toml
 cargo test --locked --manifest-path crates/semantic-model/Cargo.toml
 cargo test --locked --manifest-path crates/semantic-compiler/Cargo.toml
 cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
 DB 엔진을 변경한 경우:
@@ -143,17 +146,15 @@ docs/                        현재 architecture, security, cleanup 계획
 scripts/                     build, verification, packaging, cleanup scripts
 ```
 
-## 현재 정리 우선순위
+## 현재 엔지니어링 상태
 
-새 기능을 더하기 전에 다음 구조 정리를 진행합니다.
+- 실행 경로는 `Source Census → Analysis Plan → Language IR → canonical SQLite` 하나입니다.
+- `index_project()`와 Language IR unit emission은 단계별 coordinator/helper로 분리됐습니다.
+- desktop map/selection은 전체 snapshot을 `Vec`으로 적재하지 않고 고정된 SQLite query를 사용합니다.
+- 분석 취소는 정적 sidecar와 같은 분석에 속한 병렬 AI 자식 프로세스를 함께 종료합니다.
+- 앱 workspace 삭제는 앱 데이터만 지우며 선택한 원본 코드 폴더는 건드리지 않습니다.
 
-1. 앱 실행 경로를 canonical-only로 전환하고 폐기되는 legacy JSON 생성을 제거
-2. `index_project()`와 Language IR `emit_unit()`을 동작 변경 없이 역할별로 분리
-3. 전체 Fact snapshot 메모리 적재를 SQLite query 기반 read model로 변경
-4. 기본 실행 receipt를 축소하고 상세 audit sample은 진단 모드로 분리
-5. 남은 Go/Rust/Dart/C/C++ 실제 저장소 심층 검증 완료
-
-세부 완료 조건은 [Engineering cleanup roadmap](docs/engineering-cleanup-roadmap.md)에 고정합니다.
+남은 구조 작업과 측정 완료 조건은 [Engineering cleanup roadmap](docs/engineering-cleanup-roadmap.md)에 고정합니다.
 
 ## 문서
 

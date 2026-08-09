@@ -402,6 +402,14 @@ textarea:focus-visible,
   padding: 0 6px;
   overflow-y: auto;
 }
+.workspace-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  margin-bottom: 2px;
+  border-radius: var(--radius-control);
+}
 .workspace-row {
   position: relative;
   display: grid;
@@ -410,7 +418,7 @@ textarea:focus-visible,
   gap: 10px;
   width: 100%;
   padding: 8px 10px;
-  margin-bottom: 2px;
+  margin-bottom: 0;
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;
@@ -418,6 +426,31 @@ textarea:focus-visible,
   cursor: pointer;
   text-align: left;
   transition: background 90ms var(--ease-decelerate);
+}
+.workspace-delete {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+}
+.workspace-item:hover .workspace-delete,
+.workspace-delete:focus-visible {
+  opacity: 1;
+}
+.workspace-delete:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
+  color: var(--critical);
+}
+.workspace-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
 }
 .workspace-row:hover {
   background: var(--fill-subtle-hover);

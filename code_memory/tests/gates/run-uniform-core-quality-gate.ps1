@@ -1,38 +1,66 @@
+[CmdletBinding()]
 param(
     [string]$Bridge = (Join-Path $PSScriptRoot '..\..\rust\target\release\code-memory-language.exe'),
     [string]$ProvidersRoot,
-    [switch]$AllowMissingProvider
+    [switch]$AllowMissingProvider,
+    [switch]$KeepArtifacts
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
     $PSNativeCommandUseErrorActionPreference = $false
 }
 
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures')).Path
-$packsRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$bundledProviders = Join-Path $packsRoot 'providers'
-if ([string]::IsNullOrWhiteSpace($ProvidersRoot) -and (Test-Path $bundledProviders)) {
-    $ProvidersRoot = $bundledProviders
-}
-$outputRoot = Join-Path $PSScriptRoot '..\..\build\uniform-core-quality'
+$fixturesRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\fixtures'))
+$codeMemoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$bridgePath = [IO.Path]::GetFullPath($Bridge)
+$tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$gateRoot = Join-Path $tempBase ('codebase-workspace-canonical-language-gate-' + [guid]::NewGuid().ToString('N'))
 
+function Remove-SafeGateTree([string]$Path) {
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $tempPrefix = $tempBase.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([IO.Path]::GetFileName($resolved)).StartsWith('codebase-workspace-canonical-language-gate-', [StringComparison]::Ordinal)) {
+        throw "Refusing to remove a path outside the canonical language gate temp scope: $resolved"
+    }
+    if (-not [IO.Directory]::Exists($resolved)) {
+        return
+    }
+    $deletePath = if ($env:OS -eq 'Windows_NT' -and -not $resolved.StartsWith('\\?\', [StringComparison]::Ordinal)) {
+        '\\?\' + $resolved
+    } else {
+        $resolved
+    }
+    [IO.Directory]::Delete($deletePath, $true)
+}
+
+if (-not (Test-Path -LiteralPath $bridgePath -PathType Leaf)) {
+    throw "Bridge not found: $bridgePath"
+}
+if ([string]::IsNullOrWhiteSpace($ProvidersRoot)) {
+    $bundledProviders = Join-Path $codeMemoryRoot 'providers'
+    if (Test-Path -LiteralPath $bundledProviders -PathType Container) {
+        $ProvidersRoot = $bundledProviders
+    }
+}
+
+# C and C++ intentionally share one clangd fixture. The language catalogs are
+# still compared independently below, so a missing language cannot hide behind
+# the shared project run.
 $cases = @(
-    # ponytail: keep the active fixture contract explicit until one canonical language manifest exists;
-    # compare it with the bridge and framework catalog so drift fails loudly.
-    # Rust runs first because a freshly installed toolchain has the slowest
-    # semantic warm-up and must pass before cheaper provider checks proceed.
-    @{ Id = 'rust'; Path = 'native-lsp-rust'; Target = '#add@' },
-    @{ Id = 'typescript'; Path = 'scip-typescript'; Target = 'add\(\)' },
-    @{ Id = 'javascript'; Path = 'scip-javascript'; Target = 'add\(\)' },
-    @{ Id = 'python'; Path = 'scip-python'; Target = '#add@' },
-    @{ Id = 'java'; Path = 'scip-java'; Target = '#add\(' },
-    @{ Id = 'csharp'; Path = 'scip-dotnet'; Target = '#Add\(' },
-    @{ Id = 'c'; Path = 'native-lsp-c'; Target = '#add@' },
-    @{ Id = 'cpp'; Path = 'native-lsp-c'; Target = '#multiply@' },
-    @{ Id = 'go'; Path = 'native-lsp-go'; Target = '#Add@' },
-    @{ Id = 'dart'; Path = 'native-lsp-dart'; Target = '#add@' }
+    @{ Id = 'rust'; Path = 'native-lsp-rust' },
+    @{ Id = 'typescript'; Path = 'scip-typescript' },
+    @{ Id = 'javascript'; Path = 'scip-javascript' },
+    @{ Id = 'python'; Path = 'scip-python' },
+    @{ Id = 'java'; Path = 'scip-java' },
+    @{ Id = 'csharp'; Path = 'scip-dotnet' },
+    @{ Id = 'c-cpp'; Path = 'native-lsp-c' },
+    @{ Id = 'go'; Path = 'native-lsp-go' },
+    @{ Id = 'dart'; Path = 'native-lsp-dart' }
 )
+$contractLanguages = @('typescript', 'javascript', 'python', 'java', 'csharp', 'c', 'cpp', 'go', 'rust', 'dart')
 
 function Assert-SameLanguageIds {
     param(
@@ -49,111 +77,117 @@ function Assert-SameLanguageIds {
     }
 }
 
-if (-not (Test-Path $Bridge)) {
-    throw "Bridge not found: $Bridge"
+function Invoke-CanonicalIndex {
+    param(
+        [string]$CaseId,
+        [string]$SourceRoot
+    )
+
+    $cacheRoot = Join-Path $gateRoot ("cache-" + $CaseId)
+    New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
+    $env:CODE_MEMORY_CACHE_ROOT = $cacheRoot
+    $env:CODE_MEMORY_STRICT = '1'
+    $arguments = @(
+        'index',
+        '--root', $SourceRoot,
+        '--packs-root', $codeMemoryRoot
+    )
+    if (-not [string]::IsNullOrWhiteSpace($ProvidersRoot)) {
+        $arguments += @('--providers-root', [IO.Path]::GetFullPath($ProvidersRoot))
+    }
+
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $engineLines = @(& $bridgePath @arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($exitCode -ne 0) {
+        if ($AllowMissingProvider) {
+            Write-Host "SKIP ${CaseId}: canonical index failed"
+            return $null
+        }
+        throw "${CaseId}: canonical index failed with exit code $exitCode`n$($engineLines -join [Environment]::NewLine)"
+    }
+
+    $prefix = '@codebase-workspace-canonical-fact-bundle '
+    $marker = @($engineLines | ForEach-Object { [string]$_ } | Where-Object {
+        $_.StartsWith($prefix, [StringComparison]::Ordinal)
+    }) | Select-Object -Last 1
+    if ([string]::IsNullOrWhiteSpace($marker)) {
+        throw "${CaseId}: canonical Fact bundle receipt was not published"
+    }
+    $artifact = $marker.Substring($prefix.Length) | ConvertFrom-Json
+    if ($artifact.schema -ne 'codebase-workspace.canonical-fact-bundle-artifact.v1' -or
+        -not (Test-Path -LiteralPath $artifact.bundlePath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $artifact.manifestPath -PathType Leaf)) {
+        throw "${CaseId}: canonical Fact artifact is invalid"
+    }
+    $manifest = Get-Content -LiteralPath $artifact.manifestPath -Raw | ConvertFrom-Json
+    foreach ($field in 'snapshotId', 'sourceManifestDigest', 'semanticDigest', 'bundleDigest') {
+        if ([string]::IsNullOrWhiteSpace([string]$manifest.$field)) {
+            throw "${CaseId}: manifest field is empty: $field"
+        }
+    }
+    foreach ($field in 'analysisUnitReceiptCount', 'nodeCount', 'edgeCount', 'evidenceCount', 'fileCoverageCount', 'capabilityReceiptCount') {
+        if ([int64]$manifest.$field -le 0) {
+            throw "${CaseId}: canonical manifest has no $field"
+        }
+    }
+    [pscustomobject]@{ Artifact = $artifact; Manifest = $manifest }
 }
 
-$caseIds = @($cases | ForEach-Object Id)
-$bridgeList = @(& $Bridge list)
-if ($LASTEXITCODE -ne 0) {
-    throw 'Bridge language listing failed'
-}
-$bridgeIds = @($bridgeList | ForEach-Object {
+$previousCacheRoot = $env:CODE_MEMORY_CACHE_ROOT
+$previousStrict = $env:CODE_MEMORY_STRICT
+try {
+    New-Item -ItemType Directory -Path $gateRoot -Force | Out-Null
+
+    $bridgeList = @(& $bridgePath list)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Bridge language listing failed'
+    }
+    $bridgeIds = @($bridgeList | ForEach-Object {
         if ($_ -match '^([^\t]+)\t') { $matches[1] }
     })
-if ($bridgeIds.Count -eq 0) {
-    throw 'Bridge language listing returned no language ids'
-}
-$catalogPath = Join-Path $packsRoot 'packs\framework\catalog.json'
-$catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
-$packIds = @($catalog.languages | ForEach-Object id)
-Assert-SameLanguageIds -LeftName 'uniform fixtures' -Left $caseIds -RightName 'bridge' -Right $bridgeIds
-Assert-SameLanguageIds -LeftName 'bridge' -Left $bridgeIds -RightName 'framework catalog' -Right $packIds
+    Assert-SameLanguageIds -LeftName 'product contract' -Left $contractLanguages -RightName 'bridge' -Right $bridgeIds
 
-if (Test-Path $outputRoot) {
-    Remove-Item -LiteralPath $outputRoot -Recurse -Force
-}
-New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
+    $catalog = Get-Content -LiteralPath (Join-Path $codeMemoryRoot 'packs\framework\catalog.json') -Raw | ConvertFrom-Json
+    $packIds = @($catalog.languages | ForEach-Object id)
+    Assert-SameLanguageIds -LeftName 'bridge' -Left $bridgeIds -RightName 'framework catalog' -Right $packIds
 
-$passed = 0
-$skipped = 0
-foreach ($case in $cases) {
-    $fixture = Join-Path $root $case.Path
-    $out = Join-Path $outputRoot "$($case.Id).json"
-    $arguments = @('index', '--root', $fixture, '--out', $out, '--packs-root', $packsRoot)
-    if (-not [string]::IsNullOrWhiteSpace($ProvidersRoot)) {
-        $arguments += @('--providers-root', (Resolve-Path $ProvidersRoot).Path)
-    }
-
-    & $Bridge @arguments
-    if ($LASTEXITCODE -ne 0) {
-        if ($AllowMissingProvider) {
-            Write-Host "SKIP $($case.Id): bridge failed"
+    $passed = 0
+    $skipped = 0
+    foreach ($case in $cases) {
+        $fixture = Join-Path $fixturesRoot $case.Path
+        if (-not (Test-Path -LiteralPath $fixture -PathType Container)) {
+            throw "$($case.Id): fixture is missing: $fixture"
+        }
+        $result = Invoke-CanonicalIndex -CaseId $case.Id -SourceRoot $fixture
+        if ($null -eq $result) {
             $skipped++
             continue
         }
-        throw "$($case.Id): bridge failed"
-    }
-    if (-not (Test-Path $out)) {
-        throw "$($case.Id): index output was not written"
-    }
-
-    $result = Get-Content $out -Raw | ConvertFrom-Json
-    $language = @($result.languages | Where-Object id -eq $case.Id) | Select-Object -First 1
-    if ($null -eq $language -or $language.status -ne 'indexed') {
-        $status = if ($null -eq $language) { 'missing-language-output' } else { $language.status }
-        if ($AllowMissingProvider -and $status -in @('missing-tool', 'indexer-failed', 'provider-failed')) {
-            Write-Host "SKIP $($case.Id): $status"
-            $skipped++
-            continue
-        }
-        throw "$($case.Id): status is not indexed ($status)"
+        Write-Host ("PASS {0}: nodes={1} edges={2} evidence={3} coverage={4}" -f
+            $case.Id,
+            $result.Manifest.nodeCount,
+            $result.Manifest.edgeCount,
+            $result.Manifest.evidenceCount,
+            $result.Manifest.fileCoverageCount)
+        $passed++
     }
 
-    $documents = @($result.documents)
-    $relations = @($result.relations)
-    $calls = @($relations | Where-Object kind -eq 'CALLS')
-    if ($documents.Count -eq 0) { throw "$($case.Id): no semantic documents" }
-    if ($calls.Count -eq 0) { throw "$($case.Id): no CALLS relation" }
-    if (@($result.diagnostics | Where-Object level -eq 'error').Count -gt 0) {
-        throw "$($case.Id): error-level provider diagnostic was emitted"
+    Write-Host "canonical 10-language gate: passed=$passed skipped=$skipped projectRuns=$($cases.Count) languages=$($contractLanguages.Count)"
+    if (-not $AllowMissingProvider -and $passed -ne $cases.Count) {
+        throw 'Not every canonical language project passed.'
     }
-
-    # A physical header can be a separate semantic document in both C and C++.
-    # Only the same language/path identity is a duplicate.
-    $duplicateDocuments = @($documents | Group-Object -Property language, path | Where-Object Count -gt 1)
-    if ($duplicateDocuments.Count -gt 0) {
-        throw "$($case.Id): duplicate semantic document $($duplicateDocuments[0].Name)"
+} finally {
+    $env:CODE_MEMORY_CACHE_ROOT = $previousCacheRoot
+    $env:CODE_MEMORY_STRICT = $previousStrict
+    if ($KeepArtifacts) {
+        Write-Host "Kept canonical language gate artifacts: $gateRoot"
+    } else {
+        Remove-SafeGateTree $gateRoot
     }
-
-    $logicalRelations = @{}
-    foreach ($relation in $relations) {
-        if ([string]::IsNullOrWhiteSpace($relation.from) -or
-            [string]::IsNullOrWhiteSpace($relation.to)) {
-            throw "$($case.Id): relation lacks common endpoint evidence"
-        }
-        if ($relation.kind -eq 'CALLS' -and
-            ([string]::IsNullOrWhiteSpace($relation.path) -or @($relation.range).Count -lt 3)) {
-            throw "$($case.Id): CALLS relation lacks source-range evidence"
-        }
-        $key = "$($relation.kind)|$($relation.from)|$($relation.to)|$($relation.path)|$(@($relation.range) -join ',')"
-        if ($logicalRelations.ContainsKey($key)) {
-            throw "$($case.Id): duplicate logical relation $key"
-        }
-        $logicalRelations[$key] = $true
-    }
-
-    if (-not ($calls | Where-Object {
-        $_.to -match $case.Target -and
-        ((Test-Path (Join-Path $fixture $_.path)) -or (Test-Path $_.path))
-    })) {
-        throw "$($case.Id): expected resolved target was not found"
-    }
-    Write-Host "PASS $($case.Id): documents=$($documents.Count) relations=$($relations.Count) calls=$($calls.Count)"
-    $passed++
-}
-
-Write-Host "uniform core quality gate: passed=$passed skipped=$skipped total=$($cases.Count)"
-if (-not $AllowMissingProvider -and $passed -ne $cases.Count) {
-    exit 1
 }

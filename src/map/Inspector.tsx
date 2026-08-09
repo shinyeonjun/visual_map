@@ -11,9 +11,11 @@ import type { EvidenceRef, MapTrace, Selection, SourceExcerpt, TraceState, Truth
 export function Inspector({
   selection,
   onHighlight,
+  onOpenEvidence,
 }: {
   selection: Selection | null;
   onHighlight?: (id: string) => void;
+  onOpenEvidence?: (evidence: EvidenceRef) => void;
 }) {
   if (!selection) {
     return (
@@ -66,6 +68,8 @@ export function Inspector({
                 type="button"
                 className={evidenceClass(item, selection.source)}
                 key={`${item.path}:${item.line ?? ""}`}
+                onClick={() => onOpenEvidence?.(item)}
+                title={onOpenEvidence ? "VS Code에서 근거 열기" : undefined}
               >
                 <FileCode2 fontSize={13} aria-hidden="true" />
                 {evidenceLabel(item)}

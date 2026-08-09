@@ -182,7 +182,7 @@ fn framework_route_adapter_deduplicates_candidates_and_links_only_exact_handlers
     )
     .unwrap();
 
-    assert_eq!(framework_ir.receipt.donor_candidate_count, 4);
+    assert_eq!(framework_ir.receipt.raw_candidate_count, 4);
     assert_eq!(framework_ir.receipt.planned_route_record_count, 2);
     assert_eq!(framework_ir.receipt.emitted_route_record_count, 1);
     assert_eq!(framework_ir.receipt.rejected_route_record_count, 1);
@@ -800,6 +800,31 @@ fn lsp_utf16_coordinates_become_utf8_byte_offsets_without_guessing() {
 }
 
 #[test]
+fn default_language_ir_receipt_stays_bounded_while_diagnostics_keep_audit_detail() {
+    let emission = DonorFixture::one_language(ProgrammingLanguage::TypeScript)
+        .emit()
+        .unwrap();
+    let receipt = serde_json::to_value(&emission.receipt).unwrap();
+    let diagnostics = serde_json::to_value(&emission.diagnostics).unwrap();
+
+    assert_eq!(
+        receipt["schema"],
+        "codebase-workspace.language-ir-migration-receipt.v7"
+    );
+    assert!(receipt.get("definitionLanguageSummaries").is_none());
+    assert!(receipt.get("definitionAuditSample").is_none());
+    assert!(receipt.get("importAuditSample").is_none());
+    assert!(receipt.get("typeRelationAuditSample").is_none());
+    assert!(receipt.get("unavailableUnitSample").is_none());
+    assert_eq!(
+        diagnostics["schema"],
+        "codebase-workspace.language-ir-diagnostic-receipt.v1"
+    );
+    assert!(diagnostics["definitionLanguageSummaries"].is_array());
+    assert!(diagnostics["definitionMetadataAuditSample"].is_array());
+}
+
+#[test]
 fn source_change_after_census_fails_the_ir_boundary() {
     let fixture = DonorFixture::one_language(ProgrammingLanguage::TypeScript);
     let path = fixture.project.root.join("main.ts");
@@ -889,12 +914,13 @@ fn managed_provider_digest_mismatch_is_rejected_before_provenance() {
 fn missing_language_output_is_a_typed_coordinator_gap_not_empty_success() {
     let mut fixture = DonorFixture::one_language(ProgrammingLanguage::TypeScript);
     fixture.languages.clear();
-    let receipt = fixture.emit().unwrap().receipt;
+    let emission = fixture.emit().unwrap();
+    let receipt = emission.receipt;
 
     assert_eq!(receipt.emitted_unit_count, 0);
     assert_eq!(receipt.unavailable_unit_count, 1);
-    assert_eq!(receipt.unavailable_unit_sample.len(), 1);
-    let gap = &receipt.unavailable_unit_sample[0];
+    assert_eq!(emission.diagnostics.unavailable_unit_sample.len(), 1);
+    let gap = &emission.diagnostics.unavailable_unit_sample[0];
     assert_eq!(gap.language, ProgrammingLanguage::TypeScript);
     assert_eq!(gap.gap_code, GapCode::ProviderExecutionIncomplete);
     assert!(!gap.unit_id.is_empty());

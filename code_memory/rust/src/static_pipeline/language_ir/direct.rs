@@ -1,5 +1,6 @@
 use super::adapter::{
-    emit_language_ir, LanguageIrEmissionInput, LanguageIrMigrationReceipt, LanguageIrStreamArtifact,
+    emit_language_ir, LanguageIrDiagnosticReceipt, LanguageIrEmissionInput,
+    LanguageIrMigrationReceipt, LanguageIrStreamArtifact,
 };
 use codebase_fact_model::analysis::{
     ContextDimension, ContextDimensionKind, ProgrammingLanguage, ProviderConfigArtifact,
@@ -17,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use crate::{
     build_file_coverage, generated_context_digest, merge_provider_batches, normalize_scip_language,
-    source_scope_digest, Diagnostic, DocumentOutput, FileCoverageOutput, FileRelationOutput,
-    LanguageOutput, ProviderUnitBatch, RelationOutput, LANGUAGES,
+    source_scope_digest, Diagnostic, DocumentOutput, FileRelationOutput, LanguageOutput,
+    ProviderUnitBatch, LANGUAGES,
 };
 
 const EXECUTION_CONTEXT_RECEIPT_SCHEMA: &str =
@@ -36,7 +37,7 @@ pub(crate) struct DirectLanguageIrInput<'a> {
     pub(crate) project_model_files: &'a [String],
     /// Diagnostics produced before provider batches are merged, such as an
     /// unavailable compiler project model. They join the same authoritative
-    /// emission so the compatibility projection and Language IR cannot drift.
+    /// emission so diagnostics and Language IR cannot drift.
     pub(crate) coordinator_diagnostics: &'a [Diagnostic],
     /// Deterministic non-language analyzers contributing to this snapshot.
     pub(crate) static_analyzer_set_digest: Sha256Digest,
@@ -45,15 +46,17 @@ pub(crate) struct DirectLanguageIrInput<'a> {
 
 pub(crate) struct DirectLanguageIrEmission {
     pub(crate) receipt: LanguageIrMigrationReceipt,
+    pub(crate) diagnostics: LanguageIrDiagnosticReceipt,
     pub(crate) artifact: LanguageIrStreamArtifact,
-    pub(crate) compatibility_projection: DirectProviderProjection,
+    /// Provider-native material that deterministic post-language analyzers
+    /// still need in-process. This value is never serialized as a second
+    /// public index; Language IR remains the only language-layer authority.
+    pub(crate) provider_snapshot: ProviderAnalysisSnapshot,
 }
 
-pub(crate) struct DirectProviderProjection {
+pub(crate) struct ProviderAnalysisSnapshot {
     pub(crate) languages: Vec<LanguageOutput>,
-    pub(crate) coverage: Vec<FileCoverageOutput>,
     pub(crate) documents: Vec<DocumentOutput>,
-    pub(crate) relations: Vec<RelationOutput>,
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
@@ -415,12 +418,11 @@ pub(crate) fn emit_direct_language_ir(
     );
     Ok(DirectLanguageIrEmission {
         receipt: emission.receipt,
+        diagnostics: emission.diagnostics,
         artifact: emission.artifact,
-        compatibility_projection: DirectProviderProjection {
+        provider_snapshot: ProviderAnalysisSnapshot {
             languages,
-            coverage,
             documents,
-            relations,
             diagnostics: provider_diagnostics,
         },
     })

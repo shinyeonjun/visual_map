@@ -10,6 +10,7 @@ use super::type_relations::{
     inventory_type_relation_sites_from_root, inventory_type_use_sites_from_root,
     SyntaxTypeRelationSite, SyntaxTypeUseSite, TypeRelationIntent,
 };
+use artifact_writer::{AtomicLanguageIrArtifactWriter, LanguageIrSink, ValidatingDigestSink};
 use codebase_fact_model::analysis::{
     AnalysisUnit, ProgrammingLanguage, ProviderDescriptor, ProviderExecutionContext,
     ProviderProtocol,
@@ -29,18 +30,14 @@ use codebase_fact_model::fact_graph::{
 };
 use codebase_fact_model::identity::{EvidenceId, ProviderSymbolId, Sha256Digest, SnapshotId};
 use codebase_fact_model::language_ir::{
-    IrDefinition, IrEndpoint, IrRelation, LanguageIrHeader, LanguageIrRecord,
-    LanguageIrStreamValidator, LanguageRelationKind,
+    IrDefinition, IrEndpoint, IrRelation, LanguageIrHeader, LanguageIrRecord, LanguageRelationKind,
 };
 use codebase_fact_model::source::{RepositoryPath, SourceFileKind, SourceFlags, SourceSpan};
 use codebase_fact_model::source_manifest::{SourceEntryState, SourceManifest, SourceManifestFile};
 use codebase_fact_model::validation::Validate;
 use codebase_fact_model::ContractSchema;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs::{self, File};
-use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -49,7 +46,10 @@ use crate::{
     FileRelationOutput, LanguageOutput, OccurrenceOutput, RelationOutput, SymbolOutput, LANGUAGES,
 };
 
-const MIGRATION_RECEIPT_SCHEMA: &str = "codebase-workspace.language-ir-migration-receipt.v6";
+mod artifact_writer;
+
+const MIGRATION_RECEIPT_SCHEMA: &str = "codebase-workspace.language-ir-migration-receipt.v7";
+const DIAGNOSTIC_RECEIPT_SCHEMA: &str = "codebase-workspace.language-ir-diagnostic-receipt.v1";
 const UNAVAILABLE_SAMPLE_LIMIT: usize = 100;
 const DEFINITION_AUDIT_SAMPLE_LIMIT: usize = 100;
 const DEFINITION_METADATA_AUDIT_SAMPLE_LIMIT: usize = 200;
@@ -91,6 +91,16 @@ pub(crate) struct LanguageIrMigrationReceipt {
     pub(crate) owner_repair_count: u64,
     pub(crate) unresolved_owner_count: u64,
     pub(crate) definition_inventory_failed_file_count: u64,
+}
+
+/// Potentially large language-level audit detail. It is produced alongside
+/// the bounded migration receipt for tests and opt-in diagnostics, but it is
+/// never written to the normal product progress stream.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LanguageIrDiagnosticReceipt {
+    pub(crate) schema: &'static str,
+    pub(crate) snapshot_id: SnapshotId,
     pub(crate) definition_language_summaries: Vec<DefinitionLanguageSummary>,
     pub(crate) definition_audit_sample: Vec<DefinitionAuditFailure>,
     pub(crate) definition_metadata_audit_sample: Vec<DefinitionMetadataAuditEntry>,
@@ -121,6 +131,7 @@ pub(crate) struct LanguageIrStreamArtifact {
 
 pub(crate) struct LanguageIrEmission {
     pub(crate) receipt: LanguageIrMigrationReceipt,
+    pub(crate) diagnostics: LanguageIrDiagnosticReceipt,
     pub(crate) artifact: LanguageIrStreamArtifact,
 }
 
@@ -726,7 +737,7 @@ pub(super) fn emit_language_ir(
 
     let receipt = LanguageIrMigrationReceipt {
         schema: MIGRATION_RECEIPT_SCHEMA,
-        snapshot_id,
+        snapshot_id: snapshot_id.clone(),
         source_manifest_digest: manifest.manifest_digest,
         analysis_plan_digest: plan.plan_digest,
         provider_set_digest,
@@ -778,6 +789,10 @@ pub(super) fn emit_language_ir(
         owner_repair_count: definition_audit.owner_repair_count,
         unresolved_owner_count: definition_audit.unresolved_owner_count,
         definition_inventory_failed_file_count: definition_audit.inventory_failed_file_count,
+    };
+    let diagnostics = LanguageIrDiagnosticReceipt {
+        schema: DIAGNOSTIC_RECEIPT_SCHEMA,
+        snapshot_id,
         definition_language_summaries,
         definition_audit_sample: definition_audit
             .failures
@@ -835,6 +850,7 @@ pub(super) fn emit_language_ir(
             path: artifact_file.path,
         },
         receipt,
+        diagnostics,
     })
 }
 
@@ -865,204 +881,6 @@ struct AdapterSummary {
     type_relation_audit: TypeRelationAudit,
 }
 
-trait LanguageIrSink {
-    fn push(&mut self, record: LanguageIrRecord) -> Result<(), String>;
-}
-
-struct ValidatingDigestSink<'a> {
-    validator: LanguageIrStreamValidator,
-    hasher: Sha256,
-    semantic_hasher: Sha256,
-    record_count: u64,
-    artifact: &'a mut AtomicLanguageIrArtifactWriter,
-}
-
-impl LanguageIrSink for ValidatingDigestSink<'_> {
-    fn push(&mut self, record: LanguageIrRecord) -> Result<(), String> {
-        self.validator
-            .push(&record)
-            .map_err(|error| format!("invalid emitted Language IR record: {error}"))?;
-        let bytes = serde_json::to_vec(&record)
-            .map_err(|error| format!("cannot serialize emitted Language IR record: {error}"))?;
-        self.artifact.write_record(&bytes)?;
-        self.hasher.update((bytes.len() as u64).to_be_bytes());
-        self.hasher.update(&bytes);
-        if matches!(
-            record,
-            LanguageIrRecord::Evidence(_)
-                | LanguageIrRecord::Definition(_)
-                | LanguageIrRecord::Relation(_)
-        ) {
-            self.semantic_hasher
-                .update((bytes.len() as u64).to_be_bytes());
-            self.semantic_hasher.update(bytes);
-        }
-        self.record_count += 1;
-        Ok(())
-    }
-}
-
-impl<'a> ValidatingDigestSink<'a> {
-    fn new(artifact: &'a mut AtomicLanguageIrArtifactWriter) -> Self {
-        Self {
-            validator: LanguageIrStreamValidator::default(),
-            hasher: Sha256::new(),
-            semantic_hasher: Sha256::new(),
-            record_count: 0,
-            artifact,
-        }
-    }
-
-    fn finish(self) -> Result<(Sha256Digest, Sha256Digest, u64), String> {
-        self.validator
-            .finish()
-            .map_err(|error| format!("incomplete Language IR stream: {error}"))?;
-        let digest = Sha256Digest::parse(&format!("{:x}", self.hasher.finalize()))
-            .map_err(|error| format!("cannot encode Language IR stream digest: {error}"))?;
-        let semantic_digest =
-            Sha256Digest::parse(&format!("{:x}", self.semantic_hasher.finalize())).map_err(
-                |error| format!("cannot encode Language IR semantic payload digest: {error}"),
-            )?;
-        Ok((digest, semantic_digest, self.record_count))
-    }
-}
-
-struct AtomicLanguageIrArtifactWriter {
-    writer: Option<BufWriter<File>>,
-    temporary_path: PathBuf,
-    final_path: PathBuf,
-    hasher: Sha256,
-    record_count: u64,
-    byte_count: u64,
-    committed: bool,
-}
-
-struct LanguageIrArtifactFile {
-    path: PathBuf,
-    content_digest: Sha256Digest,
-    record_count: u64,
-    byte_count: u64,
-}
-
-impl AtomicLanguageIrArtifactWriter {
-    fn create(
-        project_root: &Path,
-        artifact_root: &Path,
-        snapshot_id: &str,
-    ) -> Result<Self, String> {
-        fs::create_dir_all(artifact_root).map_err(|error| {
-            format!(
-                "cannot create Language IR artifact root {}: {error}",
-                artifact_root.display()
-            )
-        })?;
-        let canonical_artifact_root = artifact_root.canonicalize().map_err(|error| {
-            format!(
-                "cannot resolve Language IR artifact root {}: {error}",
-                artifact_root.display()
-            )
-        })?;
-        let canonical_project_root = project_root
-            .canonicalize()
-            .unwrap_or_else(|_| project_root.to_path_buf());
-        if canonical_artifact_root.starts_with(&canonical_project_root) {
-            return Err(
-                "Language IR artifact root must be outside the selected repository".to_string(),
-            );
-        }
-        let final_path = canonical_artifact_root.join(format!("{snapshot_id}.jsonl"));
-        let temporary_path = canonical_artifact_root.join(format!(".{snapshot_id}.jsonl.tmp"));
-        if final_path.exists() || temporary_path.exists() {
-            return Err(format!(
-                "Language IR artifact target already exists: {}",
-                final_path.display()
-            ));
-        }
-        let file = File::create(&temporary_path).map_err(|error| {
-            format!(
-                "cannot create Language IR artifact {}: {error}",
-                temporary_path.display()
-            )
-        })?;
-        Ok(Self {
-            writer: Some(BufWriter::new(file)),
-            temporary_path,
-            final_path,
-            hasher: Sha256::new(),
-            record_count: 0,
-            byte_count: 0,
-            committed: false,
-        })
-    }
-
-    fn write_record(&mut self, bytes: &[u8]) -> Result<(), String> {
-        let writer = self
-            .writer
-            .as_mut()
-            .ok_or_else(|| "Language IR artifact writer is already closed".to_string())?;
-        writer.write_all(bytes).map_err(|error| {
-            format!(
-                "cannot write Language IR artifact {}: {error}",
-                self.temporary_path.display()
-            )
-        })?;
-        writer.write_all(b"\n").map_err(|error| {
-            format!(
-                "cannot write Language IR artifact {}: {error}",
-                self.temporary_path.display()
-            )
-        })?;
-        self.hasher.update(bytes);
-        self.hasher.update(b"\n");
-        self.record_count += 1;
-        self.byte_count += bytes.len() as u64 + 1;
-        Ok(())
-    }
-
-    fn finish(mut self) -> Result<LanguageIrArtifactFile, String> {
-        let mut writer = self
-            .writer
-            .take()
-            .ok_or_else(|| "Language IR artifact writer is already closed".to_string())?;
-        writer.flush().map_err(|error| {
-            format!(
-                "cannot flush Language IR artifact {}: {error}",
-                self.temporary_path.display()
-            )
-        })?;
-        writer.get_ref().sync_all().map_err(|error| {
-            format!(
-                "cannot sync Language IR artifact {}: {error}",
-                self.temporary_path.display()
-            )
-        })?;
-        drop(writer);
-        fs::rename(&self.temporary_path, &self.final_path).map_err(|error| {
-            format!(
-                "cannot publish Language IR artifact {}: {error}",
-                self.final_path.display()
-            )
-        })?;
-        self.committed = true;
-        let digest = Sha256Digest::parse(&format!("{:x}", self.hasher.clone().finalize()))
-            .map_err(|error| format!("cannot encode Language IR artifact digest: {error}"))?;
-        Ok(LanguageIrArtifactFile {
-            path: self.final_path.clone(),
-            content_digest: digest,
-            record_count: self.record_count,
-            byte_count: self.byte_count,
-        })
-    }
-}
-
-impl Drop for AtomicLanguageIrArtifactWriter {
-    fn drop(&mut self) {
-        if !self.committed {
-            let _ = fs::remove_file(&self.temporary_path);
-        }
-    }
-}
-
 fn emit_unit(
     input: UnitAdapterInput<'_>,
     sink: &mut dyn LanguageIrSink,
@@ -1070,60 +888,7 @@ fn emit_unit(
     let timing_enabled = std::env::var_os("CODE_MEMORY_LANGUAGE_IR_TIMING").is_some();
     let unit_started = Instant::now();
     let mut phase_started = Instant::now();
-    sink.push(LanguageIrRecord::Header(Box::new(LanguageIrHeader {
-        schema: ContractSchema::LanguageIrV2,
-        snapshot_id: input.snapshot_id,
-        source_manifest_digest: input.manifest_digest,
-        unit: input.unit.clone(),
-        provider: input.provider.clone(),
-        execution_context: input.execution_context.clone(),
-    })))?;
-
-    let assigned = input
-        .assigned_files
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let provider_resource_gap = provider_resource_gap(input.diagnostics);
-    let mut file_records = Vec::with_capacity(assigned.len());
-    for path in &assigned {
-        let manifest_file =
-            input.manifest_files.get(path).copied().ok_or_else(|| {
-                format!("analysis unit file missing from source manifest: {path}")
-            })?;
-        if manifest_file.state != SourceEntryState::Included
-            || !manifest_file.languages.contains(&input.unit.language)
-        {
-            return Err(format!(
-                "analysis unit owns an ineligible source file: {}",
-                path.as_str()
-            ));
-        }
-        let coverage = compatibility_file_coverage(input.coverage, input.unit.language, path);
-        let (state, gap_codes) = file_coverage_state(
-            coverage,
-            input.language_output.status,
-            provider_resource_gap,
-        );
-        let record = FileCoverageRecord {
-            unit_id: Some(input.unit.id.clone()),
-            path: path.clone(),
-            language: Some(input.unit.language),
-            file_kind: manifest_file.file_kind,
-            state,
-            byte_size: manifest_file.byte_size,
-            content_digest: manifest_file.content_digest,
-            gap_codes,
-        };
-        record
-            .validate()
-            .map_err(|error| format!("invalid Language IR file receipt for {path}: {error}"))?;
-        file_records.push(record);
-    }
-    file_records.sort_by(|left, right| left.path.cmp(&right.path));
-    for record in &file_records {
-        sink.push(LanguageIrRecord::File(record.clone()))?;
-    }
+    let (assigned, file_records) = emit_unit_header_and_coverage(&input, sink)?;
     emit_unit_timing(
         timing_enabled,
         input.unit,
@@ -1133,184 +898,15 @@ fn emit_unit(
     );
     phase_started = Instant::now();
 
-    let mut definition_audit = DefinitionAudit::default();
-    let mut syntax_definitions = BTreeMap::<RepositoryPath, Vec<SyntaxDefinition>>::new();
-    let mut syntax_type_relations = BTreeMap::<RepositoryPath, Vec<SyntaxTypeRelationSite>>::new();
-    let mut syntax_type_uses = BTreeMap::<RepositoryPath, Vec<SyntaxTypeUseSite>>::new();
-    let mut type_relation_inventory_failed_files = BTreeSet::<RepositoryPath>::new();
-    let mut import_audit = ImportAudit::for_language(input.unit.language);
-    let mut import_drafts = Vec::new();
-    let mut source_load_elapsed = Duration::ZERO;
-    let mut source_parse_elapsed = Duration::ZERO;
-    let mut definition_inventory_elapsed = Duration::ZERO;
-    let mut type_relation_inventory_elapsed = Duration::ZERO;
-    let mut type_use_inventory_elapsed = Duration::ZERO;
-    let mut import_inventory_elapsed = Duration::ZERO;
-    let mut import_resolution_elapsed = Duration::ZERO;
-    for path in &assigned {
-        let Some(manifest_file) = input.manifest_files.get(path).copied() else {
-            continue;
-        };
-        let operation_started = Instant::now();
-        let coordinates = match SourceCoordinates::load(input.project_root, manifest_file) {
-            Ok(coordinates) => coordinates,
-            Err(_) => {
-                source_load_elapsed += operation_started.elapsed();
-                record_definition_inventory_failure(input.unit, path, &mut definition_audit);
-                record_import_file_failure(
-                    input.unit,
-                    path,
-                    ImportAuditOutcome::InventoryFailed,
-                    GapCode::ProviderExecutionIncomplete,
-                    &mut import_audit,
-                );
-                type_relation_inventory_failed_files.insert(path.clone());
-                continue;
-            }
-        };
-        source_load_elapsed += operation_started.elapsed();
-        let operation_started = Instant::now();
-        let tree = match parse_tree(
-            input.unit.language.as_str(),
-            path.as_str(),
-            coordinates.text(),
-            "shared-static-inventory",
-        ) {
-            Ok(tree) => tree,
-            Err(_) => {
-                source_parse_elapsed += operation_started.elapsed();
-                record_definition_inventory_failure(input.unit, path, &mut definition_audit);
-                record_import_file_failure(
-                    input.unit,
-                    path,
-                    ImportAuditOutcome::InventoryFailed,
-                    GapCode::ProviderExecutionIncomplete,
-                    &mut import_audit,
-                );
-                if input
-                    .import_index
-                    .metadata_failed(input.unit.language, path)
-                {
-                    record_import_file_failure(
-                        input.unit,
-                        path,
-                        ImportAuditOutcome::MetadataUnavailable,
-                        GapCode::MissingProjectMetadata,
-                        &mut import_audit,
-                    );
-                }
-                type_relation_inventory_failed_files.insert(path.clone());
-                continue;
-            }
-        };
-        source_parse_elapsed += operation_started.elapsed();
-        let operation_started = Instant::now();
-        let definitions = inventory_definitions_from_root(
-            input.unit.language.as_str(),
-            tree.root_node(),
-            coordinates.text(),
-        );
-        definition_inventory_elapsed += operation_started.elapsed();
-        let definition_names_by_range =
-            definitions
-                .iter()
-                .fold(HashMap::<Vec<i32>, &str>::new(), |mut index, definition| {
-                    index
-                        .entry(definition.name_utf8_range.clone())
-                        .or_insert(definition.name.as_str());
-                    index
-                });
-        for definition in &definitions {
-            let parent = definition
-                .parent_name_utf8_range
-                .as_ref()
-                .and_then(|parent_range| definition_names_by_range.get(parent_range).copied())
-                .unwrap_or("-");
-            definition_audit.definition_keys.push(format!(
-                "{}\t{}\t{}\t{parent}",
-                path.as_str(),
-                definition.kind.as_str(),
-                definition.name
-            ));
-        }
-        definition_audit.syntax_definition_count += definitions.len() as u64;
-        definition_audit.owned_syntax_definition_count += definitions
-            .iter()
-            .filter(|definition| definition.parent_name_utf8_range.is_some())
-            .count() as u64;
-        let operation_started = Instant::now();
-        let type_relations = inventory_type_relation_sites_from_root(
-            input.unit.language,
-            tree.root_node(),
-            coordinates.text(),
-        );
-        type_relation_inventory_elapsed += operation_started.elapsed();
-        let operation_started = Instant::now();
-        let type_uses = inventory_type_use_sites_from_root(
-            input.unit.language,
-            tree.root_node(),
-            coordinates.text(),
-            &definitions,
-            &type_relations,
-        );
-        type_use_inventory_elapsed += operation_started.elapsed();
-        let operation_started = Instant::now();
-        let import_sites =
-            inventory_imports_from_root(input.unit.language, tree.root_node(), coordinates.text());
-        import_inventory_elapsed += operation_started.elapsed();
-        syntax_definitions.insert(path.clone(), definitions);
-        syntax_type_relations.insert(path.clone(), type_relations);
-        syntax_type_uses.insert(path.clone(), type_uses);
-        if input
-            .import_index
-            .metadata_failed(input.unit.language, path)
-        {
-            record_import_file_failure(
-                input.unit,
-                path,
-                ImportAuditOutcome::MetadataUnavailable,
-                GapCode::MissingProjectMetadata,
-                &mut import_audit,
-            );
-        }
-        let operation_started = Instant::now();
-        collect_import_drafts(
-            input.unit,
-            input.import_index,
-            path,
-            &coordinates,
-            import_sites,
-            &mut import_audit,
-            &mut import_drafts,
-        );
-        import_resolution_elapsed += operation_started.elapsed();
-    }
-    // Sorting the cumulative audit vector once is semantically identical to
-    // sorting it after every file.  The former implementation re-sorted tens
-    // of thousands of already-sorted keys for every source file, which made
-    // large C# and Java units effectively quadratic after the provider had
-    // already finished.
-    definition_audit.definition_keys.sort();
-    // Import sites are cumulative too. Sorting and deduplicating after every
-    // file made Java's otherwise linear import resolution quadratic (about
-    // 65 seconds for Spring's 8,982 Java files). Canonicalize once after all
-    // sites have been collected; ordering and duplicate precedence stay
-    // identical because canonicalize_import_entries defines both explicitly.
-    import_audit.canonicalize();
-    if timing_enabled {
-        eprintln!(
-            "timing stage=language_ir_source_inventory language={} unit={} load_ms={} parse_ms={} definitions_ms={} type_relations_ms={} type_uses_ms={} imports_ms={} import_resolution_ms={}",
-            input.unit.language.as_str(),
-            input.unit.id.as_str(),
-            source_load_elapsed.as_millis(),
-            source_parse_elapsed.as_millis(),
-            definition_inventory_elapsed.as_millis(),
-            type_relation_inventory_elapsed.as_millis(),
-            type_use_inventory_elapsed.as_millis(),
-            import_inventory_elapsed.as_millis(),
-            import_resolution_elapsed.as_millis(),
-        );
-    }
+    let UnitSourceInventory {
+        definition_audit,
+        syntax_definitions,
+        syntax_type_relations,
+        syntax_type_uses,
+        type_relation_inventory_failed_files,
+        import_audit,
+        import_drafts,
+    } = inventory_unit_sources(&input, &assigned, timing_enabled)?;
     emit_unit_timing(
         timing_enabled,
         input.unit,
@@ -1318,7 +914,6 @@ fn emit_unit(
         phase_started,
         unit_started,
     );
-    phase_started = Instant::now();
     let mut type_relation_audit = TypeRelationAudit {
         inventory_failed_files: type_relation_inventory_failed_files.clone(),
         ..TypeRelationAudit::default()
@@ -1331,409 +926,36 @@ fn emit_unit(
         }
     }
 
-    let mut unit_documents = input
-        .documents
-        .iter()
-        .filter(|document| {
-            normalize_scip_language(&document.language, input.unit.language.as_str())
-                == input.unit.language.as_str()
-                && RepositoryPath::parse(&document.path).is_ok_and(|path| assigned.contains(&path))
-        })
-        .collect::<Vec<_>>();
-    unit_documents.sort_by(|left, right| left.path.cmp(&right.path));
-    let document_paths = unit_documents
-        .iter()
-        .map(|document| document.path.as_str())
-        .collect::<BTreeSet<_>>();
-
-    let mut evidence = BTreeMap::<EvidenceId, FactEvidence>::new();
-    let mut definitions = BTreeMap::<ProviderSymbolId, DefinitionDraft>::new();
-    let mut definition_spans = BTreeMap::<ProviderSymbolId, SourceSpan>::new();
-    let mut ignored_provider_definition_ids = BTreeSet::<ProviderSymbolId>::new();
-    let mut omitted_definition_count = 0_u64;
-
-    for document in &unit_documents {
-        let path = RepositoryPath::parse(&document.path)
-            .map_err(|error| format!("provider returned invalid document path: {error}"))?;
-        let manifest_file = input
-            .manifest_files
-            .get(&path)
-            .copied()
-            .ok_or_else(|| format!("provider document is absent from manifest: {path}"))?;
-        let coordinates = SourceCoordinates::load(input.project_root, manifest_file)?;
-        let definition_occurrences_by_symbol = document
-            .occurrences
-            .iter()
-            .filter(|occurrence| occurrence.definition)
-            .fold(
-                HashMap::<&str, &OccurrenceOutput>::new(),
-                |mut index, occurrence| {
-                    index
-                        .entry(occurrence.symbol.as_str())
-                        .and_modify(|current| {
-                            if occurrence.range < current.range {
-                                *current = occurrence;
-                            }
-                        })
-                        .or_insert(occurrence);
-                    index
-                },
-            );
-        let mut symbols = document.symbols.iter().collect::<Vec<_>>();
-        symbols.sort_by(|left, right| left.symbol.cmp(&right.symbol));
-        for symbol in symbols {
-            let kind = canonical_definition_kind(&symbol.kind);
-            let field_candidate = kind.is_none() && is_variable_definition_kind(&symbol.kind);
-            let Some(kind) = kind.or(field_candidate.then_some(FactNodeKind::Field)) else {
-                continue;
-            };
-            let Some(occurrence) = definition_occurrences_by_symbol
-                .get(symbol.symbol.as_str())
-                .copied()
-            else {
-                omitted_definition_count += 1;
-                continue;
-            };
-            let symbol_id = ProviderSymbolId::parse(&symbol.symbol)
-                .map_err(|error| format!("provider emitted invalid symbol ID: {error}"))?;
-            let span = match coordinates.span(&occurrence.range, input.provider.protocol) {
-                Ok(span) => span,
-                Err(_) => {
-                    omitted_definition_count += 1;
-                    continue;
-                }
-            };
-            // SCIP emits a zero-width document sentinel at 0:0 for each file.
-            // Most providers classify it as a file symbol, but a provider can
-            // occasionally label it as Namespace.  It is not a source
-            // definition and cannot carry verifiable definition evidence, so
-            // never promote it into the canonical symbol graph.
-            if span.start.byte_offset == span.end.byte_offset {
-                omitted_definition_count += 1;
-                ignored_provider_definition_ids.insert(symbol_id);
-                continue;
-            }
-            let producer = evidence_producer(input.provider, "provider-definition");
-            let fact_evidence = FactEvidence::new(
-                EvidenceKind::SourceDefinition,
-                producer,
-                EvidenceLocation::Source { span: span.clone() },
-                None,
-            )
-            .map_err(|error| format!("cannot build definition evidence: {error}"))?;
-            let evidence_id = fact_evidence.id.clone();
-            evidence.insert(evidence_id.clone(), fact_evidence);
-            let parent = symbol
-                .enclosing_symbol
-                .as_deref()
-                .map(ProviderSymbolId::parse)
-                .transpose()
-                .map_err(|error| format!("provider emitted invalid parent symbol ID: {error}"))?;
-            definitions
-                .entry(symbol_id.clone())
-                .or_insert_with(|| DefinitionDraft {
-                    symbol_id: symbol_id.clone(),
-                    native_kind: symbol.kind.clone(),
-                    canonical_kind_hint: kind,
-                    qualified_name: symbol.symbol.clone(),
-                    display_name: definition_display_name(symbol),
-                    signature: normalized_optional_text(symbol.signature.as_deref()),
-                    visibility: Visibility::Unknown,
-                    parent_symbol_id: parent,
-                    definition_evidence_id: evidence_id,
-                    flags: source_flags(manifest_file.file_kind),
-                    field_candidate,
-                    path: path.clone(),
-                    provider_range: occurrence.range.clone(),
-                    syntax_match: None,
-                });
-            definition_spans.entry(symbol_id).or_insert(span);
-        }
-    }
-    emit_unit_timing(
-        timing_enabled,
-        input.unit,
-        "provider_definitions",
-        phase_started,
-        unit_started,
-    );
-    phase_started = Instant::now();
-
-    let provider_definition_ids = definitions.keys().cloned().collect::<BTreeSet<_>>();
-    let provider_definition_aliases = reconcile_definition_inventory(
-        input.unit,
-        input.provider.protocol,
+    let definitions = reconcile_unit_definitions(
+        &input,
+        &assigned,
         &syntax_definitions,
-        &mut definitions,
-        &mut definition_audit,
-    );
-    reconcile_definition_drafts(input.unit.language, &mut definitions);
-    record_definition_metadata(input.unit, &definitions, &mut definition_audit);
-    omitted_definition_count += definition_audit.blocking_count();
-    let definition_ids = definitions.keys().cloned().collect::<BTreeSet<_>>();
-    let mut discarded_definition_ids = provider_definition_ids
-        .difference(&definition_ids)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    discarded_definition_ids.extend(ignored_provider_definition_ids);
-    let retained_definition_evidence = definitions
-        .values()
-        .map(|draft| draft.definition_evidence_id.clone())
-        .collect::<BTreeSet<_>>();
-    evidence.retain(|id, _| retained_definition_evidence.contains(id));
-    let mut definition_records = definitions
-        .values()
-        .cloned()
-        .map(|draft| IrDefinition {
-            unit_id: input.unit.id.clone(),
-            symbol_id: draft.symbol_id,
-            native_kind: draft.native_kind,
-            canonical_kind_hint: draft.canonical_kind_hint,
-            qualified_name: draft.qualified_name,
-            display_name: draft.display_name,
-            signature: draft.signature,
-            visibility: draft.visibility,
-            parent_symbol_id: draft
-                .parent_symbol_id
-                .filter(|parent| definition_ids.contains(parent)),
-            definition_evidence_id: draft.definition_evidence_id,
-            flags: draft.flags,
-        })
-        .collect::<Vec<_>>();
-    definition_records.sort_by(|left, right| left.symbol_id.cmp(&right.symbol_id));
-    emit_unit_timing(
+        definition_audit,
         timing_enabled,
-        input.unit,
-        "definition_reconciliation",
-        phase_started,
         unit_started,
-    );
-    phase_started = Instant::now();
-
-    let mut unit_relations = input
-        .relations
-        .iter()
-        .filter(|relation| document_paths.contains(relation.path.as_str()))
-        .collect::<Vec<_>>();
-    unit_relations.sort_by(|left, right| {
-        (&left.path, &left.range, &left.from, &left.to, &left.kind).cmp(&(
-            &right.path,
-            &right.range,
-            &right.from,
-            &right.to,
-            &right.kind,
-        ))
-    });
-    let hierarchy_endpoint_ids = unit_relations
-        .iter()
-        .filter(|relation| {
-            provider_relation_capability(&relation.kind) == Some(AnalysisCapability::TypeRelations)
-        })
-        .flat_map(|relation| [&relation.from, &relation.to])
-        .filter_map(|raw| ProviderSymbolId::parse(raw).ok())
-        .map(|id| provider_definition_aliases.get(&id).cloned().unwrap_or(id))
-        .collect::<BTreeSet<_>>();
-    let mut hierarchy_occurrence_ranges =
-        BTreeMap::<String, BTreeMap<ProviderSymbolId, Vec<Vec<i32>>>>::new();
-    for document in &unit_documents {
-        let mut by_symbol = BTreeMap::<ProviderSymbolId, Vec<Vec<i32>>>::new();
-        for occurrence in &document.occurrences {
-            let Ok(id) = ProviderSymbolId::parse(&occurrence.symbol) else {
-                continue;
-            };
-            let id = provider_definition_aliases.get(&id).cloned().unwrap_or(id);
-            if hierarchy_endpoint_ids.contains(&id) {
-                by_symbol
-                    .entry(id)
-                    .or_default()
-                    .push(occurrence.range.clone());
-            }
-        }
-        if !by_symbol.is_empty() {
-            hierarchy_occurrence_ranges.insert(document.path.clone(), by_symbol);
-        }
-    }
-    emit_unit_timing(
+    )?;
+    let ClassifiedUnitFacts {
+        evidence,
+        definition_records,
+        relation_records,
+        emitted_relations,
+        omitted_relations,
+        omitted_definition_count,
+        definition_audit,
+        mut type_relation_audit,
+    } = classify_unit_relations(
+        RelationClassificationStage {
+            input: &input,
+            syntax_definitions: &syntax_definitions,
+            syntax_type_relations: &syntax_type_relations,
+            syntax_type_uses: &syntax_type_uses,
+            import_drafts,
+            type_relation_audit,
+            definitions,
+        },
         timing_enabled,
-        input.unit,
-        "relation_indexes",
-        phase_started,
         unit_started,
-    );
-    phase_started = Instant::now();
-    let mut relation_records = Vec::new();
-    let mut emitted_relations = BTreeMap::<AnalysisCapability, u64>::new();
-    let mut omitted_relations = BTreeMap::<AnalysisCapability, u64>::new();
-    let mut current_path = None::<String>;
-    let mut current_coordinates = None::<SourceCoordinates>;
-    let relation_classification = ProviderRelationClassificationContext {
-        language: input.unit.language,
-        protocol: input.provider.protocol,
-        definitions: &definitions,
-        syntax_definitions: &syntax_definitions,
-        syntax_type_relations: &syntax_type_relations,
-        syntax_type_uses: &syntax_type_uses,
-        hierarchy_occurrence_ranges: &hierarchy_occurrence_ranges,
-    };
-    for relation in unit_relations {
-        let Some(capability) = provider_relation_capability(&relation.kind) else {
-            continue;
-        };
-        let source = match endpoint(&relation.from) {
-            Ok(endpoint) => endpoint,
-            Err(_) => {
-                *omitted_relations.entry(capability).or_default() += 1;
-                continue;
-            }
-        };
-        let target = match endpoint(&relation.to) {
-            Ok(endpoint) => endpoint,
-            Err(_) => {
-                *omitted_relations.entry(capability).or_default() += 1;
-                continue;
-            }
-        };
-        let mut source = remap_provider_alias(source, &provider_definition_aliases);
-        let mut target = remap_provider_alias(target, &provider_definition_aliases);
-        if [&source, &target].iter().any(|endpoint| {
-            matches!(
-                endpoint,
-                IrEndpoint::NativeSymbol { symbol_id }
-                    if discarded_definition_ids.contains(symbol_id)
-            )
-        }) {
-            *omitted_relations.entry(capability).or_default() += 1;
-            continue;
-        }
-        let Some(mapping) =
-            classify_provider_relation(relation, &source, &target, &relation_classification)
-        else {
-            *omitted_relations.entry(capability).or_default() += 1;
-            continue;
-        };
-        if mapping.reverse_endpoints {
-            std::mem::swap(&mut source, &mut target);
-        }
-        if source == target {
-            continue;
-        }
-        let evidence_range = mapping.evidence_range.as_deref().unwrap_or(&relation.range);
-        let span = if evidence_range.is_empty() {
-            match &source {
-                IrEndpoint::NativeSymbol { symbol_id } => definition_spans.get(symbol_id).cloned(),
-                IrEndpoint::File { .. } | IrEndpoint::Structure { .. } => None,
-            }
-        } else {
-            if current_path.as_deref() != Some(&relation.path) {
-                let path = RepositoryPath::parse(&relation.path)
-                    .map_err(|error| format!("provider relation has invalid path: {error}"))?;
-                let manifest_file = input.manifest_files.get(&path).copied().ok_or_else(|| {
-                    format!("provider relation path is absent from manifest: {path}")
-                })?;
-                current_coordinates =
-                    Some(SourceCoordinates::load(input.project_root, manifest_file)?);
-                current_path = Some(relation.path.clone());
-            }
-            current_coordinates.as_ref().and_then(|coordinates| {
-                coordinates
-                    .span(evidence_range, input.provider.protocol)
-                    .ok()
-            })
-        };
-        let Some(span) = span else {
-            *omitted_relations.entry(mapping.capability).or_default() += 1;
-            continue;
-        };
-        if mapping.capability == AnalysisCapability::TypeRelations {
-            if let Some(site_key) = &mapping.matched_explicit_site_key {
-                type_relation_audit
-                    .matched_explicit_site_keys
-                    .insert(site_key.clone());
-            }
-            let (source_symbol, source_name) = type_relation_endpoint(&source, &definitions);
-            let (target_symbol, target_name) = type_relation_endpoint(&target, &definitions);
-            let entry = TypeRelationAuditEntry {
-                unit_id: input.unit.id.as_str().to_string(),
-                language: input.unit.language,
-                path: span.path.clone(),
-                native_relation: relation.kind.clone(),
-                kind: mapping.kind,
-                source_symbol,
-                source_name,
-                target_symbol,
-                target_name,
-                start_line: span.start.line,
-                start_utf8_column: span.start.utf8_column,
-                end_line: span.end.line,
-                end_utf8_column: span.end.utf8_column,
-            };
-            type_relation_audit
-                .relation_keys
-                .push(type_relation_audit_key(&entry));
-            type_relation_audit.entries.push(entry);
-        }
-        let fact_evidence = FactEvidence::new(
-            mapping.evidence_kind,
-            evidence_producer(input.provider, "provider-relation"),
-            EvidenceLocation::Source { span },
-            None,
-        )
-        .map_err(|error| format!("cannot build relation evidence: {error}"))?;
-        let evidence_id = fact_evidence.id.clone();
-        evidence.insert(evidence_id.clone(), fact_evidence);
-        relation_records.push(IrRelation {
-            unit_id: input.unit.id.clone(),
-            source,
-            target,
-            kind: mapping.kind,
-            truth: FactTruth::Confirmed,
-            resolution: ResolutionMethod::Provider,
-            dispatch: match mapping.kind {
-                LanguageRelationKind::Calls => DispatchKind::Unknown,
-                LanguageRelationKind::Constructs => DispatchKind::Direct,
-                _ => DispatchKind::NotApplicable,
-            },
-            semantic_context_id: input.unit.context.id.clone(),
-            evidence_ids: vec![evidence_id],
-        });
-        *emitted_relations.entry(mapping.capability).or_default() += 1;
-    }
-    for draft in import_drafts {
-        let capability = match draft.relation {
-            LanguageRelationKind::Imports => AnalysisCapability::Imports,
-            LanguageRelationKind::Exports => AnalysisCapability::Exports,
-            _ => unreachable!("import draft must be imports or exports"),
-        };
-        let fact_evidence = FactEvidence::new(
-            EvidenceKind::ImportSite,
-            syntax_import_evidence_producer(),
-            EvidenceLocation::Source { span: draft.span },
-            None,
-        )
-        .map_err(|error| format!("cannot build import evidence: {error}"))?;
-        let evidence_id = fact_evidence.id.clone();
-        evidence.insert(evidence_id.clone(), fact_evidence);
-        relation_records.push(IrRelation {
-            unit_id: input.unit.id.clone(),
-            source: IrEndpoint::File { path: draft.source },
-            target: draft.target,
-            kind: draft.relation,
-            truth: FactTruth::Confirmed,
-            resolution: draft.resolution,
-            dispatch: DispatchKind::NotApplicable,
-            semantic_context_id: input.unit.context.id.clone(),
-            evidence_ids: vec![evidence_id],
-        });
-        *emitted_relations.entry(capability).or_default() += 1;
-    }
-    relation_records.sort_by_key(relation_sort_key);
-    emit_unit_timing(
-        timing_enabled,
-        input.unit,
-        "relation_classification",
-        phase_started,
-        unit_started,
-    );
+    )?;
     phase_started = Instant::now();
 
     for fact_evidence in evidence.values() {
@@ -1876,6 +1098,766 @@ fn emit_unit(
         definition_audit,
         import_audit,
         type_relation_audit,
+    })
+}
+
+struct UnitSourceInventory {
+    definition_audit: DefinitionAudit,
+    syntax_definitions: BTreeMap<RepositoryPath, Vec<SyntaxDefinition>>,
+    syntax_type_relations: BTreeMap<RepositoryPath, Vec<SyntaxTypeRelationSite>>,
+    syntax_type_uses: BTreeMap<RepositoryPath, Vec<SyntaxTypeUseSite>>,
+    type_relation_inventory_failed_files: BTreeSet<RepositoryPath>,
+    import_audit: ImportAudit,
+    import_drafts: Vec<ImportDraft>,
+}
+
+struct ReconciledUnitDefinitions<'a> {
+    unit_documents: Vec<&'a DocumentOutput>,
+    document_paths: BTreeSet<&'a str>,
+    evidence: BTreeMap<EvidenceId, FactEvidence>,
+    definitions: BTreeMap<ProviderSymbolId, DefinitionDraft>,
+    definition_spans: BTreeMap<ProviderSymbolId, SourceSpan>,
+    provider_definition_aliases: BTreeMap<ProviderSymbolId, ProviderSymbolId>,
+    discarded_definition_ids: BTreeSet<ProviderSymbolId>,
+    omitted_definition_count: u64,
+    definition_records: Vec<IrDefinition>,
+    definition_audit: DefinitionAudit,
+}
+
+struct RelationClassificationStage<'a> {
+    input: &'a UnitAdapterInput<'a>,
+    syntax_definitions: &'a BTreeMap<RepositoryPath, Vec<SyntaxDefinition>>,
+    syntax_type_relations: &'a BTreeMap<RepositoryPath, Vec<SyntaxTypeRelationSite>>,
+    syntax_type_uses: &'a BTreeMap<RepositoryPath, Vec<SyntaxTypeUseSite>>,
+    import_drafts: Vec<ImportDraft>,
+    type_relation_audit: TypeRelationAudit,
+    definitions: ReconciledUnitDefinitions<'a>,
+}
+
+struct ClassifiedUnitFacts {
+    evidence: BTreeMap<EvidenceId, FactEvidence>,
+    definition_records: Vec<IrDefinition>,
+    relation_records: Vec<IrRelation>,
+    emitted_relations: BTreeMap<AnalysisCapability, u64>,
+    omitted_relations: BTreeMap<AnalysisCapability, u64>,
+    omitted_definition_count: u64,
+    definition_audit: DefinitionAudit,
+    type_relation_audit: TypeRelationAudit,
+}
+
+fn classify_unit_relations(
+    stage: RelationClassificationStage<'_>,
+    timing_enabled: bool,
+    unit_started: Instant,
+) -> Result<ClassifiedUnitFacts, String> {
+    let RelationClassificationStage {
+        input,
+        syntax_definitions,
+        syntax_type_relations,
+        syntax_type_uses,
+        import_drafts,
+        mut type_relation_audit,
+        definitions,
+    } = stage;
+    let ReconciledUnitDefinitions {
+        unit_documents,
+        document_paths,
+        mut evidence,
+        definitions,
+        definition_spans,
+        provider_definition_aliases,
+        discarded_definition_ids,
+        omitted_definition_count,
+        definition_records,
+        definition_audit,
+    } = definitions;
+    let mut phase_started = Instant::now();
+    let mut unit_relations = input
+        .relations
+        .iter()
+        .filter(|relation| document_paths.contains(relation.path.as_str()))
+        .collect::<Vec<_>>();
+    unit_relations.sort_by(|left, right| {
+        (&left.path, &left.range, &left.from, &left.to, &left.kind).cmp(&(
+            &right.path,
+            &right.range,
+            &right.from,
+            &right.to,
+            &right.kind,
+        ))
+    });
+    let hierarchy_endpoint_ids = unit_relations
+        .iter()
+        .filter(|relation| {
+            provider_relation_capability(&relation.kind) == Some(AnalysisCapability::TypeRelations)
+        })
+        .flat_map(|relation| [&relation.from, &relation.to])
+        .filter_map(|raw| ProviderSymbolId::parse(raw).ok())
+        .map(|id| provider_definition_aliases.get(&id).cloned().unwrap_or(id))
+        .collect::<BTreeSet<_>>();
+    let mut hierarchy_occurrence_ranges =
+        BTreeMap::<String, BTreeMap<ProviderSymbolId, Vec<Vec<i32>>>>::new();
+    for document in &unit_documents {
+        let mut by_symbol = BTreeMap::<ProviderSymbolId, Vec<Vec<i32>>>::new();
+        for occurrence in &document.occurrences {
+            let Ok(id) = ProviderSymbolId::parse(&occurrence.symbol) else {
+                continue;
+            };
+            let id = provider_definition_aliases.get(&id).cloned().unwrap_or(id);
+            if hierarchy_endpoint_ids.contains(&id) {
+                by_symbol
+                    .entry(id)
+                    .or_default()
+                    .push(occurrence.range.clone());
+            }
+        }
+        if !by_symbol.is_empty() {
+            hierarchy_occurrence_ranges.insert(document.path.clone(), by_symbol);
+        }
+    }
+    emit_unit_timing(
+        timing_enabled,
+        input.unit,
+        "relation_indexes",
+        phase_started,
+        unit_started,
+    );
+    phase_started = Instant::now();
+
+    let mut relation_records = Vec::new();
+    let mut emitted_relations = BTreeMap::<AnalysisCapability, u64>::new();
+    let mut omitted_relations = BTreeMap::<AnalysisCapability, u64>::new();
+    let mut current_path = None::<String>;
+    let mut current_coordinates = None::<SourceCoordinates>;
+    let relation_classification = ProviderRelationClassificationContext {
+        language: input.unit.language,
+        protocol: input.provider.protocol,
+        definitions: &definitions,
+        syntax_definitions,
+        syntax_type_relations,
+        syntax_type_uses,
+        hierarchy_occurrence_ranges: &hierarchy_occurrence_ranges,
+    };
+    for relation in unit_relations {
+        let Some(capability) = provider_relation_capability(&relation.kind) else {
+            continue;
+        };
+        let source = match endpoint(&relation.from) {
+            Ok(endpoint) => endpoint,
+            Err(_) => {
+                *omitted_relations.entry(capability).or_default() += 1;
+                continue;
+            }
+        };
+        let target = match endpoint(&relation.to) {
+            Ok(endpoint) => endpoint,
+            Err(_) => {
+                *omitted_relations.entry(capability).or_default() += 1;
+                continue;
+            }
+        };
+        let source = remap_provider_alias(source, &provider_definition_aliases);
+        let target = remap_provider_alias(target, &provider_definition_aliases);
+        let Some((mut source, mut target)) = retain_relation_endpoints(
+            relation,
+            capability,
+            source,
+            target,
+            &discarded_definition_ids,
+        ) else {
+            *omitted_relations.entry(capability).or_default() += 1;
+            continue;
+        };
+        let Some(mapping) =
+            classify_provider_relation(relation, &source, &target, &relation_classification)
+        else {
+            *omitted_relations.entry(capability).or_default() += 1;
+            continue;
+        };
+        if mapping.reverse_endpoints {
+            std::mem::swap(&mut source, &mut target);
+        }
+        if source == target {
+            continue;
+        }
+        let evidence_range = mapping.evidence_range.as_deref().unwrap_or(&relation.range);
+        let span = if evidence_range.is_empty() {
+            match &source {
+                IrEndpoint::NativeSymbol { symbol_id } => definition_spans.get(symbol_id).cloned(),
+                IrEndpoint::File { .. } | IrEndpoint::Structure { .. } => None,
+            }
+        } else {
+            if current_path.as_deref() != Some(&relation.path) {
+                let path = RepositoryPath::parse(&relation.path)
+                    .map_err(|error| format!("provider relation has invalid path: {error}"))?;
+                let manifest_file = input.manifest_files.get(&path).copied().ok_or_else(|| {
+                    format!("provider relation path is absent from manifest: {path}")
+                })?;
+                current_coordinates =
+                    Some(SourceCoordinates::load(input.project_root, manifest_file)?);
+                current_path = Some(relation.path.clone());
+            }
+            current_coordinates.as_ref().and_then(|coordinates| {
+                coordinates
+                    .span(evidence_range, input.provider.protocol)
+                    .ok()
+            })
+        };
+        let Some(span) = span else {
+            *omitted_relations.entry(mapping.capability).or_default() += 1;
+            continue;
+        };
+        if mapping.capability == AnalysisCapability::TypeRelations {
+            if let Some(site_key) = &mapping.matched_explicit_site_key {
+                type_relation_audit
+                    .matched_explicit_site_keys
+                    .insert(site_key.clone());
+            }
+            let (source_symbol, source_name) = type_relation_endpoint(&source, &definitions);
+            let (target_symbol, target_name) = type_relation_endpoint(&target, &definitions);
+            let entry = TypeRelationAuditEntry {
+                unit_id: input.unit.id.as_str().to_string(),
+                language: input.unit.language,
+                path: span.path.clone(),
+                native_relation: relation.kind.clone(),
+                kind: mapping.kind,
+                source_symbol,
+                source_name,
+                target_symbol,
+                target_name,
+                start_line: span.start.line,
+                start_utf8_column: span.start.utf8_column,
+                end_line: span.end.line,
+                end_utf8_column: span.end.utf8_column,
+            };
+            type_relation_audit
+                .relation_keys
+                .push(type_relation_audit_key(&entry));
+            type_relation_audit.entries.push(entry);
+        }
+        let fact_evidence = FactEvidence::new(
+            mapping.evidence_kind,
+            evidence_producer(input.provider, "provider-relation"),
+            EvidenceLocation::Source { span },
+            None,
+        )
+        .map_err(|error| format!("cannot build relation evidence: {error}"))?;
+        let evidence_id = fact_evidence.id.clone();
+        evidence.insert(evidence_id.clone(), fact_evidence);
+        relation_records.push(IrRelation {
+            unit_id: input.unit.id.clone(),
+            source,
+            target,
+            kind: mapping.kind,
+            truth: FactTruth::Confirmed,
+            resolution: ResolutionMethod::Provider,
+            dispatch: match mapping.kind {
+                LanguageRelationKind::Calls => DispatchKind::Unknown,
+                LanguageRelationKind::Constructs => DispatchKind::Direct,
+                _ => DispatchKind::NotApplicable,
+            },
+            semantic_context_id: input.unit.context.id.clone(),
+            evidence_ids: vec![evidence_id],
+        });
+        *emitted_relations.entry(mapping.capability).or_default() += 1;
+    }
+
+    for draft in import_drafts {
+        let capability = match draft.relation {
+            LanguageRelationKind::Imports => AnalysisCapability::Imports,
+            LanguageRelationKind::Exports => AnalysisCapability::Exports,
+            _ => unreachable!("import draft must be imports or exports"),
+        };
+        let fact_evidence = FactEvidence::new(
+            EvidenceKind::ImportSite,
+            syntax_import_evidence_producer(),
+            EvidenceLocation::Source { span: draft.span },
+            None,
+        )
+        .map_err(|error| format!("cannot build import evidence: {error}"))?;
+        let evidence_id = fact_evidence.id.clone();
+        evidence.insert(evidence_id.clone(), fact_evidence);
+        relation_records.push(IrRelation {
+            unit_id: input.unit.id.clone(),
+            source: IrEndpoint::File { path: draft.source },
+            target: draft.target,
+            kind: draft.relation,
+            truth: FactTruth::Confirmed,
+            resolution: draft.resolution,
+            dispatch: DispatchKind::NotApplicable,
+            semantic_context_id: input.unit.context.id.clone(),
+            evidence_ids: vec![evidence_id],
+        });
+        *emitted_relations.entry(capability).or_default() += 1;
+    }
+    relation_records.sort_by_key(relation_sort_key);
+    emit_unit_timing(
+        timing_enabled,
+        input.unit,
+        "relation_classification",
+        phase_started,
+        unit_started,
+    );
+
+    Ok(ClassifiedUnitFacts {
+        evidence,
+        definition_records,
+        relation_records,
+        emitted_relations,
+        omitted_relations,
+        omitted_definition_count,
+        definition_audit,
+        type_relation_audit,
+    })
+}
+
+fn reconcile_unit_definitions<'a>(
+    input: &'a UnitAdapterInput<'a>,
+    assigned: &BTreeSet<RepositoryPath>,
+    syntax_definitions: &BTreeMap<RepositoryPath, Vec<SyntaxDefinition>>,
+    mut definition_audit: DefinitionAudit,
+    timing_enabled: bool,
+    unit_started: Instant,
+) -> Result<ReconciledUnitDefinitions<'a>, String> {
+    let mut phase_started = Instant::now();
+    let mut unit_documents = input
+        .documents
+        .iter()
+        .filter(|document| {
+            normalize_scip_language(&document.language, input.unit.language.as_str())
+                == input.unit.language.as_str()
+                && RepositoryPath::parse(&document.path).is_ok_and(|path| assigned.contains(&path))
+        })
+        .collect::<Vec<_>>();
+    unit_documents.sort_by(|left, right| left.path.cmp(&right.path));
+    let document_paths = unit_documents
+        .iter()
+        .map(|document| document.path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut evidence = BTreeMap::<EvidenceId, FactEvidence>::new();
+    let mut definitions = BTreeMap::<ProviderSymbolId, DefinitionDraft>::new();
+    let mut definition_spans = BTreeMap::<ProviderSymbolId, SourceSpan>::new();
+    let mut ignored_provider_definition_ids = BTreeSet::<ProviderSymbolId>::new();
+    let mut omitted_definition_count = 0_u64;
+
+    for document in &unit_documents {
+        let path = RepositoryPath::parse(&document.path)
+            .map_err(|error| format!("provider returned invalid document path: {error}"))?;
+        let manifest_file = input
+            .manifest_files
+            .get(&path)
+            .copied()
+            .ok_or_else(|| format!("provider document is absent from manifest: {path}"))?;
+        let coordinates = SourceCoordinates::load(input.project_root, manifest_file)?;
+        let definition_occurrences_by_symbol = document
+            .occurrences
+            .iter()
+            .filter(|occurrence| occurrence.definition)
+            .fold(
+                HashMap::<&str, &OccurrenceOutput>::new(),
+                |mut index, occurrence| {
+                    index
+                        .entry(occurrence.symbol.as_str())
+                        .and_modify(|current| {
+                            if occurrence.range < current.range {
+                                *current = occurrence;
+                            }
+                        })
+                        .or_insert(occurrence);
+                    index
+                },
+            );
+        let mut symbols = document.symbols.iter().collect::<Vec<_>>();
+        symbols.sort_by(|left, right| left.symbol.cmp(&right.symbol));
+        for symbol in symbols {
+            let kind = canonical_definition_kind(&symbol.kind);
+            let field_candidate = kind.is_none() && is_variable_definition_kind(&symbol.kind);
+            let Some(kind) = kind.or(field_candidate.then_some(FactNodeKind::Field)) else {
+                continue;
+            };
+            let Some(occurrence) = definition_occurrences_by_symbol
+                .get(symbol.symbol.as_str())
+                .copied()
+            else {
+                omitted_definition_count += 1;
+                continue;
+            };
+            let symbol_id = ProviderSymbolId::parse(&symbol.symbol)
+                .map_err(|error| format!("provider emitted invalid symbol ID: {error}"))?;
+            let span = match coordinates.span(&occurrence.range, input.provider.protocol) {
+                Ok(span) => span,
+                Err(_) => {
+                    omitted_definition_count += 1;
+                    continue;
+                }
+            };
+            // Zero-width document sentinels are not source definitions and
+            // cannot carry verifiable definition evidence.
+            if span.start.byte_offset == span.end.byte_offset {
+                omitted_definition_count += 1;
+                ignored_provider_definition_ids.insert(symbol_id);
+                continue;
+            }
+            let fact_evidence = FactEvidence::new(
+                EvidenceKind::SourceDefinition,
+                evidence_producer(input.provider, "provider-definition"),
+                EvidenceLocation::Source { span: span.clone() },
+                None,
+            )
+            .map_err(|error| format!("cannot build definition evidence: {error}"))?;
+            let evidence_id = fact_evidence.id.clone();
+            evidence.insert(evidence_id.clone(), fact_evidence);
+            let parent = symbol
+                .enclosing_symbol
+                .as_deref()
+                .map(ProviderSymbolId::parse)
+                .transpose()
+                .map_err(|error| format!("provider emitted invalid parent symbol ID: {error}"))?;
+            definitions
+                .entry(symbol_id.clone())
+                .or_insert_with(|| DefinitionDraft {
+                    symbol_id: symbol_id.clone(),
+                    native_kind: symbol.kind.clone(),
+                    canonical_kind_hint: kind,
+                    qualified_name: symbol.symbol.clone(),
+                    display_name: definition_display_name(symbol),
+                    signature: normalized_optional_text(symbol.signature.as_deref()),
+                    visibility: Visibility::Unknown,
+                    parent_symbol_id: parent,
+                    definition_evidence_id: evidence_id,
+                    flags: source_flags(manifest_file.file_kind),
+                    field_candidate,
+                    path: path.clone(),
+                    provider_range: occurrence.range.clone(),
+                    syntax_match: None,
+                });
+            definition_spans.entry(symbol_id).or_insert(span);
+        }
+    }
+    emit_unit_timing(
+        timing_enabled,
+        input.unit,
+        "provider_definitions",
+        phase_started,
+        unit_started,
+    );
+    phase_started = Instant::now();
+
+    let provider_definition_ids = definitions.keys().cloned().collect::<BTreeSet<_>>();
+    let provider_definition_aliases = reconcile_definition_inventory(
+        input.unit,
+        input.provider.protocol,
+        syntax_definitions,
+        &mut definitions,
+        &mut definition_audit,
+    );
+    reconcile_definition_drafts(input.unit.language, &mut definitions);
+    record_definition_metadata(input.unit, &definitions, &mut definition_audit);
+    omitted_definition_count += definition_audit.blocking_count();
+    let definition_ids = definitions.keys().cloned().collect::<BTreeSet<_>>();
+    let mut discarded_definition_ids = provider_definition_ids
+        .difference(&definition_ids)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    discarded_definition_ids.extend(ignored_provider_definition_ids);
+    let retained_definition_evidence = definitions
+        .values()
+        .map(|draft| draft.definition_evidence_id.clone())
+        .collect::<BTreeSet<_>>();
+    evidence.retain(|id, _| retained_definition_evidence.contains(id));
+    let mut definition_records = definitions
+        .values()
+        .cloned()
+        .map(|draft| IrDefinition {
+            unit_id: input.unit.id.clone(),
+            symbol_id: draft.symbol_id,
+            native_kind: draft.native_kind,
+            canonical_kind_hint: draft.canonical_kind_hint,
+            qualified_name: draft.qualified_name,
+            display_name: draft.display_name,
+            signature: draft.signature,
+            visibility: draft.visibility,
+            parent_symbol_id: draft
+                .parent_symbol_id
+                .filter(|parent| definition_ids.contains(parent)),
+            definition_evidence_id: draft.definition_evidence_id,
+            flags: draft.flags,
+        })
+        .collect::<Vec<_>>();
+    definition_records.sort_by(|left, right| left.symbol_id.cmp(&right.symbol_id));
+    emit_unit_timing(
+        timing_enabled,
+        input.unit,
+        "definition_reconciliation",
+        phase_started,
+        unit_started,
+    );
+
+    Ok(ReconciledUnitDefinitions {
+        unit_documents,
+        document_paths,
+        evidence,
+        definitions,
+        definition_spans,
+        provider_definition_aliases,
+        discarded_definition_ids,
+        omitted_definition_count,
+        definition_records,
+        definition_audit,
+    })
+}
+
+fn emit_unit_header_and_coverage(
+    input: &UnitAdapterInput<'_>,
+    sink: &mut dyn LanguageIrSink,
+) -> Result<(BTreeSet<RepositoryPath>, Vec<FileCoverageRecord>), String> {
+    sink.push(LanguageIrRecord::Header(Box::new(LanguageIrHeader {
+        schema: ContractSchema::LanguageIrV2,
+        snapshot_id: input.snapshot_id.clone(),
+        source_manifest_digest: input.manifest_digest,
+        unit: input.unit.clone(),
+        provider: input.provider.clone(),
+        execution_context: input.execution_context.clone(),
+    })))?;
+
+    let assigned = input
+        .assigned_files
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let provider_resource_gap = provider_resource_gap(input.diagnostics);
+    let mut file_records = Vec::with_capacity(assigned.len());
+    for path in &assigned {
+        let manifest_file =
+            input.manifest_files.get(path).copied().ok_or_else(|| {
+                format!("analysis unit file missing from source manifest: {path}")
+            })?;
+        if manifest_file.state != SourceEntryState::Included
+            || !manifest_file.languages.contains(&input.unit.language)
+        {
+            return Err(format!(
+                "analysis unit owns an ineligible source file: {}",
+                path.as_str()
+            ));
+        }
+        let coverage = provider_file_coverage(input.coverage, input.unit.language, path);
+        let (state, gap_codes) = file_coverage_state(
+            coverage,
+            input.language_output.status,
+            provider_resource_gap,
+        );
+        let record = FileCoverageRecord {
+            unit_id: Some(input.unit.id.clone()),
+            path: path.clone(),
+            language: Some(input.unit.language),
+            file_kind: manifest_file.file_kind,
+            state,
+            byte_size: manifest_file.byte_size,
+            content_digest: manifest_file.content_digest,
+            gap_codes,
+        };
+        record
+            .validate()
+            .map_err(|error| format!("invalid Language IR file receipt for {path}: {error}"))?;
+        file_records.push(record);
+    }
+    file_records.sort_by(|left, right| left.path.cmp(&right.path));
+    for record in &file_records {
+        sink.push(LanguageIrRecord::File(record.clone()))?;
+    }
+    Ok((assigned, file_records))
+}
+
+fn inventory_unit_sources(
+    input: &UnitAdapterInput<'_>,
+    assigned: &BTreeSet<RepositoryPath>,
+    timing_enabled: bool,
+) -> Result<UnitSourceInventory, String> {
+    let mut definition_audit = DefinitionAudit::default();
+    let mut syntax_definitions = BTreeMap::<RepositoryPath, Vec<SyntaxDefinition>>::new();
+    let mut syntax_type_relations = BTreeMap::<RepositoryPath, Vec<SyntaxTypeRelationSite>>::new();
+    let mut syntax_type_uses = BTreeMap::<RepositoryPath, Vec<SyntaxTypeUseSite>>::new();
+    let mut type_relation_inventory_failed_files = BTreeSet::<RepositoryPath>::new();
+    let mut import_audit = ImportAudit::for_language(input.unit.language);
+    let mut import_drafts = Vec::new();
+    let mut source_load_elapsed = Duration::ZERO;
+    let mut source_parse_elapsed = Duration::ZERO;
+    let mut definition_inventory_elapsed = Duration::ZERO;
+    let mut type_relation_inventory_elapsed = Duration::ZERO;
+    let mut type_use_inventory_elapsed = Duration::ZERO;
+    let mut import_inventory_elapsed = Duration::ZERO;
+    let mut import_resolution_elapsed = Duration::ZERO;
+
+    for path in assigned {
+        let Some(manifest_file) = input.manifest_files.get(path).copied() else {
+            continue;
+        };
+        let operation_started = Instant::now();
+        let coordinates = match SourceCoordinates::load(input.project_root, manifest_file) {
+            Ok(coordinates) => coordinates,
+            Err(_) => {
+                source_load_elapsed += operation_started.elapsed();
+                record_definition_inventory_failure(input.unit, path, &mut definition_audit);
+                record_import_file_failure(
+                    input.unit,
+                    path,
+                    ImportAuditOutcome::InventoryFailed,
+                    GapCode::ProviderExecutionIncomplete,
+                    &mut import_audit,
+                );
+                type_relation_inventory_failed_files.insert(path.clone());
+                continue;
+            }
+        };
+        source_load_elapsed += operation_started.elapsed();
+        let operation_started = Instant::now();
+        let tree = match parse_tree(
+            input.unit.language.as_str(),
+            path.as_str(),
+            coordinates.text(),
+            "shared-static-inventory",
+        ) {
+            Ok(tree) => tree,
+            Err(_) => {
+                source_parse_elapsed += operation_started.elapsed();
+                record_definition_inventory_failure(input.unit, path, &mut definition_audit);
+                record_import_file_failure(
+                    input.unit,
+                    path,
+                    ImportAuditOutcome::InventoryFailed,
+                    GapCode::ProviderExecutionIncomplete,
+                    &mut import_audit,
+                );
+                if input
+                    .import_index
+                    .metadata_failed(input.unit.language, path)
+                {
+                    record_import_file_failure(
+                        input.unit,
+                        path,
+                        ImportAuditOutcome::MetadataUnavailable,
+                        GapCode::MissingProjectMetadata,
+                        &mut import_audit,
+                    );
+                }
+                type_relation_inventory_failed_files.insert(path.clone());
+                continue;
+            }
+        };
+        source_parse_elapsed += operation_started.elapsed();
+
+        let operation_started = Instant::now();
+        let definitions = inventory_definitions_from_root(
+            input.unit.language.as_str(),
+            tree.root_node(),
+            coordinates.text(),
+        );
+        definition_inventory_elapsed += operation_started.elapsed();
+        let definition_names_by_range =
+            definitions
+                .iter()
+                .fold(HashMap::<Vec<i32>, &str>::new(), |mut index, definition| {
+                    index
+                        .entry(definition.name_utf8_range.clone())
+                        .or_insert(definition.name.as_str());
+                    index
+                });
+        for definition in &definitions {
+            let parent = definition
+                .parent_name_utf8_range
+                .as_ref()
+                .and_then(|parent_range| definition_names_by_range.get(parent_range).copied())
+                .unwrap_or("-");
+            definition_audit.definition_keys.push(format!(
+                "{}\t{}\t{}\t{parent}",
+                path.as_str(),
+                definition.kind.as_str(),
+                definition.name
+            ));
+        }
+        definition_audit.syntax_definition_count += definitions.len() as u64;
+        definition_audit.owned_syntax_definition_count += definitions
+            .iter()
+            .filter(|definition| definition.parent_name_utf8_range.is_some())
+            .count() as u64;
+
+        let operation_started = Instant::now();
+        let type_relations = inventory_type_relation_sites_from_root(
+            input.unit.language,
+            tree.root_node(),
+            coordinates.text(),
+        );
+        type_relation_inventory_elapsed += operation_started.elapsed();
+        let operation_started = Instant::now();
+        let type_uses = inventory_type_use_sites_from_root(
+            input.unit.language,
+            tree.root_node(),
+            coordinates.text(),
+            &definitions,
+            &type_relations,
+        );
+        type_use_inventory_elapsed += operation_started.elapsed();
+        let operation_started = Instant::now();
+        let import_sites =
+            inventory_imports_from_root(input.unit.language, tree.root_node(), coordinates.text());
+        import_inventory_elapsed += operation_started.elapsed();
+        syntax_definitions.insert(path.clone(), definitions);
+        syntax_type_relations.insert(path.clone(), type_relations);
+        syntax_type_uses.insert(path.clone(), type_uses);
+
+        if input
+            .import_index
+            .metadata_failed(input.unit.language, path)
+        {
+            record_import_file_failure(
+                input.unit,
+                path,
+                ImportAuditOutcome::MetadataUnavailable,
+                GapCode::MissingProjectMetadata,
+                &mut import_audit,
+            );
+        }
+        let operation_started = Instant::now();
+        collect_import_drafts(
+            input.unit,
+            input.import_index,
+            path,
+            &coordinates,
+            import_sites,
+            &mut import_audit,
+            &mut import_drafts,
+        );
+        import_resolution_elapsed += operation_started.elapsed();
+    }
+
+    // Canonicalize cumulative inventories once. Re-sorting after every file
+    // made large Java and C# units effectively quadratic without changing the
+    // accepted facts.
+    definition_audit.definition_keys.sort();
+    import_audit.canonicalize();
+    if timing_enabled {
+        eprintln!(
+            "timing stage=language_ir_source_inventory language={} unit={} load_ms={} parse_ms={} definitions_ms={} type_relations_ms={} type_uses_ms={} imports_ms={} import_resolution_ms={}",
+            input.unit.language.as_str(),
+            input.unit.id.as_str(),
+            source_load_elapsed.as_millis(),
+            source_parse_elapsed.as_millis(),
+            definition_inventory_elapsed.as_millis(),
+            type_relation_inventory_elapsed.as_millis(),
+            type_use_inventory_elapsed.as_millis(),
+            import_inventory_elapsed.as_millis(),
+            import_resolution_elapsed.as_millis(),
+        );
+    }
+
+    Ok(UnitSourceInventory {
+        definition_audit,
+        syntax_definitions,
+        syntax_type_relations,
+        syntax_type_uses,
+        type_relation_inventory_failed_files,
+        import_audit,
+        import_drafts,
     })
 }
 
@@ -3240,6 +3222,42 @@ fn remap_provider_alias(
     }
 }
 
+/// A provider may use its zero-width file sentinel as the caller for a
+/// top-level callback (notably test callbacks). The sentinel is deliberately
+/// not a canonical definition, but the provider's exact call-site range still
+/// proves a file-scoped call. Re-anchor only that source endpoint to the exact
+/// manifest file. A discarded target, or any non-call relation involving a
+/// discarded endpoint, remains unresolved and is not emitted.
+fn retain_relation_endpoints(
+    relation: &RelationOutput,
+    capability: AnalysisCapability,
+    source: IrEndpoint,
+    target: IrEndpoint,
+    discarded_definition_ids: &BTreeSet<ProviderSymbolId>,
+) -> Option<(IrEndpoint, IrEndpoint)> {
+    let target_discarded = matches!(
+        &target,
+        IrEndpoint::NativeSymbol { symbol_id }
+            if discarded_definition_ids.contains(symbol_id)
+    );
+    if target_discarded {
+        return None;
+    }
+    let source_discarded = matches!(
+        &source,
+        IrEndpoint::NativeSymbol { symbol_id }
+            if discarded_definition_ids.contains(symbol_id)
+    );
+    if !source_discarded {
+        return Some((source, target));
+    }
+    if capability != AnalysisCapability::DirectCalls {
+        return None;
+    }
+    let path = RepositoryPath::parse(&relation.path).ok()?;
+    Some((IrEndpoint::File { path }, target))
+}
+
 fn relation_sort_key(relation: &IrRelation) -> (String, String, u8, String) {
     (
         endpoint_key(&relation.source),
@@ -3315,7 +3333,7 @@ fn syntax_import_evidence_producer() -> EvidenceProducer {
     }
 }
 
-fn compatibility_file_coverage<'a>(
+fn provider_file_coverage<'a>(
     coverage: &'a [FileCoverageOutput],
     language: ProgrammingLanguage,
     path: &RepositoryPath,

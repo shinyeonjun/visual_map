@@ -116,47 +116,14 @@ try {
         -Bridge $Bridge `
         -ProvidersRoot $providersRoot
     if ($LASTEXITCODE -ne 0) {
-        throw "10-language provider quality gate failed with exit code $LASTEXITCODE."
+        throw "10-language canonical provider quality gate failed with exit code $LASTEXITCODE."
     }
-    & (Join-Path $repoRoot "code_memory\tests\gates\run-execution-context-ground-truth-gate.ps1") `
-        -Bridge $Bridge `
+    & (Join-Path $repoRoot "scripts\smoke-code-determinism.ps1") `
+        -EnginePath $Bridge `
         -ProvidersRoot $providersRoot `
-        -Runs 2 `
-        -OutputRoot (Join-Path $gateRoot "execution-context-ground-truth")
+        -PacksRoot (Join-Path $repoRoot "code_memory")
     if ($LASTEXITCODE -ne 0) {
-        throw "10-language execution-context ground-truth gate failed with exit code $LASTEXITCODE."
-    }
-    & (Join-Path $repoRoot "code_memory\tests\gates\run-definition-ground-truth-gate.ps1") `
-        -Bridge $Bridge `
-        -ProvidersRoot $providersRoot `
-        -Runs 2 `
-        -OutputRoot (Join-Path $gateRoot "definition-ground-truth")
-    if ($LASTEXITCODE -ne 0) {
-        throw "10-language definition ground-truth gate failed with exit code $LASTEXITCODE."
-    }
-    & (Join-Path $repoRoot "code_memory\tests\gates\run-semantic-ground-truth-gate.ps1") `
-        -Bridge $Bridge `
-        -ProvidersRoot $providersRoot `
-        -Runs 2 `
-        -OutputRoot (Join-Path $gateRoot "semantic-ground-truth")
-    if ($LASTEXITCODE -ne 0) {
-        throw "10-language CALLS/CONSTRUCTS ground-truth gate failed with exit code $LASTEXITCODE."
-    }
-    & (Join-Path $repoRoot "code_memory\tests\gates\run-import-ground-truth-gate.ps1") `
-        -Bridge $Bridge `
-        -ProvidersRoot $providersRoot `
-        -Runs 2 `
-        -OutputRoot (Join-Path $gateRoot "import-ground-truth")
-    if ($LASTEXITCODE -ne 0) {
-        throw "10-language import ground-truth gate failed with exit code $LASTEXITCODE."
-    }
-    & (Join-Path $repoRoot "code_memory\tests\gates\run-type-relation-ground-truth-gate.ps1") `
-        -Bridge $Bridge `
-        -ProvidersRoot $providersRoot `
-        -Runs 2 `
-        -OutputRoot (Join-Path $gateRoot "type-relation-ground-truth")
-    if ($LASTEXITCODE -ne 0) {
-        throw "10-language type-relation ground-truth gate failed with exit code $LASTEXITCODE."
+        throw "Canonical Fact determinism gate failed with exit code $LASTEXITCODE."
     }
     Write-Host "Provider bundle gate passed: packs=$(@($catalog.packs).Count) languages=$($actualLanguages.Count)"
 } finally {

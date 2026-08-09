@@ -3547,6 +3547,158 @@ name 두 형태로 표현했고, 테스트가 입력 문자열을 resolver의 ca
 
 ---
 
+## TS-2026-08-09-80 — canonical을 쓰면서 legacy JSON도 만드는 이중 파이프라인을 유지하지 않는다
+
+### 증상
+
+앱은 canonical SQLite만 사용하지만 code engine과 release gate가 동시에 `language-index`,
+`architecture-index`, `collection-report`를 만들거나 읽었다. 같은 provider 결과가 두 그래프 표현으로
+분기됐고, 삭제 예정 출력의 PowerShell gate가 새 CLI의 `--out` 거부 뒤 전부 깨졌다.
+
+### 영향
+
+정답 주인이 둘로 보이고, 한쪽만 고치면 테스트와 실제 앱이 서로 다른 결과를 검증한다. 구형 구조 약
+4,600줄과 collector 약 2,700줄이 실제 제품 가치 없이 유지 비용과 회귀 면적을 늘렸다.
+
+### 근본 원인
+
+canonical parity를 확인하기 위한 임시 호환층을 완료 조건 없이 남겨 두고, 배포 gate도 그 임시 출력에
+결합했다.
+
+### 적용한 수정
+
+- Test/Framework IR을 실제 Language IR/canonical linker 입력으로 연결했다.
+- CLI와 desktop staging의 legacy JSON 출력·소비를 삭제했다.
+- 독립 제품 consumer가 없던 `collect` command와 collector 모듈을 삭제했다.
+- 15개 legacy JSON gate를 제거하고, signed provider gate를 10언어 canonical publication과 독립 bundle-byte
+  determinism으로 교체했다.
+- 현재 계약 문서에서 canonical SQLite 하나만 제품 출력으로 정의했다.
+
+### 검증 결과
+
+- Code Memory 317/317
+- canonical provider fixture project 9/9, 언어 계약 10/10
+- 구형 `--out` 호출은 shadow 비교 도구와 provider 자체 옵션을 제외한 제품/release 경로에서 0
+
+### 재발 시 점검 순서
+
+1. 새 output을 추가하기 전에 실제 제품 consumer와 삭제 조건을 문서화한다.
+2. release gate가 desktop과 같은 canonical receipt를 읽는지 확인한다.
+3. `language-index`/`architecture-index` 호환 writer를 되살려 문제를 우회하지 않는다.
+
+---
+
+## TS-2026-08-09-81 — SQLite bundle을 선택할 때마다 전체 Vec로 읽지 않는다
+
+### 증상
+
+노드 하나를 선택해도 nodes, edges, evidence, coverage, capability receipts, gaps 전체를 메모리에
+물질화하고 최대 두 snapshot을 캐시했다.
+
+### 영향
+
+선택 비용이 사용자가 연 상세 정보가 아니라 저장소 전체 크기에 비례한다. 대형 monorepo에서는 첫 선택
+지연과 peak memory가 동시에 증가한다.
+
+### 근본 원인
+
+immutable bundle 검증과 제품 read model을 하나의 `load_snapshot()` 동작으로 결합했다.
+
+### 적용한 수정
+
+- immutable bundle digest 검증 cache와 graph query를 분리했다.
+- map overview, selection node/evidence, adjacency/TracePath 입력을 고정된 parameterized SQLite query로 읽는다.
+- 모든 query에 deterministic ordering과 명시적 limit를 둔다.
+- 전체 graph/snapshot cache는 제거했다.
+
+### 검증 결과
+
+Tauri library 70 passed / 4 environment-only ignored. 반복 조회는 같은 결과를 반환하지만 전체 graph를
+보유하지 않는 회귀 테스트가 통과한다. 실제 대형 repository latency/peak-memory 수치는 별도 scale gate에서
+확정해야 한다.
+
+---
+
+## TS-2026-08-09-82 — 진행률만 있고 전체 분석 취소가 없으면 병렬 AI가 고아 프로세스로 남는다
+
+### 증상
+
+정적 sidecar와 16개 의미 분할 작업이 순차/병렬로 이어지는데 workspace 단위 취소 API가 없었다. 일부
+단계만 취소하면 이미 시작된 Codex/Claude 자식이 계속 실행될 수 있었다.
+
+### 영향
+
+느린 분석을 사용자가 멈출 수 없고, 앱을 닫거나 재시도할 때 CPU/메모리와 CLI 작업이 남는다.
+
+### 근본 원인
+
+각 subprocess가 서로 다른 생명주기를 가져 “한 번 누른 분석”이라는 상위 operation identity가 없었다.
+
+### 적용한 수정
+
+- workspace당 하나의 operation ID와 guard를 분석 시작부터 종료까지 유지한다.
+- 정적 엔진과 모든 local partition/retry/global reconciliation 자식에게 같은 operation ID를 전달한다.
+- 하나의 취소 command가 해당 operation의 process tree를 종료한다.
+- 취소는 오류 toast로 과장하지 않고 이전 published snapshot을 보존한다.
+
+### 검증 결과
+
+backend shared-operation cancellation 회귀, frontend cancel 동작, process-tree cancellation 테스트가 모두
+통과한다.
+
+---
+
+## TS-2026-08-09-83 — 기본 분석 영수증에 상세 감사 샘플을 전부 싣지 않는다
+
+### 증상
+
+Language IR 기본 진행 marker가 언어별 정의·import·type 관계 요약과 source sample을 항상 직렬화했다.
+저장소가 커질수록 제품이 소비하지 않는 로그가 커지고, 실패 전달 경로의 문자열 상한과 충돌할 수 있었다.
+
+### 근본 원인
+
+제품 완료 여부를 판단하는 bounded receipt와 개발자가 원인 분석에 쓰는 diagnostic report를 같은 구조체로
+취급했다.
+
+### 적용한 수정
+
+- 기본 `language-ir-migration-receipt.v7`에는 identity, digest, 완료·누락·차단 수치만 남겼다.
+- 언어별 요약과 source sample은 별도 `language-ir-diagnostic-receipt.v1`로 분리했다.
+- 상세 자료는 `CODE_MEMORY_LANGUAGE_IR_DIAGNOSTICS=1`일 때만 별도 marker로 출력한다.
+- 두 receipt의 분리는 Language IR stream, semantic digest, canonical SQLite bytes에 영향을 주지 않는다.
+
+### 검증 결과
+
+기본 JSON에 상세 sample field가 없고 opt-in diagnostic JSON에는 보존되는 계약 테스트를 추가했다. 동일 입력
+bundle-byte 결정성 gate로 semantic 결과가 바뀌지 않음을 함께 확인한다.
+
+---
+
+## TS-2026-08-09-84 — Windows 긴 경로 임시 fixture는 검증된 Temp 범위에서 네이티브 삭제한다
+
+### 증상
+
+결정성 검사는 실제로 통과했지만 마지막 `Remove-Item -Recurse`가 긴 canonical cache 경로에서 실패해 테스트가
+오류로 끝나고 임시 폴더가 남았다.
+
+### 근본 원인
+
+제품 bundle은 Windows extended-length path를 올바르게 사용했지만 PowerShell cleanup만 일반 경로 재귀 삭제에
+의존했다.
+
+### 적용한 수정
+
+- 삭제 대상의 절대 경로가 OS Temp 아래이며 전용 fixture prefix를 갖는지 먼저 검증한다.
+- Windows에서는 `\\?\` 경로와 `.NET Directory.Delete(path, recursive: true)`를 사용한다.
+- 결정성·10언어 gate 양쪽에서 같은 fail-closed cleanup 규칙을 사용한다.
+
+### 검증 결과
+
+독립 cache 2회에서 semantic digest와 SQLite bytes가 같았고 fixture cleanup도 정상 완료했다. 기존에 남은
+fixture 하나도 같은 범위 검증 후 삭제했다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text

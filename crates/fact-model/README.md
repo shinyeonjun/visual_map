@@ -22,13 +22,11 @@ It is deliberately split by responsibility:
 ## Version boundary
 
 `SourceManifestV1`, `AnalysisPlanV1`, `LanguageIrV2`, and `CanonicalFactV1` are
-new static/import-contract versions. They do not change the current desktop
-SQLite Fact Graph schema v2. The existing
-`language-index v2`, `architecture-index v4`, and `collection-report v1`
-remain compatibility outputs. The code engine now emits and validates one
-direct Language IR stream before that projection; canonical normalization,
-storage migrations, and import parity must pass before the compatibility
-outputs are removed.
+the active static/import-contract versions. The code engine emits one validated
+Language IR stream and publishes one immutable canonical SQLite bundle. The
+former `language-index`, `architecture-index`, and `collection-report`
+compatibility outputs have been removed; no product or release gate consumes a
+second graph representation.
 
 ## Invariants
 

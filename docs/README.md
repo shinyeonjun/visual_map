@@ -15,12 +15,12 @@ Leiden grouping, mode-based UI, POC screenshot처럼 2026-08-07 hard cut 이전�
   [`code_memory/docs`](../code_memory/docs/README.md)
 - 공용 정적 데이터와 저장 schema: [`crates/fact-model`](../crates/fact-model/README.md)
 - AI 의미 출력과 검증 계약: [`crates/semantic-model`](../crates/semantic-model/README.md)
-- DB metadata 분석 계약: [`db_memory/docs`](../db_memory/docs/README.md)
+- DB metadata 엔진 개요: [`db_memory`](../db_memory/README.md)
 
 엔진 문서는 extractor 동작과 데이터 계약을 정의한다. 데스크톱 사용자 경험은
 runtime architecture가 정의한다. 현재 Fluent 2 workbench, provider/model/reasoning
 설정, 정확한 CLI hand-off도 별도 목업이 아니라 runtime 계약에 포함된다.
 
-현재 코드 엔진에는 검증된 donor-to-Language-IR migration bridge가 남아 있다.
-이는 canonical 경로로 이동하기 위한 shadow gate이며, 제거 순서와 완료 조건은
-engineering cleanup roadmap의 P1을 따른다.
+현재 코드 엔진과 데스크톱 사이에는 canonical SQLite 경로 하나만 남아 있다.
+이전 donor/architecture/collector 호환 출력은 제거됐으며, 남은 정리와 실측 완료
+조건은 engineering cleanup roadmap을 따른다.

@@ -12,8 +12,7 @@ mod tests;
 use crate::static_pipeline::language_ir::artifact::visit_language_ir_records;
 use crate::static_pipeline::language_ir::syntax::parse_tree;
 use crate::static_pipeline::source_evidence::VerifiedSourceFile;
-use crate::RelationOutput;
-use codebase_fact_model::analysis::{ProgrammingLanguage, ProviderDescriptor, ProviderProtocol};
+use codebase_fact_model::analysis::ProgrammingLanguage;
 use codebase_fact_model::analysis_plan::AnalysisPlan;
 use codebase_fact_model::coverage::{AnalysisCapability, AnalysisGap, AnalysisScope, GapCode};
 use codebase_fact_model::evidence::{
@@ -167,7 +166,6 @@ pub(crate) fn adapt_test_relations(
     plan: &AnalysisPlan,
     snapshot_id: &SnapshotId,
     language_ir_path: &Path,
-    raw_provider_relations: &[RelationOutput],
 ) -> Result<TestIr, String> {
     manifest
         .validate()
@@ -186,7 +184,6 @@ pub(crate) fn adapt_test_relations(
         .map(|file| (file.path.clone(), file))
         .collect::<BTreeMap<_, _>>();
     let mut ir_snapshot_ids = BTreeSet::new();
-    let mut unit_providers = BTreeMap::<AnalysisUnitId, ProviderDescriptor>::new();
     let mut language_evidence = BTreeMap::<EvidenceId, FactEvidence>::new();
     let mut definitions = Vec::<IrDefinition>::new();
     let mut call_relations = Vec::<IrRelation>::new();
@@ -194,7 +191,6 @@ pub(crate) fn adapt_test_relations(
         match record {
             LanguageIrRecord::Header(header) => {
                 ir_snapshot_ids.insert(header.snapshot_id.clone());
-                unit_providers.insert(header.unit.id.clone(), header.provider.clone());
             }
             LanguageIrRecord::Evidence(item) => {
                 language_evidence.insert(item.id.clone(), item);
@@ -440,106 +436,6 @@ pub(crate) fn adapt_test_relations(
         }
     }
 
-    // Some providers represent a top-level test callback as the file symbol.
-    // That symbol is intentionally not a canonical definition, so the generic
-    // Language IR call relation is omitted. The typed test adapter may consume
-    // the raw provider call only when its target resolves to an already
-    // registered Language IR definition and its exact call range lies inside
-    // an exact TestCase body.
-    let assignments_by_path =
-        plan.assignments.iter().fold(
-            BTreeMap::<
-                RepositoryPath,
-                Vec<&codebase_fact_model::analysis_plan::FileAnalysisAssignment>,
-            >::new(),
-            |mut index, assignment| {
-                index
-                    .entry(assignment.path.clone())
-                    .or_default()
-                    .push(assignment);
-                index
-            },
-        );
-    let mut raw_sources = BTreeMap::<RepositoryPath, VerifiedSourceFile>::new();
-    for relation in raw_provider_relations
-        .iter()
-        .filter(|relation| matches!(relation.kind.as_str(), "CALLS" | "CONSTRUCTS"))
-    {
-        let Ok(path) = RepositoryPath::parse(&relation.path) else {
-            continue;
-        };
-        let Some(assignments) = assignments_by_path.get(&path) else {
-            continue;
-        };
-        let Ok(target_symbol_id) = ProviderSymbolId::parse(&relation.to) else {
-            continue;
-        };
-        for assignment in assignments {
-            for unit_id in &assignment.unit_ids {
-                let Some(target_definition) = resolve_definition(
-                    unit_id,
-                    &target_symbol_id,
-                    &local_definitions,
-                    &global_definitions,
-                ) else {
-                    continue;
-                };
-                if target_definition.flags.test {
-                    continue;
-                }
-                let Some(provider) = unit_providers.get(unit_id) else {
-                    continue;
-                };
-                if !raw_sources.contains_key(&path) {
-                    let Some(manifest_file) = manifest_files.get(&path).copied() else {
-                        continue;
-                    };
-                    raw_sources.insert(
-                        path.clone(),
-                        VerifiedSourceFile::load(project_root, manifest_file)?,
-                    );
-                }
-                let Some(source) = raw_sources.get(&path) else {
-                    continue;
-                };
-                let Ok(span) = source.span(&relation.range, provider.protocol) else {
-                    continue;
-                };
-                let key = (unit_id.clone(), path.clone());
-                let Some(case_ordinals) = cases_by_unit_path.get(&key) else {
-                    continue;
-                };
-                let selected = case_ordinals
-                    .iter()
-                    .filter(|ordinal| span_contains(&cases[**ordinal].body_span, &span))
-                    .min_by_key(|ordinal| span_size(&cases[**ordinal].body_span));
-                let Some(selected) = selected else {
-                    continue;
-                };
-                let call_evidence = FactEvidence::new(
-                    EvidenceKind::CallSite,
-                    EvidenceProducer {
-                        kind: producer_kind(provider.protocol),
-                        name: provider.name.clone(),
-                        version: provider.version.clone(),
-                        strategy: Some("typed-test-call-donor".to_string()),
-                    },
-                    EvidenceLocation::Source { span },
-                    None,
-                )
-                .map_err(|error| format!("cannot build typed test-call evidence: {error}"))?;
-                let call_evidence_id = call_evidence.id.clone();
-                evidence.insert(call_evidence_id.clone(), call_evidence);
-                let case = &cases[*selected];
-                let item = relation_evidence
-                    .entry((case.qualified_name.clone(), target_symbol_id.clone()))
-                    .or_default();
-                item.insert(case.marker_evidence_id.clone());
-                item.insert(call_evidence_id);
-            }
-        }
-    }
-
     let mut relations = relation_evidence
         .into_iter()
         .map(|((test_qualified_name, target_symbol_id), evidence_ids)| {
@@ -668,14 +564,6 @@ fn span_contains(outer: &SourceSpan, inner: &SourceSpan) -> bool {
 
 fn span_size(span: &SourceSpan) -> u64 {
     span.end.byte_offset.saturating_sub(span.start.byte_offset)
-}
-
-fn producer_kind(protocol: ProviderProtocol) -> EvidenceProducerKind {
-    match protocol {
-        ProviderProtocol::Scip => EvidenceProducerKind::Scip,
-        ProviderProtocol::LanguageServerProtocol => EvidenceProducerKind::LanguageServer,
-        ProviderProtocol::CompilerApi => EvidenceProducerKind::CompilerApi,
-    }
 }
 
 fn canonicalize_gaps(gaps: &mut Vec<AnalysisGap>) {

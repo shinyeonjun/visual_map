@@ -103,24 +103,6 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
     },
 ];
 
-#[derive(Serialize)]
-pub(crate) struct IndexOutput {
-    pub(crate) schema: &'static str,
-    pub(crate) project_root: String,
-    pub(crate) provider_provenance: Vec<ProviderProvenance>,
-    pub(crate) languages: Vec<LanguageOutput>,
-    pub(crate) coverage: Vec<FileCoverageOutput>,
-    pub(crate) documents: Vec<DocumentOutput>,
-    pub(crate) relations: Vec<RelationOutput>,
-    pub(crate) file_relations: Vec<FileRelationOutput>,
-    pub(crate) project_model_files: Vec<String>,
-    pub(crate) frameworks: Vec<crate::frameworks::FrameworkOutput>,
-    pub(crate) framework_relations: Vec<crate::frameworks::FrameworkRelation>,
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) timings: Vec<StageTiming>,
-    pub(crate) analysis_units: Vec<AnalysisUnitOutput>,
-}
-
 #[derive(Clone, Serialize)]
 pub(crate) struct ProviderProvenance {
     pub(crate) language: String,
@@ -129,23 +111,6 @@ pub(crate) struct ProviderProvenance {
     pub(crate) status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) version: Option<String>,
-}
-
-#[derive(Clone, Serialize)]
-pub(crate) struct AnalysisUnitOutput {
-    pub(crate) id: String,
-    pub(crate) language: String,
-    pub(crate) root: String,
-    pub(crate) files_found: usize,
-    pub(crate) files_indexed: usize,
-    pub(crate) files_excluded: usize,
-    pub(crate) files_missing: usize,
-    pub(crate) status: &'static str,
-    pub(crate) provider: &'static str,
-    pub(crate) execution: &'static str,
-    pub(crate) elapsed_ms: u128,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) reason: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -242,7 +207,7 @@ pub(crate) struct Diagnostic {
 }
 
 /// Stable machine-readable diagnostic categories shared by the engine, the
-/// architecture projection, and the desktop client. The human message is
+/// canonical pipeline and the desktop client. The human message is
 /// intentionally not part of the classification contract.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -281,57 +246,10 @@ pub(crate) enum DiagnosticCode {
     Internal,
 }
 
-impl DiagnosticCode {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::ProviderMissing => "provider-missing",
-            Self::ProviderFailed => "provider-failed",
-            Self::IndexerFailed => "indexer-failed",
-            Self::InvalidOutput => "invalid-output",
-            Self::EmptySemantic => "empty-semantic",
-            Self::MissingDependencyMetadata => "missing-dependency-metadata",
-            Self::DependencyMetadataGap => "missing-dependency",
-            Self::MissingCompileContext => "missing-compile-context",
-            Self::MissingExternalTool => "missing-external-tool",
-            Self::MissingLegacySdk => "missing-legacy-sdk",
-            Self::ProviderTimeout => "provider-timeout",
-            Self::ProviderStopped => "provider-stopped",
-            Self::PartialCoverage => "partial-coverage",
-            Self::LargeWorkspacePartial => "workspace-too-large",
-            Self::JavaSourceFallback => "java-source-fallback",
-            Self::JavaSourceFallbackFailed => "java-source-fallback-failed",
-            Self::TypescriptSourceFallback => "typescript-source-fallback",
-            Self::ProviderDiagnostic => "provider-diagnostic",
-            Self::GeneratedCode => "generated-code",
-            Self::TestOnly => "test-only",
-            Self::UnsupportedFramework => "unsupported-framework",
-            Self::DynamicRegistration => "dynamic-registration",
-            Self::StaleIndex => "stale-index",
-            Self::SnapshotIncompatible => "snapshot-incompatible",
-            Self::DisplayLimit => "display-limit",
-            Self::Unknown => "unknown",
-            Self::Internal => "internal",
-        }
-    }
-
-    pub(crate) const fn exclusion_reason(self) -> Option<&'static str> {
-        match self {
-            Self::MissingDependencyMetadata | Self::DependencyMetadataGap => {
-                Some("missing-dependency")
-            }
-            Self::MissingCompileContext | Self::MissingExternalTool | Self::MissingLegacySdk => {
-                Some("missing-compile-context")
-            }
-            _ => None,
-        }
-    }
-}
-
 /// Provider-decoded, project-relative semantic batch.
 ///
 /// This is the primary result of a SCIP/LSP worker. Language IR consumes these
-/// batches exactly once, then exposes `language-index.v2` as a temporary
-/// compatibility projection of that same authoritative merge.
+/// batches exactly once and seals their exact facts into Language IR.
 pub(crate) struct ProviderUnitBatch {
     pub(crate) language: LanguageOutput,
     /// Canonical project-relative files the provider was asked to analyze.

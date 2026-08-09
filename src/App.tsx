@@ -5,6 +5,8 @@ import {
   ChatRegular as MessageSquareText,
   ChevronDownRegular as ChevronDown,
   DatabaseRegular as Database,
+  DeleteRegular as Delete,
+  DismissCircleRegular as StopCircle,
   ErrorCircleRegular as CircleAlert,
   FolderOpenRegular as FolderOpen,
   FolderRegular as FolderCode,
@@ -32,7 +34,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Inspector } from "./map/Inspector";
 import { MapCanvas } from "./map/MapCanvas";
 import { PREVIEW_MAP, PREVIEW_SELECTION } from "./map/previewMap";
-import type { MapView, Selection } from "./map/types";
+import type { EvidenceRef, MapView, Selection } from "./map/types";
 import {
   defaultEffortFor,
   defaultModelFor,
@@ -53,8 +55,10 @@ import type {
 } from "./contracts";
 import {
   analyzeWorkspace,
+  cancelWorkspaceAnalysis,
   chooseRepositoryFolder,
   createWorkspace,
+  deleteWorkspace,
   getEngineRegistry,
   getFactGraphStatus,
   getMapSelection,
@@ -62,6 +66,7 @@ import {
   hasDesktopRuntime,
   listProviders,
   listWorkspaces,
+  openSourceLocation,
   setWorkspaceProvider,
 } from "./desktop";
 
@@ -77,12 +82,15 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [providerOpen, setProviderOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mapView, setMapView] = useState<MapView | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [analyzingWorkspaceId, setAnalyzingWorkspaceId] = useState<string | null>(null);
+  const [cancellingWorkspaceId, setCancellingWorkspaceId] = useState<string | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressEvent | null>(null);
   const activeWorkspaceIdRef = useRef<string | null>(null);
+  const cancellationRequests = useRef(new Set<string>());
 
   const activeWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
@@ -230,10 +238,58 @@ export default function App() {
         setError("분석은 끝났지만 현재 snapshot과 일치하는 의미 지도가 없습니다.");
       }
     } catch (reason: unknown) {
-      if (activeWorkspaceIdRef.current === workspace.id) setError(errorMessage(reason));
+      if (activeWorkspaceIdRef.current === workspace.id && !cancellationRequests.current.has(workspace.id)) {
+        setError(errorMessage(reason));
+      }
     } finally {
+      cancellationRequests.current.delete(workspace.id);
       setAnalyzingWorkspaceId((current) => (current === workspace.id ? null : current));
+      setCancellingWorkspaceId((current) => (current === workspace.id ? null : current));
     }
+  }
+
+  async function cancelAnalysis() {
+    const workspaceId = analyzingWorkspaceId;
+    if (!workspaceId || cancellingWorkspaceId) return;
+    cancellationRequests.current.add(workspaceId);
+    setCancellingWorkspaceId(workspaceId);
+    try {
+      const accepted = await cancelWorkspaceAnalysis(workspaceId);
+      if (!accepted) {
+        cancellationRequests.current.delete(workspaceId);
+        setCancellingWorkspaceId(null);
+        setError("이미 분석이 끝났거나 취소할 작업을 찾지 못했습니다.");
+      }
+    } catch (reason: unknown) {
+      cancellationRequests.current.delete(workspaceId);
+      setCancellingWorkspaceId(null);
+      setError(errorMessage(reason));
+    }
+  }
+
+  async function removeWorkspace(workspace: Workspace) {
+    if (analyzingWorkspaceId === workspace.id) return;
+    try {
+      await deleteWorkspace(workspace.id);
+      const remaining = workspaces.filter((item) => item.id !== workspace.id);
+      setWorkspaces(remaining);
+      if (activeWorkspaceIdRef.current === workspace.id) {
+        const nextId = remaining[0]?.id ?? null;
+        activeWorkspaceIdRef.current = nextId;
+        setActiveWorkspaceId(nextId);
+      }
+      setDeleteTarget(null);
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  function openEvidence(evidence: EvidenceRef) {
+    const workspace = activeWorkspace;
+    if (!workspace) return;
+    void openSourceLocation(workspace.id, evidence.path, evidence.line ?? null, null, "vscode").catch(
+      (reason: unknown) => setError(errorMessage(reason)),
+    );
   }
 
   function upsertWorkspace(workspace: Workspace) {
@@ -257,7 +313,9 @@ export default function App() {
         engineRegistry={engineRegistry}
         onOpenProvider={() => setProviderOpen(true)}
         onAnalyze={() => void runAnalysis()}
+        onCancel={() => void cancelAnalysis()}
         analyzing={Boolean(activeWorkspaceId) && analyzingWorkspaceId === activeWorkspaceId}
+        cancelling={Boolean(activeWorkspaceId) && cancellingWorkspaceId === activeWorkspaceId}
         analysisProgress={analysisProgress}
       />
       <div className="workbench">
@@ -267,6 +325,8 @@ export default function App() {
           activeWorkspaceId={activeWorkspaceId}
           onSelect={selectWorkspace}
           onCreate={() => setCreateOpen(true)}
+          onDelete={setDeleteTarget}
+          analyzingWorkspaceId={analyzingWorkspaceId}
         />
         <main className="canvas-stage" aria-label="코드베이스 구조 지도">
           {loadState === "loading" ? (
@@ -287,6 +347,8 @@ export default function App() {
               analyzing={analyzingWorkspaceId === activeWorkspace.id}
               progress={analysisProgress}
               onAnalyze={() => void runAnalysis()}
+              onCancel={() => void cancelAnalysis()}
+              cancelling={cancellingWorkspaceId === activeWorkspace.id}
             />
           )}
         </main>
@@ -294,7 +356,7 @@ export default function App() {
           <div className="detail-head">
             <strong>{selection?.title ?? "선택 없음"}</strong>
           </div>
-          <Inspector selection={selection} />
+          <Inspector selection={selection} onOpenEvidence={openEvidence} />
           <ChatPanel workspace={activeWorkspace} status={factStatus} selection={selection} />
         </aside>
       </div>
@@ -329,6 +391,13 @@ export default function App() {
           onError={setError}
         />
       ) : null}
+      {deleteTarget ? (
+        <DeleteWorkspaceDialog
+          workspace={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={() => void removeWorkspace(deleteTarget)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -338,14 +407,18 @@ function Header({
   engineRegistry,
   onOpenProvider,
   onAnalyze,
+  onCancel,
   analyzing,
+  cancelling,
   analysisProgress,
 }: {
   workspace: Workspace | null;
   engineRegistry: EngineRegistry | null;
   onOpenProvider: () => void;
   onAnalyze: () => void;
+  onCancel: () => void;
   analyzing: boolean;
+  cancelling: boolean;
   analysisProgress: AnalysisProgressEvent | null;
 }) {
   const engineCount = engineRegistry?.engines.filter((engine) => engine.available).length ?? 0;
@@ -374,12 +447,12 @@ function Header({
         <Button
           className="analysis-button"
           appearance="primary"
-          icon={analyzing ? <LoaderCircle className="spin" fontSize={15} /> : <Network fontSize={15} />}
-          onClick={onAnalyze}
-          disabled={!workspace || analyzing}
+          icon={analyzing ? <StopCircle fontSize={15} /> : <Network fontSize={15} />}
+          onClick={analyzing ? onCancel : onAnalyze}
+          disabled={!workspace || cancelling}
           title={analyzing ? analysisProgress?.label : "현재 코드로 새 지도를 만듭니다"}
         >
-          {analyzing ? progressLabel(analysisProgress) : "분석"}
+          {analyzing ? (cancelling ? "취소 중" : `${progressLabel(analysisProgress)} · 취소`) : "분석"}
         </Button>
         <Button className="provider-button" appearance="secondary" onClick={onOpenProvider} disabled={!workspace}>
           <span>
@@ -440,11 +513,15 @@ function ProjectRail({
   activeWorkspaceId,
   onSelect,
   onCreate,
+  onDelete,
+  analyzingWorkspaceId,
 }: {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
   onSelect: (workspaceId: string) => void;
   onCreate: () => void;
+  onDelete: (workspace: Workspace) => void;
+  analyzingWorkspaceId: string | null;
 }) {
   return (
     <aside className="project-rail">
@@ -456,18 +533,29 @@ function ProjectRail({
       </div>
       <div className="workspace-list">
         {workspaces.map((workspace) => (
-          <button
-            type="button"
-            className={workspace.id === activeWorkspaceId ? "workspace-row active" : "workspace-row"}
-            key={workspace.id}
-            onClick={() => onSelect(workspace.id)}
-          >
-            <FolderCode fontSize={16} />
-            <span>
-              <strong>{workspace.name}</strong>
-              <small>{lastPathSegment(workspace.repoPath)}</small>
-            </span>
-          </button>
+          <div className="workspace-item" key={workspace.id}>
+            <button
+              type="button"
+              className={workspace.id === activeWorkspaceId ? "workspace-row active" : "workspace-row"}
+              onClick={() => onSelect(workspace.id)}
+            >
+              <FolderCode fontSize={16} />
+              <span>
+                <strong>{workspace.name}</strong>
+                <small>{lastPathSegment(workspace.repoPath)}</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              className="workspace-delete"
+              onClick={() => onDelete(workspace)}
+              disabled={analyzingWorkspaceId === workspace.id}
+              aria-label={`${workspace.name} 프로젝트 삭제`}
+              title={analyzingWorkspaceId === workspace.id ? "분석 중에는 삭제할 수 없습니다" : "프로젝트 삭제"}
+            >
+              <Delete fontSize={14} />
+            </button>
+          </div>
         ))}
       </div>
       {workspaces.length === 0 ? <p className="rail-empty">연결된 프로젝트가 없습니다.</p> : null}
@@ -514,12 +602,16 @@ function WorkspaceCanvas({
   analyzing,
   progress,
   onAnalyze,
+  onCancel,
+  cancelling,
 }: {
   workspace: Workspace;
   status: FactGraphStatus | null;
   analyzing: boolean;
   progress: AnalysisProgressEvent | null;
   onAnalyze: () => void;
+  onCancel: () => void;
+  cancelling: boolean;
 }) {
   const hasSnapshot = Boolean(status?.snapshotId);
   return (
@@ -544,14 +636,54 @@ function WorkspaceCanvas({
         </p>
         <Button
           appearance="primary"
-          icon={analyzing ? <LoaderCircle className="spin" fontSize={17} /> : <Network fontSize={17} />}
-          onClick={onAnalyze}
-          disabled={analyzing}
+          icon={analyzing ? <StopCircle fontSize={17} /> : <Network fontSize={17} />}
+          onClick={analyzing ? onCancel : onAnalyze}
+          disabled={cancelling}
         >
-          {analyzing ? progressLabel(progress) : hasSnapshot ? "의미 지도 다시 만들기" : "코드 분석 시작"}
+          {analyzing
+            ? cancelling
+              ? "분석 취소 중"
+              : `${progressLabel(progress)} · 취소`
+            : hasSnapshot
+              ? "의미 지도 다시 만들기"
+              : "코드 분석 시작"}
         </Button>
       </div>
     </section>
+  );
+}
+
+function DeleteWorkspaceDialog({
+  workspace,
+  onClose,
+  onConfirm,
+}: {
+  workspace: Workspace;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open onOpenChange={(_, data) => (!data.open ? onClose() : undefined)}>
+      <DialogSurface className="dialog-surface" aria-label="프로젝트 삭제 확인">
+        <DialogBody>
+          <DialogTitle>프로젝트 연결을 삭제할까요?</DialogTitle>
+          <DialogContent className="dialog-content">
+            <p className="dialog-lead">
+              <strong>{workspace.name}</strong>의 저장된 지도와 대화 문맥을 이 앱에서 삭제합니다.
+            </p>
+            <p className="dialog-note">원본 코드 폴더는 절대 삭제하지 않습니다.</p>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" type="button" onClick={onClose}>
+              취소
+            </Button>
+            <Button appearance="primary" type="button" onClick={onConfirm}>
+              앱에서 삭제
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
 

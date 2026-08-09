@@ -1,7 +1,7 @@
 //! Streaming reader for the sealed Language IR JSONL artifact.
 //!
 //! Canonical linking and typed post-language adapters must consume the same
-//! validated stream instead of rebuilding facts from compatibility output.
+//! validated stream instead of rebuilding facts from another graph output.
 
 use codebase_fact_model::language_ir::LanguageIrRecord;
 use std::fs::File;

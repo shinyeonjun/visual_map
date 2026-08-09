@@ -1,4 +1,6 @@
+#[cfg(test)]
 use std::borrow::Cow;
+#[cfg(test)]
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Read};
@@ -9,6 +11,7 @@ use codebase_fact_model::source_manifest::SourceEncoding;
 use sha2::{Digest as _, Sha256};
 
 use crate::SourceSnapshot;
+#[cfg(test)]
 use crate::LANGUAGES;
 
 pub(crate) const DEFAULT_SOURCE_READ_BUFFER_BYTES: usize = 64 * 1024;
@@ -222,6 +225,7 @@ pub(crate) fn canonical_existing_path(path: &Path) -> io::Result<PathBuf> {
         .unwrap_or(canonical))
 }
 
+#[cfg(test)]
 pub(crate) fn load_source_snapshot(root: &Path) -> SourceSnapshot {
     let mut extensions = HashSet::new();
     for language in LANGUAGES {
@@ -232,12 +236,14 @@ pub(crate) fn load_source_snapshot(root: &Path) -> SourceSnapshot {
     load_source_snapshot_from_files(root, &files)
 }
 
+#[cfg(test)]
 pub(crate) fn load_source_snapshot_from_files(root: &Path, files: &[PathBuf]) -> SourceSnapshot {
     let mut snapshot = load_source_snapshot_metadata_from_files(root, files);
     load_source_contents(root, &mut snapshot);
     snapshot
 }
 
+#[cfg(test)]
 pub(crate) fn load_source_snapshot_metadata_from_files(
     root: &Path,
     files: &[PathBuf],

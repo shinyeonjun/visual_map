@@ -22,6 +22,7 @@ pub(crate) fn analyze_and_publish(
     app_data_dir: &Path,
     workspace: &Workspace,
     providers: &ProviderRegistry,
+    operation_id: &str,
     progress: SemanticProgress<'_>,
 ) -> Result<String, String> {
     let snapshot = fact_graph::load_published_snapshot(app_data_dir, &workspace.id)?
@@ -42,13 +43,20 @@ pub(crate) fn analyze_and_publish(
     let runtime = providers.resolve(runtime_kind)?;
     let approved = if plan.is_direct() {
         emit_progress(progress, "AI 의미 지도를 분석하는 중", 0, 1);
-        let raw = broker::run_provider(&runtime, &plan.base)?;
+        let raw = broker::run_provider(&runtime, &plan.base, operation_id)?;
         let result = parse_and_verify_base_response(&plan.base, &raw)
             .map_err(|error| format!("AI 의미 결과 검증 실패: {error}"))?;
         emit_progress(progress, "AI 의미 지도 검증 완료", 1, 1);
         result
     } else {
-        analyze_partitioned(app_data_dir, workspace, &runtime, &plan, progress)?
+        analyze_partitioned(
+            app_data_dir,
+            workspace,
+            &runtime,
+            &plan,
+            operation_id,
+            progress,
+        )?
     };
     let revision_id = approved.revision_id.to_string();
     store::publish(app_data_dir, &workspace.id, &plan.base.packet, &approved)?;
@@ -60,6 +68,7 @@ fn analyze_partitioned(
     workspace: &Workspace,
     runtime: &ResolvedProvider,
     plan: &CompiledSemanticPlan,
+    operation_id: &str,
     progress: SemanticProgress<'_>,
 ) -> Result<codebase_semantic_model::ApprovedSemanticRevision, String> {
     let total = plan.partitions.len() as u64 + 1;
@@ -93,37 +102,42 @@ fn analyze_partitioned(
     let mut retry_indexes = Vec::new();
     let mut fatal_errors = Vec::new();
     let mut initial_completed = 0usize;
-    broker::run_provider_batch(runtime, &pending_prompts, |batch_index, raw| {
-        initial_completed += 1;
-        let index = pending_indexes[batch_index];
-        let prompt = &pending_prompts[batch_index];
-        match verify_provider_result(prompt, raw, "첫") {
-            Ok(revision) => {
-                if let Err(error) = accept_verified_partition(
-                    app_data_dir,
-                    workspace,
-                    plan,
-                    index,
-                    revision,
-                    &mut verified,
-                ) {
-                    fatal_errors.push(error);
+    broker::run_provider_batch(
+        runtime,
+        &pending_prompts,
+        operation_id,
+        |batch_index, raw| {
+            initial_completed += 1;
+            let index = pending_indexes[batch_index];
+            let prompt = &pending_prompts[batch_index];
+            match verify_provider_result(prompt, raw, "첫") {
+                Ok(revision) => {
+                    if let Err(error) = accept_verified_partition(
+                        app_data_dir,
+                        workspace,
+                        plan,
+                        index,
+                        revision,
+                        &mut verified,
+                    ) {
+                        fatal_errors.push(error);
+                    }
                 }
+                Err(error) => retry_indexes.push((index, error)),
             }
-            Err(error) => retry_indexes.push((index, error)),
-        }
-        let approved_count = verified.iter().flatten().count();
-        emit_progress(
-            progress,
-            &format!(
-                "분할 의미 분석 {initial_completed}/{} 처리 · 검증 {approved_count}/{}",
-                pending_prompts.len(),
-                plan.partitions.len()
-            ),
-            approved_count as u64,
-            total,
-        );
-    });
+            let approved_count = verified.iter().flatten().count();
+            emit_progress(
+                progress,
+                &format!(
+                    "분할 의미 분석 {initial_completed}/{} 처리 · 검증 {approved_count}/{}",
+                    pending_prompts.len(),
+                    plan.partitions.len()
+                ),
+                approved_count as u64,
+                total,
+            );
+        },
+    );
 
     // Retry only the partitions whose first execution or verification failed.
     // All first-pass successes have already been verified and cached, so a
@@ -134,7 +148,7 @@ fn analyze_partitioned(
         .collect::<Vec<_>>();
     let mut retry_errors = Vec::new();
     let mut retry_completed = 0usize;
-    broker::run_provider_retry_batch(runtime, &retry_prompts, |retry_index, raw| {
+    broker::run_provider_retry_batch(runtime, &retry_prompts, operation_id, |retry_index, raw| {
         retry_completed += 1;
         let (index, first_error) = &retry_indexes[retry_index];
         match verify_provider_result(&retry_prompts[retry_index], raw, "1회 재시도") {
@@ -189,7 +203,7 @@ fn analyze_partitioned(
         plan.partitions.len() as u64,
         total,
     );
-    let raw = broker::run_provider(runtime, &reconciliation)
+    let raw = broker::run_provider(runtime, &reconciliation, operation_id)
         .map_err(|error| format!("AI 의미 전역 통합 실패: {error}"))?;
     let approved = parse_and_verify_base_response(&reconciliation, &raw)
         .map_err(|error| format!("AI 의미 전역 통합 결과 검증 실패: {error}"))?;
@@ -338,11 +352,24 @@ mod external_tests {
 
         crate::fact_graph::import_and_publish(&app_data, &workspace.id, &artifact).unwrap();
         let providers = ProviderRegistry::discover();
-        let revision_id = analyze_and_publish(&app_data, &workspace, &providers, None).unwrap();
+        let revision_id = analyze_and_publish(
+            &app_data,
+            &workspace,
+            &providers,
+            "semantic-cache-test",
+            None,
+        )
+        .unwrap();
         // The same canonical Fact packet must reuse the verified semantic
         // revision instead of paying for and varying another AI call.
-        let cached_revision_id =
-            analyze_and_publish(&app_data, &workspace, &providers, None).unwrap();
+        let cached_revision_id = analyze_and_publish(
+            &app_data,
+            &workspace,
+            &providers,
+            "semantic-cache-test",
+            None,
+        )
+        .unwrap();
         let map = get_map_view(&app_data, &workspace).unwrap().unwrap();
 
         assert!(!revision_id.is_empty());

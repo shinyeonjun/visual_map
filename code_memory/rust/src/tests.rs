@@ -11,56 +11,6 @@ fn registry_has_exactly_ten_languages() {
 }
 
 #[test]
-fn index_output_matches_contract_golden_shape() {
-    let golden: serde_json::Value = serde_json::from_str(include_str!(
-        "../../tests/fixtures/engine-index-contract.json"
-    ))
-    .expect("contract golden must be valid JSON");
-    let root =
-        std::env::temp_dir().join(format!("code-memory-index-contract-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("create contract fixture root");
-    std::fs::write(root.join("main.py"), "def health():\n    return 'ok'\n")
-        .expect("write contract fixture source");
-    let output_path = root.join("language-index.json");
-    let architecture_path = root.join("architecture-index.json");
-    let pack_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("code_memory root");
-    index_project(&root, &output_path, &architecture_path, pack_root, None)
-        .expect("contract fixture should index without external providers");
-    let output: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&output_path).expect("read generated contract output"),
-    )
-    .expect("generated contract output must be valid JSON");
-    assert_eq!(output["schema"], golden["schema"]);
-    for field in golden["requiredTopLevel"].as_array().unwrap() {
-        let field = field.as_str().unwrap();
-        assert!(output.get(field).is_some(), "missing output field: {field}");
-    }
-    for stage in golden["requiredTimingStages"].as_array().unwrap() {
-        let stage = stage.as_str().unwrap();
-        assert!(output["timings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|timing| timing["stage"] == stage));
-    }
-    let unit = output["analysis_units"]
-        .as_array()
-        .unwrap()
-        .first()
-        .unwrap();
-    for field in golden["requiredAnalysisUnitFields"].as_array().unwrap() {
-        let field = field.as_str().unwrap();
-        assert!(
-            unit.get(field).is_some(),
-            "missing analysis unit field: {field}"
-        );
-    }
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
 fn diagnostic_codes_use_the_stable_contract_names() {
     assert_eq!(
         serde_json::to_value(DiagnosticCode::DependencyMetadataGap).unwrap(),
@@ -70,7 +20,6 @@ fn diagnostic_codes_use_the_stable_contract_names() {
         serde_json::to_value(DiagnosticCode::LargeWorkspacePartial).unwrap(),
         "workspace-too-large"
     );
-    assert_eq!(DiagnosticCode::ProviderFailed.as_str(), "provider-failed");
 }
 
 #[test]
@@ -90,62 +39,32 @@ fn provider_stderr_capture_keeps_a_bounded_failure_tail() {
 
 #[test]
 fn strict_gate_does_not_fail_explicit_source_exclusions() {
-    let output = IndexOutput {
-        schema: "test",
-        project_root: String::new(),
-        provider_provenance: Vec::new(),
-        languages: vec![LanguageOutput {
-            id: "c".to_string(),
-            name: "C".to_string(),
-            provider: "native-lsp",
-            files_found: 1,
-            files_indexed: 0,
-            files_excluded: 1,
-            files_missing: 0,
-            status: "excluded",
-        }],
-        coverage: Vec::new(),
-        documents: Vec::new(),
-        relations: Vec::new(),
-        file_relations: Vec::new(),
-        project_model_files: Vec::new(),
-        frameworks: Vec::new(),
-        framework_relations: Vec::new(),
-        diagnostics: Vec::new(),
-        timings: Vec::new(),
-        analysis_units: Vec::new(),
-    };
-    assert!(enforce_quality_gate(&output).is_ok());
+    let languages = vec![LanguageOutput {
+        id: "c".to_string(),
+        name: "C".to_string(),
+        provider: "native-lsp",
+        files_found: 1,
+        files_indexed: 0,
+        files_excluded: 1,
+        files_missing: 0,
+        status: "excluded",
+    }];
+    assert!(enforce_quality_gate(&languages, &[]).is_ok());
 }
 
 #[test]
 fn strict_gate_still_fails_provider_missing_files() {
-    let output = IndexOutput {
-        schema: "test",
-        project_root: String::new(),
-        provider_provenance: Vec::new(),
-        languages: vec![LanguageOutput {
-            id: "dart".to_string(),
-            name: "Dart".to_string(),
-            provider: "native-lsp",
-            files_found: 2,
-            files_indexed: 1,
-            files_excluded: 0,
-            files_missing: 1,
-            status: "indexed-partial",
-        }],
-        coverage: Vec::new(),
-        documents: Vec::new(),
-        relations: Vec::new(),
-        file_relations: Vec::new(),
-        project_model_files: Vec::new(),
-        frameworks: Vec::new(),
-        framework_relations: Vec::new(),
-        diagnostics: Vec::new(),
-        timings: Vec::new(),
-        analysis_units: Vec::new(),
-    };
-    assert!(enforce_quality_gate(&output).is_err());
+    let languages = vec![LanguageOutput {
+        id: "dart".to_string(),
+        name: "Dart".to_string(),
+        provider: "native-lsp",
+        files_found: 2,
+        files_indexed: 1,
+        files_excluded: 0,
+        files_missing: 1,
+        status: "indexed-partial",
+    }];
+    assert!(enforce_quality_gate(&languages, &[]).is_err());
 }
 
 #[test]
@@ -271,58 +190,6 @@ fn every_language_has_a_provider() {
     assert!(LANGUAGES
         .iter()
         .all(|lang| !lang.tool.is_empty() && !lang.extensions.is_empty()));
-}
-
-#[test]
-fn public_index_order_is_canonicalized_at_the_boundary() {
-    let document = |path: &str| DocumentOutput {
-        language: "python".to_string(),
-        path: path.to_string(),
-        symbols: Vec::new(),
-        occurrences: Vec::new(),
-    };
-    let mut output = IndexOutput {
-        schema: "test",
-        project_root: String::new(),
-        provider_provenance: Vec::new(),
-        languages: vec![
-            LanguageOutput {
-                id: "z".to_string(),
-                name: "Z".to_string(),
-                provider: "native-lsp",
-                files_found: 0,
-                files_indexed: 0,
-                files_excluded: 0,
-                files_missing: 0,
-                status: "indexed",
-            },
-            LanguageOutput {
-                id: "a".to_string(),
-                name: "A".to_string(),
-                provider: "native-lsp",
-                files_found: 0,
-                files_indexed: 0,
-                files_excluded: 0,
-                files_missing: 0,
-                status: "indexed",
-            },
-        ],
-        coverage: Vec::new(),
-        documents: vec![document("z.py"), document("a.py")],
-        relations: Vec::new(),
-        file_relations: Vec::new(),
-        project_model_files: Vec::new(),
-        frameworks: Vec::new(),
-        framework_relations: Vec::new(),
-        diagnostics: Vec::new(),
-        timings: Vec::new(),
-        analysis_units: Vec::new(),
-    };
-
-    canonicalize_index_output(&mut output);
-
-    assert_eq!(output.languages[0].id, "a");
-    assert_eq!(output.documents[0].path, "a.py");
 }
 
 #[test]

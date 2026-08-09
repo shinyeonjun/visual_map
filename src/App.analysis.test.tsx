@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
   getMapView: vi.fn(),
   getMapSelection: vi.fn(),
   setWorkspaceProvider: vi.fn(),
+  cancelWorkspaceAnalysis: vi.fn(),
+  deleteWorkspace: vi.fn(),
+  openSourceLocation: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -42,10 +45,13 @@ vi.mock("./desktop", () => ({
     coverageCount: 0,
   }),
   analyzeWorkspace: mocks.analyzeWorkspace,
+  cancelWorkspaceAnalysis: mocks.cancelWorkspaceAnalysis,
   getMapView: mocks.getMapView,
   getMapSelection: mocks.getMapSelection,
   chooseRepositoryFolder: vi.fn(),
   createWorkspace: vi.fn(),
+  deleteWorkspace: mocks.deleteWorkspace,
+  openSourceLocation: mocks.openSourceLocation,
   setWorkspaceProvider: mocks.setWorkspaceProvider,
 }));
 
@@ -84,6 +90,17 @@ describe("analysis vertical slice", () => {
     mocks.getMapView.mockReset();
     mocks.getMapSelection.mockReset();
     mocks.setWorkspaceProvider.mockReset();
+    mocks.cancelWorkspaceAnalysis.mockReset();
+    mocks.deleteWorkspace.mockReset();
+    mocks.openSourceLocation.mockReset();
+    mocks.cancelWorkspaceAnalysis.mockResolvedValue(true);
+    mocks.deleteWorkspace.mockResolvedValue(undefined);
+    mocks.openSourceLocation.mockResolvedValue({
+      path: "D:\\commerce\\src\\orders\\service.ts",
+      line: 12,
+      column: null,
+      action: "vscode",
+    });
     mocks.getMapView.mockResolvedValueOnce(null).mockResolvedValue(map);
     mocks.analyzeWorkspace.mockResolvedValue({
       factGraph: {
@@ -120,7 +137,59 @@ describe("analysis vertical slice", () => {
     fireEvent.click(screen.getByRole("button", { name: /주문.*orders.*L0/ }));
 
     await waitFor(() => expect(mocks.getMapSelection).toHaveBeenCalledWith("ws-0123456789abcdef", "area-orders"));
-    expect(await screen.findByText("service.ts:12")).toBeVisible();
+    const evidence = await screen.findByRole("button", { name: "service.ts:12" });
+    expect(evidence).toBeVisible();
+    fireEvent.click(evidence);
+    await waitFor(() =>
+      expect(mocks.openSourceLocation).toHaveBeenCalledWith(
+        "ws-0123456789abcdef",
+        "src/orders/service.ts",
+        12,
+        null,
+        "vscode",
+      ),
+    );
+  });
+
+  it("cancels the static engine and every semantic child through one workspace action", async () => {
+    const deferred: { resolve?: (value: unknown) => void } = {};
+    mocks.analyzeWorkspace.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          deferred.resolve = resolve;
+        }),
+    );
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "코드 분석 시작" }));
+
+    const cancel = await screen.findAllByRole("button", { name: /분석.*취소/ });
+    fireEvent.click(cancel[0]);
+    await waitFor(() => expect(mocks.cancelWorkspaceAnalysis).toHaveBeenCalledWith("ws-0123456789abcdef"));
+
+    deferred.resolve?.({
+      factGraph: {
+        schemaVersion: 1,
+        snapshotId: null,
+        sourceRevision: null,
+        nodeCount: 0,
+        edgeCount: 0,
+        evidenceCount: 0,
+        coverageCount: 0,
+      },
+      semanticRevisionId: null,
+      semanticError: null,
+    });
+    await waitFor(() => expect(mocks.getMapView).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /분석.*취소/ })).not.toBeInTheDocument());
+  });
+
+  it("deletes only the app workspace after explicit confirmation", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "commerce 프로젝트 삭제" }));
+    expect(await screen.findByRole("dialog", { name: "프로젝트 삭제 확인" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "앱에서 삭제" }));
+    await waitFor(() => expect(mocks.deleteWorkspace).toHaveBeenCalledWith("ws-0123456789abcdef"));
+    expect(screen.queryByText("commerce")).not.toBeInTheDocument();
   });
 
   it("shows the exact CLI model and defaults reasoning to high", async () => {

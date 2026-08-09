@@ -1,4 +1,11 @@
 import "@testing-library/jest-dom/vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach } from "vitest";
+
+// Keep each UI test isolated even when Vitest runs outside a Jest-compatible
+// global environment. Without an explicit cleanup, a previous App render can
+// leave duplicate dialogs and project actions in the next test's document.
+afterEach(() => cleanup());
 
 // Fluent's Tabster focus manager reads this browser global directly. JSDOM
 // exposes it on window but does not copy it to the Node test global.

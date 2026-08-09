@@ -1,5 +1,5 @@
 use crate::{
-    fact_graph::{self, CanonicalFactSnapshot},
+    fact_graph,
     semantic::store,
     static_query::{self, TraceLimits},
     workspace::Workspace,
@@ -128,13 +128,29 @@ pub(crate) fn get_map_view(
     let Some(stored) = store::load_current(app_data_dir, &workspace.id)? else {
         return Ok(None);
     };
-    let Some(facts) = fact_graph::load_published_snapshot(app_data_dir, &workspace.id)? else {
+    let Some(facts) = fact_graph::open_published_read_model(app_data_dir, &workspace.id)? else {
         return Ok(None);
     };
     if facts.manifest.snapshot_id != stored.revision.snapshot_id {
         return Ok(None);
     }
-    Ok(Some(project_map(&stored, &facts)))
+    let fact_ids = stored
+        .packet
+        .input
+        .anchors
+        .iter()
+        .map(|anchor| anchor.fact_id.clone())
+        .chain(
+            stored
+                .packet
+                .input
+                .representative_traces
+                .iter()
+                .flat_map(|trace| trace.ordered_fact_ids.iter().cloned()),
+        )
+        .collect::<BTreeSet<_>>();
+    let nodes = facts.nodes_by_ids(fact_ids)?;
+    Ok(Some(project_map(&stored, &nodes)))
 }
 
 pub(crate) fn get_map_selection(
@@ -151,7 +167,7 @@ pub(crate) fn get_map_selection(
     let Some(stored) = store::load_current(app_data_dir, &workspace.id)? else {
         return Ok(None);
     };
-    let Some(facts) = fact_graph::load_published_snapshot(app_data_dir, &workspace.id)? else {
+    let Some(facts) = fact_graph::open_published_read_model(app_data_dir, &workspace.id)? else {
         return Ok(None);
     };
     if facts.manifest.snapshot_id != stored.revision.snapshot_id {
@@ -168,10 +184,13 @@ pub(crate) fn get_map_selection(
         .anchors
         .iter()
         .find(|anchor| anchor.fact_id.as_str() == selected_id);
-    let fact = facts
-        .nodes
-        .iter()
-        .find(|fact| fact.id.as_str() == selected_id);
+    let selected_fact_id = FactNodeId::parse(selected_id.to_string()).ok();
+    let selected_facts = if area.is_none() && anchor.is_none() {
+        facts.nodes_by_ids(selected_fact_id.iter().cloned())?
+    } else {
+        Vec::new()
+    };
+    let fact = selected_facts.first();
     let (title, role, evidence_ids, owner_regions) = if let Some(area) = area {
         (
             area.label.clone(),
@@ -211,7 +230,8 @@ pub(crate) fn get_map_selection(
     } else {
         return Ok(None);
     };
-    let evidence = evidence_refs(&facts.evidence, &evidence_ids);
+    let evidence_rows = facts.evidence_by_ids(evidence_ids.iter().cloned())?;
+    let evidence = evidence_refs(&evidence_rows, &evidence_ids);
     let source = stored
         .packet
         .input
@@ -229,23 +249,41 @@ pub(crate) fn get_map_selection(
                 .unwrap_or(excerpt.start_line),
         });
     let relations = selection_tallies(&stored.packet.input.boundary_relations, &owner_regions);
-    let facts_by_id = facts
-        .nodes
-        .iter()
-        .map(|fact| (fact.id.clone(), fact))
-        .collect::<BTreeMap<_, _>>();
     let traces = if let Some(area) = area {
-        area_trace_candidates(
+        let candidates = area_trace_candidates(
             area,
             &stored.packet.input.regions,
             &stored.packet.input.representative_traces,
         )
         .into_iter()
         .take(3)
-        .filter_map(|trace| project_trace(trace, &facts_by_id))
-        .collect()
+        .collect::<Vec<_>>();
+        let trace_nodes = facts.nodes_by_ids(
+            candidates
+                .iter()
+                .flat_map(|trace| trace.ordered_fact_ids.iter().cloned()),
+        )?;
+        let facts_by_id = trace_nodes
+            .iter()
+            .map(|fact| (fact.id.clone(), fact))
+            .collect::<BTreeMap<_, _>>();
+        candidates
+            .into_iter()
+            .filter_map(|trace| project_trace(trace, &facts_by_id))
+            .collect()
     } else if let Some(fact) = fact {
-        static_query::trace_paths_from_fact(&facts, &fact.id, TraceLimits::selection())?
+        let limits = TraceLimits::selection();
+        let Some(trace_facts) =
+            facts.trace_snapshot(&fact.id, limits.max_depth, limits.max_expansions_per_entry)?
+        else {
+            return Ok(None);
+        };
+        let facts_by_id = trace_facts
+            .nodes
+            .iter()
+            .map(|fact| (fact.id.clone(), fact))
+            .collect::<BTreeMap<_, _>>();
+        static_query::trace_paths_from_fact(&trace_facts, &fact.id, limits)?
             .into_iter()
             .take(3)
             .filter_map(|trace| project_trace(&trace, &facts_by_id))
@@ -264,9 +302,8 @@ pub(crate) fn get_map_selection(
     }))
 }
 
-fn project_map(stored: &store::StoredSemanticRevision, facts: &CanonicalFactSnapshot) -> MapView {
+fn project_map(stored: &store::StoredSemanticRevision, facts: &[FactNode]) -> MapView {
     let facts_by_id = facts
-        .nodes
         .iter()
         .map(|fact| (fact.id.clone(), fact))
         .collect::<BTreeMap<_, _>>();

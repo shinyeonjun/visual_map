@@ -73,3 +73,12 @@ export interface CommandError {
   message?: string;
   detail?: string;
 }
+
+export type SourceEditor = "vscode" | "cursor";
+
+export interface SourceActionResult {
+  path: string;
+  line: number | null;
+  column: number | null;
+  action: string;
+}

@@ -200,20 +200,20 @@ pub(super) fn ingest_framework_routes(
     }
 
     for (unit_id, unit) in units {
-        let donor = framework_ir
+        let framework_audit = framework_ir
             .unit_audit
             .get(unit_id)
             .ok_or_else(|| format!("Framework IR omitted unit audit {unit_id}"))?;
         let result = unit_results
             .get(unit_id)
             .expect("canonical framework unit audit");
-        let (execution_state, precision) = if donor.candidate_count == 0 {
+        let (execution_state, precision) = if framework_audit.candidate_count == 0 {
             (
                 CapabilityExecutionState::NotApplicable,
                 EvidencePrecision::None,
             )
-        } else if donor.rejected_route_count == 0
-            && result.resolved_handlers == donor.candidate_count
+        } else if framework_audit.rejected_route_count == 0
+            && result.resolved_handlers == framework_audit.candidate_count
         {
             (
                 CapabilityExecutionState::Complete,
@@ -234,9 +234,11 @@ pub(super) fn ingest_framework_routes(
             execution_state,
             precision,
             denominator: CoverageDenominator::Known {
-                eligible_count: donor.candidate_count,
+                eligible_count: framework_audit.candidate_count,
             },
-            covered_count: result.resolved_handlers.min(donor.candidate_count),
+            covered_count: result
+                .resolved_handlers
+                .min(framework_audit.candidate_count),
             emitted_fact_count: result.route_nodes.len() as u64,
             emitted_relation_count: result.edges.len() as u64,
             truncated_count: 0,

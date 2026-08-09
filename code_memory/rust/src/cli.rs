@@ -1,3 +1,37 @@
+fn write_json<T: Serialize, W: Write>(writer: &mut W, value: &T) -> serde_json::Result<()> {
+    if env::var_os("CODE_MEMORY_PRETTY_JSON").is_some() {
+        serde_json::to_writer_pretty(writer, value)
+    } else {
+        serde_json::to_writer(writer, value)
+    }
+}
+
+fn resolve_output_path(path: PathBuf) -> Result<PathBuf, String> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(env::current_dir()
+            .map_err(|error| format!("cannot resolve output path: {error}"))?
+            .join(path))
+    }
+}
+
+fn required_path(args: &[String], flag: &str) -> Result<PathBuf, String> {
+    optional_path(args, flag).ok_or_else(|| format!("missing {flag} <path>"))
+}
+
+fn optional_path(args: &[String], flag: &str) -> Option<PathBuf> {
+    for (index, value) in args.iter().enumerate() {
+        if value == flag {
+            return args.get(index + 1).map(PathBuf::from);
+        }
+        if let Some(path) = value.strip_prefix(&format!("{flag}=")) {
+            return Some(PathBuf::from(path));
+        }
+    }
+    None
+}
+
 fn list_languages() -> Result<(), String> {
     for lang in LANGUAGES {
         let provider = match lang.provider {
@@ -280,4 +314,3 @@ fn enforce_managed_provider_policy(
         ))
     }
 }
-

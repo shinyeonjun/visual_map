@@ -19,6 +19,7 @@ static STAGING_NONCE: AtomicU64 = AtomicU64::new(0);
 pub(super) fn run_provider(
     runtime: &provider::ResolvedProvider,
     compiled: &CompiledBasePrompt,
+    operation_id: &str,
 ) -> Result<String, String> {
     let runtime_kind = match compiled.packet.provider.kind {
         AiProviderKind::Codex => provider::AiProviderKind::Codex,
@@ -29,8 +30,12 @@ pub(super) fn run_provider(
     }
     let staging = ProviderStaging::create()?;
     match compiled.packet.provider.kind {
-        AiProviderKind::Codex => run_codex(&runtime.executable, &staging.path, compiled),
-        AiProviderKind::Claude => run_claude(&runtime.executable, &staging.path, compiled),
+        AiProviderKind::Codex => {
+            run_codex(&runtime.executable, &staging.path, compiled, operation_id)
+        }
+        AiProviderKind::Claude => {
+            run_claude(&runtime.executable, &staging.path, compiled, operation_id)
+        }
     }
 }
 
@@ -40,6 +45,7 @@ pub(super) fn run_provider(
 pub(super) fn run_provider_batch(
     runtime: &provider::ResolvedProvider,
     prompts: &[CompiledBasePrompt],
+    operation_id: &str,
     on_completed: impl FnMut(usize, Result<String, String>),
 ) {
     run_provider_batch_with_limit(
@@ -50,6 +56,7 @@ pub(super) fn run_provider_batch(
             DEFAULT_INITIAL_PROVIDER_JOBS,
         ),
         "initial",
+        operation_id,
         on_completed,
     );
 }
@@ -60,6 +67,7 @@ pub(super) fn run_provider_batch(
 pub(super) fn run_provider_retry_batch(
     runtime: &provider::ResolvedProvider,
     prompts: &[CompiledBasePrompt],
+    operation_id: &str,
     on_completed: impl FnMut(usize, Result<String, String>),
 ) {
     run_provider_batch_with_limit(
@@ -70,6 +78,7 @@ pub(super) fn run_provider_retry_batch(
             DEFAULT_RETRY_PROVIDER_JOBS,
         ),
         "retry",
+        operation_id,
         on_completed,
     );
 }
@@ -79,6 +88,7 @@ fn run_provider_batch_with_limit(
     prompts: &[CompiledBasePrompt],
     max_parallel: usize,
     phase: &'static str,
+    operation_id: &str,
     mut on_completed: impl FnMut(usize, Result<String, String>),
 ) {
     if prompts.is_empty() {
@@ -108,7 +118,7 @@ fn run_provider_batch_with_limit(
                 };
                 let started = Instant::now();
                 let input_bytes = prompt.rendered_prompt().len();
-                let result = run_provider(runtime, prompt);
+                let result = run_provider(runtime, prompt, operation_id);
                 eprintln!(
                     "@codebase-workspace-ai-performance {}",
                     serde_json::json!({
@@ -181,6 +191,7 @@ fn run_codex(
     executable: &Path,
     staging: &Path,
     compiled: &CompiledBasePrompt,
+    operation_id: &str,
 ) -> Result<String, String> {
     let schema_path = staging.join("base-semantic-output.schema.json");
     let output_path = staging.join("provider-output.json");
@@ -192,7 +203,7 @@ fn run_codex(
     )
     .map_err(|error| format!("Codex output schema 저장 실패: {error}"))?;
     let args = codex_args(staging, compiled)?;
-    let result = run_with_prompt(executable, &args, staging, compiled)?;
+    let result = run_with_prompt(executable, &args, staging, compiled, operation_id)?;
     if !result.ok {
         return Err(provider_failure("Codex", &result.stderr));
     }
@@ -229,9 +240,10 @@ fn run_claude(
     executable: &Path,
     staging: &Path,
     compiled: &CompiledBasePrompt,
+    operation_id: &str,
 ) -> Result<String, String> {
     let args = claude_args(compiled)?;
-    let result = run_with_prompt(executable, &args, staging, compiled)?;
+    let result = run_with_prompt(executable, &args, staging, compiled, operation_id)?;
     if !result.ok {
         return Err(provider_failure("Claude", &result.stderr));
     }
@@ -267,6 +279,7 @@ fn run_with_prompt(
     args: &[String],
     staging: &Path,
     compiled: &CompiledBasePrompt,
+    operation_id: &str,
 ) -> Result<engine::EngineRunResult, String> {
     let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     engine::run_command_with_input(
@@ -276,7 +289,7 @@ fn run_with_prompt(
             hard_timeout: Duration::from_secs(30 * 60),
             idle_timeout: Duration::from_secs(10 * 60),
         },
-        &[],
+        &[("CODEBASE_WORKSPACE_OPERATION_ID", operation_id)],
         staging,
         compiled.rendered_prompt().into_bytes(),
     )

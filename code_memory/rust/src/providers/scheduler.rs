@@ -15,16 +15,8 @@ pub(crate) struct ProviderJob {
     pub(crate) members: Vec<LanguageJob>,
 }
 
-pub(crate) struct ProviderUnitResult {
-    pub(crate) language: String,
-    pub(crate) id: String,
-    pub(crate) provider: &'static str,
-}
-
 pub(crate) struct ProviderJobResult {
-    pub(crate) units: Vec<ProviderUnitResult>,
     pub(crate) batches: Vec<ProviderUnitBatch>,
-    pub(crate) elapsed_ms: u128,
 }
 
 pub(crate) fn merge_provider_jobs(jobs: Vec<LanguageJob>) -> Vec<ProviderJob> {
@@ -206,15 +198,6 @@ pub(crate) fn run_provider_jobs(
                 let job_key = job.key.clone();
                 let file_count = combined_job_files(&job.members).len();
                 let unit_count = job.members.len();
-                let units = job
-                    .members
-                    .iter()
-                    .map(|member| ProviderUnitResult {
-                        language: member.lang.id.to_string(),
-                        id: member.analysis_unit_id.clone(),
-                        provider: provider_label(member),
-                    })
-                    .collect();
                 let members = job.members.clone();
                 let mut batches = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     analyze_provider_job(job)
@@ -264,15 +247,7 @@ pub(crate) fn run_provider_jobs(
                         "elapsedMs": elapsed_ms,
                     })
                 );
-                let _ = sender.send((
-                    ordinal,
-                    weight,
-                    ProviderJobResult {
-                        units,
-                        batches,
-                        elapsed_ms,
-                    },
-                ));
+                let _ = sender.send((ordinal, weight, ProviderJobResult { batches }));
             });
         }
 

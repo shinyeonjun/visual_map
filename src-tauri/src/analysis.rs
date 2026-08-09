@@ -8,8 +8,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
-    fs,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -20,6 +19,7 @@ const CANONICAL_BUNDLE_MARKER: &str = "@codebase-workspace-canonical-fact-bundle
 const ENGINE_ERROR_PREFIX: &str = "code-memory-language: ";
 const MAX_ENGINE_FAILURE_DETAIL_CHARS: usize = 800;
 static ACTIVE_WORKSPACE_ANALYSES: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+static ACTIVE_WORKSPACE_OPERATIONS: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -55,17 +55,49 @@ pub(crate) fn begin_workspace_analysis(
     if !active.insert(workspace_id.to_string()) {
         return Err("이 workspace는 이미 분석 중입니다".to_string());
     }
+    let operation_id = format!("analysis-{workspace_id}-{}", unix_millis());
+    let operation_guard = match engine::begin_engine_operation(&operation_id) {
+        Ok(guard) => guard,
+        Err(error) => {
+            active.remove(workspace_id);
+            return Err(error);
+        }
+    };
+    let operations = ACTIVE_WORKSPACE_OPERATIONS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut operations = match operations.lock() {
+        Ok(operations) => operations,
+        Err(_) => {
+            active.remove(workspace_id);
+            return Err("analysis 취소 상태가 손상되었습니다".to_string());
+        }
+    };
+    operations.insert(workspace_id.to_string(), operation_id.clone());
     Ok(WorkspaceAnalysisGuard {
         workspace_id: workspace_id.to_string(),
+        operation_id,
+        _operation_guard: operation_guard,
     })
 }
 
 pub(crate) struct WorkspaceAnalysisGuard {
     workspace_id: String,
+    operation_id: String,
+    _operation_guard: engine::EngineOperationGuard,
+}
+
+impl WorkspaceAnalysisGuard {
+    pub(crate) fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
 }
 
 impl Drop for WorkspaceAnalysisGuard {
     fn drop(&mut self) {
+        if let Some(operations) = ACTIVE_WORKSPACE_OPERATIONS.get() {
+            if let Ok(mut operations) = operations.lock() {
+                operations.remove(&self.workspace_id);
+            }
+        }
         if let Ok(mut active) = ACTIVE_WORKSPACE_ANALYSES
             .get_or_init(|| Mutex::new(BTreeSet::new()))
             .lock()
@@ -75,10 +107,23 @@ impl Drop for WorkspaceAnalysisGuard {
     }
 }
 
+pub(crate) fn cancel_workspace_analysis(workspace_id: &str) -> Result<bool, String> {
+    let operation_id = ACTIVE_WORKSPACE_OPERATIONS
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .map_err(|_| "analysis 취소 상태가 손상되었습니다".to_string())?
+        .get(workspace_id)
+        .cloned();
+    Ok(operation_id
+        .as_deref()
+        .is_some_and(engine::cancel_engine_operation))
+}
+
 pub(crate) fn run_code_analysis(
     app: &tauri::AppHandle,
     app_data_dir: &Path,
     workspace: &Workspace,
+    operation_id: &str,
 ) -> Result<FactGraphStatus, String> {
     let registry = crate::engine_registry_for_app(app)?;
     let code_engine = registry
@@ -93,7 +138,6 @@ pub(crate) fn run_code_analysis(
             .unwrap_or_else(|| format!("읽기 도구가 없습니다: {}", code_engine.executable)));
     }
 
-    let staging = AnalysisStaging::create()?;
     let engine_dir = PathBuf::from(&registry.engine_dir);
     let packs_root = resolve_packs_root(&engine_dir)?;
     let provider_progress = |label: &str, completed: u64, total: u64| {
@@ -113,8 +157,6 @@ pub(crate) fn run_code_analysis(
         &engine_dir,
         Some(&provider_progress),
     )?;
-    let index_out = staging.path.join("language-index.json");
-    let architecture_out = staging.path.join("architecture-index.json");
     let args = vec![
         "index".to_string(),
         "--root".to_string(),
@@ -123,13 +165,7 @@ pub(crate) fn run_code_analysis(
         path_text(&packs_root, "framework pack root")?,
         "--providers-root".to_string(),
         path_text(&providers_root, "provider root")?,
-        "--out".to_string(),
-        path_text(&index_out, "analysis output")?,
-        "--architecture-out".to_string(),
-        path_text(&architecture_out, "architecture output")?,
     ];
-    let operation_id = format!("analysis-{}-{}", workspace.id, unix_millis());
-    let _operation_guard = engine::begin_engine_operation(&operation_id)?;
     let observer = progress_observer(app.clone(), workspace.id.clone());
     let result = engine::run_engine_command_with_env_observer(
         code_engine,
@@ -139,7 +175,7 @@ pub(crate) fn run_code_analysis(
             idle_timeout: Duration::from_secs(10 * 60),
         },
         &[
-            ("CODEBASE_WORKSPACE_OPERATION_ID", operation_id.as_str()),
+            ("CODEBASE_WORKSPACE_OPERATION_ID", operation_id),
             ("CODE_MEMORY_REQUIRE_MANAGED_PROVIDERS", "1"),
         ],
         Some(observer),
@@ -277,38 +313,6 @@ fn path_text(path: &Path, label: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{label} 경로를 실행 인자로 표현할 수 없습니다"))
 }
 
-struct AnalysisStaging {
-    path: PathBuf,
-}
-
-impl AnalysisStaging {
-    fn create() -> Result<Self, String> {
-        let path = std::env::temp_dir().join(format!(
-            "codebase-workspace-analysis-{}-{}",
-            std::process::id(),
-            unix_millis()
-        ));
-        fs::create_dir(&path)
-            .map_err(|error| format!("analysis staging 폴더를 만들지 못했습니다: {error}"))?;
-        Ok(Self { path })
-    }
-}
-
-impl Drop for AnalysisStaging {
-    fn drop(&mut self) {
-        let temp_root = std::env::temp_dir();
-        if self.path.parent() == Some(temp_root.as_path())
-            && self
-                .path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("codebase-workspace-analysis-"))
-        {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
 fn unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -369,5 +373,14 @@ mod tests {
         assert!(begin_workspace_analysis(&workspace_id).is_err());
         drop(guard);
         assert!(begin_workspace_analysis(&workspace_id).is_ok());
+    }
+
+    #[test]
+    fn workspace_cancellation_targets_the_shared_engine_operation() {
+        let workspace_id = format!("ws-cancel-{}", unix_millis());
+        let guard = begin_workspace_analysis(&workspace_id).unwrap();
+        assert!(cancel_workspace_analysis(&workspace_id).unwrap());
+        drop(guard);
+        assert!(!cancel_workspace_analysis(&workspace_id).unwrap());
     }
 }
