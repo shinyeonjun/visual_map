@@ -184,6 +184,24 @@ Model selection stores an exact `{ provider, model, effort }` tuple. Existing
 workspaces without effort default to `high`. The broker resolves and pins one
 installed compatible CLI runtime for the analysis boundary.
 
+The canvas is sized from the published layout rather than a fixed viewport.
+Top-level areas without saved reader positions are packed deterministically
+using their projected width and content height; the column count expands with
+the area count. Fit-to-screen may zoom out to 5% for very large repositories.
+Below the detail threshold the same map becomes a responsibility overview:
+area identity, child count, item count, and relationships remain visible while
+member chains and relation labels are deferred until zoom-in. This is semantic
+zoom, not a second product mode, and it does not change graph membership or
+truth.
+
+Analysis progress is deliberately stage-scoped. The UI shows the current
+stage, the engine's exact label/work count, elapsed wall time, and cancellation;
+it never presents one stage's ratio as an end-to-end completion percentage or
+claims an unmeasured ETA. Reanalysis leaves the prior published map visible
+with a compact status overlay. Long failures render a bounded summary with
+collapsed technical detail so diagnostics remain available without replacing
+the workbench.
+
 ## Surviving components
 
 - `src/`: Fluent desktop shell and typed canvas/inspector.

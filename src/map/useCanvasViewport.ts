@@ -14,7 +14,8 @@ import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent }
  * with the content and turn them into stripes at low zoom.
  */
 
-const MIN_SCALE = 0.35;
+/** Large repositories must still be able to fit the complete responsibility map. */
+const MIN_SCALE = 0.05;
 const MAX_SCALE = 2.2;
 const GRID = 24;
 /** Room left around the content when fitting, so nothing touches the edge. */

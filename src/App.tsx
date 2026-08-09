@@ -89,6 +89,7 @@ export default function App() {
   const [analyzingWorkspaceId, setAnalyzingWorkspaceId] = useState<string | null>(null);
   const [cancellingWorkspaceId, setCancellingWorkspaceId] = useState<string | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressEvent | null>(null);
+  const [analysisStartedAt, setAnalysisStartedAt] = useState<number | null>(null);
   const activeWorkspaceIdRef = useRef<string | null>(null);
   const cancellationRequests = useRef(new Set<string>());
 
@@ -222,6 +223,7 @@ export default function App() {
       total: 1,
       label: "코드 분석을 시작합니다",
     });
+    setAnalysisStartedAt(Date.now());
     setAnalyzingWorkspaceId(workspace.id);
     try {
       const result = await analyzeWorkspace(workspace.id);
@@ -245,6 +247,7 @@ export default function App() {
       cancellationRequests.current.delete(workspace.id);
       setAnalyzingWorkspaceId((current) => (current === workspace.id ? null : current));
       setCancellingWorkspaceId((current) => (current === workspace.id ? null : current));
+      setAnalysisStartedAt(null);
     }
   }
 
@@ -337,6 +340,15 @@ export default function App() {
             <>
               {previewing ? <PreviewBanner /> : null}
               <MapCanvas view={displayedMap} selectedId={selectedId} onSelect={setSelectedId} />
+              {activeWorkspace && analyzingWorkspaceId === activeWorkspace.id ? (
+                <AnalysisStatus
+                  variant="overlay"
+                  progress={analysisProgress}
+                  startedAt={analysisStartedAt}
+                  cancelling={cancellingWorkspaceId === activeWorkspace.id}
+                  onCancel={() => void cancelAnalysis()}
+                />
+              ) : null}
             </>
           ) : !activeWorkspace ? (
             <EmptyCanvas onCreate={() => setCreateOpen(true)} />
@@ -346,6 +358,7 @@ export default function App() {
               status={factStatus}
               analyzing={analyzingWorkspaceId === activeWorkspace.id}
               progress={analysisProgress}
+              startedAt={analysisStartedAt}
               onAnalyze={() => void runAnalysis()}
               onCancel={() => void cancelAnalysis()}
               cancelling={cancellingWorkspaceId === activeWorkspace.id}
@@ -361,13 +374,7 @@ export default function App() {
         </aside>
       </div>
       {error && loadState !== "error" ? (
-        <div className="error-toast" role="alert">
-          <CircleAlert fontSize={16} />
-          <span>{error}</span>
-          <button type="button" onClick={() => setError(null)} aria-label="오류 닫기">
-            닫기
-          </button>
-        </div>
+        <ErrorNotice key={error} message={error} onClose={() => setError(null)} />
       ) : null}
       {createOpen ? (
         <CreateWorkspaceDialog
@@ -452,7 +459,7 @@ function Header({
           disabled={!workspace || cancelling}
           title={analyzing ? analysisProgress?.label : "현재 코드로 새 지도를 만듭니다"}
         >
-          {analyzing ? (cancelling ? "취소 중" : `${progressLabel(analysisProgress)} · 취소`) : "분석"}
+          {analyzing ? (cancelling ? "취소 중" : "분석 중 · 취소") : "분석"}
         </Button>
         <Button className="provider-button" appearance="secondary" onClick={onOpenProvider} disabled={!workspace}>
           <span>
@@ -601,6 +608,7 @@ function WorkspaceCanvas({
   status,
   analyzing,
   progress,
+  startedAt,
   onAnalyze,
   onCancel,
   cancelling,
@@ -609,6 +617,7 @@ function WorkspaceCanvas({
   status: FactGraphStatus | null;
   analyzing: boolean;
   progress: AnalysisProgressEvent | null;
+  startedAt: number | null;
   onAnalyze: () => void;
   onCancel: () => void;
   cancelling: boolean;
@@ -624,29 +633,78 @@ function WorkspaceCanvas({
         <LedgerMetric label="파일" value={status?.coverageCount ?? 0} />
       </div>
       <div className="canvas-message">
-        <Network fontSize={30} />
-        <p className="eyebrow">{hasSnapshot ? "분석 준비 완료" : "분석 결과 없음"}</p>
-        <h2>{hasSnapshot ? "검증된 구조를 불러왔습니다." : "아직 분석 결과가 없습니다."}</h2>
-        <p>
-          {analyzing
-            ? (progress?.label ?? "코드 구조를 분석하고 있습니다.")
-            : hasSnapshot
-              ? `snapshot ${status?.snapshotId ?? ""}`
-              : "새 canonical Fact Graph에 저장된 결과만 이 캔버스에 표시됩니다."}
-        </p>
+        {analyzing ? (
+          <AnalysisStatus
+            variant="embedded"
+            progress={progress}
+            startedAt={startedAt}
+            cancelling={cancelling}
+            onCancel={onCancel}
+          />
+        ) : (
+          <>
+            <Network fontSize={30} />
+            <p className="eyebrow">{hasSnapshot ? "분석 준비 완료" : "분석 결과 없음"}</p>
+            <h2>{hasSnapshot ? "검증된 구조를 불러왔습니다." : "아직 분석 결과가 없습니다."}</h2>
+            <p>
+              {hasSnapshot
+                ? `snapshot ${status?.snapshotId ?? ""}`
+                : "새 canonical Fact Graph에 저장된 결과만 이 캔버스에 표시됩니다."}
+            </p>
+            <Button appearance="primary" icon={<Network fontSize={17} />} onClick={onAnalyze}>
+              {hasSnapshot ? "의미 지도 다시 만들기" : "코드 분석 시작"}
+            </Button>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AnalysisStatus({
+  variant,
+  progress,
+  startedAt,
+  cancelling,
+  onCancel,
+}: {
+  variant: "overlay" | "embedded";
+  progress: AnalysisProgressEvent | null;
+  startedAt: number | null;
+  cancelling: boolean;
+  onCancel: () => void;
+}) {
+  const elapsedSeconds = useElapsedSeconds(startedAt);
+  const completed = Math.max(0, progress?.completed ?? 0);
+  const total = Math.max(1, progress?.total ?? 1);
+  return (
+    <section className={`analysis-status ${variant}`} aria-label="코드 분석 상태" aria-live="polite">
+      <div className="analysis-status-head">
+        <span className="analysis-status-spinner" aria-hidden="true">
+          <LoaderCircle className="spin" />
+        </span>
+        <span>
+          <small>{analysisStageLabel(progress?.stage)}</small>
+          <strong>
+            {cancelling ? "실행 중인 분석을 안전하게 중지하는 중" : (progress?.label ?? "코드를 분석하는 중")}
+          </strong>
+        </span>
+        <time>경과 {formatElapsed(elapsedSeconds)}</time>
+      </div>
+      <progress aria-label="현재 단계 진행률" max={total} value={Math.min(completed, total)} />
+      <div className="analysis-status-foot">
+        <span>
+          현재 단계 {total > 1 ? `${completed.toLocaleString("ko-KR")}/${total.toLocaleString("ko-KR")}` : "실행 중"}
+        </span>
+        <small>전체 완료 예상치가 아닌 현재 단계의 실제 상태입니다.</small>
         <Button
-          appearance="primary"
-          icon={analyzing ? <StopCircle fontSize={17} /> : <Network fontSize={17} />}
-          onClick={analyzing ? onCancel : onAnalyze}
+          appearance="subtle"
+          size="small"
+          icon={<StopCircle fontSize={14} />}
+          onClick={onCancel}
           disabled={cancelling}
         >
-          {analyzing
-            ? cancelling
-              ? "분석 취소 중"
-              : `${progressLabel(progress)} · 취소`
-            : hasSnapshot
-              ? "의미 지도 다시 만들기"
-              : "코드 분석 시작"}
+          {cancelling ? "취소 중" : "분석 취소"}
         </Button>
       </div>
     </section>
@@ -1000,16 +1058,74 @@ function CenteredState({ icon, title, detail }: { icon: React.ReactNode; title: 
   );
 }
 
+function ErrorNotice({ message, onClose }: { message: string; onClose: () => void }) {
+  const { summary, detail } = splitErrorMessage(message);
+  return (
+    <div className="error-toast" role="alert">
+      <CircleAlert fontSize={18} aria-hidden="true" />
+      <div className="error-toast-copy">
+        <strong>{summary}</strong>
+        {detail ? (
+          <details>
+            <summary>자세히</summary>
+            <pre>{detail}</pre>
+          </details>
+        ) : null}
+      </div>
+      <button type="button" onClick={onClose} aria-label="오류 닫기">
+        닫기
+      </button>
+    </div>
+  );
+}
+
 function lastPathSegment(path: string): string {
   const segments = path.split(/[\\/]/).filter(Boolean);
   return segments[segments.length - 1] ?? path;
 }
 
-function progressLabel(progress: AnalysisProgressEvent | null): string {
-  if (!progress) return "분석 중";
-  const total = Math.max(1, progress.total);
-  const percent = Math.min(100, Math.round((progress.completed / total) * 100));
-  return percent > 0 ? `분석 ${percent}%` : "분석 중";
+function useElapsedSeconds(startedAt: number | null): number {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (startedAt === null) {
+      setElapsed(0);
+      return;
+    }
+    const update = () => setElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    update();
+    const timer = window.setInterval(update, 1_000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+  return elapsed;
+}
+
+function formatElapsed(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return minutes > 0 ? `${minutes}분 ${String(remainder).padStart(2, "0")}초` : `${remainder}초`;
+}
+
+function analysisStageLabel(stage: string | undefined): string {
+  if (!stage || stage === "starting") return "분석 준비";
+  if (stage === "discovery" || stage === "manifest") return "소스 확인";
+  if (stage === "project-model" || stage === "planning") return "분석 계획";
+  if (stage === "provider-setup" || stage === "provider-selection") return "언어 분석기 준비";
+  if (stage === "providers") return "정적 코드 분석";
+  if (stage === "facts-ready") return "코드 사실 저장 완료";
+  if (stage === "semantic") return "AI 의미 지도 구성";
+  return "코드 분석";
+}
+
+function splitErrorMessage(message: string): { summary: string; detail: string | null } {
+  const normalized = message.trim() || "작업을 완료하지 못했습니다.";
+  const firstLine = normalized.split(/\r?\n/, 1)[0] ?? normalized;
+  if (normalized.length <= 220 && !normalized.includes("\n")) {
+    return { summary: normalized, detail: null };
+  }
+  const candidate = firstLine.slice(0, 180);
+  const boundary = Math.max(candidate.lastIndexOf(". "), candidate.lastIndexOf(" | "), candidate.lastIndexOf(" "));
+  const summary = `${candidate.slice(0, boundary >= 96 ? boundary : 180).trimEnd()}…`;
+  return { summary, detail: normalized };
 }
 
 function errorMessage(reason: unknown): string {

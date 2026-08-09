@@ -353,10 +353,9 @@ fn project_map(stored: &store::StoredSemanticRevision, facts: &[FactNode]) -> Ma
         .filter(|area| area.parent_area_id.is_none())
         .collect::<Vec<_>>();
     top.sort_by(|left, right| left.area_id.cmp(&right.area_id));
-    let areas = top
+    let mut areas = top
         .iter()
-        .enumerate()
-        .map(|(index, area)| {
+        .map(|area| {
             project_area(
                 area,
                 &children,
@@ -364,10 +363,11 @@ fn project_map(stored: &store::StoredSemanticRevision, facts: &[FactNode]) -> Ma
                 &anchors_by_region,
                 &stored.packet.input.representative_traces,
                 &facts_by_id,
-                Some(default_position(index)),
+                None,
             )
         })
-        .collect();
+        .collect::<Vec<_>>();
+    assign_default_positions(&mut areas);
     let assignments = stored
         .revision
         .assignments
@@ -726,12 +726,113 @@ fn evidence_refs(
         .collect()
 }
 
-fn default_position(index: usize) -> MapPosition {
-    let column = i32::try_from(index % 4).unwrap_or(0);
-    let row = i32::try_from(index / 4).unwrap_or(0);
-    MapPosition {
-        x: 48 + column * 300,
-        y: 96 + row * 300,
+fn assign_default_positions(areas: &mut [MapArea]) {
+    const LEFT: i32 = 48;
+    const TOP: i32 = 96;
+    const COLUMN_GAP: i32 = 56;
+    const ROW_GAP: i32 = 64;
+
+    let columns = default_column_count(areas.len());
+    let mut y = TOP;
+    for row in areas.chunks_mut(columns) {
+        let mut x = LEFT;
+        let mut row_height = 0_i32;
+        for area in row {
+            area.position = Some(MapPosition { x, y });
+            let width = i32::try_from(area.width.unwrap_or(232)).unwrap_or(i32::MAX);
+            x = x.saturating_add(width).saturating_add(COLUMN_GAP);
+            row_height = row_height.max(estimated_area_height(area));
+        }
+        y = y.saturating_add(row_height).saturating_add(ROW_GAP);
+    }
+}
+
+fn default_column_count(area_count: usize) -> usize {
+    match area_count {
+        0..=4 => area_count.max(1),
+        5..=12 => 4,
+        13..=30 => 5,
+        31..=60 => 6,
+        61..=112 => 7,
+        _ => 8,
+    }
+}
+
+fn estimated_area_height(area: &MapArea) -> i32 {
+    let trace_height = i32::from(area.trace.is_some()) * 24;
+    let hidden_height = i32::from(area.hidden_node_count > 0) * 36;
+    if area.areas.is_empty() {
+        return 88_i32
+            .saturating_add(trace_height)
+            .saturating_add(hidden_height)
+            .saturating_add(
+                i32::try_from(area.nodes.len())
+                    .unwrap_or(i32::MAX)
+                    .saturating_mul(58),
+            );
+    }
+    let tallest_child = area
+        .areas
+        .iter()
+        .map(estimated_area_height)
+        .max()
+        .unwrap_or(0);
+    112_i32
+        .saturating_add(trace_height)
+        .saturating_add(tallest_child)
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    fn area(id: &str, width: u32, node_count: usize) -> MapArea {
+        MapArea {
+            id: id.to_string(),
+            name: id.to_string(),
+            original_name: None,
+            summary: String::new(),
+            depth: 0,
+            areas: Vec::new(),
+            nodes: (0..node_count)
+                .map(|index| MapNode {
+                    id: format!("{id}-{index}"),
+                    name: index.to_string(),
+                    kind: "Code".to_string(),
+                    role: "code",
+                })
+                .collect(),
+            hidden_node_count: 0,
+            position: None,
+            width: Some(width),
+            trace: None,
+        }
+    }
+
+    #[test]
+    fn default_layout_accounts_for_variable_width_and_row_height() {
+        let mut areas = vec![
+            area("wide", 720, 1),
+            area("next", 232, 1),
+            area("third", 232, 1),
+            area("tall", 232, 8),
+            area("next-row", 232, 1),
+        ];
+        assign_default_positions(&mut areas);
+
+        let wide = areas[0].position.as_ref().unwrap();
+        let next = areas[1].position.as_ref().unwrap();
+        assert!(next.x >= wide.x + 720 + 56);
+        let tall = areas[3].position.as_ref().unwrap();
+        let next_row = areas[4].position.as_ref().unwrap();
+        assert!(next_row.y >= tall.y + estimated_area_height(&areas[3]) + 64);
+    }
+
+    #[test]
+    fn large_maps_expand_to_more_columns_without_losing_determinism() {
+        assert_eq!(default_column_count(4), 4);
+        assert_eq!(default_column_count(20), 5);
+        assert_eq!(default_column_count(192), 8);
     }
 }
 

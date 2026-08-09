@@ -132,9 +132,10 @@ describe("analysis vertical slice", () => {
     const start = await screen.findByRole("button", { name: "코드 분석 시작" });
     fireEvent.click(start);
 
-    expect(await screen.findByText("주문을 처리합니다.")).toBeVisible();
+    const areaButton = await screen.findByRole("button", { name: /주문.*orders.*L0/ });
+    expect(areaButton).toBeVisible();
     expect(mocks.analyzeWorkspace).toHaveBeenCalledWith("ws-0123456789abcdef");
-    fireEvent.click(screen.getByRole("button", { name: /주문.*orders.*L0/ }));
+    fireEvent.click(areaButton);
 
     await waitFor(() => expect(mocks.getMapSelection).toHaveBeenCalledWith("ws-0123456789abcdef", "area-orders"));
     const evidence = await screen.findByRole("button", { name: "service.ts:12" });
@@ -163,6 +164,8 @@ describe("analysis vertical slice", () => {
     fireEvent.click(await screen.findByRole("button", { name: "코드 분석 시작" }));
 
     const cancel = await screen.findAllByRole("button", { name: /분석.*취소/ });
+    expect(cancel[0]).toHaveTextContent("분석 중 · 취소");
+    expect(cancel[0]).not.toHaveTextContent("%");
     fireEvent.click(cancel[0]);
     await waitFor(() => expect(mocks.cancelWorkspaceAnalysis).toHaveBeenCalledWith("ws-0123456789abcdef"));
 
@@ -181,6 +184,21 @@ describe("analysis vertical slice", () => {
     });
     await waitFor(() => expect(mocks.getMapView).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByRole("button", { name: /분석.*취소/ })).not.toBeInTheDocument());
+  });
+
+  it("keeps long engine diagnostics collapsed behind a short error summary", async () => {
+    const diagnostic = `의미 지도 검증에 실패했습니다: ${"trace crosses an unrelated region ".repeat(30)}`;
+    mocks.analyzeWorkspace.mockRejectedValueOnce(diagnostic);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "코드 분석 시작" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toBeVisible();
+    expect(alert).toHaveTextContent("의미 지도 검증에 실패했습니다");
+    const details = screen.getByText("자세히").closest("details");
+    expect(details).not.toHaveAttribute("open");
+    expect(details?.querySelector("pre")).toHaveTextContent(diagnostic.trim());
   });
 
   it("deletes only the app workspace after explicit confirmation", async () => {

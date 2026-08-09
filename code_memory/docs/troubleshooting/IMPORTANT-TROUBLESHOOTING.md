@@ -4128,6 +4128,75 @@ GC도 사용자 데이터 삭제 정책과 복구 경계를 정한 뒤 별도 �
 
 ---
 
+## TS-2026-08-09-94 — 고정 캔버스 잘림·영역 겹침·가짜 전체 진행률 제거
+
+### 증상
+
+영역 수가 많거나 저장 위치가 멀리 있는 지도는 `1440×1080` 바깥 내용이 화면 맞춤에 포함되지 않았다.
+백엔드는 폭이 서로 다른 영역도 300px 고정 격자에 놓아 넓은 영역이 다음 영역과 겹칠 수 있었다. 분석 중
+헤더의 `55%`는 실제 전체 완료율처럼 보였지만 provider 단계 내부 값이었고, 긴 오류는 화면 폭을 크게
+차지했다.
+
+### 영향
+
+대형 저장소일수록 전체 구조 지도에서 영역이 사라지거나 겹쳐 핵심 제품 가치가 깨졌다. 수 분이 걸리는
+provider/AI 단계에서 같은 숫자가 오래 유지되면 멈춘 것으로 오해하게 되고, 기술 오류가 캔버스를 덮어
+이전 지도를 계속 읽을 수도 없었다.
+
+### 잘못 짚기 쉬운 원인
+
+최소 줌만 낮추거나 CSS 카드 폭만 줄이면 실제 world bounds와 배치 충돌은 남는다. 여러 단계가 서로 다른
+분모를 쓰는 상황에서 비율을 이어 붙이는 것도 정확한 E2E 진행률이 아니다. 오류 문자열 자체를 버리면
+진단 가능성만 잃는다.
+
+### 근본 원인
+
+- 프론트 stage와 SVG viewBox가 실제 map data와 무관한 고정 크기였다.
+- fallback과 백엔드 기본 배치가 실제 area width/content height를 사용하지 않았다.
+- 모든 줌 수준에서 중첩 영역·멤버·관계 라벨을 전부 렌더링했다.
+- `ResizeObserver`가 같은 rectangle에도 새 `Map` state를 기록했고 relation route를 두 번 계산했다.
+- 현재 단계 `completed/total`을 전체 분석 percentage로 표시했다.
+- 오류 UI에 summary/detail 경계가 없었다.
+
+### 적용한 수정
+
+- 백엔드와 프론트 fallback 모두 실제 영역 폭과 예상 렌더 높이를 사용해 행을 배치한다. 열 수는 영역 수에
+  따라 1~8개로 결정되며 같은 입력에서는 항상 같다.
+- 캔버스 world bounds는 모든 top-level area의 위치·폭·높이와 padding으로 계산한다. 화면 맞춤 최소 배율은
+  5%다.
+- 55% 미만은 같은 데이터의 책임 overview로 렌더링한다. 이름, 하위 영역 수, 확인 항목 수, 관계선은 남기고
+  무거운 member chain과 relation label만 확대 전까지 생략한다.
+- relation route는 측정 rectangle에서 한 번만 계산한다. rectangle 비교에는 0.25px 허용치를 두고 같은
+  측정이면 기존 state를 재사용하며 observer callback은 animation frame당 한 번으로 합친다.
+- 분석 UI는 stage label, 엔진의 exact label/work count, 경과 시간, 취소를 표시한다. stage ratio를 전체
+  완료율이나 ETA로 부르지 않는다. 재분석 중에도 마지막 게시 지도를 유지한다.
+- 긴 오류는 180자 이내 요약과 닫힌 `<details>` 기술 원문으로 분리한다.
+
+### 검증 결과
+
+- 40개 미배치 영역의 stage width/height가 기존 `1440×1080`보다 확장되고 모든 40개 영역이 DOM에 남는
+  회귀 테스트가 통과했다.
+- `(2400, 3200)` 저장 위치가 world bounds에 포함되는 회귀 테스트가 통과했다.
+- 가변 폭/행 높이와 4·20·192개 영역의 결정적 열 수 Rust 테스트가 통과했다.
+- 긴 오류가 접힌 상세로 남고 분석 버튼에 가짜 `%`가 없는 UI 테스트가 통과했다.
+
+### 재발 시 점검 순서
+
+1. `.map-stage`와 SVG `viewBox`가 실제 `mapWorld` 값을 같이 쓰는지 확인한다.
+2. 저장 위치가 없는 area가 width/height를 무시한 고정 300px 격자로 돌아가지 않았는지 확인한다.
+3. 낮은 줌에서 item detail과 relation label이 다시 전부 mount되지 않았는지 확인한다.
+4. `ResizeObserver`가 동일 rectangle마다 새 state를 만드는지 React profiler로 확인한다.
+5. stage별 progress를 합산 근거 없이 전체 percentage나 ETA로 표시하지 않았는지 확인한다.
+6. 오류 원문이 화면에 항상 펼쳐지거나 반대로 진단 정보가 삭제되지 않았는지 확인한다.
+
+### 남은 한계 또는 후속 gate
+
+DOM 구조·경계 회귀는 고정했지만 실제 S/M/L 저장소의 pan/zoom frame time, initial fit latency, connector 수별
+route 비용, WebView peak memory는 아직 측정하지 않았다. 이 수치 없이 “몇 영역까지 60fps” 같은 출시
+한계를 선언하지 않는다. 필요하면 viewport virtualization/level-of-detail threshold를 측정 결과로만 조정한다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text

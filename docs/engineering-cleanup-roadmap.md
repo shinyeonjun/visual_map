@@ -90,19 +90,40 @@ remaining measured completion gates.
   diagnostic receipt and do not affect semantic or bundle identity.
 - Normal engine progress no longer scales with repository audit sample size.
 
-## Local certification result
+### Large-map workbench behavior
+
+- The map world expands from actual area positions and estimated rendered
+  bounds instead of clipping everything outside a fixed `1440×1080` stage.
+- Default top-level placement uses actual projected width/content height and a
+  deterministic area-count-dependent column count, so wide or tall areas do
+  not overlap the next column or row.
+- Fit-to-screen supports large repositories down to 5% scale. At low scale,
+  semantic zoom keeps responsibility names, counts, and relationship lines but
+  omits member-heavy detail until the reader zooms in.
+- Connector geometry is memoized from one measured rectangle set and unchanged
+  `ResizeObserver` samples do not trigger another render.
+- Analysis feedback reports current stage, exact work count, elapsed time, and
+  cancellation rather than a misleading whole-analysis percentage. Existing
+  maps remain visible during reanalysis.
+- Long engine/AI diagnostics are collapsed behind a short error summary.
+- Regression fixtures cover forty unplaced areas and stored positions beyond
+  the former fixed world boundary. Large-repository interaction latency and
+  peak-memory measurements remain the separate P2 gate below.
+
+## Latest staged verification before the final Clippy gate
 
 - Code Memory: 322 passed, 0 failed.
 - Fact/Semantic contracts: 18 + 3 + 22 passed; one authenticated Codex
   evaluation remains intentionally ignored in local automation.
-- Tauri: 76 passed, 0 failed, 4 external-environment tests ignored.
-- Frontend: 8 passed; typecheck, ESLint, Knip, Prettier, and production build
-  passed.
+- Tauri: 78 passed, 0 failed, 4 external-environment tests ignored.
+- Frontend: 12 passed; typecheck, ESLint, Prettier, and production build passed.
 - Canonical provider gate: 9 project runs, 10 language contracts, 0 skipped.
 - Independent cache runs produced identical semantic digests and identical
   canonical SQLite bytes in debug and release profiles.
 - Code Memory, Tauri, fact-model, semantic-model, and semantic-compiler passed
-  Clippy with `-D warnings`.
+  Clippy with `-D warnings` at the preceding canonical-cleanup checkpoint.
+  Per the cleanup order, Clippy is not repeatedly interleaved with structural
+  patches; it is rerun once as the final repository certification gate.
 - Locked optimized Code Memory build passed, and verification fixtures were
   removed without leaving Temp artifacts.
 

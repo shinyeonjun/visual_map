@@ -11,17 +11,20 @@ import {
   SubtractRegular as Minus,
   TableRegular as Table2,
 } from "@fluentui/react-icons";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { drawableRelations, flattenAreas } from "./types";
 import type { MapArea, MapNode, MapView, NodeRole, TraceState } from "./types";
 import { useCanvasViewport } from "./useCanvasViewport";
 
-/** The world the areas are placed in. Larger than any first view, so it pans. */
-const WORLD_WIDTH = 1440;
-const WORLD_HEIGHT = 1080;
+/** The smallest useful canvas. Larger maps expand from their actual layout. */
+const MIN_WORLD_WIDTH = 1440;
+const MIN_WORLD_HEIGHT = 1080;
 /** Where a top-level area sits when the reader has not moved it yet. */
 const DEFAULT_AREA_WIDTH = 232;
+const CANVAS_PADDING = 72;
+/** Below this scale the canvas becomes a responsibility overview. */
+const DETAIL_SCALE = 0.55;
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -34,25 +37,36 @@ export function MapCanvas({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const canvas = useCanvasViewport(WORLD_WIDTH, WORLD_HEIGHT);
+  const fallbackPositions = useMemo(() => defaultPositions(view.areas), [view.areas]);
+  const world = useMemo(() => mapWorld(view, fallbackPositions), [fallbackPositions, view]);
+  const canvas = useCanvasViewport(world.width, world.height);
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const rects = useAreaRects(stageRef, view);
-  const relations = drawableRelations(view);
+  const detailed = canvas.view.scale >= DETAIL_SCALE;
+  const rects = useAreaRects(stageRef, view, detailed);
+  const relations = useMemo(() => drawableRelations(view), [view]);
+  const routedRelations = useMemo(
+    () =>
+      relations.flatMap((relation) => {
+        const path = elbow(rects.get(relation.from), rects.get(relation.to));
+        return path ? [{ relation, path }] : [];
+      }),
+    [rects, relations],
+  );
 
   return (
     <div
-      className={panelClass("map-canvas", canvas.panning && "panning")}
+      className={panelClass("map-canvas", !detailed && "overview", canvas.panning && "panning")}
       ref={canvas.viewRef}
       style={canvas.gridStyle as CSSProperties}
       {...canvas.handlers}
     >
       <div className="map-mode">
         <Boxes fontSize={15} aria-hidden="true" />
-        무한 캔버스
+        {detailed ? "상세 구조" : "전체 구조"} · {view.areas.length.toLocaleString("ko-KR")}개 영역
       </div>
 
       <div className="map-stage" ref={stageRef} style={canvas.stageStyle as CSSProperties}>
-        <svg className="map-wires" viewBox={`0 0 ${WORLD_WIDTH} ${WORLD_HEIGHT}`} aria-hidden="true">
+        <svg className="map-wires" viewBox={`0 0 ${world.width} ${world.height}`} aria-hidden="true">
           <defs>
             {(["verified", "structural", "candidate"] as const).map((truth) => (
               <marker
@@ -68,9 +82,7 @@ export function MapCanvas({
               </marker>
             ))}
           </defs>
-          {relations.map((relation) => {
-            const path = elbow(rects.get(relation.from), rects.get(relation.to));
-            if (!path) return null;
+          {routedRelations.map(({ relation, path }) => {
             return (
               <path
                 key={relation.id}
@@ -82,22 +94,27 @@ export function MapCanvas({
           })}
         </svg>
 
-        {relations.map((relation) => {
-          const path = elbow(rects.get(relation.from), rects.get(relation.to));
-          if (!path) return null;
-          return (
-            <span
-              key={`${relation.id}-count`}
-              className={`map-wire-count ${relation.truth}`}
-              style={{ left: path.midX, top: path.midY }}
-            >
-              {relation.label} {relation.count.toLocaleString("ko-KR")}
-            </span>
-          );
-        })}
+        {detailed
+          ? routedRelations.map(({ relation, path }) => (
+              <span
+                key={`${relation.id}-count`}
+                className={`map-wire-count ${relation.truth}`}
+                style={{ left: path.midX, top: path.midY }}
+              >
+                {relation.label} {relation.count.toLocaleString("ko-KR")}
+              </span>
+            ))
+          : null}
 
         {view.areas.map((area, index) => (
-          <AreaBox key={area.id} area={area} fallbackIndex={index} selectedId={selectedId} onSelect={onSelect} />
+          <AreaBox
+            key={area.id}
+            area={area}
+            fallbackPosition={fallbackPositions[index]}
+            detailed={detailed}
+            selectedId={selectedId}
+            onSelect={onSelect}
+          />
         ))}
       </div>
 
@@ -134,20 +151,22 @@ export function MapCanvas({
 
 function AreaBox({
   area,
-  fallbackIndex,
+  fallbackPosition,
+  detailed,
   selectedId,
   onSelect,
 }: {
   area: MapArea;
-  fallbackIndex: number;
+  fallbackPosition: { x: number; y: number };
+  detailed: boolean;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
   const open = area.areas.length > 0 || area.nodes.length > 0;
-  const position = area.position ?? defaultPosition(fallbackIndex);
+  const position = area.position ?? fallbackPosition;
   return (
     <article
-      className={panelClass("map-area", open && "open", selectedId === area.id && "selected")}
+      className={panelClass("map-area", open && "open", !detailed && "overview", selectedId === area.id && "selected")}
       data-area-id={area.id}
       style={{ left: position.x, top: position.y, width: area.width ?? DEFAULT_AREA_WIDTH }}
     >
@@ -156,33 +175,42 @@ function AreaBox({
         {area.originalName ? <span className="map-area-origin">{area.originalName}</span> : null}
         <span className="map-area-level">L{area.depth}</span>
       </button>
-      <p className="map-area-summary">{area.summary}</p>
-      {area.trace ? <TraceReceipt state={area.trace.state} stepCount={area.trace.stepCount} /> : null}
+      {detailed ? (
+        <>
+          <p className="map-area-summary">{area.summary}</p>
+          {area.trace ? <TraceReceipt state={area.trace.state} stepCount={area.trace.stepCount} /> : null}
 
-      {area.areas.length > 0 ? (
-        <div className="map-subareas">
-          {area.areas.map((child) => (
-            <section className="map-subarea" key={child.id}>
-              <button type="button" className="map-subarea-head" onClick={() => onSelect(child.id)}>
-                <span className="map-subarea-name">{child.name}</span>
-                <span className="map-area-level">L{child.depth}</span>
-              </button>
-              <p className="map-subarea-summary">{child.summary}</p>
-              {child.trace ? <TraceReceipt state={child.trace.state} stepCount={child.trace.stepCount} /> : null}
-              <NodeChain nodes={child.nodes} selectedId={selectedId} onSelect={onSelect} />
-              {child.hiddenNodeCount > 0 ? (
-                <button type="button" className="map-more">
-                  +{child.hiddenNodeCount.toLocaleString("ko-KR")} 더 보기
-                </button>
-              ) : null}
-            </section>
-          ))}
-        </div>
-      ) : null}
+          {area.areas.length > 0 ? (
+            <div className="map-subareas">
+              {area.areas.map((child) => (
+                <section className="map-subarea" key={child.id}>
+                  <button type="button" className="map-subarea-head" onClick={() => onSelect(child.id)}>
+                    <span className="map-subarea-name">{child.name}</span>
+                    <span className="map-area-level">L{child.depth}</span>
+                  </button>
+                  <p className="map-subarea-summary">{child.summary}</p>
+                  {child.trace ? <TraceReceipt state={child.trace.state} stepCount={child.trace.stepCount} /> : null}
+                  <NodeChain nodes={child.nodes} selectedId={selectedId} onSelect={onSelect} />
+                  {child.hiddenNodeCount > 0 ? (
+                    <button type="button" className="map-more">
+                      +{child.hiddenNodeCount.toLocaleString("ko-KR")} 더 보기
+                    </button>
+                  ) : null}
+                </section>
+              ))}
+            </div>
+          ) : null}
 
-      {area.areas.length === 0 && area.nodes.length > 0 ? (
-        <NodeChain nodes={area.nodes} selectedId={selectedId} onSelect={onSelect} />
-      ) : null}
+          {area.areas.length === 0 && area.nodes.length > 0 ? (
+            <NodeChain nodes={area.nodes} selectedId={selectedId} onSelect={onSelect} />
+          ) : null}
+        </>
+      ) : (
+        <p className="map-area-overview-count">
+          {area.areas.length > 0 ? `하위 영역 ${area.areas.length.toLocaleString("ko-KR")}` : "하위 영역 없음"}
+          <span>확인 항목 {areaItemCount(area).toLocaleString("ko-KR")}</span>
+        </p>
+      )}
     </article>
   );
 }
@@ -263,16 +291,19 @@ function NodeIcon({ role }: { role: NodeRole }) {
  * shape from one holding twelve. Measured after layout and re-measured when
  * anything resizes.
  */
-function useAreaRects(stageRef: React.RefObject<HTMLDivElement | null>, view: MapView) {
+function useAreaRects(stageRef: React.RefObject<HTMLDivElement | null>, view: MapView, detailed: boolean) {
   const [rects, setRects] = useState<Map<string, Rect>>(new Map());
-  const signature = flattenAreas(view.areas)
-    .map((area) => area.id)
-    .join("|");
+  const signature =
+    `${detailed ? "detail" : "overview"}:` +
+    flattenAreas(view.areas)
+      .map((area) => area.id)
+      .join("|");
 
   useLayoutEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
 
+    let animationFrame: number | null = null;
     const measure = () => {
       const origin = stage.getBoundingClientRect();
       const scale = origin.width / stage.offsetWidth || 1;
@@ -288,15 +319,38 @@ function useAreaRects(stageRef: React.RefObject<HTMLDivElement | null>, view: Ma
           height: box.height / scale,
         });
       }
-      setRects(next);
+      setRects((current) => (rectMapsEqual(current, next) ? current : next));
     };
 
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
+    const scheduleMeasure = () => {
+      if (typeof requestAnimationFrame === "undefined") {
+        measure();
+        return;
+      }
+      if (animationFrame !== null) return;
+      animationFrame = requestAnimationFrame(() => {
+        animationFrame = null;
+        measure();
+      });
+    };
+
+    scheduleMeasure();
+    if (typeof ResizeObserver === "undefined") {
+      return () => {
+        if (animationFrame !== null && typeof cancelAnimationFrame !== "undefined") {
+          cancelAnimationFrame(animationFrame);
+        }
+      };
+    }
+    const observer = new ResizeObserver(scheduleMeasure);
     observer.observe(stage);
     for (const element of stage.querySelectorAll("[data-area-id]")) observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (animationFrame !== null && typeof cancelAnimationFrame !== "undefined") {
+        cancelAnimationFrame(animationFrame);
+      }
+    };
   }, [signature, stageRef]);
 
   return rects;
@@ -331,10 +385,76 @@ function elbow(from: Rect | undefined, to: Rect | undefined) {
   };
 }
 
-/** A readable grid for areas the reader has not placed yet. */
-function defaultPosition(index: number): { x: number; y: number } {
-  const columns = 4;
-  return { x: 48 + (index % columns) * 288, y: 72 + Math.floor(index / columns) * 260 };
+function rectMapsEqual(left: Map<string, Rect>, right: Map<string, Rect>): boolean {
+  if (left.size !== right.size) return false;
+  for (const [id, next] of right) {
+    const current = left.get(id);
+    if (!current) return false;
+    if (
+      Math.abs(current.x - next.x) > 0.25 ||
+      Math.abs(current.y - next.y) > 0.25 ||
+      Math.abs(current.width - next.width) > 0.25 ||
+      Math.abs(current.height - next.height) > 0.25
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areaItemCount(area: MapArea): number {
+  return area.nodes.length + area.hiddenNodeCount + area.areas.reduce((sum, child) => sum + areaItemCount(child), 0);
+}
+
+function estimateAreaHeight(area: MapArea): number {
+  const traceHeight = area.trace ? 24 : 0;
+  const hiddenHeight = area.hiddenNodeCount > 0 ? 36 : 0;
+  if (area.areas.length === 0) {
+    return 88 + traceHeight + hiddenHeight + area.nodes.length * 58;
+  }
+  return 112 + traceHeight + Math.max(0, ...area.areas.map(estimateAreaHeight));
+}
+
+function defaultColumnCount(areaCount: number): number {
+  if (areaCount <= 4) return Math.max(1, areaCount);
+  if (areaCount <= 12) return 4;
+  if (areaCount <= 30) return 5;
+  if (areaCount <= 60) return 6;
+  if (areaCount <= 112) return 7;
+  return 8;
+}
+
+/** A deterministic, non-overlapping grid when stored positions are absent. */
+function defaultPositions(areas: MapArea[]): Array<{ x: number; y: number }> {
+  const positions: Array<{ x: number; y: number }> = [];
+  const columns = defaultColumnCount(areas.length);
+  let y = 96;
+  for (let start = 0; start < areas.length; start += columns) {
+    const row = areas.slice(start, start + columns);
+    let x = 48;
+    let rowHeight = 0;
+    row.forEach((area, offset) => {
+      positions[start + offset] = { x, y };
+      x += (area.width ?? DEFAULT_AREA_WIDTH) + 56;
+      rowHeight = Math.max(rowHeight, estimateAreaHeight(area));
+    });
+    y += rowHeight + 64;
+  }
+  return positions;
+}
+
+function mapWorld(view: MapView, fallbackPositions: Array<{ x: number; y: number }>) {
+  let maxX = MIN_WORLD_WIDTH - CANVAS_PADDING;
+  let maxY = MIN_WORLD_HEIGHT - CANVAS_PADDING;
+  view.areas.forEach((area, index) => {
+    const position = area.position ?? fallbackPositions[index] ?? { x: CANVAS_PADDING, y: CANVAS_PADDING };
+    maxX = Math.max(maxX, position.x + (area.width ?? DEFAULT_AREA_WIDTH));
+    maxY = Math.max(maxY, position.y + estimateAreaHeight(area));
+  });
+  return {
+    width: Math.ceil(maxX + CANVAS_PADDING),
+    height: Math.ceil(maxY + CANVAS_PADDING),
+  };
 }
 
 function panelClass(...parts: Array<string | false | null | undefined>): string {

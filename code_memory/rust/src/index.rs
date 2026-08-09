@@ -171,15 +171,16 @@ pub(crate) fn index_project(
     emit_progress("providers", 35, 100, "언어 공급자 실행 중");
     let mut analyses = planning.cached_analyses;
     for result in run_provider_jobs(planning.jobs, |completed, total| {
+        let label = if completed == total {
+            "언어별 분석 결과 병합 중".to_string()
+        } else {
+            format!("언어 공급자 실행 중 · {completed}/{total} 작업 완료")
+        };
         emit_progress(
             "providers",
             35 + completed.saturating_mul(35) / total.max(1),
             100,
-            if completed == total {
-                "언어별 의미 분석 병합 중"
-            } else {
-                "언어 공급자 실행 중"
-            },
+            &label,
         );
     })? {
         analyses.extend(result.batches);
