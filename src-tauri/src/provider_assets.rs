@@ -43,7 +43,7 @@ const PROVIDER_PUBLIC_KEY: &str = env!("CODEBASE_WORKSPACE_PROVIDER_CATALOG_PUBL
 static ACTIVATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 type ProviderActivationProgress<'a> = dyn Fn(&str, u64, u64) + 'a;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProviderCatalog {
     schema_version: u32,
@@ -53,7 +53,7 @@ struct ProviderCatalog {
     packs: Vec<ProviderPack>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProviderPack {
     id: String,
@@ -66,7 +66,7 @@ struct ProviderPack {
     entrypoints: Vec<ProviderEntrypoint>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProviderEntrypoint {
     path: String,
@@ -121,6 +121,22 @@ fn activate_signed_bundles(
     required_languages: &BTreeSet<String>,
     progress: Option<&ProviderActivationProgress<'_>>,
 ) -> Result<PathBuf, String> {
+    activate_signed_bundles_with_public_key(
+        app_data_dir,
+        bundle_root,
+        required_languages,
+        progress,
+        PROVIDER_PUBLIC_KEY,
+    )
+}
+
+fn activate_signed_bundles_with_public_key(
+    app_data_dir: &Path,
+    bundle_root: &Path,
+    required_languages: &BTreeSet<String>,
+    progress: Option<&ProviderActivationProgress<'_>>,
+    public_key: &str,
+) -> Result<PathBuf, String> {
     let _guard = ACTIVATION_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
@@ -131,7 +147,7 @@ fn activate_signed_bundles(
         .map_err(|error| format!("provider catalog를 읽지 못했습니다: {error}"))?;
     let signature = fs::read_to_string(&signature_path)
         .map_err(|error| format!("provider catalog signature를 읽지 못했습니다: {error}"))?;
-    verify_catalog_signature(&catalog_bytes, signature.trim())?;
+    verify_catalog_signature_with_public_key(&catalog_bytes, signature.trim(), public_key)?;
     let catalog: ProviderCatalog = serde_json::from_slice(&catalog_bytes)
         .map_err(|error| format!("provider catalog 형식이 올바르지 않습니다: {error}"))?;
     validate_catalog(&catalog)?;
@@ -301,9 +317,13 @@ fn select_packs<'a>(
     Ok(selected)
 }
 
-fn verify_catalog_signature(catalog: &[u8], encoded_signature: &str) -> Result<(), String> {
+fn verify_catalog_signature_with_public_key(
+    catalog: &[u8],
+    encoded_signature: &str,
+    encoded_public_key: &str,
+) -> Result<(), String> {
     let public_key: [u8; 32] = STANDARD
-        .decode(PROVIDER_PUBLIC_KEY.trim())
+        .decode(encoded_public_key.trim())
         .map_err(|error| format!("provider public key base64 오류: {error}"))?
         .try_into()
         .map_err(|_| "provider public key 길이가 올바르지 않습니다".to_string())?;
@@ -695,6 +715,7 @@ fn unix_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
     use zip::{write::SimpleFileOptions, ZipWriter};
 
     fn write_test_pack(
@@ -737,29 +758,130 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bundled_development_catalog_signature_and_contract_are_valid() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("engines/provider-bundles");
-        let catalog_bytes = fs::read(root.join(CATALOG_FILE)).unwrap();
-        let signature = fs::read_to_string(root.join(SIGNATURE_FILE)).unwrap();
-        verify_catalog_signature(&catalog_bytes, signature.trim()).unwrap();
-        let catalog: ProviderCatalog = serde_json::from_slice(&catalog_bytes).unwrap();
-        validate_catalog(&catalog).unwrap();
+    fn write_signed_test_bundle(bundle_root: &Path) -> (ProviderCatalog, String) {
+        fs::create_dir_all(bundle_root).unwrap();
+        let core = write_test_pack(
+            bundle_root,
+            "core",
+            &[],
+            &[("manifest.json", br#"{"providers":[]}"#)],
+            "manifest.json",
+        );
+        let all = write_test_pack(
+            bundle_root,
+            "all",
+            &EXPECTED_LANGUAGES,
+            &[("all/tool.exe", b"test-provider")],
+            "all/tool.exe",
+        );
+        let catalog = ProviderCatalog {
+            schema_version: 2,
+            catalog_version: "test-catalog".to_string(),
+            key_id: "0123456789abcdef".to_string(),
+            platform: "windows-x86_64".to_string(),
+            packs: vec![core, all],
+        };
+        let catalog_bytes = serde_json::to_vec(&catalog).unwrap();
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        let signature = signing_key.sign(&catalog_bytes);
+        let encoded_signature = STANDARD.encode(signature.to_bytes());
+        let encoded_public_key = STANDARD.encode(signing_key.verifying_key().to_bytes());
+        fs::write(bundle_root.join(CATALOG_FILE), catalog_bytes).unwrap();
+        fs::write(bundle_root.join(SIGNATURE_FILE), encoded_signature).unwrap();
+        (catalog, encoded_public_key)
+    }
+
+    fn catalog_pack(id: &str, languages: &[&str], entrypoint: &str) -> ProviderPack {
+        ProviderPack {
+            id: id.to_string(),
+            version: "test-version".to_string(),
+            file_name: format!("providers-{id}.zip"),
+            sha256: "0".repeat(64),
+            compressed_bytes: 1,
+            unpacked_bytes: 1,
+            languages: languages.iter().map(|value| (*value).to_string()).collect(),
+            entrypoints: vec![ProviderEntrypoint {
+                path: entrypoint.to_string(),
+                sha256: "1".repeat(64),
+                bytes: 1,
+            }],
+        }
+    }
+
+    fn provider_selection_catalog() -> ProviderCatalog {
+        ProviderCatalog {
+            schema_version: 2,
+            catalog_version: "test-catalog".to_string(),
+            key_id: "0123456789abcdef".to_string(),
+            platform: "windows-x86_64".to_string(),
+            packs: vec![
+                catalog_pack("core", &[], "manifest.json"),
+                catalog_pack(
+                    "node",
+                    &["typescript", "javascript", "python"],
+                    "node/tool.exe",
+                ),
+                catalog_pack("java", &["java"], "java/tool.exe"),
+                catalog_pack("dotnet", &["csharp"], "dotnet/tool.exe"),
+                catalog_pack("clang", &["c", "cpp"], "clang/tool.exe"),
+                catalog_pack("go", &["go"], "go/tool.exe"),
+                catalog_pack("rust", &["rust"], "rust/tool.exe"),
+                catalog_pack("dart", &["dart"], "dart/tool.exe"),
+            ],
+        }
     }
 
     #[test]
-    fn bundled_core_pack_activates_once_into_the_shared_v3_store() {
-        let app_data = std::env::temp_dir().join(format!(
+    fn signed_catalog_signature_and_contract_are_valid_without_release_assets() {
+        let root = std::env::temp_dir().join(format!(
+            "codebase-workspace-provider-catalog-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        let (catalog, public_key) = write_signed_test_bundle(&root);
+        let catalog_bytes = fs::read(root.join(CATALOG_FILE)).unwrap();
+        let signature = fs::read_to_string(root.join(SIGNATURE_FILE)).unwrap();
+        verify_catalog_signature_with_public_key(&catalog_bytes, signature.trim(), &public_key)
+            .unwrap();
+        validate_catalog(&catalog).unwrap();
+        let mut tampered = catalog_bytes;
+        tampered.push(b' ');
+        assert!(
+            verify_catalog_signature_with_public_key(&tampered, signature.trim(), &public_key)
+                .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn signed_core_pack_activates_once_into_the_shared_v3_store() {
+        let root = std::env::temp_dir().join(format!(
             "codebase-workspace-provider-core-{}-{}",
             std::process::id(),
             unix_millis()
         ));
-        let bundle_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("engines/provider-bundles");
+        let app_data = root.join("app-data");
+        let bundle_root = root.join("bundles");
+        let (_, public_key) = write_signed_test_bundle(&bundle_root);
         fs::create_dir_all(&app_data).unwrap();
         let required = BTreeSet::new();
 
-        let first = activate_signed_bundles(&app_data, &bundle_root, &required, None).unwrap();
-        let second = activate_signed_bundles(&app_data, &bundle_root, &required, None).unwrap();
+        let first = activate_signed_bundles_with_public_key(
+            &app_data,
+            &bundle_root,
+            &required,
+            None,
+            &public_key,
+        )
+        .unwrap();
+        let second = activate_signed_bundles_with_public_key(
+            &app_data,
+            &bundle_root,
+            &required,
+            None,
+            &public_key,
+        )
+        .unwrap();
         assert_eq!(first, second);
         assert_eq!(
             first
@@ -772,14 +894,13 @@ mod tests {
         assert!(first.join(PACK_RECEIPT_FILE).is_file());
         assert!(first.join("manifest.json").is_file());
 
-        fs::remove_dir_all(app_data).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn provider_activation_selects_core_and_only_packs_for_detected_languages() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("engines/provider-bundles");
-        let catalog: ProviderCatalog =
-            serde_json::from_slice(&fs::read(root.join(CATALOG_FILE)).unwrap()).unwrap();
+        let catalog = provider_selection_catalog();
+        validate_catalog(&catalog).unwrap();
         let required = ["python".to_string(), "typescript".to_string()]
             .into_iter()
             .collect::<BTreeSet<_>>();

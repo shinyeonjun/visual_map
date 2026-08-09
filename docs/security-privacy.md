@@ -10,19 +10,34 @@ automatic GitHub upload in the current product boundary.
 ## AI boundary
 
 The user selects one installed Codex or Claude CLI adapter for both semantic-map
-analysis and chat. No provider is selected automatically. Static and database
-analysis remains available from the last published snapshot when the provider
-is unavailable; AI-derived refresh and chat are unavailable.
+analysis and chat. No provider is selected automatically. Before the first
+semantic analysis for a workspace/provider pair, the UI requires explicit
+consent that selected source-evidence excerpts are handed to that CLI and may
+reach its external AI service.
 
-Before AI integration is enabled, the implementation must enforce:
+The implementation enforces:
 
 - explicit provider/model selection;
 - bounded, purpose-specific evidence retrieval instead of whole-repository
   prompt dumps;
-- secret/path redaction at the process boundary;
+- source-excerpt secret redaction before prompt compilation, plus a second
+  fail-closed check immediately before the provider process is started;
+- masking for key/value credentials, authenticated connection strings, bearer
+  and JWT values, common provider-token shapes, and private-key blocks;
 - no raw DB row access;
 - no credential persistence in workspace or conversation records;
 - visible analysis version and stale-state handling after source changes.
+
+Automatic secret recognition cannot prove that every arbitrary high-entropy
+literal is a credential. The consent UI says this explicitly; repositories
+must not treat committed source as a credential store. The provider receives
+only the redacted bounded excerpts selected from verified evidence, never a
+whole-repository prompt dump.
+
+Static Fact publication is independent from AI success. If semantic analysis
+fails, the newly verified static snapshot remains current and usable while no
+semantic revision is published for it. An older semantic map is never shown as
+if it belonged to the new static snapshot.
 
 ## Filesystem and process boundary
 

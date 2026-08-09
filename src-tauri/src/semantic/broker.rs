@@ -26,6 +26,7 @@ pub(super) fn run_provider(
     compiled: &CompiledBasePrompt,
     operation_id: &str,
 ) -> Result<String, String> {
+    ensure_source_excerpts_sanitized(compiled)?;
     let runtime_kind = match compiled.packet.provider.kind {
         AiProviderKind::Codex => provider::AiProviderKind::Codex,
         AiProviderKind::Claude => provider::AiProviderKind::Claude,
@@ -42,6 +43,17 @@ pub(super) fn run_provider(
             run_claude(&runtime.executable, &staging.path, compiled, operation_id)
         }
     }
+}
+
+fn ensure_source_excerpts_sanitized(compiled: &CompiledBasePrompt) -> Result<(), String> {
+    for (index, excerpt) in compiled.packet.input.excerpts.iter().enumerate() {
+        if engine::redact_secrets(&excerpt.text) != excerpt.text {
+            return Err(format!(
+                "AI 전송이 차단되었습니다: source excerpt {index}에 마스킹되지 않은 비밀 패턴이 있습니다"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Executes independent first-pass semantic partitions. Each result is still
@@ -530,6 +542,42 @@ mod tests {
         assert_eq!(adaptive_worker_count(40, 32, Some(1_800)), 2);
         assert_eq!(adaptive_worker_count(40, 32, Some(1_400)), 1);
         assert_eq!(adaptive_worker_count(5, 16, Some(8_192)), 3);
+    }
+
+    #[test]
+    fn provider_boundary_rejects_any_unredacted_source_excerpt() {
+        let mut compiled = semantic_prompt_fixture();
+        compiled
+            .packet
+            .input
+            .excerpts
+            .push(codebase_semantic_model::EvidenceExcerpt {
+                evidence_id: codebase_fact_model::identity::EvidenceId::from_components(&[
+                    "broker-test",
+                    "evidence",
+                ])
+                .unwrap(),
+                owner_region_id: codebase_semantic_model::RegionId::from_components(&[
+                    "broker-test",
+                    "region",
+                ])
+                .unwrap(),
+                file_fact_id: codebase_fact_model::identity::FactNodeId::from_components(&[
+                    "broker-test",
+                    "file",
+                ])
+                .unwrap(),
+                relative_path: codebase_fact_model::source::RepositoryPath::parse("src/app.ts")
+                    .unwrap(),
+                start_line: 1,
+                end_line: 1,
+                content_hash: codebase_fact_model::identity::Sha256Digest::of_bytes(b"source"),
+                text: "const api_key = 'production-secret';".to_string(),
+            });
+
+        let error = ensure_source_excerpts_sanitized(&compiled).unwrap_err();
+        assert!(error.contains("AI 전송이 차단되었습니다"));
+        assert!(error.contains("source excerpt 0"));
     }
 
     fn semantic_prompt_fixture() -> CompiledBasePrompt {

@@ -96,10 +96,26 @@ remaining measured completion gates.
 
 - One shared operation ID covers static analysis and every parallel semantic
   child process.
-- The UI can cancel the complete operation and keeps the prior snapshot.
+- The UI can cancel the complete operation. Static publication remains
+  transactional; once a new canonical snapshot is verified and published, a
+  later AI failure cannot roll it back. The semantic revision is simply absent
+  for that snapshot.
 - Evidence opens at an exact repository-relative source location.
 - Workspace deletion requires confirmation and never deletes the source folder.
 - UI tests explicitly clean every render to prevent cross-test state leakage.
+
+### Post-certification trust fixes
+
+- Source evidence is redacted before semantic packet compilation and checked
+  again at the provider process boundary. Known unredacted secret shapes stop
+  the provider call instead of becoming prompt bytes.
+- The first semantic run for each workspace/provider pair requires explicit
+  user consent and states that automatic masking cannot cover arbitrary secret
+  formats.
+- Ordinary CI provider-asset tests build compact signed ZIP fixtures and a full
+  in-memory ten-language catalog. They no longer depend on ignored local
+  installer bundles. The separate provider release gate remains responsible
+  for the real large signed archives and ten-language executable quality.
 
 ### Bounded product receipts
 
@@ -134,8 +150,9 @@ remaining measured completion gates.
 - Code Memory: 323 passed, 0 failed.
 - Fact/Semantic contracts: 18 + 3 + 27 passed; three authenticated Codex
   evaluations remain intentionally ignored in local automation.
-- Tauri: 79 passed, 0 failed, 4 external-environment tests ignored.
-- Frontend: 12 passed; typecheck, ESLint, Prettier, and production build passed.
+- Tauri: 82 passed, 0 failed, 4 external-environment tests ignored.
+- Frontend: 21 passed; typecheck, ESLint, Prettier, dead-code check, and
+  production build passed.
 - Canonical provider gate: 9 project runs, 10 language contracts, 0 skipped.
 - Independent cache runs produced identical semantic digests and identical
   canonical SQLite bytes in debug and release profiles.

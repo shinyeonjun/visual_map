@@ -35,7 +35,7 @@ flowchart LR
     G -. "변경 불가" .-> I
 ```
 
-정적 분석 결과가 권위 있는 원본입니다. AI 결과는 동일한 Fact Graph에서 다시 만들 수 있는 파생 revision이며, 실패해도 마지막으로 검증된 Fact snapshot을 덮어쓰지 않습니다.
+정적 분석 결과가 권위 있는 원본입니다. AI 결과는 동일한 Fact Graph에서 다시 만들 수 있는 파생 revision입니다. AI가 실패해도 새로 검증된 Fact snapshot은 그대로 남고, 그 snapshot의 의미 지도만 없는 상태가 됩니다.
 
 ## 현재 가능한 것
 
@@ -67,7 +67,8 @@ flowchart LR
 - 이름이나 가까운 폴더만으로 관계 대상을 연결하지 않습니다.
 - 분석 중 source가 변경되면 혼합 snapshot을 공개하지 않습니다.
 - AI 출력은 기존 Fact/Region/Evidence ID만 참조할 수 있습니다.
-- 취소·실패·검증 실패는 이전에 게시된 snapshot을 보존합니다.
+- AI로 보내는 source 근거는 사전 동의를 받고 비밀 패턴을 마스킹하며, 남은 알려진 비밀 패턴이 있으면 전송을 차단합니다.
+- 정적 게시 전 취소·실패는 이전 snapshot을 보존하고, 정적 게시 후 AI 실패는 새 Fact snapshot과 `의미 지도 없음` 상태를 보존합니다.
 
 ## 개발 환경
 

@@ -48,6 +48,27 @@ pub(crate) struct AnalyzeWorkspaceResult {
     pub semantic_error: Option<String>,
 }
 
+pub(crate) fn complete_analysis(
+    fact_graph: FactGraphStatus,
+    semantic: Result<String, String>,
+) -> AnalyzeWorkspaceResult {
+    match semantic {
+        Ok(revision_id) => AnalyzeWorkspaceResult {
+            fact_graph,
+            semantic_revision_id: Some(revision_id),
+            semantic_error: None,
+        },
+        Err(error) => AnalyzeWorkspaceResult {
+            // Static facts are the authoritative product output. Semantic
+            // analysis is a replaceable derivative and must never roll this
+            // newly published snapshot back when the provider fails.
+            fact_graph,
+            semantic_revision_id: None,
+            semantic_error: Some(error),
+        },
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SourceLanguageReceipt {
@@ -490,5 +511,28 @@ mod tests {
         assert!(cancel_workspace_analysis(&workspace_id).unwrap());
         drop(guard);
         assert!(!cancel_workspace_analysis(&workspace_id).unwrap());
+    }
+
+    #[test]
+    fn semantic_failure_keeps_the_new_static_fact_snapshot() {
+        let facts = FactGraphStatus {
+            schema_version: 1,
+            snapshot_id: Some("snapshot-new".to_string()),
+            source_revision: Some("source-new".to_string()),
+            node_count: 21,
+            edge_count: 13,
+            evidence_count: 34,
+            coverage_count: 8,
+        };
+
+        let result = complete_analysis(facts.clone(), Err("provider unavailable".to_string()));
+
+        assert_eq!(result.fact_graph.snapshot_id, facts.snapshot_id);
+        assert_eq!(result.fact_graph.node_count, 21);
+        assert_eq!(result.semantic_revision_id, None);
+        assert_eq!(
+            result.semantic_error.as_deref(),
+            Some("provider unavailable")
+        );
     }
 }

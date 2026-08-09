@@ -96,7 +96,9 @@ the build.
 `src-tauri/src/analysis.rs` starts one analysis operation per workspace. One
 operation ID is passed to the static sidecar and every semantic child process.
 Cancellation therefore stops the complete analysis, including parallel AI
-partitions, while preserving the previously published revision.
+partitions. A cancellation before canonical publication preserves the previous
+static snapshot; a semantic-provider failure after canonical publication keeps
+the newly verified static snapshot and publishes no semantic revision for it.
 
 The desktop validates the artifact schema, completion manifest, SQLite digest,
 known tables, typed rows, references, and counts before copying it into
@@ -134,6 +136,13 @@ with gap/cycle/depth-limit status instead of being presented as complete.
 ## AI semantic boundary
 
 AI receives a bounded, provider-neutral projection of the verified Fact Graph.
+Before the first run for a workspace/provider pair, the UI explicitly discloses
+that selected source excerpts cross the configured CLI boundary. Excerpts are
+secret-redacted before packet compilation, and the broker refuses to start a
+provider process if applying the redactor again would change any excerpt. This
+keeps packet identity/cache keys tied to exactly the sanitized bytes sent to
+the provider.
+
 It may:
 
 - group existing static regions into L0/L1 semantic areas;
@@ -148,6 +157,9 @@ schema-validated and referentially checked before an immutable semantic
 revision is published. A trace can represent an area only when every region
 that owns the trace belongs to that area's direct or descendant membership;
 cross-area traces remain relationship information rather than area evidence.
+Semantic failure never rolls back the canonical Fact pointer. Map queries also
+require snapshot identity equality, so an older semantic revision cannot be
+rendered over a newer static snapshot.
 
 Large semantic inputs use adaptive, disjoint local Map jobs. The planner derives
 the partition shape from the complete prompt byte size, static region count,

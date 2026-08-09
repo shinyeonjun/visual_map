@@ -84,8 +84,12 @@ const selection: Selection = {
   source: null,
 };
 
+const evidenceConsentKey = "codebase-workspace.ai-source-evidence-consent.v1:ws-0123456789abcdef:codex";
+
 describe("analysis vertical slice", () => {
   beforeEach(() => {
+    window.localStorage.clear();
+    window.localStorage.setItem(evidenceConsentKey, "accepted");
     mocks.analyzeWorkspace.mockReset();
     mocks.getMapView.mockReset();
     mocks.getMapSelection.mockReset();
@@ -201,6 +205,53 @@ describe("analysis vertical slice", () => {
     expect(details?.querySelector("pre")).toHaveTextContent(diagnostic.trim());
   });
 
+  it("keeps newly published static facts visible when semantic map generation fails", async () => {
+    mocks.getMapView.mockReset().mockResolvedValue(null);
+    mocks.analyzeWorkspace.mockResolvedValueOnce({
+      factGraph: {
+        schemaVersion: 1,
+        snapshotId: "snapshot-new",
+        sourceRevision: "source-new",
+        nodeCount: 21,
+        edgeCount: 13,
+        evidenceCount: 34,
+        coverageCount: 8,
+      },
+      semanticRevisionId: null,
+      semanticError: "provider unavailable",
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "코드 분석 시작" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("코드 사실은 저장됐지만 의미 지도를 만들지 못했습니다");
+    const ledger = screen.getByLabelText("분석 원장");
+    expect(ledger).toHaveTextContent("노드21");
+    expect(ledger).toHaveTextContent("관계13");
+    expect(ledger).toHaveTextContent("근거34");
+    expect(ledger).toHaveTextContent("파일8");
+    expect(await screen.findByText("snapshot snapshot-new")).toBeVisible();
+    expect(mocks.getMapView).toHaveBeenCalledTimes(2);
+  });
+
+  it("requires explicit consent before source evidence can cross the AI provider boundary", async () => {
+    window.localStorage.removeItem(evidenceConsentKey);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "코드 분석 시작" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "AI 코드 근거 전송 동의" });
+    expect(dialog).toHaveTextContent("선택된 소스 코드 근거 발췌");
+    expect(dialog).toHaveTextContent("외부 AI 서비스로 전송될 수 있습니다");
+    expect(dialog).toHaveTextContent("알려진 비밀값 패턴은 전송 전에 마스킹");
+    expect(mocks.analyzeWorkspace).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "동의하고 분석" }));
+    await waitFor(() => expect(mocks.analyzeWorkspace).toHaveBeenCalledWith("ws-0123456789abcdef"));
+    expect(window.localStorage.getItem(evidenceConsentKey)).toBe("accepted");
+  });
+
   it("deletes only the app workspace after explicit confirmation", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "commerce 프로젝트 삭제" }));
@@ -208,6 +259,7 @@ describe("analysis vertical slice", () => {
     fireEvent.click(screen.getByRole("button", { name: "앱에서 삭제" }));
     await waitFor(() => expect(mocks.deleteWorkspace).toHaveBeenCalledWith("ws-0123456789abcdef"));
     expect(screen.queryByText("commerce")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(evidenceConsentKey)).toBeNull();
   });
 
   it("shows the exact CLI model and defaults reasoning to high", async () => {

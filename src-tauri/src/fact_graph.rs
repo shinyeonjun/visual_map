@@ -200,49 +200,6 @@ pub(crate) fn status_for_workspace(
     Ok(status_from_manifest(&published.manifest))
 }
 
-pub(crate) fn checkpoint_published_pointer(
-    app_data_dir: impl AsRef<Path>,
-    workspace_id: &str,
-) -> Result<Option<Vec<u8>>, String> {
-    // Validate the referenced bundle before accepting it as a rollback point.
-    let current = published_bundle_for_workspace(&app_data_dir, workspace_id)?;
-    if current.is_none() {
-        return Ok(None);
-    }
-    let path =
-        workspace::workspace_data_dir(app_data_dir, workspace_id)?.join(PUBLISHED_POINTER_FILE);
-    fs::read(path)
-        .map(Some)
-        .map_err(|error| format!("Fact snapshot rollback point를 읽지 못했습니다: {error}"))
-}
-
-pub(crate) fn restore_published_pointer(
-    app_data_dir: impl AsRef<Path>,
-    workspace_id: &str,
-    checkpoint: Option<&[u8]>,
-) -> Result<(), String> {
-    let workspace_dir = workspace::workspace_data_dir(app_data_dir, workspace_id)?;
-    let path = workspace_dir.join(PUBLISHED_POINTER_FILE);
-    match checkpoint {
-        Some(bytes) => {
-            let pointer: PublishedFactPointer = serde_json::from_slice(bytes)
-                .map_err(|error| format!("Fact rollback pointer 형식 오류: {error}"))?;
-            if pointer.manifest.workspace_id.as_str() != workspace_id {
-                return Err("Fact rollback pointer의 workspace identity가 다릅니다".to_string());
-            }
-            replace_pointer_bytes(&path, bytes)
-        }
-        None => {
-            if path.is_file() {
-                fs::remove_file(path).map_err(|error| {
-                    format!("실패한 Fact snapshot pointer rollback 실패: {error}")
-                })?;
-            }
-            Ok(())
-        }
-    }
-}
-
 pub(crate) fn import_and_publish(
     app_data_dir: impl AsRef<Path>,
     workspace_id: &str,
@@ -1050,31 +1007,6 @@ mod tests {
         let trace = reader.trace_snapshot(&caller.id, 1, 1).unwrap().unwrap();
         assert_eq!(trace.nodes.len(), 2);
         assert_eq!(trace.edges, vec![edge]);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn failed_semantic_refresh_restores_the_previous_fact_pointer() {
-        let root = test_root("rollback");
-        let workspace_id = "ws-0123456789abcdef";
-        let workspace_dir = root.join("workspaces").join("v2").join(workspace_id);
-        fs::create_dir_all(&workspace_dir).unwrap();
-        let fixture = empty_bundle_fixture(&root, workspace_id);
-        let expected = import_and_publish(&root, workspace_id, &fixture).unwrap();
-        let checkpoint = checkpoint_published_pointer(&root, workspace_id)
-            .unwrap()
-            .unwrap();
-
-        fs::remove_file(workspace_dir.join(PUBLISHED_POINTER_FILE)).unwrap();
-        restore_published_pointer(&root, workspace_id, Some(&checkpoint)).unwrap();
-        assert_eq!(status_for_workspace(&root, workspace_id).unwrap(), expected);
-
-        restore_published_pointer(&root, workspace_id, None).unwrap();
-        assert_eq!(
-            status_for_workspace(&root, workspace_id).unwrap(),
-            empty_status()
-        );
-        assert!(workspace_dir.join("fact-snapshots").is_dir());
         fs::remove_dir_all(root).unwrap();
     }
 

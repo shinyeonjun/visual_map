@@ -1,4 +1,5 @@
 use crate::{
+    engine,
     fact_graph::{CanonicalFactSnapshot, FactReadModel},
     static_query,
     workspace::Workspace,
@@ -783,10 +784,10 @@ fn build_excerpts(
         let end_index = usize::try_from(span.end.line.saturating_add(3))
             .unwrap_or(lines.len())
             .min(lines.len());
-        let mut excerpt_text = lines[start_index..end_index].join("\n");
-        if excerpt_text.len() > MAX_EXCERPT_TEXT_BYTES {
-            excerpt_text.truncate(MAX_EXCERPT_TEXT_BYTES);
-        }
+        // Source excerpts cross the local AI-provider boundary. Redact the
+        // complete bounded excerpt before truncation so a secret can never be
+        // exposed merely because the byte ceiling split it in the middle.
+        let excerpt_text = sanitize_excerpt_text(&lines[start_index..end_index].join("\n"));
         if excerpt_text.trim().is_empty() {
             continue;
         }
@@ -803,6 +804,18 @@ fn build_excerpts(
         regions_with_excerpt.insert(anchor.owner_region_id.clone());
     }
     Ok(result)
+}
+
+fn sanitize_excerpt_text(input: &str) -> String {
+    let mut output = engine::redact_secrets(input);
+    if output.len() > MAX_EXCERPT_TEXT_BYTES {
+        let mut end = MAX_EXCERPT_TEXT_BYTES;
+        while !output.is_char_boundary(end) {
+            end -= 1;
+        }
+        output.truncate(end);
+    }
+    output
 }
 
 fn owning_file(
@@ -927,6 +940,34 @@ mod tests {
     fn relation_order_is_explicit_instead_of_debug_string_dependent() {
         assert!(family_rank(FactEdgeFamily::Code) < family_rank(FactEdgeFamily::Data));
         assert!(truth_rank(FactTruth::Confirmed) < truth_rank(FactTruth::StaticCandidate));
+    }
+
+    #[test]
+    fn ai_source_excerpt_is_redacted_without_destroying_legitimate_code_context() {
+        let github = ["gh", "p_", "1234567890", "abcdefghijklmnopqrstuvwxyz"].concat();
+        let database_url = [
+            "postgres://orders:",
+            "production-password",
+            "@db.internal/orders",
+        ]
+        .concat();
+        let input = format!(
+            "export async function createOrder(input: OrderInput) {{\n\
+             const databaseUrl = '{database_url}';\n\
+             const github = '{github}';\n\
+             const verify = (token: string) => sessions.verify(token);\n\
+             return repository.save(input);\n\
+             }}"
+        );
+
+        let output = sanitize_excerpt_text(&input);
+
+        assert!(!output.contains("production-password"));
+        assert!(!output.contains(&github));
+        assert!(output.contains("export async function createOrder"));
+        assert!(output.contains("token: string"));
+        assert!(output.contains("repository.save(input)"));
+        assert!(output.len() <= MAX_EXCERPT_TEXT_BYTES);
     }
 
     #[test]

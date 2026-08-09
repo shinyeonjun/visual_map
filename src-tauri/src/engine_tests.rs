@@ -315,6 +315,49 @@ fn redaction_masks_json_and_spaced_key_values() {
 }
 
 #[test]
+fn redaction_masks_standalone_provider_tokens_and_private_keys() {
+    // Assemble credential-shaped fixtures at runtime so repository secret
+    // scanners never mistake inert test data for a committed live credential.
+    let github = ["gh", "p_", "1234567890", "abcdefghijklmnopqrstuvwxyz"].concat();
+    let openai = ["sk", "-proj-", "abcdefghijklmnopqrstuvwxyz", "1234567890"].concat();
+    let aws = ["AK", "IA", "1234567890ABCDEF"].concat();
+    let jwt = [
+        "eyJhbGciOiJIUzI1NiJ9",
+        ".",
+        "eyJzdWIiOiJ1c2VyLTEyMzQ1Njc4OTAifQ",
+        ".",
+        "abcdefghijklmnopqrstuvwxyz",
+    ]
+    .concat();
+    let bearer = "bearer-secret-1234567890".to_string();
+    let private_key =
+        "-----BEGIN PRIVATE KEY-----\nraw-private-material\n-----END PRIVATE KEY-----";
+    let text = format!(
+        "const github = \"{github}\";\nconst model = \"{openai}\";\nconst aws = \"{aws}\";\nconst jwt = \"{jwt}\";\nAuthorization: Bearer {bearer}\n{private_key}\nconst tokenCount = 2;\nimport reset from './forgot-password/token-view';"
+    );
+
+    let redacted = redact_secrets(&text);
+
+    for secret in [
+        github.as_str(),
+        openai.as_str(),
+        aws.as_str(),
+        jwt.as_str(),
+        bearer.as_str(),
+        "raw-private-material",
+    ] {
+        assert!(
+            !redacted.contains(secret),
+            "secret shape remained: {secret}"
+        );
+    }
+    assert!(redacted.contains("[REDACTED_TOKEN]"));
+    assert!(redacted.contains("[REDACTED_PRIVATE_KEY]"));
+    assert!(redacted.contains("const tokenCount = 2"));
+    assert!(redacted.contains("./forgot-password/token-view"));
+}
+
+#[test]
 fn redaction_preserves_json_with_secret_like_code_paths() {
     let input = r#"{
         "name": "forgot-password:module",

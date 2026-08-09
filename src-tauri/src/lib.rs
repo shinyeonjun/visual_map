@@ -114,7 +114,6 @@ fn analyze_workspace(
     let app_data_dir = app_data_dir(&app)?;
     let workspace = workspace::open_workspace(&app_data_dir, &request.workspace_id)?;
     let analysis_guard = analysis::begin_workspace_analysis(&workspace.id)?;
-    let previous_pointer = fact_graph::checkpoint_published_pointer(&app_data_dir, &workspace.id)?;
     let fact_graph = analysis::run_code_analysis(
         &app,
         &app_data_dir,
@@ -150,26 +149,10 @@ fn analyze_workspace(
         analysis_guard.operation_id(),
         Some(&semantic_progress),
     );
-    match semantic {
-        Ok(revision_id) => Ok(analysis::AnalyzeWorkspaceResult {
-            fact_graph,
-            semantic_revision_id: Some(revision_id),
-            semantic_error: None,
-        }),
-        Err(error) => {
-            fact_graph::restore_published_pointer(
-                &app_data_dir,
-                &workspace.id,
-                previous_pointer.as_deref(),
-            )?;
-            let restored = fact_graph::status_for_workspace(&app_data_dir, &workspace.id)?;
-            Ok(analysis::AnalyzeWorkspaceResult {
-                fact_graph: restored,
-                semantic_revision_id: None,
-                semantic_error: Some(engine::redact_secrets(&error)),
-            })
-        }
-    }
+    Ok(analysis::complete_analysis(
+        fact_graph,
+        semantic.map_err(|error| engine::redact_secrets(&error)),
+    ))
 }
 
 #[tauri::command]

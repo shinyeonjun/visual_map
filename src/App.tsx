@@ -71,6 +71,7 @@ import {
 } from "./desktop";
 
 type LoadState = "loading" | "ready" | "error";
+const AI_EVIDENCE_CONSENT_VERSION = "v1";
 
 export default function App() {
   const [loadState, setLoadState] = useState<LoadState>("loading");
@@ -82,6 +83,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [providerOpen, setProviderOpen] = useState(false);
+  const [analysisConsentTarget, setAnalysisConsentTarget] = useState<Workspace | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mapView, setMapView] = useState<MapView | null>(null);
@@ -207,8 +209,25 @@ export default function App() {
     };
   }, [activeWorkspaceId, mapView, previewing, selectedId]);
 
-  async function runAnalysis() {
+  function requestAnalysis() {
     const workspace = activeWorkspace;
+    if (!workspace || analyzingWorkspaceId) return;
+    if (!workspace.provider || hasAiEvidenceConsent(workspace)) {
+      void runAnalysis(workspace);
+      return;
+    }
+    setAnalysisConsentTarget(workspace);
+  }
+
+  function acceptAnalysisConsent(workspace: Workspace) {
+    rememberAiEvidenceConsent(workspace);
+    setAnalysisConsentTarget(null);
+    if (activeWorkspaceIdRef.current === workspace.id) {
+      void runAnalysis(workspace);
+    }
+  }
+
+  async function runAnalysis(workspace: Workspace) {
     if (!workspace || analyzingWorkspaceId) return;
     if (!workspace.provider) {
       setError("코드 의미 지도를 만들 Codex 또는 Claude 모델을 먼저 설정하세요.");
@@ -274,6 +293,7 @@ export default function App() {
     if (analyzingWorkspaceId === workspace.id) return;
     try {
       await deleteWorkspace(workspace.id);
+      forgetAiEvidenceConsent(workspace);
       const remaining = workspaces.filter((item) => item.id !== workspace.id);
       setWorkspaces(remaining);
       if (activeWorkspaceIdRef.current === workspace.id) {
@@ -315,7 +335,7 @@ export default function App() {
         workspace={activeWorkspace}
         engineRegistry={engineRegistry}
         onOpenProvider={() => setProviderOpen(true)}
-        onAnalyze={() => void runAnalysis()}
+        onAnalyze={requestAnalysis}
         onCancel={() => void cancelAnalysis()}
         analyzing={Boolean(activeWorkspaceId) && analyzingWorkspaceId === activeWorkspaceId}
         cancelling={Boolean(activeWorkspaceId) && cancellingWorkspaceId === activeWorkspaceId}
@@ -359,7 +379,7 @@ export default function App() {
               analyzing={analyzingWorkspaceId === activeWorkspace.id}
               progress={analysisProgress}
               startedAt={analysisStartedAt}
-              onAnalyze={() => void runAnalysis()}
+              onAnalyze={requestAnalysis}
               onCancel={() => void cancelAnalysis()}
               cancelling={cancellingWorkspaceId === activeWorkspace.id}
             />
@@ -405,8 +425,56 @@ export default function App() {
           onConfirm={() => void removeWorkspace(deleteTarget)}
         />
       ) : null}
+      {analysisConsentTarget ? (
+        <AiEvidenceConsentDialog
+          workspace={analysisConsentTarget}
+          onClose={() => setAnalysisConsentTarget(null)}
+          onConfirm={() => acceptAnalysisConsent(analysisConsentTarget)}
+        />
+      ) : null}
     </div>
   );
+}
+
+function aiEvidenceConsentKey(workspace: Workspace): string | null {
+  if (!workspace.provider) return null;
+  return aiEvidenceConsentStorageKey(workspace.id, workspace.provider.kind);
+}
+
+function aiEvidenceConsentStorageKey(workspaceId: string, providerKind: ProviderKind): string {
+  return `codebase-workspace.ai-source-evidence-consent.${AI_EVIDENCE_CONSENT_VERSION}:${workspaceId}:${providerKind}`;
+}
+
+function hasAiEvidenceConsent(workspace: Workspace): boolean {
+  const key = aiEvidenceConsentKey(workspace);
+  if (!key) return false;
+  try {
+    return window.localStorage.getItem(key) === "accepted";
+  } catch {
+    return false;
+  }
+}
+
+function rememberAiEvidenceConsent(workspace: Workspace) {
+  const key = aiEvidenceConsentKey(workspace);
+  if (!key) return;
+  try {
+    window.localStorage.setItem(key, "accepted");
+  } catch {
+    // A blocked storage API must not make consent implicit. This explicit
+    // confirmation still authorizes only the analysis being started now.
+  }
+}
+
+function forgetAiEvidenceConsent(workspace: Workspace) {
+  for (const providerKind of ["codex", "claude"] as const) {
+    const key = aiEvidenceConsentStorageKey(workspace.id, providerKind);
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      // The record is not a credential. A blocked storage API is harmless.
+    }
+  }
 }
 
 function Header({
@@ -737,6 +805,45 @@ function DeleteWorkspaceDialog({
             </Button>
             <Button appearance="primary" type="button" onClick={onConfirm}>
               앱에서 삭제
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function AiEvidenceConsentDialog({
+  workspace,
+  onClose,
+  onConfirm,
+}: {
+  workspace: Workspace;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const provider = workspace.provider?.kind === "claude" ? "Claude CLI" : "Codex CLI";
+  return (
+    <Dialog open onOpenChange={(_, data) => (!data.open ? onClose() : undefined)}>
+      <DialogSurface className="dialog-surface" aria-label="AI 코드 근거 전송 동의">
+        <DialogBody>
+          <DialogTitle>AI 의미 분석을 시작할까요?</DialogTitle>
+          <DialogContent className="dialog-content">
+            <p className="dialog-lead">
+              <strong>{workspace.name}</strong>에서 선택된 소스 코드 근거 발췌가 {provider}에 전달됩니다. CLI 설정에
+              따라 외부 AI 서비스로 전송될 수 있습니다.
+            </p>
+            <p className="dialog-note">
+              정적 코드 사실은 로컬에서 만들고, 알려진 비밀값 패턴은 전송 전에 마스킹합니다. 자동 마스킹이 모든 형태의
+              비밀값을 보장하지는 않습니다.
+            </p>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" type="button" onClick={onClose}>
+              취소
+            </Button>
+            <Button appearance="primary" type="button" onClick={onConfirm}>
+              동의하고 분석
             </Button>
           </DialogActions>
         </DialogBody>
