@@ -118,6 +118,33 @@ fn census_parallel_measurement_is_identical_to_serial_measurement() {
 }
 
 #[test]
+fn a_validated_preflight_manifest_reuses_the_exact_census_identity() {
+    let project = TestProject::new("census-preflight");
+    project.write("src/main.ts", b"export const value = 1;\n");
+    let census = SourceCensus::scan(&project.root).unwrap();
+    let manifest_path = project.root.join("preflight-source-manifest.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec(&census.manifest).unwrap(),
+    )
+    .unwrap();
+
+    let loaded = SourceCensus::load_verified_manifest(
+        &project.root,
+        &manifest_path,
+        &census.manifest.manifest_digest,
+    )
+    .unwrap();
+    assert_eq!(loaded.manifest, census.manifest);
+    assert!(SourceCensus::load_verified_manifest(
+        &project.root,
+        &manifest_path,
+        &Sha256Digest::of_bytes(b"different manifest"),
+    )
+    .is_err());
+}
+
+#[test]
 fn census_streams_large_sources_and_hashes_the_complete_content() {
     let project = TestProject::new("large-source");
     let mut source = String::from("export const marker = '한글';\n\n");

@@ -79,11 +79,13 @@ struct ProviderReceipt {
     schema_version: u32,
     catalog_version: String,
     catalog_digest: String,
+    pack_ids: Vec<String>,
 }
 
 pub(crate) fn resolve_provider_root(
     app_data_dir: &Path,
     engine_dir: &Path,
+    required_languages: &BTreeSet<String>,
     progress: Option<&ProviderActivationProgress<'_>>,
 ) -> Result<PathBuf, String> {
     let expanded = engine_dir.join("provider-bundles");
@@ -100,12 +102,13 @@ pub(crate) fn resolve_provider_root(
             return Ok(source_root);
         }
     }
-    activate_signed_bundles(app_data_dir, &expanded, progress)
+    activate_signed_bundles(app_data_dir, &expanded, required_languages, progress)
 }
 
 fn activate_signed_bundles(
     app_data_dir: &Path,
     bundle_root: &Path,
+    required_languages: &BTreeSet<String>,
     progress: Option<&ProviderActivationProgress<'_>>,
 ) -> Result<PathBuf, String> {
     let _guard = ACTIVATION_LOCK
@@ -122,14 +125,31 @@ fn activate_signed_bundles(
     let catalog: ProviderCatalog = serde_json::from_slice(&catalog_bytes)
         .map_err(|error| format!("provider catalog 형식이 올바르지 않습니다: {error}"))?;
     validate_catalog(&catalog)?;
+    let selected_packs = select_packs(&catalog, required_languages)?;
+    let pack_ids = selected_packs
+        .iter()
+        .map(|pack| pack.id.clone())
+        .collect::<Vec<_>>();
     let catalog_digest = lower_sha256_bytes(&catalog_bytes);
-    let target_name = format!("{}-{}", catalog.catalog_version, &catalog_digest[..16]);
+    let selection_digest = lower_sha256_bytes(pack_ids.join("\0").as_bytes());
+    let target_name = format!(
+        "{}-{}-{}",
+        catalog.catalog_version,
+        &catalog_digest[..16],
+        &selection_digest[..16]
+    );
     let provider_root = app_data_dir.join("managed-providers").join("v2");
     fs::create_dir_all(&provider_root)
         .map_err(|error| format!("managed provider 폴더를 만들지 못했습니다: {error}"))?;
     let target = provider_root.join(target_name);
     if target.is_dir() {
-        verify_activated_root(&target, &catalog, &catalog_digest)?;
+        verify_activated_root(
+            &target,
+            &catalog,
+            &catalog_digest,
+            &pack_ids,
+            &selected_packs,
+        )?;
         return Ok(target);
     }
 
@@ -141,8 +161,8 @@ fn activate_signed_bundles(
         path: staging_path,
         root: provider_root,
     };
-    let total = u64::try_from(catalog.packs.len()).unwrap_or(u64::MAX);
-    for (index, pack) in catalog.packs.iter().enumerate() {
+    let total = u64::try_from(selected_packs.len()).unwrap_or(u64::MAX);
+    for (index, pack) in selected_packs.iter().enumerate() {
         if let Some(progress) = progress {
             progress(
                 &format!("언어 분석 도구 준비 중 · {}", pack.id),
@@ -154,16 +174,23 @@ fn activate_signed_bundles(
         verify_archive(&archive_path, pack)?;
         extract_archive(&archive_path, &staging.path, pack)?;
     }
-    verify_entrypoints(&staging.path, &catalog)?;
+    verify_entrypoints(&staging.path, &selected_packs)?;
     let receipt = ProviderReceipt {
-        schema_version: 1,
+        schema_version: 2,
         catalog_version: catalog.catalog_version.clone(),
         catalog_digest: catalog_digest.clone(),
+        pack_ids: pack_ids.clone(),
     };
     write_synced_json(&staging.path.join(RECEIPT_FILE), &receipt)?;
     if let Err(error) = fs::rename(&staging.path, &target) {
         if target.is_dir() {
-            verify_activated_root(&target, &catalog, &catalog_digest)?;
+            verify_activated_root(
+                &target,
+                &catalog,
+                &catalog_digest,
+                &pack_ids,
+                &selected_packs,
+            )?;
             return Ok(target);
         }
         return Err(format!("managed provider를 게시하지 못했습니다: {error}"));
@@ -172,6 +199,41 @@ fn activate_signed_bundles(
         progress("언어 분석 도구 준비 완료", total, total.max(1));
     }
     Ok(target)
+}
+
+fn select_packs<'a>(
+    catalog: &'a ProviderCatalog,
+    required_languages: &BTreeSet<String>,
+) -> Result<Vec<&'a ProviderPack>, String> {
+    let supported = EXPECTED_LANGUAGES
+        .into_iter()
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    if !required_languages.is_subset(&supported) {
+        let unsupported = required_languages
+            .difference(&supported)
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "지원하지 않는 source language가 provider 선택에 포함되었습니다: {}",
+            unsupported.join(", ")
+        ));
+    }
+    let selected = catalog
+        .packs
+        .iter()
+        .filter(|pack| {
+            pack.languages.is_empty()
+                || pack
+                    .languages
+                    .iter()
+                    .any(|language| required_languages.contains(language))
+        })
+        .collect::<Vec<_>>();
+    if selected.is_empty() || selected.iter().all(|pack| !pack.languages.is_empty()) {
+        return Err("provider core pack을 찾지 못했습니다".to_string());
+    }
+    Ok(selected)
 }
 
 fn verify_catalog_signature(catalog: &[u8], encoded_signature: &str) -> Result<(), String> {
@@ -349,23 +411,26 @@ fn verify_activated_root(
     root: &Path,
     catalog: &ProviderCatalog,
     catalog_digest: &str,
+    pack_ids: &[String],
+    selected_packs: &[&ProviderPack],
 ) -> Result<(), String> {
     let receipt: ProviderReceipt = serde_json::from_slice(
         &fs::read(root.join(RECEIPT_FILE))
             .map_err(|error| format!("provider activation receipt를 읽지 못했습니다: {error}"))?,
     )
     .map_err(|error| format!("provider activation receipt 형식 오류: {error}"))?;
-    if receipt.schema_version != 1
+    if receipt.schema_version != 2
         || receipt.catalog_version != catalog.catalog_version
         || receipt.catalog_digest != catalog_digest
+        || receipt.pack_ids != pack_ids
     {
         return Err("기존 managed provider cache가 다른 catalog를 가리킵니다".to_string());
     }
-    verify_entrypoints(root, catalog)
+    verify_entrypoints(root, selected_packs)
 }
 
-fn verify_entrypoints(root: &Path, catalog: &ProviderCatalog) -> Result<(), String> {
-    for pack in &catalog.packs {
+fn verify_entrypoints(root: &Path, packs: &[&ProviderPack]) -> Result<(), String> {
+    for pack in packs {
         for entrypoint in &pack.entrypoints {
             let relative = checked_relative_path(&entrypoint.path)?;
             let path = root.join(relative);
@@ -495,6 +560,24 @@ mod tests {
         verify_catalog_signature(&catalog_bytes, signature.trim()).unwrap();
         let catalog: ProviderCatalog = serde_json::from_slice(&catalog_bytes).unwrap();
         validate_catalog(&catalog).unwrap();
+    }
+
+    #[test]
+    fn provider_activation_selects_core_and_only_packs_for_detected_languages() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("engines/provider-bundles");
+        let catalog: ProviderCatalog =
+            serde_json::from_slice(&fs::read(root.join(CATALOG_FILE)).unwrap()).unwrap();
+        let required = ["python".to_string(), "typescript".to_string()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let selected = select_packs(&catalog, &required).unwrap();
+        let ids = selected
+            .iter()
+            .map(|pack| pack.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["core", "node"]);
+        assert!(select_packs(&catalog, &["ruby".to_string()].into_iter().collect()).is_err());
     }
 
     #[test]

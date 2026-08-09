@@ -21,12 +21,16 @@ fn required_path(args: &[String], flag: &str) -> Result<PathBuf, String> {
 }
 
 fn optional_path(args: &[String], flag: &str) -> Option<PathBuf> {
+    optional_value(args, flag).map(PathBuf::from)
+}
+
+fn optional_value(args: &[String], flag: &str) -> Option<String> {
     for (index, value) in args.iter().enumerate() {
         if value == flag {
-            return args.get(index + 1).map(PathBuf::from);
+            return args.get(index + 1).cloned();
         }
         if let Some(path) = value.strip_prefix(&format!("{flag}=")) {
-            return Some(PathBuf::from(path));
+            return Some(path.to_string());
         }
     }
     None

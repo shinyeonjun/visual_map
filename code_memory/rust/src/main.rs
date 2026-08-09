@@ -75,6 +75,14 @@ fn run() -> Result<(), String> {
             let rest: Vec<String> = args.collect();
             provider_compare::compare_scip(&rest)
         }
+        Some("detect-languages") => {
+            let rest: Vec<String> = args.collect();
+            let root = required_path(&rest, "--root")?;
+            detect_source_languages(
+                &root,
+                optional_path(&rest, "--manifest-out").as_deref(),
+            )
+        }
         Some("index") => {
             let rest: Vec<String> = args.collect();
             let root = required_path(&rest, "--root")?;
@@ -89,12 +97,34 @@ fn run() -> Result<(), String> {
                         .to_string(),
                 );
             }
-            index_project(&root, &pack_root, providers_root.as_deref())
+            let expected_source_manifest = optional_value(&rest, "--expected-source-manifest")
+                .map(|value| {
+                    codebase_fact_model::identity::Sha256Digest::parse(&value)
+                        .map_err(|error| format!("invalid --expected-source-manifest: {error}"))
+                })
+                .transpose()?;
+            let source_manifest = optional_path(&rest, "--source-manifest");
+            if source_manifest.is_some() != expected_source_manifest.is_some() {
+                return Err(
+                    "--source-manifest and --expected-source-manifest must be provided together"
+                        .to_string(),
+                );
+            }
+            index_project(
+                &root,
+                &pack_root,
+                providers_root.as_deref(),
+                source_manifest.as_deref(),
+                expected_source_manifest.as_ref(),
+            )
         }
         Some(command) => Err(format!(
-            "unknown command '{command}'. Use list, doctor, compare-scip, or index."
+            "unknown command '{command}'. Use list, doctor, detect-languages, compare-scip, or index."
         )),
-        None => Err("missing command. Use list, doctor, compare-scip, or index.".to_string()),
+        None => Err(
+            "missing command. Use list, doctor, detect-languages, compare-scip, or index."
+                .to_string(),
+        ),
     }
 }
 

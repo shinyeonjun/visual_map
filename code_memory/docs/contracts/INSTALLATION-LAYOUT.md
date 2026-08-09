@@ -52,6 +52,20 @@ project models live under app-owned cache directories and never under the
 connected repository. Provider execution is timeout/cancellation bounded and
 must terminate descendants.
 
+The installer carries a signed catalog plus compressed provider packs. Before
+the first analysis of a repository, the code sidecar performs Source Census
+without any provider and emits the exact supported-language set plus manifest
+digest. The desktop verifies the catalog and extracts only `core` and packs
+whose declared language set intersects that receipt. The index process reuses
+the validated preflight Source Manifest and a final fresh census still rejects
+any repository change before publication.
+
+Provider activation receipts include the catalog digest and exact selected
+pack IDs. Different language selections cannot be mistaken for a complete
+activation. The compressed archives still ship with the offline installer;
+splitting them into separately downloadable artifacts requires a signed update
+transport and is not implied by selective local activation.
+
 ## Project boundary
 
 The engine reads source and supported project metadata. It must not write IDE

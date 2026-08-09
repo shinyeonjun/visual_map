@@ -36,6 +36,16 @@ remaining measured completion gates.
 - The previous full `nodes + edges + evidence + coverage + receipts + gaps`
   snapshot materialization/cache is removed.
 - Immutable bundle verification uses a small digest cache, not a graph cache.
+- Semantic planning keeps full evidence on disk and key-queries only evidence
+  referenced by its bounded selected anchors.
+
+### Detected-language provider activation
+
+- A provider-free Source Census emits the exact supported-language set and a
+  reusable validated Source Manifest before signed provider activation.
+- Only core plus intersecting language packs are verified and extracted.
+- The index reuses that manifest instead of performing an additional source
+  scan, and the existing final census still rejects mixed source generations.
 
 ### Lifecycle controls
 

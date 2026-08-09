@@ -6,6 +6,8 @@ pub(crate) fn index_project(
     root: &Path,
     pack_root: &Path,
     providers_root: Option<&Path>,
+    source_manifest_path: Option<&Path>,
+    expected_source_manifest: Option<&codebase_fact_model::identity::Sha256Digest>,
 ) -> Result<(), String> {
     let root = crate::source::canonical_project_root(root)?;
     let pack_root = pack_root
@@ -22,7 +24,15 @@ pub(crate) fn index_project(
     emit_progress("discovery", 3, 100, "소스 파일 찾는 중");
     let discovery_started = Instant::now();
     let file_walk_started = Instant::now();
-    let source_census = static_pipeline::source_census::SourceCensus::scan(&root)?;
+    let source_census = match (source_manifest_path, expected_source_manifest) {
+        (Some(path), Some(digest)) => {
+            static_pipeline::source_census::SourceCensus::load_verified_manifest(
+                &root, path, digest,
+            )?
+        }
+        (None, None) => static_pipeline::source_census::SourceCensus::scan(&root)?,
+        _ => return Err("incomplete preflight source manifest receipt".to_string()),
+    };
     let all_source_files = source_census.included_language_files();
     let max_project_source_file_bytes = source_census
         .manifest
@@ -226,4 +236,66 @@ pub(crate) fn index_project(
         active_cache_files: planning.active_cache_files,
         timings,
     })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceLanguageReceipt {
+    schema: &'static str,
+    manifest_digest: codebase_fact_model::identity::Sha256Digest,
+    languages: Vec<String>,
+}
+
+pub(crate) fn detect_source_languages(
+    root: &Path,
+    manifest_out: Option<&Path>,
+) -> Result<(), String> {
+    let root = crate::source::canonical_project_root(root)?;
+    emit_progress("provider-selection", 0, 1, "필요한 언어 분석 도구 확인 중");
+    let census = static_pipeline::source_census::SourceCensus::scan(&root)?;
+    if let Some(path) = manifest_out {
+        let path = resolve_output_path(path.to_path_buf())?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "cannot create source manifest directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| {
+                format!("cannot create source manifest {}: {error}", path.display())
+            })?;
+        write_json(&mut output, &census.manifest)
+            .map_err(|error| format!("cannot encode source manifest: {error}"))?;
+        output.sync_all().map_err(|error| {
+            format!("cannot sync source manifest {}: {error}", path.display())
+        })?;
+    }
+    let mut languages = census
+        .manifest
+        .files
+        .iter()
+        .filter(|file| {
+            file.state == codebase_fact_model::source_manifest::SourceEntryState::Included
+        })
+        .flat_map(|file| file.languages.iter().map(|language| language.as_str().to_string()))
+        .collect::<Vec<_>>();
+    languages.sort();
+    languages.dedup();
+    eprintln!(
+        "@codebase-workspace-source-languages {}",
+        serde_json::to_string(&SourceLanguageReceipt {
+            schema: "codebase-workspace.source-languages.v1",
+            manifest_digest: census.manifest.manifest_digest,
+            languages,
+        })
+        .map_err(|error| format!("cannot encode source language receipt: {error}"))?
+    );
+    emit_progress("provider-selection", 1, 1, "필요한 언어 분석 도구 확인 완료");
+    Ok(())
 }

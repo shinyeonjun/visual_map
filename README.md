@@ -22,7 +22,8 @@ Codebase Workspace는 로컬 코드베이스를 정적 분석해 검증 가능�
 ```mermaid
 flowchart LR
     A["로컬 프로젝트"] --> B["Source Census"]
-    B --> C["Analysis Plan"]
+    B --> B1["필요한 언어 provider pack만 활성화"]
+    B1 --> C["Analysis Plan"]
     C --> D["언어별 SCIP / LSP provider"]
     D --> E["Language IR"]
     E --> F["Canonical linker"]
@@ -151,6 +152,8 @@ scripts/                     build, verification, packaging, cleanup scripts
 - 실행 경로는 `Source Census → Analysis Plan → Language IR → canonical SQLite` 하나입니다.
 - `index_project()`와 Language IR unit emission은 단계별 coordinator/helper로 분리됐습니다.
 - desktop map/selection은 전체 snapshot을 `Vec`으로 적재하지 않고 고정된 SQLite query를 사용합니다.
+- 의미 지도 입력도 전체 evidence를 적재하지 않고 선택된 앵커의 근거만 SQLite에서 조회합니다.
+- 최초 Source Census 결과로 실제 언어를 확정해 필요한 서명 provider pack만 활성화하며, 같은 manifest를 본 분석이 재사용합니다.
 - 분석 취소는 정적 sidecar와 같은 분석에 속한 병렬 AI 자식 프로세스를 함께 종료합니다.
 - 앱 workspace 삭제는 앱 데이터만 지우며 선택한 원본 코드 폴더는 건드리지 않습니다.
 

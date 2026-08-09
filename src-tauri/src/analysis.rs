@@ -6,9 +6,11 @@ use crate::{
     provider_assets,
     workspace::Workspace,
 };
+use codebase_fact_model::identity::Sha256Digest;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -16,6 +18,7 @@ use std::{
 use tauri::Emitter;
 
 const CANONICAL_BUNDLE_MARKER: &str = "@codebase-workspace-canonical-fact-bundle ";
+const SOURCE_LANGUAGES_MARKER: &str = "@codebase-workspace-source-languages ";
 const ENGINE_ERROR_PREFIX: &str = "code-memory-language: ";
 const MAX_ENGINE_FAILURE_DETAIL_CHARS: usize = 800;
 static ACTIVE_WORKSPACE_ANALYSES: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
@@ -43,6 +46,14 @@ pub(crate) struct AnalyzeWorkspaceResult {
     pub fact_graph: FactGraphStatus,
     pub semantic_revision_id: Option<String>,
     pub semantic_error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SourceLanguageReceipt {
+    schema: String,
+    manifest_digest: Sha256Digest,
+    languages: BTreeSet<String>,
 }
 
 pub(crate) fn begin_workspace_analysis(
@@ -140,6 +151,15 @@ pub(crate) fn run_code_analysis(
 
     let engine_dir = PathBuf::from(&registry.engine_dir);
     let packs_root = resolve_packs_root(&engine_dir)?;
+    let preflight = AnalysisPreflight::create(app_data_dir)?;
+    let source_manifest_path = preflight.path.join("source-manifest.json");
+    let source_languages = detect_workspace_languages(
+        app,
+        code_engine,
+        workspace,
+        operation_id,
+        &source_manifest_path,
+    )?;
     let provider_progress = |label: &str, completed: u64, total: u64| {
         let _ = app.emit(
             "analysis-progress",
@@ -155,6 +175,7 @@ pub(crate) fn run_code_analysis(
     let providers_root = provider_assets::resolve_provider_root(
         app_data_dir,
         &engine_dir,
+        &source_languages.languages,
         Some(&provider_progress),
     )?;
     let args = vec![
@@ -165,6 +186,10 @@ pub(crate) fn run_code_analysis(
         path_text(&packs_root, "framework pack root")?,
         "--providers-root".to_string(),
         path_text(&providers_root, "provider root")?,
+        "--source-manifest".to_string(),
+        path_text(&source_manifest_path, "source manifest")?,
+        "--expected-source-manifest".to_string(),
+        source_languages.manifest_digest.to_string(),
     ];
     let observer = progress_observer(app.clone(), workspace.id.clone());
     let result = engine::run_engine_command_with_env_observer(
@@ -199,6 +224,83 @@ pub(crate) fn run_code_analysis(
         },
     );
     Ok(status)
+}
+
+fn detect_workspace_languages(
+    app: &tauri::AppHandle,
+    code_engine: &engine::EngineAvailability,
+    workspace: &Workspace,
+    operation_id: &str,
+    source_manifest_path: &Path,
+) -> Result<SourceLanguageReceipt, String> {
+    let args = vec![
+        "detect-languages".to_string(),
+        "--root".to_string(),
+        workspace.repo_path.clone(),
+        "--manifest-out".to_string(),
+        path_text(source_manifest_path, "source manifest")?,
+    ];
+    let observer = progress_observer(app.clone(), workspace.id.clone());
+    let result = engine::run_engine_command_with_env_observer(
+        code_engine,
+        &args,
+        EngineRunPolicy {
+            hard_timeout: Duration::from_secs(30 * 60),
+            idle_timeout: Duration::from_secs(5 * 60),
+        },
+        &[("CODEBASE_WORKSPACE_OPERATION_ID", operation_id)],
+        Some(observer),
+    )?;
+    if !result.ok {
+        return Err(match engine_failure_detail(&result.stderr) {
+            Some(detail) => format!("source language 확인이 실패했습니다: {detail}"),
+            None => "source language 확인이 실패했습니다".to_string(),
+        });
+    }
+    let receipt: SourceLanguageReceipt = parse_last_marker_with_prefix(
+        &result.stderr,
+        SOURCE_LANGUAGES_MARKER,
+        "source language receipt",
+    )?;
+    if receipt.schema != "codebase-workspace.source-languages.v1" {
+        return Err("지원하지 않는 source language receipt입니다".to_string());
+    }
+    Ok(receipt)
+}
+
+struct AnalysisPreflight {
+    path: PathBuf,
+    root: PathBuf,
+}
+
+impl AnalysisPreflight {
+    fn create(app_data_dir: &Path) -> Result<Self, String> {
+        let root = app_data_dir.join("analysis-staging").join("v1");
+        fs::create_dir_all(&root)
+            .map_err(|error| format!("analysis staging root를 만들지 못했습니다: {error}"))?;
+        let path = root.join(format!(
+            ".preflight-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir(&path)
+            .map_err(|error| format!("analysis preflight 폴더를 만들지 못했습니다: {error}"))?;
+        Ok(Self { path, root })
+    }
+}
+
+impl Drop for AnalysisPreflight {
+    fn drop(&mut self) {
+        if self.path.parent() == Some(self.root.as_path())
+            && self
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".preflight-"))
+        {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 fn engine_failure_detail(stderr: &str) -> Option<String> {
@@ -239,15 +341,21 @@ fn is_engine_progress_or_telemetry(line: &str) -> bool {
 }
 
 fn parse_last_marker<T: for<'de> Deserialize<'de>>(stderr: &str) -> Result<T, String> {
+    parse_last_marker_with_prefix(stderr, CANONICAL_BUNDLE_MARKER, "canonical bundle receipt")
+}
+
+fn parse_last_marker_with_prefix<T: for<'de> Deserialize<'de>>(
+    stderr: &str,
+    prefix: &str,
+    label: &str,
+) -> Result<T, String> {
     let payload = stderr
         .lines()
-        .filter_map(|line| line.strip_prefix(CANONICAL_BUNDLE_MARKER))
+        .filter_map(|line| line.strip_prefix(prefix))
         .next_back()
-        .ok_or_else(|| {
-            "codebase-memory가 canonical bundle receipt를 내보내지 않았습니다".to_string()
-        })?;
+        .ok_or_else(|| format!("codebase-memory가 {label}를 내보내지 않았습니다"))?;
     serde_json::from_str(payload)
-        .map_err(|error| format!("canonical bundle receipt 형식이 올바르지 않습니다: {error}"))
+        .map_err(|error| format!("{label} 형식이 올바르지 않습니다: {error}"))
 }
 
 fn progress_observer(app: tauri::AppHandle, workspace_id: String) -> EngineObserver {

@@ -104,6 +104,44 @@ impl SourceCensus {
         })
     }
 
+    /// Reuses a manifest produced by the immediately preceding provider-pack
+    /// selection pass. The manifest is fully schema/identity validated here;
+    /// `index_project` still performs a fresh census before publication and
+    /// refuses to publish if any source byte changed while providers ran.
+    pub(crate) fn load_verified_manifest(
+        root: &Path,
+        path: &Path,
+        expected_digest: &Sha256Digest,
+    ) -> Result<Self, String> {
+        let security_root = root.canonicalize().map_err(|error| {
+            format!(
+                "cannot canonicalize project root {}: {error}",
+                root.display()
+            )
+        })?;
+        let manifest: SourceManifest =
+            serde_json::from_slice(&fs::read(path).map_err(|error| {
+                format!("cannot read source manifest {}: {error}", path.display())
+            })?)
+            .map_err(|error| format!("invalid source manifest JSON: {error}"))?;
+        manifest
+            .validate()
+            .map_err(|error| format!("invalid source manifest: {error}"))?;
+        if manifest.workspace_id != workspace_id(&security_root)? {
+            return Err("preflight source manifest belongs to another repository".to_string());
+        }
+        if &manifest.manifest_digest != expected_digest {
+            return Err(format!(
+                "preflight source manifest digest mismatch: expected={expected_digest} actual={}",
+                manifest.manifest_digest
+            ));
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+            manifest,
+        })
+    }
+
     /// Absolute, sorted provider inputs. Config and unsupported files remain
     /// in the manifest but are not presented as source-language documents.
     pub(crate) fn included_language_files(&self) -> Vec<PathBuf> {

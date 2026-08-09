@@ -12,7 +12,8 @@ the same map for their own work.
 ```mermaid
 flowchart LR
     A["Selected repository"] --> B["Source Census"]
-    B --> C["Analysis Plan"]
+    B --> B1["Detected-language provider activation"]
+    B1 --> C["Analysis Plan"]
     C --> D["10 language providers"]
     D --> E["Language IR v2"]
     E --> F["Two-pass canonical linker"]
@@ -35,16 +36,19 @@ the last verified static snapshot.
 
 1. Source Census streams complete source bytes, hashes them, and records
    explicit excluded or non-enumerated scopes.
-2. Analysis Plan assigns every included language file to compiler/package/TU
+2. The desktop activates only the signed provider packs needed by that exact
+   manifest. The validated preflight manifest is reused by `index`, so provider
+   selection does not add a third source scan.
+3. Analysis Plan assigns every included language file to compiler/package/TU
    boundaries.
-3. The resource-weighted scheduler runs provider shards without changing plan
+4. The resource-weighted scheduler runs provider shards without changing plan
    ownership.
-4. Direct adapters reconcile provider output with exact source inventories and
+5. Direct adapters reconcile provider output with exact source inventories and
    emit one validated Language IR v2 authority.
-5. The linker registers identities, resolves evidence-backed relations,
+6. The linker registers identities, resolves evidence-backed relations,
    deduplicates, prunes visualization-irrelevant details, and verifies graph
    invariants.
-6. The store fsyncs an immutable content-addressed SQLite bundle and completion
+7. The store fsyncs an immutable content-addressed SQLite bundle and completion
    manifest, then emits the canonical receipt.
 
 The removed `language-index`, `architecture-index`, and `collection-report`
@@ -76,11 +80,12 @@ inside the selected repository.
 `src-tauri/src/fact_graph.rs` serves fixed SQLite queries. Interactive map
 overview, selection nodes, evidence, and bounded TracePath inputs are read by
 key and limit; a click no longer materializes all node/edge/evidence tables or
-caches two complete snapshots in memory. The semantic compilation job may read
-one verified snapshot to construct its bounded global projection; replacing
-that one-shot build with streaming partitions is separate scale work. A small
-verification-digest cache avoids repeating immutable bundle verification and
-is invalidated by the published pointer identity.
+caches two complete snapshots in memory. Semantic planning materializes the
+structural node/edge/coverage tables needed for ownership and TracePath, then
+fetches only evidence IDs referenced by the bounded final anchor set. The old
+full-evidence snapshot API has no runtime path. A small verification-digest
+cache avoids repeating immutable bundle verification and is invalidated by the
+published pointer identity.
 
 Source navigation resolves repository-relative evidence below the selected
 root, rejects path escape/reparse traversal, and opens an exact file/line in a
