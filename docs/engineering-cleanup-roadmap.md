@@ -1,6 +1,6 @@
 # Engineering cleanup roadmap
 
-Status: canonical hard cut and local certification completed, 2026-08-09.
+Status: canonical hard cut and final local certification completed, 2026-08-09.
 
 This is not a feature backlog. It records the safe cleanup sequence for the
 code-analysis vertical slice and separates completed structural work from the
@@ -125,22 +125,28 @@ remaining measured completion gates.
   the former fixed world boundary. Large-repository interaction latency and
   peak-memory measurements remain the separate P2 gate below.
 
-## Latest staged verification before the final Clippy gate
+## Final local certification
 
 - Code Memory: 322 passed, 0 failed.
-- Fact/Semantic contracts: 18 + 3 + 22 passed; one authenticated Codex
-  evaluation remains intentionally ignored in local automation.
+- Fact/Semantic contracts: 18 + 3 + 27 passed; three authenticated Codex
+  evaluations remain intentionally ignored in local automation.
 - Tauri: 78 passed, 0 failed, 4 external-environment tests ignored.
 - Frontend: 12 passed; typecheck, ESLint, Prettier, and production build passed.
 - Canonical provider gate: 9 project runs, 10 language contracts, 0 skipped.
 - Independent cache runs produced identical semantic digests and identical
   canonical SQLite bytes in debug and release profiles.
 - Code Memory, Tauri, fact-model, semantic-model, and semantic-compiler passed
-  Clippy with `-D warnings` at the preceding canonical-cleanup checkpoint.
-  Per the cleanup order, Clippy is not repeatedly interleaved with structural
-  patches; it is rerun once as the final repository certification gate.
-- Locked optimized Code Memory build passed, and verification fixtures were
-  removed without leaving Temp artifacts.
+  pinned Rust 1.96.1 Clippy with `--locked --all-targets -D warnings` after all
+  code and structural patches. The only first-pass warning was an equivalent
+  manual clamp in Source Census worker selection; it was normalized, followed
+  by another 322-test Code Memory run and a clean five-package Clippy rerun.
+- Locked optimized Code Memory build passed. The signed local provider gate ran
+  9 project fixtures across all 10 supported languages with 0 skipped and
+  produced identical semantic digests and canonical SQLite bytes across two
+  independent caches.
+- Product version, bundled-engine notices, dependency inventory (945 entries),
+  and all five Rust formatting checks passed. Verification fixtures were
+  removed without leaving repository artifacts.
 
 External CI is the final repository certification after this checkpoint is
 published. It must not replace any of the local gates above.

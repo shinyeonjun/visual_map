@@ -425,8 +425,7 @@ fn default_measurement_workers() -> usize {
     thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(1)
-        .min(16)
-        .max(1)
+        .clamp(1, 16)
 }
 
 fn measure_pending_files(
