@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 
 /**
  * Pan and zoom for the map.
@@ -20,6 +20,27 @@ const MAX_SCALE = 2.2;
 const GRID = 24;
 /** Room left around the content when fitting, so nothing touches the edge. */
 const FIT_PADDING = 64;
+
+/*
+  Wheel deltas are not a single unit. A precision trackpad reports pixels, a
+  mouse wheel usually reports lines, and some devices report pages. Converting
+  everything to pixels first is what makes one gesture feel the same on every
+  device instead of moving three pixels per notch.
+*/
+const LINE_DELTA_PX = 16;
+const PAGE_DELTA_PX = 400;
+/**
+ * Zoom is exponential in the scroll delta, so a pinch covers the same ratio
+ * whether the map is at 5% or 200%. Linear steps feel fast when zoomed out and
+ * unusably slow when zoomed in.
+ */
+const ZOOM_SENSITIVITY = 0.0075;
+/**
+ * A trackpad pinch arrives as many small deltas; a mouse wheel arrives as one
+ * large notch. Capping the per-event ratio keeps the first smooth without
+ * letting the second jump several zoom levels at once.
+ */
+const MAX_ZOOM_STEP = 1.25;
 
 interface Viewport {
   scale: number;
@@ -109,14 +130,33 @@ export function useCanvasViewport(contentWidth: number, contentHeight: number) {
     }
   }
 
-  function onWheel(event: ReactWheelEvent<HTMLDivElement>) {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    if (event.ctrlKey || event.metaKey) {
-      zoomAt(event.deltaY < 0 ? 1.12 : 1 / 1.12, event.clientX - bounds.left, event.clientY - bounds.top);
-      return;
+  /*
+    React registers wheel at the root as a passive listener, so preventDefault
+    from an onWheel prop is silently ignored. Without it the WebView claims
+    ctrl+wheel as page zoom and the whole application scales instead of the
+    map, which is exactly what a trackpad pinch sends. The listener therefore
+    has to be attached natively and non-passively.
+  */
+  useEffect(() => {
+    const element = viewRef.current;
+    if (!element) return;
+
+    function onWheel(event: WheelEvent) {
+      if (!element) return;
+      event.preventDefault();
+      const bounds = element.getBoundingClientRect();
+      const { x: deltaX, y: deltaY } = wheelDeltaInPixels(event);
+      // A trackpad pinch reaches the page as ctrl+wheel; so does ctrl+scroll.
+      if (event.ctrlKey || event.metaKey) {
+        zoomAt(zoomStep(deltaY), event.clientX - bounds.left, event.clientY - bounds.top);
+        return;
+      }
+      setView((current) => ({ ...current, x: current.x - deltaX, y: current.y - deltaY }));
     }
-    setView((current) => ({ ...current, x: current.x - event.deltaX, y: current.y - event.deltaY }));
-  }
+
+    element.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => element.removeEventListener("wheel", onWheel, true);
+  }, [zoomAt]);
 
   return {
     viewRef,
@@ -125,7 +165,7 @@ export function useCanvasViewport(contentWidth: number, contentHeight: number) {
     fit,
     zoomIn: () => zoomBy(1.15),
     zoomOut: () => zoomBy(1 / 1.15),
-    handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onWheel },
+    handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp },
     /** Keeps the dots a constant size while still moving with the content. */
     gridStyle: {
       backgroundSize: `${GRID * view.scale}px ${GRID * view.scale}px`,
@@ -141,4 +181,21 @@ export function useCanvasViewport(contentWidth: number, contentHeight: number) {
 
 function clamp(value: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
+}
+
+/** Reports every wheel device in the same unit so one gesture feels the same. */
+function wheelDeltaInPixels(event: WheelEvent): { x: number; y: number } {
+  const unit =
+    event.deltaMode === 1 /* DOM_DELTA_LINE */
+      ? LINE_DELTA_PX
+      : event.deltaMode === 2 /* DOM_DELTA_PAGE */
+        ? PAGE_DELTA_PX
+        : 1;
+  return { x: event.deltaX * unit, y: event.deltaY * unit };
+}
+
+/** Scroll delta to a zoom ratio: proportional, direction-correct, bounded. */
+function zoomStep(deltaY: number): number {
+  const ratio = Math.exp(-deltaY * ZOOM_SENSITIVITY);
+  return Math.min(MAX_ZOOM_STEP, Math.max(1 / MAX_ZOOM_STEP, ratio));
 }

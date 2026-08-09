@@ -521,6 +521,8 @@ textarea:focus-visible,
   overflow: hidden;
   cursor: grab;
   touch-action: none;
+  /* Keeps a horizontal two-finger pan from becoming a WebView back-navigation. */
+  overscroll-behavior: none;
   background-color: #fbfbfb;
   background-image: radial-gradient(circle at 1px 1px, rgb(15 108 189 / 13%) 1px, transparent 0);
 }
