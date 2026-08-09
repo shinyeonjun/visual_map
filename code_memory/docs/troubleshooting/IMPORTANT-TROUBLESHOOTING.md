@@ -3845,6 +3845,57 @@ prompt policy version 변경으로 기존 semantic cache는 한 번 무효화된
 
 ---
 
+## TS-2026-08-09-89 — fail-fast 검증의 다음 오류까지 재분석 없이 교정한다
+
+### 증상
+
+16개 의미 partition의 첫 분석 뒤 5개가 repair로 들어갔고, 한 partition은 첫 결과와 AI 교정 결과가 모두
+`MissingReference`로 거부됐다. 첫 오류는 `areas[region-8ac...].parentProposalKey`, 교정 뒤 오류는 같은
+누락 부모를 가리키는 다른 `areas[region-f046...].parentProposalKey`였다.
+
+### 근본 원인
+
+검증기는 안전하게 fail-fast 하므로 rejected JSON 안에 잘못된 부모 참조가 여러 개 있어도 첫 항목 하나만
+반환했다. 기존 repair 정책은 exact error의 최소 수정을 강조해 AI가 보고된 한 경로만 고쳤고, 동일 결과에
+남아 있던 두 번째 위반은 교정 결과를 다시 검증할 때 비로소 드러났다. repair 호출 자체는 정상 작동했지만
+한 번만 허용해 다음 오류를 고칠 기회가 없었다.
+
+### 적용한 수정
+
+- `MissingReference`·`InvalidHierarchy`이면 rejected JSON을 typed proposal로 다시 읽어 존재하지 않는 parent,
+  잘못된 L0/L1 parent 형태, 존재하지 않는 assignment area를 최대 128개까지 결정적으로 열거한다.
+- repair payload에 primary `verifierError`와 `relatedVerifierErrors`를 함께 넣고 같은 invariant의 모든 반복
+  위반을 한 번에 고치도록 명시한다.
+- L0는 `level: 0 + parentProposalKey: null`, L1은 같은 `areas` 배열에 실제 존재하는 parentless L0의 정확한
+  `proposalKey`만 참조한다. region ID·label·누락 area를 parent처럼 쓰지 못하게 한다.
+- 첫 교정이 다른 후속 검증 오류를 드러내면 최신 rejected JSON과 최신 exact error로 2차 교정한다. 최대
+  교정 횟수는 두 번이며 전체 분석 prompt는 다시 실행하지 않는다.
+- provider 실행 결과가 없을 때만 실패한 exact prompt를 한 번 재시도한다. repair 실행이 죽으면 원래 분석으로
+  되돌아가지 않는다.
+
+### 검증 결과
+
+같은 missing parent를 가리키는 두 L1 area fixture에서 repair payload가 두 경로를 모두 열거하는 회귀 테스트가
+통과했다. semantic compiler 25개, Tauri 72개가 통과했고 외부 환경 의존 테스트는 각각 3개·4개 제외했다.
+앱과 같은 최신 Codex CLI `0.147.0-alpha.6.5`와 `GPT-5.6 Terra`를 사용한 opt-in 실제 모델 테스트에서도
+두 누락 부모 참조를 한 번에 교정하고 기존 assignment·label·summary를 보존한 채 strict verifier를 통과했다.
+
+### 재발 시 점검 순서
+
+1. repair payload의 `relatedVerifierErrors`에 같은 누락 parent를 쓰는 모든 area가 들어가는지 확인한다.
+2. 로그에 첫 repair batch 뒤 실패 partition만 두 번째 `phase: repair` batch로 들어가는지 확인한다.
+3. 두 번째 교정도 실패하면 오류 문자열에 첫 결과, AI 1차 교정, AI 2차 교정의 서로 다른 path가 남는지 본다.
+4. 성공한 partition cache가 다시 실행되지 않고 실패한 partition만 provider로 전달되는지 확인한다.
+5. repair 결과가 assignment나 의미 텍스트를 불필요하게 바꾸지 않았는지 revision diff를 확인한다.
+
+### 남은 한계 또는 후속 gate
+
+모든 verifier 규칙을 다중 오류 수집기로 복제하지 않는다. 현재는 기계적으로 안전하게 열거할 수 있는
+계층·참조 위반만 묶고, 그 밖의 순차 오류는 최대 2차 교정으로 처리한다. 이 한도를 넘으면 비용을 계속
+소비하지 않고 전체 revision 게시를 차단한다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text

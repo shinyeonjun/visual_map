@@ -15,7 +15,10 @@ use codebase_semantic_compiler::{
     compile_reconciliation_prompt, compile_semantic_plan, CompiledSemanticPlan,
     VerifiedSemanticPartition,
 };
-use recovery::{compile_recovery_prompt, run_provider_with_repair, verify_provider_result};
+use recovery::{
+    compile_recovery_prompt, continue_recovery_prompt, run_provider_with_repair,
+    verify_provider_result,
+};
 use std::path::Path;
 
 type SemanticProgress<'a> = Option<&'a dyn Fn(&str, u64, u64)>;
@@ -145,57 +148,64 @@ fn analyze_partitioned(
     // Invalid JSON results are repaired with the original output plus exact
     // verifier feedback. Only execution failures without a result rerun the
     // original analysis prompt. First-pass successes stay verified and cached.
-    let recovery_prompts = recovery_requests
-        .iter()
-        .map(|request| request.prompt.clone())
-        .collect::<Vec<_>>();
-    let mut recovery_errors = Vec::new();
-    let mut recovery_completed = 0usize;
-    broker::run_provider_repair_batch(
-        runtime,
-        &recovery_prompts,
-        operation_id,
-        |recovery_index, raw| {
-            recovery_completed += 1;
-            let request = &recovery_requests[recovery_index];
-            match verify_provider_result(&recovery_prompts[recovery_index], raw) {
-                Ok(revision) => {
-                    if let Err(error) = accept_verified_partition(
-                        app_data_dir,
-                        workspace,
-                        plan,
-                        request.partition_index,
-                        revision,
-                        &mut verified,
-                    ) {
-                        fatal_errors.push(error);
+    let mut recovery_round = 0usize;
+    while !recovery_requests.is_empty() {
+        recovery_round += 1;
+        let recovery_prompts = recovery_requests
+            .iter()
+            .map(|request| request.prompt.clone())
+            .collect::<Vec<_>>();
+        let mut next_recovery_requests = Vec::new();
+        let mut recovery_completed = 0usize;
+        broker::run_provider_repair_batch(
+            runtime,
+            &recovery_prompts,
+            operation_id,
+            |recovery_index, raw| {
+                recovery_completed += 1;
+                let request = &recovery_requests[recovery_index];
+                match verify_provider_result(&recovery_prompts[recovery_index], raw) {
+                    Ok(revision) => {
+                        if let Err(error) = accept_verified_partition(
+                            app_data_dir,
+                            workspace,
+                            plan,
+                            request.partition_index,
+                            revision,
+                            &mut verified,
+                        ) {
+                            fatal_errors.push(error);
+                        }
                     }
+                    Err(recovery_error) => match continue_recovery_prompt(
+                        &plan.partitions[request.partition_index].prompt,
+                        request,
+                        recovery_error,
+                    ) {
+                        Ok(next) => next_recovery_requests.push(next),
+                        Err(error) => fatal_errors.push(partition_error(
+                            plan,
+                            request.partition_index,
+                            &error,
+                        )),
+                    },
                 }
-                Err(recovery_error) => recovery_errors.push(partition_error(
-                    plan,
-                    request.partition_index,
+                let approved_count = verified.iter().flatten().count();
+                emit_progress(
+                    progress,
                     &format!(
-                        "{}; {}",
-                        request.first_error,
-                        recovery_error.describe(request.attempt_label())
+                        "AI 결과 {recovery_round}차 교정 및 실행 복구 {recovery_completed}/{} · 검증 {approved_count}/{}",
+                        recovery_prompts.len(),
+                        plan.partitions.len()
                     ),
-                )),
-            }
-            let approved_count = verified.iter().flatten().count();
-            emit_progress(
-                progress,
-                &format!(
-                    "AI 결과 교정 및 실행 복구 {recovery_completed}/{} · 검증 {approved_count}/{}",
-                    recovery_prompts.len(),
-                    plan.partitions.len()
-                ),
-                approved_count as u64,
-                total,
-            );
-        },
-    );
+                    approved_count as u64,
+                    total,
+                );
+            },
+        );
+        recovery_requests = next_recovery_requests;
+    }
 
-    fatal_errors.extend(recovery_errors);
     if !fatal_errors.is_empty() {
         return Err(summarize_partition_errors(&fatal_errors));
     }

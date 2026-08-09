@@ -93,6 +93,44 @@ fn codex_repairs_a_rejected_cross_area_trace_without_redoing_assignments() {
     parse_and_verify_base_response(&repair, &raw).unwrap();
 }
 
+#[test]
+#[ignore = "requires an installed and authenticated Codex CLI"]
+fn codex_repairs_all_repeated_missing_parent_references_in_one_pass() {
+    let (mut draft, ids) = fixture_draft();
+    draft.provider.model = "gpt-5.6-terra".to_string();
+    let compiled = compile_base_prompt(draft).unwrap();
+    let mut rejected = valid_proposal(&compiled, &ids);
+    let missing_parent =
+        codebase_semantic_model::ProposalKey::parse("region-471620b8270e").unwrap();
+    for area in rejected
+        .areas
+        .iter_mut()
+        .filter(|area| area.proposal_key.as_str() != "orders")
+    {
+        area.level = 1;
+        area.parent_proposal_key = Some(missing_parent.clone());
+    }
+    let rejected_json = serde_json::to_string(&rejected).unwrap();
+    let verifier_error = verify_base_proposal(&compiled.packet, rejected.clone()).unwrap_err();
+    let repair = compile_base_repair_prompt(&compiled, &rejected_json, &verifier_error).unwrap();
+
+    let raw = run_codex(&repair);
+    let corrected: codebase_semantic_model::SemanticRevisionProposal =
+        serde_json::from_str(&raw).unwrap();
+
+    assert_eq!(corrected.assignments, rejected.assignments);
+    for original_area in &rejected.areas {
+        let corrected_area = corrected
+            .areas
+            .iter()
+            .find(|area| area.proposal_key == original_area.proposal_key)
+            .unwrap();
+        assert_eq!(corrected_area.label, original_area.label);
+        assert_eq!(corrected_area.summary, original_area.summary);
+    }
+    parse_and_verify_base_response(&repair, &raw).unwrap();
+}
+
 fn run_codex(compiled: &CompiledBasePrompt) -> String {
     let temp = unique_eval_dir();
     fs::create_dir(&temp).unwrap();
@@ -115,7 +153,19 @@ fn run_codex(compiled: &CompiledBasePrompt) -> String {
         .arg(&schema_path)
         .arg("--output-last-message")
         .arg(&output_path)
-        .args(["--model", &compiled.packet.provider.model, "-"])
+        .args(["--model", &compiled.packet.provider.model, "--config"])
+        .arg(format!(
+            "model_reasoning_effort=\"{}\"",
+            match compiled.packet.provider.effort {
+                codebase_semantic_model::ReasoningEffort::Low => "low",
+                codebase_semantic_model::ReasoningEffort::Medium => "medium",
+                codebase_semantic_model::ReasoningEffort::High => "high",
+                codebase_semantic_model::ReasoningEffort::Xhigh => "xhigh",
+                codebase_semantic_model::ReasoningEffort::Max => "max",
+                codebase_semantic_model::ReasoningEffort::Ultra => "ultra",
+            }
+        ))
+        .arg("-")
         .current_dir(&temp)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

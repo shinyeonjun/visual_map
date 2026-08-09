@@ -124,10 +124,14 @@ they do not resume or create the user's Codex/Claude chat session. The semantic
 cache key includes Fact digest, prompt/schema version, provider/model, and
 reasoning effort so identical approved input remains stable. When a provider
 returns a schema-valid but unverifiable result, the broker sends that rejected
-JSON and the exact verifier error through one bounded repair prompt. It does
-not rerun semantic analysis or change unrelated decisions; the complete
-corrected object must pass the same verifier. Only an execution failure with
-no result retries the original prompt.
+JSON and the exact verifier error through a bounded repair prompt. For
+hierarchy/reference failures it also enumerates every safely detectable
+violation of the same invariant from the rejected object, because the strict
+verifier itself is fail-fast. If one repair exposes a later validation error,
+the latest rejected object may receive one final targeted repair; semantic
+analysis is never restarted and repair is capped at two provider calls. Every
+complete corrected object must pass the same verifier. Only an execution
+failure with no result retries the exact prompt that failed.
 
 ## UI boundary
 

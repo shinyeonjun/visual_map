@@ -6,16 +6,18 @@ use crate::{
 use codebase_fact_model::identity::{Sha256Digest, SnapshotId, WorkspaceId};
 use codebase_semantic_model::{
     AiProviderDescriptor, BaseSemanticInput, BaseSemanticPacket, OutputLanguage, ScopeReceipt,
-    SemanticTask, BASE_SEMANTIC_SCHEMA_VERSION,
+    SemanticRevisionProposal, SemanticTask, BASE_SEMANTIC_SCHEMA_VERSION,
 };
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 pub const PACKET_COMPILER_VERSION: &str = "base-packet-v2";
 pub const PROMPT_POLICY_VERSION: &str = "base-semantic-policy-v3";
 
 const MAX_REJECTED_OUTPUT_BYTES: usize = 512 * 1024;
 const MAX_REPAIR_PROMPT_BYTES: usize = 1024 * 1024;
+const MAX_RELATED_VERIFIER_ERRORS: usize = 128;
 
 const SYSTEM_POLICY: &str = r#"You are the semantic compiler for an evidence-backed codebase map.
 
@@ -42,9 +44,10 @@ OUTPUT
 
 const REPAIR_POLICY: &str = r#"VERIFIER-GUIDED REPAIR
 16. This request repairs one rejected JSON result; it is not a new semantic analysis. Preserve every assignment, hierarchy choice, label, summary, alias, warning, and valid citation that is not implicated by verifierError.
-17. verifierError is trusted product feedback. Make the smallest complete-output edit that resolves that exact error without weakening any earlier authority, evidence, or abstention rule.
-18. For a representativeTracePathIds mismatch, derive a trace's region set from every input.regions[].representativeTracePathIds entry that lists that trace. The trace is eligible only when that non-empty region set is a subset of the area's direct and descendant assigned regions. Never move regions or reshape areas to legalize a citation. Remove the invalid trace first; replace it only with a supplied eligible trace, otherwise leave the array empty.
-19. Return the entire corrected JSON object, not a patch, explanation, or diff. The corrected object must still match the original packet identity and supplied output schema."#;
+17. verifierError is trusted fail-fast product feedback. relatedVerifierErrors contains every other hierarchy or reference violation that the product could safely enumerate from the same rejected object. Repair every listed violation and scan the entire output for repeated instances of the same invariant; do not stop after changing only the first reported path.
+18. Every area's proposalKey is a key declared by an object in the same areas array. An L0 area has level 0 and parentProposalKey null. An L1 area has level 1 and parentProposalKey exactly equal to the proposalKey of an existing parentless L0 area in that array. A regionId, label, or omitted area is not a valid parent. For MissingReference or InvalidHierarchy, repair all affected areas and assignments while preserving unrelated semantic text and region assignments.
+19. For a representativeTracePathIds mismatch, derive a trace's region set from every input.regions[].representativeTracePathIds entry that lists that trace. The trace is eligible only when that non-empty region set is a subset of the area's direct and descendant assigned regions. Never move regions or reshape areas to legalize a citation. Remove the invalid trace first; replace it only with a supplied eligible trace, otherwise leave the array empty.
+20. Return the entire corrected JSON object, not a patch, explanation, or diff. The corrected object must still match the original packet identity and supplied output schema."#;
 
 #[derive(Clone, Debug)]
 pub struct BaseSemanticDraft {
@@ -102,6 +105,7 @@ struct DigestMaterial<'a> {
 struct RepairPayload<'a> {
     original_request: &'a str,
     verifier_error: &'a SemanticCompileError,
+    related_verifier_errors: &'a [SemanticCompileError],
     rejected_output: &'a str,
 }
 
@@ -181,9 +185,11 @@ pub fn compile_base_repair_prompt(
             ),
         ));
     }
+    let related_verifier_errors = collect_related_verifier_errors(rejected_output, verifier_error);
     let payload_json = serde_json::to_string(&RepairPayload {
         original_request: &original.task_prompt,
         verifier_error,
+        related_verifier_errors: &related_verifier_errors,
         rejected_output,
     })
     .map_err(|error| {
@@ -220,4 +226,71 @@ pub fn compile_base_repair_prompt(
         ));
     }
     Ok(compiled)
+}
+
+fn collect_related_verifier_errors(
+    rejected_output: &str,
+    primary: &SemanticCompileError,
+) -> Vec<SemanticCompileError> {
+    if !matches!(
+        primary.code,
+        SemanticCompileErrorCode::MissingReference | SemanticCompileErrorCode::InvalidHierarchy
+    ) {
+        return Vec::new();
+    }
+    let Ok(proposal) = serde_json::from_str::<SemanticRevisionProposal>(rejected_output) else {
+        return Vec::new();
+    };
+    let areas: BTreeMap<_, _> = proposal
+        .areas
+        .iter()
+        .map(|area| (&area.proposal_key, area))
+        .collect();
+    let mut findings = Vec::new();
+
+    for area in areas.values() {
+        let path = format!("areas[{}].parentProposalKey", area.proposal_key);
+        match (area.level, area.parent_proposal_key.as_ref()) {
+            (0, None) => {}
+            (1, Some(parent_key)) => match areas.get(parent_key) {
+                None => findings.push(SemanticCompileError::new(
+                    SemanticCompileErrorCode::MissingReference,
+                    path,
+                    format!("parent proposal {parent_key} does not exist"),
+                )),
+                Some(parent) if parent.level != 0 || parent.parent_proposal_key.is_some() => {
+                    findings.push(SemanticCompileError::new(
+                        SemanticCompileErrorCode::InvalidHierarchy,
+                        path,
+                        "an L1 area must have one parentless L0 parent",
+                    ));
+                }
+                Some(_) => {}
+            },
+            _ => findings.push(SemanticCompileError::new(
+                SemanticCompileErrorCode::InvalidHierarchy,
+                path,
+                "only parentless L0 and direct-child L1 areas are allowed",
+            )),
+        }
+    }
+
+    for assignment in &proposal.assignments {
+        if !areas.contains_key(&assignment.area_proposal_key) {
+            findings.push(SemanticCompileError::new(
+                SemanticCompileErrorCode::MissingReference,
+                format!("assignments[{}].areaProposalKey", assignment.region_id),
+                format!("area {} does not exist", assignment.area_proposal_key),
+            ));
+        }
+    }
+
+    findings.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.message.cmp(&right.message))
+    });
+    findings.dedup();
+    findings.truncate(MAX_RELATED_VERIFIER_ERRORS);
+    findings
 }

@@ -858,8 +858,10 @@ canonical producer, 대규모 representative omission receipt, clean=incremental
   position에 대해 세 번의 전역 round로 실행한다. 각 round 뒤 같은 cache를 소비하므로 retry 횟수와
   abstention 계약은 이전과 같다.
 - AI local partition은 최초 batch 기본 4개, 검증 실패 교정·실행 실패 복구 batch 기본 2개로 분리했다.
-  검증 실패는 거부된 JSON과 exact verifier 오류를 받은 bounded repair prompt가 최소 수정하고, 결과가 없는
-  실행 실패만 원래 prompt를 다시 실행한다. evidence, verifier, model과 reasoning effort는 그대로다. 각각
+  검증 실패는 거부된 JSON과 exact verifier 오류를 받은 bounded repair prompt가 최소 수정한다. fail-fast
+  검증에서 안전하게 열거할 수 있는 같은 계층·참조 위반은 한 번에 모두 전달하며, 새 오류가 뒤이어 드러날
+  때만 최신 결과를 최대 한 번 더 교정한다. 결과가 없는 실행 실패만 실패한 exact prompt를 다시 실행한다.
+  evidence, verifier, model과 reasoning effort는 그대로다. 각각
   `CODEBASE_WORKSPACE_AI_MAX_PARALLEL`, `CODEBASE_WORKSPACE_AI_RETRY_MAX_PARALLEL`로 1~8 범위 조정이 가능하다.
 - `scip-typescript --max-file-byte-size`를 scheduler shard의 최대 파일이 아니라 Source Census가 승인한
   프로젝트 전체 최대 source 크기로 계산한다. indexer가 상위 tsconfig의 더 큰 member를 조용히 건너뛰지

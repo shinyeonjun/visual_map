@@ -6,7 +6,7 @@ use codebase_semantic_compiler::{
     verify_base_proposal, SemanticCompileErrorCode,
 };
 use codebase_semantic_model::{
-    AreaCategory, LabelSource, SemanticFallbackReason, TracePathId, TracePathState,
+    AreaCategory, LabelSource, ProposalKey, SemanticFallbackReason, TracePathId, TracePathState,
     TracePathSummary,
 };
 use pretty_assertions::assert_eq;
@@ -102,6 +102,45 @@ fn verifier_error_compiles_a_minimal_full_output_repair_prompt() {
     }
     let corrected_json = serde_json::to_string(&rejected).unwrap();
     assert!(parse_and_verify_base_response(&repair, &corrected_json).is_ok());
+}
+
+#[test]
+fn hierarchy_repair_prompt_enumerates_every_missing_parent_reference() {
+    let (draft, ids) = fixture_draft();
+    let compiled = compile_base_prompt(draft).unwrap();
+    let mut rejected = valid_proposal(&compiled, &ids);
+    let missing_parent = ProposalKey::parse("missing-parent").unwrap();
+    for area in rejected
+        .areas
+        .iter_mut()
+        .filter(|area| area.proposal_key.as_str() != "orders")
+    {
+        area.level = 1;
+        area.parent_proposal_key = Some(missing_parent.clone());
+    }
+    rejected.areas[1].parent_proposal_key = Some(missing_parent);
+    let rejected_json = serde_json::to_string(&rejected).unwrap();
+    let verifier_error = verify_base_proposal(&compiled.packet, rejected).unwrap_err();
+
+    let repair = compile_base_repair_prompt(&compiled, &rejected_json, &verifier_error).unwrap();
+
+    assert_eq!(
+        verifier_error.code,
+        SemanticCompileErrorCode::MissingReference
+    );
+    assert!(repair.task_prompt.contains("relatedVerifierErrors"));
+    assert!(repair
+        .task_prompt
+        .contains("areas[authentication].parentProposalKey"));
+    assert!(repair
+        .task_prompt
+        .contains("areas[create-order].parentProposalKey"));
+    assert!(repair
+        .system_policy
+        .contains("Repair every listed violation"));
+    assert!(repair
+        .system_policy
+        .contains("A regionId, label, or omitted area is not a valid parent"));
 }
 
 #[test]
