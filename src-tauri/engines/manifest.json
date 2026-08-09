@@ -5,7 +5,7 @@
       "id": "codebase-memory",
       "version": "0.1.0",
       "sourceRepository": "https://github.com/shinyeonjun/visual_map/tree/main/code_memory",
-      "sourceCommit": "uncommitted-hard-cut-2026-08-07",
+      "sourceCommit": "b13370c450c809796d61a563720c7352da5cebf7",
       "releaseUrl": "",
       "archive": {
         "fileName": "code-memory-language-windows-amd64.zip",
@@ -30,7 +30,7 @@
       "id": "database-memory",
       "version": "0.2.0",
       "sourceRepository": "https://github.com/shinyeonjun/visual_map/tree/main/db_memory",
-      "sourceCommit": "uncommitted-hard-cut-2026-08-07",
+      "sourceCommit": "bb6a6830eb609b9bd7269bbfd4b60c58488beda7",
       "releaseUrl": "https://github.com/shinyeonjun/rdb-memory-mcp/releases/tag/v0.2.0",
       "archive": {
         "fileName": "rdb-memory-mcp-windows-amd64.zip",
