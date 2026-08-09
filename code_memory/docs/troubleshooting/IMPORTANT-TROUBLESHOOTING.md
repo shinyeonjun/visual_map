@@ -3513,6 +3513,40 @@ column으로 해석한다. C#에서 확인한 것과 같은 provider-boundary �
 
 ---
 
+## TS-2026-08-09-79 — Windows 8.3 임시 경로 표기를 provider 경로의 정답으로 비교하지 않는다
+
+### 증상
+
+로컬에서는 코드 엔진 350개 테스트가 통과했지만 GitHub Windows runner에서는 provider root 관련 테스트
+3개가 실패했다. 실제 경로는 같았으나 기대값은 `C:\Users\RUNNER~1\...`, resolver 결과는
+`C:\Users\runneradmin\...`였다.
+
+### 영향
+
+provider 탐색과 release build는 정상이지만 깨끗한 Windows CI가 실패한다. 더 위험한 수정은 제품의
+`canonicalize`를 제거해 같은 파일을 서로 다른 경로 identity로 취급하게 만드는 것이다.
+
+### 잘못 짚기 쉬운 원인
+
+provider 우선순위나 manifest resolution 오류가 아니다. Windows가 같은 디렉터리를 8.3 short name과 long
+name 두 형태로 표현했고, 테스트가 입력 문자열을 resolver의 canonical 결과와 직접 비교한 것이 원인이다.
+
+### 근본 원인과 수정
+
+`std::env::temp_dir()`가 반환한 lexical path가 모든 Windows 환경에서 canonical path와 같다는 잘못된
+가정이 테스트에 있었다. 제품 resolver의 보안·identity 경계는 유지하고, 기대 경로도
+`managed_provider_root()`를 통과시킨 뒤 상대 launcher 경로를 붙이도록 수정했다.
+
+### 검증 결과와 재발 방지
+
+- 기본 병렬 실행으로 코드 엔진 350/350 통과
+- `clippy --all-targets -- -D warnings` 통과
+- provider 경로 테스트는 문자열 표기가 아니라 resolver와 같은 canonical boundary를 기준으로 비교한다.
+- path display가 아니라 파일 identity가 목적일 때 short/long path, `\\?\` prefix, drive-letter case를 별도
+  semantic 값으로 취급하지 않는다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text

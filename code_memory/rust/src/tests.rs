@@ -663,7 +663,11 @@ fn provider_root_is_checked_before_path() {
         bin.join("scip-typescript")
     };
     fs::write(&executable, b"provider").expect("write provider placeholder");
-    assert_eq!(find_tool("scip-typescript", Some(&root)), Some(executable));
+    let expected = managed_provider_root(&root)
+        .join("scip-typescript")
+        .join("bin")
+        .join(executable.file_name().expect("provider executable name"));
+    assert_eq!(find_tool("scip-typescript", Some(&root)), Some(expected));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -680,7 +684,8 @@ fn windows_root_launcher_precedes_non_windows_bin_script() {
     let non_windows_script = root.join("bin").join("jdtls");
     fs::write(&root_launcher, b"launcher").expect("write Windows launcher");
     fs::write(&non_windows_script, b"script").expect("write non-Windows script");
-    assert_eq!(find_tool("jdtls", Some(&root)), Some(root_launcher));
+    let expected = managed_provider_root(&root).join("jdtls.cmd");
+    assert_eq!(find_tool("jdtls", Some(&root)), Some(expected));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -700,7 +705,7 @@ fn provider_manifest_resolves_a_different_directory_name() {
         .expect("write provider manifest");
     assert_eq!(
         find_tool("jdtls", Some(&root)),
-        Some(root.join("jdtls/bin/jdtls.cmd"))
+        Some(managed_provider_root(&root).join("jdtls/bin/jdtls.cmd"))
     );
     let resolution = resolve_tool("jdtls", Some(&root));
     assert_eq!(resolution.origin, "managed-manifest");
