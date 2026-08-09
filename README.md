@@ -151,6 +151,7 @@ scripts/                     build, verification, packaging, cleanup scripts
 
 - 실행 경로는 `Source Census → Analysis Plan → Language IR → canonical SQLite` 하나입니다.
 - `index_project()`와 Language IR unit emission은 단계별 coordinator/helper로 분리됐습니다.
+- 대형 unit의 source AST inventory는 CPU·가용 메모리·최대 파일 크기로 제한된 worker가 파일별로 처리하고, 경로 순서로 병합해 직렬 실행과 같은 IR bytes를 냅니다.
 - desktop map/selection은 전체 snapshot을 `Vec`으로 적재하지 않고 고정된 SQLite query를 사용합니다.
 - 의미 지도 입력도 전체 evidence를 적재하지 않고 선택된 앵커의 근거만 SQLite에서 조회합니다.
 - 최초 Source Census 결과로 실제 언어를 확정해 필요한 서명 provider pack만 활성화하며, 같은 manifest를 본 분석이 재사용합니다.

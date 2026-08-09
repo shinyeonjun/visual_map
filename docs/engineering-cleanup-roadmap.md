@@ -28,6 +28,9 @@ remaining measured completion gates.
   reconciliation, relation classification, receipt construction, and artifact
   publication to focused helpers.
 - No extraction rule was changed merely to make the functions smaller.
+- File-local source inventory now lives in `adapter/source_inventory.rs`, runs
+  with bounded parallelism for large units, and rejoins in deterministic path
+  order. The serial/parallel byte-identity gate is part of the engine suite.
 
 ### Query-backed desktop read model
 
@@ -88,9 +91,9 @@ published. It must not replace any of the local gates above.
 ### P1. Physical Language IR module split
 
 The 800-line coordinator has been removed, but `language_ir/adapter.rs` remains
-a large physical file. Move existing helper groups into source inventory,
-definition reconciliation, relation mapping, and receipt modules without
-changing semantic/bundle digests.
+a large physical file. Source inventory and artifact writing are now separate.
+Move the remaining definition reconciliation, relation mapping, and receipt
+groups without changing semantic/bundle digests.
 
 Completion: no circular ownership, focused module tests remain local, and the
 canonical fixture digests are unchanged.

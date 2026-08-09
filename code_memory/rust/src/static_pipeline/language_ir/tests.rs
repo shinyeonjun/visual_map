@@ -27,6 +27,7 @@ use codebase_fact_model::validation::Validate;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,6 +37,32 @@ use crate::static_pipeline::analysis_unit_planner::plan_analysis_units;
 use crate::static_pipeline::canonical::{normalize_language_ir, CanonicalLanguageInput};
 use crate::static_pipeline::framework_ir::{adapt_framework_routes, framework_analyzer_set_digest};
 use crate::static_pipeline::source_census::SourceCensus;
+
+struct TestEnvironmentOverride {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl TestEnvironmentOverride {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+
+    fn update(&self, value: &str) {
+        std::env::set_var(self.key, value);
+    }
+}
+
+impl Drop for TestEnvironmentOverride {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
 
 #[test]
 fn all_ten_languages_emit_valid_deterministic_unit_streams() {
@@ -67,6 +94,29 @@ fn all_ten_languages_emit_valid_deterministic_unit_streams() {
         first.artifact.content_digest,
         repeated.artifact.content_digest
     );
+}
+
+#[test]
+fn parallel_source_inventory_is_byte_identical_to_the_serial_path() {
+    let fixture = DonorFixture::typescript_many_files(64);
+    let workers = TestEnvironmentOverride::set("CODE_MEMORY_MAX_LANGUAGE_IR_WORKERS", "1");
+    let serial = fixture.emit().unwrap();
+    workers.update("8");
+    let parallel = fixture.emit().unwrap();
+
+    assert_eq!(
+        serial.receipt.stream_set_digest,
+        parallel.receipt.stream_set_digest
+    );
+    assert_eq!(
+        serial.receipt.semantic_payload_set_digest,
+        parallel.receipt.semantic_payload_set_digest
+    );
+    assert_eq!(
+        serial.artifact.content_digest,
+        parallel.artifact.content_digest
+    );
+    assert_eq!(serial.artifact.record_count, parallel.artifact.record_count);
 }
 
 #[test]
@@ -987,6 +1037,92 @@ impl DonorFixture {
 
     fn one_language(language: ProgrammingLanguage) -> Self {
         Self::new(&[language])
+    }
+
+    fn typescript_many_files(file_count: usize) -> Self {
+        assert!(file_count >= 1);
+        let mut fixture = Self::one_language(ProgrammingLanguage::TypeScript);
+        let spec = LANGUAGES
+            .iter()
+            .find(|candidate| candidate.contract_language == ProgrammingLanguage::TypeScript)
+            .unwrap();
+        for ordinal in 1..file_count {
+            let path = format!("src/file-{ordinal:04}.ts");
+            let target_name = format!("Target{ordinal:04}");
+            let caller_name = format!("Caller{ordinal:04}");
+            let source =
+                format!("export class {target_name} {{}}\nexport function {caller_name}() {{}}\n");
+            fixture.project.write(&path, source.as_bytes());
+            let target_range = unique_token_range(&source, &target_name);
+            let caller_range = unique_token_range(&source, &caller_name);
+            let target = format!("fixture typescript {target_name}#");
+            let caller = format!("fixture typescript {caller_name}#call().");
+            fixture.documents.push(DocumentOutput {
+                language: ProgrammingLanguage::TypeScript.as_str().to_string(),
+                path: path.clone(),
+                symbols: vec![
+                    SymbolOutput {
+                        symbol: target.clone(),
+                        kind: "Class".to_string(),
+                        display_name: Some(target_name),
+                        documentation: Vec::new(),
+                        signature: None,
+                        enclosing_symbol: None,
+                    },
+                    SymbolOutput {
+                        symbol: caller.clone(),
+                        kind: "Function".to_string(),
+                        display_name: Some(caller_name),
+                        documentation: Vec::new(),
+                        signature: None,
+                        enclosing_symbol: None,
+                    },
+                ],
+                occurrences: vec![
+                    OccurrenceOutput {
+                        symbol: target.clone(),
+                        range: target_range.clone(),
+                        enclosing_range: target_range,
+                        definition: true,
+                        import: false,
+                        read: false,
+                        write: false,
+                    },
+                    OccurrenceOutput {
+                        symbol: caller.clone(),
+                        range: caller_range.clone(),
+                        enclosing_range: caller_range.clone(),
+                        definition: true,
+                        import: false,
+                        read: false,
+                        write: false,
+                    },
+                ],
+            });
+            fixture.relations.push(RelationOutput {
+                from: caller,
+                to: target,
+                kind: "CALLS".to_string(),
+                path: path.clone(),
+                range: caller_range,
+                confidence: Some(1.0),
+                strategy: Some("fixture-provider".to_string()),
+            });
+            fixture.coverage.push(FileCoverageOutput {
+                language: ProgrammingLanguage::TypeScript.as_str().to_string(),
+                path,
+                status: "indexed",
+                reason: None,
+            });
+        }
+        let language = fixture.languages.first_mut().unwrap();
+        language.name = spec.name.to_string();
+        language.files_found = file_count;
+        language.files_indexed = file_count;
+        fixture.census = SourceCensus::scan(&fixture.project.root).unwrap();
+        fixture.plan =
+            plan_analysis_units(&fixture.project.root, &fixture.census.manifest).unwrap();
+        fixture
     }
 
     fn new(languages: &[ProgrammingLanguage]) -> Self {

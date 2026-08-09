@@ -1,15 +1,9 @@
 use super::capabilities::{capability_policies, AdapterMeasurement};
-use super::definition_inventory::{inventory_definitions_from_root, SyntaxDefinition};
-use super::imports::{
-    inventory_imports_from_root, ImportRelation, ImportResolution, ImportSite, ProjectImportIndex,
-};
+use super::definition_inventory::SyntaxDefinition;
+use super::imports::{ImportRelation, ImportResolution, ImportSite, ProjectImportIndex};
 use super::provider::resolve_provider_descriptor;
 use super::source_coordinates::SourceCoordinates;
-use super::syntax::parse_tree;
-use super::type_relations::{
-    inventory_type_relation_sites_from_root, inventory_type_use_sites_from_root,
-    SyntaxTypeRelationSite, SyntaxTypeUseSite, TypeRelationIntent,
-};
+use super::type_relations::{SyntaxTypeRelationSite, SyntaxTypeUseSite, TypeRelationIntent};
 use artifact_writer::{AtomicLanguageIrArtifactWriter, LanguageIrSink, ValidatingDigestSink};
 use codebase_fact_model::analysis::{
     AnalysisUnit, ProgrammingLanguage, ProviderDescriptor, ProviderExecutionContext,
@@ -37,9 +31,10 @@ use codebase_fact_model::source_manifest::{SourceEntryState, SourceManifest, Sou
 use codebase_fact_model::validation::Validate;
 use codebase_fact_model::ContractSchema;
 use serde::Serialize;
+use source_inventory::inventory_unit_sources;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::{
     normalize_scip_language, Diagnostic, DiagnosticCode, DocumentOutput, FileCoverageOutput,
@@ -47,6 +42,7 @@ use crate::{
 };
 
 mod artifact_writer;
+mod source_inventory;
 
 const MIGRATION_RECEIPT_SCHEMA: &str = "codebase-workspace.language-ir-migration-receipt.v7";
 const DIAGNOSTIC_RECEIPT_SCHEMA: &str = "codebase-workspace.language-ir-diagnostic-receipt.v1";
@@ -329,9 +325,12 @@ impl DefinitionAudit {
     }
 
     fn merge(&mut self, other: &Self) {
-        self.definition_keys
-            .extend(other.definition_keys.iter().cloned());
-        self.definition_keys.sort();
+        self.absorb(other.clone());
+        self.canonicalize();
+    }
+
+    fn absorb(&mut self, mut other: Self) {
+        self.definition_keys.append(&mut other.definition_keys);
         self.syntax_definition_count += other.syntax_definition_count;
         self.owned_syntax_definition_count += other.owned_syntax_definition_count;
         self.matched_definition_count += other.matched_definition_count;
@@ -343,19 +342,21 @@ impl DefinitionAudit {
         self.resolved_owner_count += other.resolved_owner_count;
         self.unresolved_owner_count += other.unresolved_owner_count;
         self.inventory_failed_file_count += other.inventory_failed_file_count;
-        self.metadata_keys
-            .extend(other.metadata_keys.iter().cloned());
-        self.metadata_keys.sort();
-        self.metadata_keys.dedup();
+        self.metadata_keys.append(&mut other.metadata_keys);
         self.metadata_definition_count += other.metadata_definition_count;
         self.callable_definition_count += other.callable_definition_count;
         self.callable_signature_count += other.callable_signature_count;
         self.known_visibility_count += other.known_visibility_count;
-        self.metadata_entries
-            .extend(other.metadata_entries.iter().cloned());
+        self.metadata_entries.append(&mut other.metadata_entries);
+        self.failures.append(&mut other.failures);
+    }
+
+    fn canonicalize(&mut self) {
+        self.definition_keys.sort();
+        self.metadata_keys.sort();
+        self.metadata_keys.dedup();
         self.metadata_entries.sort();
         self.metadata_entries.dedup();
-        self.failures.extend(other.failures.iter().cloned());
         self.failures.sort();
         self.failures.dedup();
     }
@@ -449,12 +450,16 @@ impl ImportAudit {
     }
 
     fn merge(&mut self, other: &Self) {
-        self.site_keys.extend(other.site_keys.iter().cloned());
+        self.absorb(other.clone());
+        self.canonicalize();
+    }
+
+    fn absorb(&mut self, mut other: Self) {
+        self.site_keys.append(&mut other.site_keys);
         for (capability, audit) in &other.capabilities {
             self.capability_mut(*capability).merge(audit);
         }
-        self.entries.extend(other.entries.iter().cloned());
-        self.canonicalize();
+        self.entries.append(&mut other.entries);
     }
 }
 
@@ -1668,199 +1673,6 @@ fn emit_unit_header_and_coverage(
         sink.push(LanguageIrRecord::File(record.clone()))?;
     }
     Ok((assigned, file_records))
-}
-
-fn inventory_unit_sources(
-    input: &UnitAdapterInput<'_>,
-    assigned: &BTreeSet<RepositoryPath>,
-    timing_enabled: bool,
-) -> Result<UnitSourceInventory, String> {
-    let mut definition_audit = DefinitionAudit::default();
-    let mut syntax_definitions = BTreeMap::<RepositoryPath, Vec<SyntaxDefinition>>::new();
-    let mut syntax_type_relations = BTreeMap::<RepositoryPath, Vec<SyntaxTypeRelationSite>>::new();
-    let mut syntax_type_uses = BTreeMap::<RepositoryPath, Vec<SyntaxTypeUseSite>>::new();
-    let mut type_relation_inventory_failed_files = BTreeSet::<RepositoryPath>::new();
-    let mut import_audit = ImportAudit::for_language(input.unit.language);
-    let mut import_drafts = Vec::new();
-    let mut source_load_elapsed = Duration::ZERO;
-    let mut source_parse_elapsed = Duration::ZERO;
-    let mut definition_inventory_elapsed = Duration::ZERO;
-    let mut type_relation_inventory_elapsed = Duration::ZERO;
-    let mut type_use_inventory_elapsed = Duration::ZERO;
-    let mut import_inventory_elapsed = Duration::ZERO;
-    let mut import_resolution_elapsed = Duration::ZERO;
-
-    for path in assigned {
-        let Some(manifest_file) = input.manifest_files.get(path).copied() else {
-            continue;
-        };
-        let operation_started = Instant::now();
-        let coordinates = match SourceCoordinates::load(input.project_root, manifest_file) {
-            Ok(coordinates) => coordinates,
-            Err(_) => {
-                source_load_elapsed += operation_started.elapsed();
-                record_definition_inventory_failure(input.unit, path, &mut definition_audit);
-                record_import_file_failure(
-                    input.unit,
-                    path,
-                    ImportAuditOutcome::InventoryFailed,
-                    GapCode::ProviderExecutionIncomplete,
-                    &mut import_audit,
-                );
-                type_relation_inventory_failed_files.insert(path.clone());
-                continue;
-            }
-        };
-        source_load_elapsed += operation_started.elapsed();
-        let operation_started = Instant::now();
-        let tree = match parse_tree(
-            input.unit.language.as_str(),
-            path.as_str(),
-            coordinates.text(),
-            "shared-static-inventory",
-        ) {
-            Ok(tree) => tree,
-            Err(_) => {
-                source_parse_elapsed += operation_started.elapsed();
-                record_definition_inventory_failure(input.unit, path, &mut definition_audit);
-                record_import_file_failure(
-                    input.unit,
-                    path,
-                    ImportAuditOutcome::InventoryFailed,
-                    GapCode::ProviderExecutionIncomplete,
-                    &mut import_audit,
-                );
-                if input
-                    .import_index
-                    .metadata_failed(input.unit.language, path)
-                {
-                    record_import_file_failure(
-                        input.unit,
-                        path,
-                        ImportAuditOutcome::MetadataUnavailable,
-                        GapCode::MissingProjectMetadata,
-                        &mut import_audit,
-                    );
-                }
-                type_relation_inventory_failed_files.insert(path.clone());
-                continue;
-            }
-        };
-        source_parse_elapsed += operation_started.elapsed();
-
-        let operation_started = Instant::now();
-        let definitions = inventory_definitions_from_root(
-            input.unit.language.as_str(),
-            tree.root_node(),
-            coordinates.text(),
-        );
-        definition_inventory_elapsed += operation_started.elapsed();
-        let definition_names_by_range =
-            definitions
-                .iter()
-                .fold(HashMap::<Vec<i32>, &str>::new(), |mut index, definition| {
-                    index
-                        .entry(definition.name_utf8_range.clone())
-                        .or_insert(definition.name.as_str());
-                    index
-                });
-        for definition in &definitions {
-            let parent = definition
-                .parent_name_utf8_range
-                .as_ref()
-                .and_then(|parent_range| definition_names_by_range.get(parent_range).copied())
-                .unwrap_or("-");
-            definition_audit.definition_keys.push(format!(
-                "{}\t{}\t{}\t{parent}",
-                path.as_str(),
-                definition.kind.as_str(),
-                definition.name
-            ));
-        }
-        definition_audit.syntax_definition_count += definitions.len() as u64;
-        definition_audit.owned_syntax_definition_count += definitions
-            .iter()
-            .filter(|definition| definition.parent_name_utf8_range.is_some())
-            .count() as u64;
-
-        let operation_started = Instant::now();
-        let type_relations = inventory_type_relation_sites_from_root(
-            input.unit.language,
-            tree.root_node(),
-            coordinates.text(),
-        );
-        type_relation_inventory_elapsed += operation_started.elapsed();
-        let operation_started = Instant::now();
-        let type_uses = inventory_type_use_sites_from_root(
-            input.unit.language,
-            tree.root_node(),
-            coordinates.text(),
-            &definitions,
-            &type_relations,
-        );
-        type_use_inventory_elapsed += operation_started.elapsed();
-        let operation_started = Instant::now();
-        let import_sites =
-            inventory_imports_from_root(input.unit.language, tree.root_node(), coordinates.text());
-        import_inventory_elapsed += operation_started.elapsed();
-        syntax_definitions.insert(path.clone(), definitions);
-        syntax_type_relations.insert(path.clone(), type_relations);
-        syntax_type_uses.insert(path.clone(), type_uses);
-
-        if input
-            .import_index
-            .metadata_failed(input.unit.language, path)
-        {
-            record_import_file_failure(
-                input.unit,
-                path,
-                ImportAuditOutcome::MetadataUnavailable,
-                GapCode::MissingProjectMetadata,
-                &mut import_audit,
-            );
-        }
-        let operation_started = Instant::now();
-        collect_import_drafts(
-            input.unit,
-            input.import_index,
-            path,
-            &coordinates,
-            import_sites,
-            &mut import_audit,
-            &mut import_drafts,
-        );
-        import_resolution_elapsed += operation_started.elapsed();
-    }
-
-    // Canonicalize cumulative inventories once. Re-sorting after every file
-    // made large Java and C# units effectively quadratic without changing the
-    // accepted facts.
-    definition_audit.definition_keys.sort();
-    import_audit.canonicalize();
-    if timing_enabled {
-        eprintln!(
-            "timing stage=language_ir_source_inventory language={} unit={} load_ms={} parse_ms={} definitions_ms={} type_relations_ms={} type_uses_ms={} imports_ms={} import_resolution_ms={}",
-            input.unit.language.as_str(),
-            input.unit.id.as_str(),
-            source_load_elapsed.as_millis(),
-            source_parse_elapsed.as_millis(),
-            definition_inventory_elapsed.as_millis(),
-            type_relation_inventory_elapsed.as_millis(),
-            type_use_inventory_elapsed.as_millis(),
-            import_inventory_elapsed.as_millis(),
-            import_resolution_elapsed.as_millis(),
-        );
-    }
-
-    Ok(UnitSourceInventory {
-        definition_audit,
-        syntax_definitions,
-        syntax_type_relations,
-        syntax_type_uses,
-        type_relation_inventory_failed_files,
-        import_audit,
-        import_drafts,
-    })
 }
 
 fn emit_unit_timing(

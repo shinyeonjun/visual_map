@@ -44,7 +44,9 @@ the last verified static snapshot.
 4. The resource-weighted scheduler runs provider shards without changing plan
    ownership.
 5. Direct adapters reconcile provider output with exact source inventories and
-   emit one validated Language IR v2 authority.
+   emit one validated Language IR v2 authority. File-local AST inventories run
+   in a CPU- and memory-bounded pool and are merged back in repository-path
+   order; record serialization reuses a bounded buffer.
 6. The linker registers identities, resolves evidence-backed relations,
    deduplicates, prunes visualization-irrelevant details, and verifies graph
    invariants.
@@ -140,6 +142,10 @@ Provider concurrency is also calculated at runtime from the current job count,
 logical CPU count, and available memory. Optional environment values are safety
 caps only; they cannot turn the adaptive scheduler into a larger fixed pool.
 Scheduler telemetry records the inputs and selected worker count for every run.
+The post-provider Language IR inventory uses the same principle: units with at
+least 32 files may use up to eight file workers, but the cap is reduced from
+available memory and the largest planned source file. Serial and parallel paths
+must produce identical stream, semantic, and artifact digests.
 All provider calls are ephemeral: they do not resume or create the user's
 Codex/Claude chat session. The semantic cache key includes Fact digest,
 prompt/schema version, provider/model, and reasoning effort so identical

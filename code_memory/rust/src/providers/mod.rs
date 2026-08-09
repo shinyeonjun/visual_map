@@ -30,7 +30,8 @@ pub(crate) use execution_context::{
 pub(crate) use lsp::*;
 pub(crate) use process::{provider_timeout, run_bounded_command, ProviderProcessGuard};
 pub(crate) use scheduler::{
-    combined_job_files, merge_provider_jobs, run_provider_jobs, ProviderJob,
+    combined_job_files, merge_provider_jobs, provider_memory_budget_mb, run_provider_jobs,
+    ProviderJob,
 };
 pub(crate) use scip::*;
 pub(crate) use workspace::{ProviderWorkspace, ProviderWorkspaceBinding};

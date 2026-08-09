@@ -3957,6 +3957,58 @@ region directory ceiling은 계층 Reduce와 별개로 유지되며 S/M/L 실저
 
 ---
 
+## TS-2026-08-09-91 — 대형 unit의 source inventory를 결정적·메모리 제한 병렬 단계로 바꾼다
+
+### 증상
+
+provider cache가 적중해도 Language IR adapter가 한 unit의 모든 파일을 순서대로 다시 열고 AST를 파싱했다.
+C# EF Core 기준 source inventory만 28.533초였고 provider 실행이 0ms인 warm 전체도 168.572초였다.
+
+### 잘못 짚기 쉬운 원인
+
+LSP 요청 batch는 이미 bounded in-flight 방식이었다. 언어 단위만 병렬화해도 하나의 C#/Java unit에 수천
+파일이 몰리면 이 직렬 구간은 그대로 남는다. 정확도 규칙을 줄이거나 AST inventory를 생략하는 것도 허용할
+수 없다.
+
+### 근본 원인
+
+파일 load, tree-sitter parse, definition/type/import inventory와 exact import resolution은 파일별로 독립인데
+unit 전체를 하나의 `for` loop에서 실행했다. 반면 결과 순서는 Language IR digest 계약에 포함되므로 완료
+순서대로 곧바로 stream에 쓰는 단순 병렬화는 비결정적이었다.
+
+### 적용한 수정
+
+- 32파일 이상 unit만 파일별 worker pool을 사용한다.
+- worker 상한은 논리 CPU에서 하나를 남긴 값, 최대 8, 가용 메모리, 가장 큰 source의 24배 AST 추정치 중
+  가장 작은 값이다. `CODE_MEMORY_MAX_LANGUAGE_IR_WORKERS`는 확대가 아니라 추가 안전 상한으로만 작동한다.
+- 각 worker는 완전한 파일-local inventory와 typed failure receipt를 반환한다. coordinator는 Analysis Plan의
+  repository path 순서로 결과를 재조립한 뒤 한 번만 canonical sort/dedup한다.
+- Language IR JSON record buffer를 재사용하고 artifact writer buffer를 1MiB로 올려 레코드별 allocator/syscall
+  비용을 줄였다. digest 계산식과 fsync/publish 계약은 바꾸지 않았다.
+- source inventory 구현을 `adapter/source_inventory.rs`로 분리해 거대 adapter에 병렬 제어를 섞지 않았다.
+
+### 검증 결과
+
+64개 TypeScript 파일을 같은 snapshot에서 worker 1과 worker 8로 각각 생성했다. stream-set digest,
+semantic-payload digest, JSONL content digest, record count가 모두 동일했다. 이 작은 fixture에서 inventory
+wall time은 8ms에서 3ms였고 전체 Code Memory 321개 테스트가 통과했다.
+
+### 재발 시 점검 순서
+
+1. `CODE_MEMORY_LANGUAGE_IR_TIMING=1`에서 `workers`, `wall_ms`, 각 `*_cpu_ms`를 분리해 본다.
+2. worker 완료 순서가 아니라 repository path 순서로 merge되는지 확인한다.
+3. worker panic·누락·중복 index가 전체 unit 실패로 승격되는지 확인한다.
+4. worker 1/다중 worker의 네 digest/count가 같은지 회귀 테스트를 실행한다.
+5. 메모리 상한을 없애거나 파일 전체 AST를 worker 밖에 장기 보관하지 않았는지 확인한다.
+
+### 남은 한계 또는 후속 gate
+
+8ms→3ms는 구조 검증용 작은 fixture 수치이지 EF Core 개선치를 뜻하지 않는다. C#/Java frozen corpus에서
+source inventory, relation classification, stream emission, canonical linker를 다시 분리 계측해 실제 효과와
+peak memory를 기록해야 이 성능 항목을 완료로 올린다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text

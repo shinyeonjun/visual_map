@@ -18,6 +18,7 @@ pub(super) struct ValidatingDigestSink<'a> {
     hasher: Sha256,
     semantic_hasher: Sha256,
     record_count: u64,
+    record_buffer: Vec<u8>,
     artifact: &'a mut AtomicLanguageIrArtifactWriter,
 }
 
@@ -26,11 +27,13 @@ impl LanguageIrSink for ValidatingDigestSink<'_> {
         self.validator
             .push(&record)
             .map_err(|error| format!("invalid emitted Language IR record: {error}"))?;
-        let bytes = serde_json::to_vec(&record)
+        self.record_buffer.clear();
+        serde_json::to_writer(&mut self.record_buffer, &record)
             .map_err(|error| format!("cannot serialize emitted Language IR record: {error}"))?;
-        self.artifact.write_record(&bytes)?;
-        self.hasher.update((bytes.len() as u64).to_be_bytes());
-        self.hasher.update(&bytes);
+        self.artifact.write_record(&self.record_buffer)?;
+        self.hasher
+            .update((self.record_buffer.len() as u64).to_be_bytes());
+        self.hasher.update(&self.record_buffer);
         if matches!(
             record,
             LanguageIrRecord::Evidence(_)
@@ -38,8 +41,8 @@ impl LanguageIrSink for ValidatingDigestSink<'_> {
                 | LanguageIrRecord::Relation(_)
         ) {
             self.semantic_hasher
-                .update((bytes.len() as u64).to_be_bytes());
-            self.semantic_hasher.update(bytes);
+                .update((self.record_buffer.len() as u64).to_be_bytes());
+            self.semantic_hasher.update(&self.record_buffer);
         }
         self.record_count += 1;
         Ok(())
@@ -53,6 +56,7 @@ impl<'a> ValidatingDigestSink<'a> {
             hasher: Sha256::new(),
             semantic_hasher: Sha256::new(),
             record_count: 0,
+            record_buffer: Vec::with_capacity(4 * 1024),
             artifact,
         }
     }
@@ -129,7 +133,7 @@ impl AtomicLanguageIrArtifactWriter {
             )
         })?;
         Ok(Self {
-            writer: Some(BufWriter::new(file)),
+            writer: Some(BufWriter::with_capacity(1024 * 1024, file)),
             temporary_path,
             final_path,
             hasher: Sha256::new(),
