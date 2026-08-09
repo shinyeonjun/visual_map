@@ -49,7 +49,11 @@ the last verified static snapshot.
 5. Direct adapters reconcile provider output with exact source inventories and
    emit one validated Language IR v2 authority. File-local AST inventories run
    in a CPU- and memory-bounded pool and are merged back in repository-path
-   order; record serialization reuses a bounded buffer.
+   order; record serialization reuses a bounded buffer. The adapter coordinator
+   delegates definition reconciliation, relation classification, receipt data
+   contracts, source inventory, and artifact writing to separate modules. These
+   modules do not own scheduling or canonical publication, so extraction rules
+   still have one direction and cannot form a second pipeline.
 6. The linker reads the Language IR in two parsed passes: the first ingests
    receipts/evidence and registers definition identities, including valid
    forward evidence references; the second resolves evidence-backed

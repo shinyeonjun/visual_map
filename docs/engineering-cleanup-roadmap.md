@@ -32,6 +32,21 @@ remaining measured completion gates.
   with bounded parallelism for large units, and rejoins in deterministic path
   order. The serial/parallel byte-identity gate is part of the engine suite.
 
+### Physical Language IR ownership split
+
+- `adapter.rs` remains the unit-level coordinator and aggregation boundary.
+- `adapter/definitions.rs` owns definition draft reconciliation and its focused
+  regression tests.
+- `adapter/relations.rs` owns provider-relation filtering, endpoint retention,
+  capability mapping, and deterministic relation ordering.
+- `adapter/receipts.rs` owns the stable migration, diagnostic, stream, and
+  audit receipt data contracts.
+- `adapter/source_inventory.rs` and `adapter/artifact_writer.rs` retain source
+  enumeration and atomic stream publication respectively.
+- The split changed no schema, extraction rule, record order, semantic digest,
+  or canonical bundle behavior; the Language IR/canonical regression suite is
+  the gate for every physical move.
+
 ### Query-backed desktop read model
 
 - Map overview and selection use fixed typed SQLite queries.
@@ -131,16 +146,6 @@ External CI is the final repository certification after this checkpoint is
 published. It must not replace any of the local gates above.
 
 ## Remaining cleanup
-
-### P1. Physical Language IR module split
-
-The 800-line coordinator has been removed, but `language_ir/adapter.rs` remains
-a large physical file. Source inventory and artifact writing are now separate.
-Move the remaining definition reconciliation, relation mapping, and receipt
-groups without changing semantic/bundle digests.
-
-Completion: no circular ownership, focused module tests remain local, and the
-canonical fixture digests are unchanged.
 
 ### P2. Measured large-repository read model
 

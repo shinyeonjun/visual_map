@@ -4197,6 +4197,67 @@ route 비용, WebView peak memory는 아직 측정하지 않았다. 이 수치 �
 
 ---
 
+## TS-2026-08-09-95 — Language IR 물리 분리는 의미 규칙과 데이터 계약을 섞지 않는다
+
+### 증상
+
+`language_ir/adapter.rs` 한 파일에 unit 조정, definition 보정, provider relation 분류, receipt schema,
+source inventory, artifact publication이 함께 있었다. 일부 큰 함수는 앞서 분리됐지만 definition·relation·receipt
+구현은 여전히 같은 물리 파일에 남아 언어별 예외를 수정할 때 무관한 계약까지 함께 읽어야 했다.
+
+### 영향
+
+현재 동작이 틀린 것은 아니었지만 책임 경계가 코드 구조에 드러나지 않았다. 새 언어 규칙이나 감사 필드를
+추가할수록 동일 파일의 import와 private helper 결합이 커지고, 단순한 파일 정리가 record 순서·digest·canonical
+bundle을 바꾸는 위험한 수정으로 번질 수 있었다.
+
+### 잘못 짚기 쉬운 원인
+
+파일 줄 수 자체가 결함은 아니다. 임의의 줄 수 목표로 helper를 잘게 쪼개거나 공용 trait를 추가하면 오히려
+호출 흐름과 소유권이 숨는다. 또한 definition과 relation을 동시에 재설계하면서 옮기면 구조 변경과 정확도
+변경을 같은 회귀에서 구분할 수 없다.
+
+### 근본 원인
+
+canonical-only 전환 중 구형 coordinator를 제거하는 데 집중하면서, 새 adapter의 안정된 책임 경계가 확인된
+뒤에도 물리 모듈화를 미뤘다. 결과적으로 unit coordinator가 사용해야 할 계약과 coordinator 내부 구현이 한
+파일에 놓였다.
+
+### 적용한 수정
+
+- `adapter.rs`는 unit emission, audit 집계, coverage 조정의 순서만 소유한다.
+- `adapter/definitions.rs`가 definition draft·source inventory reconciliation·kind/owner/display-name 정규화를
+  소유하며 관련 회귀 테스트도 같은 모듈로 이동했다.
+- `adapter/relations.rs`가 provider relation 허용 여부, endpoint 보존, capability/kind/rank 결정을 소유한다.
+- `adapter/receipts.rs`가 migration/diagnostic/stream/audit receipt의 직렬화 계약만 소유한다.
+- `source_inventory.rs`와 `artifact_writer.rs`의 기존 단방향 책임은 유지했다.
+- coordinator가 필요한 타입은 제한된 `pub(crate)` 재노출로 제공하고, 새 pipeline·trait·runtime dispatch는
+  추가하지 않았다.
+
+### 검증 결과
+
+- Language IR 전용 64개 테스트가 64/64 통과했다.
+- definition 회귀 테스트 경로가 `adapter::definitions::tests`로 이동해 구현과 검증 책임이 일치한다.
+- 10언어 stream 결정성, canonical bundle 연결, evidence/reference 검증, receipt boundedness 테스트가 모두
+  기존 결과로 통과했다.
+- `git diff --check`가 통과했고 schema 상수와 직렬화 필드에는 변경이 없다.
+
+### 재발 시 점검 순서
+
+1. `adapter.rs`가 언어별 definition/relation 규칙을 다시 직접 소유하는지 확인한다.
+2. receipt 필드를 runtime 계산 코드와 같은 모듈에 추가하지 않았는지 확인한다.
+3. 새 helper가 scheduling, filesystem publication, canonical linking 중 둘 이상을 소유하지 않는지 확인한다.
+4. 구조 이동 직후 Language IR 64개 회귀를 먼저 실행하고 전체 gate는 체크포인트 뒤에 실행한다.
+5. 의미 규칙을 함께 바꿔야 한다면 물리 이동과 별도 커밋으로 분리하고 digest 변화 이유를 기록한다.
+
+### 남은 한계 또는 후속 gate
+
+`adapter.rs`에는 unit emission과 언어별 audit 집계가 여전히 함께 있지만 서로 강하게 연결된 한 실행 경계다.
+실측된 변경 빈도나 병목 없이 추가 추상화를 만들지 않는다. 다음 구조 분리는 테스트 가능성 또는 측정된
+성능 문제를 해결할 때만 진행한다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text
