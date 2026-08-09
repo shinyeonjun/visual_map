@@ -30,9 +30,9 @@ pub(crate) fn analyze_and_publish(
     operation_id: &str,
     progress: SemanticProgress<'_>,
 ) -> Result<String, String> {
-    let snapshot = fact_graph::load_published_snapshot(app_data_dir, &workspace.id)?
+    let fact_reader = fact_graph::open_published_read_model(app_data_dir, &workspace.id)?
         .ok_or_else(|| "게시된 canonical Fact snapshot이 없습니다".to_string())?;
-    let plan = compile_semantic_plan(read_model::build_base_draft(workspace, &snapshot)?)
+    let plan = compile_semantic_plan(read_model::build_base_draft(workspace, &fact_reader)?)
         .map_err(|error| format!("AI 의미 입력을 만들지 못했습니다: {error}"))?;
     eprintln!(
         "@codebase-workspace-ai-plan {}",

@@ -26,7 +26,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -80,7 +80,6 @@ pub(crate) struct CanonicalFactSnapshot {
     pub manifest: FactBundleManifest,
     pub nodes: Vec<FactNode>,
     pub edges: Vec<FactEdge>,
-    pub evidence: Vec<FactEvidence>,
     pub file_coverage: Vec<FileCoverageRecord>,
     pub capability_receipts: Vec<CapabilityReceipt>,
     pub gaps: Vec<AnalysisGap>,
@@ -165,19 +164,25 @@ impl FactReadModel {
             manifest: self.manifest.clone(),
             nodes,
             edges: edges.into_values().collect(),
-            evidence: Vec::new(),
             file_coverage: Vec::new(),
             capability_receipts: validated_rows(&self.connection, "capability_receipts")?,
             gaps: validated_rows(&self.connection, "gaps")?,
         }))
     }
 
-    fn full_snapshot(&self) -> Result<CanonicalFactSnapshot, String> {
+    /// Materialize the deterministic graph tables required to plan the
+    /// semantic map, but deliberately leave source evidence on disk.
+    ///
+    /// The planner first selects a bounded set of anchor facts. It can then
+    /// fetch only the evidence referenced by those anchors through
+    /// [`Self::evidence_by_ids`]. Large repositories commonly contain far
+    /// more evidence rows than the final semantic prompt can consume, so
+    /// loading the entire evidence table here would only duplicate memory.
+    pub(crate) fn semantic_analysis_snapshot(&self) -> Result<CanonicalFactSnapshot, String> {
         Ok(CanonicalFactSnapshot {
             manifest: self.manifest.clone(),
             nodes: validated_rows(&self.connection, "nodes")?,
             edges: validated_rows(&self.connection, "edges")?,
-            evidence: validated_rows(&self.connection, "evidence")?,
             file_coverage: validated_rows(&self.connection, "file_coverage")?,
             capability_receipts: validated_rows(&self.connection, "capability_receipts")?,
             gaps: validated_rows(&self.connection, "gaps")?,
@@ -339,16 +344,6 @@ pub(crate) fn published_bundle_for_workspace(
         manifest: pointer.manifest,
         bundle_path,
     }))
-}
-
-pub(crate) fn load_published_snapshot(
-    app_data_dir: impl AsRef<Path>,
-    workspace_id: &str,
-) -> Result<Option<Arc<CanonicalFactSnapshot>>, String> {
-    let Some(reader) = open_published_read_model(app_data_dir, workspace_id)? else {
-        return Ok(None);
-    };
-    Ok(Some(Arc::new(reader.full_snapshot()?)))
 }
 
 pub(crate) fn open_published_read_model(
@@ -931,23 +926,23 @@ mod tests {
     }
 
     #[test]
-    fn repeated_reads_return_equal_snapshots_without_retaining_the_full_graph() {
+    fn repeated_read_models_return_equal_manifests_without_retaining_the_full_graph() {
         let root = test_root("snapshot-cache");
         let workspace_id = "ws-0123456789abcdef";
         fs::create_dir_all(root.join("workspaces").join("v2").join(workspace_id)).unwrap();
         let fixture = empty_bundle_fixture(&root, workspace_id);
         import_and_publish(&root, workspace_id, &fixture).unwrap();
 
-        let first = load_published_snapshot(&root, workspace_id)
+        let first = open_published_read_model(&root, workspace_id)
             .unwrap()
             .unwrap();
-        let second = load_published_snapshot(&root, workspace_id)
+        let second = open_published_read_model(&root, workspace_id)
             .unwrap()
             .unwrap();
 
         assert_eq!(first.manifest, second.manifest);
-        assert_eq!(first.nodes.len(), second.nodes.len());
-        assert_eq!(first.edges.len(), second.edges.len());
+        drop(first);
+        drop(second);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1055,7 +1050,6 @@ mod tests {
         let trace = reader.trace_snapshot(&caller.id, 1, 1).unwrap().unwrap();
         assert_eq!(trace.nodes.len(), 2);
         assert_eq!(trace.edges, vec![edge]);
-        assert!(trace.evidence.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 

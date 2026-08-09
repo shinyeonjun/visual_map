@@ -1,4 +1,8 @@
-use crate::{fact_graph::CanonicalFactSnapshot, static_query, workspace::Workspace};
+use crate::{
+    fact_graph::{CanonicalFactSnapshot, FactReadModel},
+    static_query,
+    workspace::Workspace,
+};
 use codebase_fact_model::{
     analysis::ProgrammingLanguage,
     coverage::{FileCoverageRecord, FileCoverageState},
@@ -37,8 +41,9 @@ const MAX_EXCERPT_TEXT_BYTES: usize = 24 * 1024;
 
 pub(crate) fn build_base_draft(
     workspace: &Workspace,
-    snapshot: &CanonicalFactSnapshot,
+    fact_reader: &FactReadModel,
 ) -> Result<BaseSemanticDraft, String> {
+    let snapshot = fact_reader.semantic_analysis_snapshot()?;
     let provider = workspace
         .provider
         .as_ref()
@@ -51,7 +56,7 @@ pub(crate) fn build_base_draft(
     let repository_root = Path::new(&workspace.repo_path)
         .canonicalize()
         .map_err(|error| format!("프로젝트 폴더를 확인하지 못했습니다: {error}"))?;
-    let input = build_input(&workspace_id, &repository_root, snapshot)?;
+    let input = build_input(&workspace_id, &repository_root, &snapshot, fact_reader)?;
     let region_count = input.regions.len() as u64;
     Ok(BaseSemanticDraft {
         workspace_id,
@@ -98,16 +103,12 @@ fn build_input(
     workspace_id: &WorkspaceId,
     repository_root: &Path,
     snapshot: &CanonicalFactSnapshot,
+    fact_reader: &FactReadModel,
 ) -> Result<BaseSemanticInput, String> {
     let nodes_by_id = snapshot
         .nodes
         .iter()
         .map(|node| (node.id.clone(), node))
-        .collect::<BTreeMap<_, _>>();
-    let evidence_by_id = snapshot
-        .evidence
-        .iter()
-        .map(|evidence| (evidence.id.clone(), evidence))
         .collect::<BTreeMap<_, _>>();
     let coverage_by_path = snapshot
         .file_coverage
@@ -243,6 +244,15 @@ fn build_input(
         &mut regions,
         &region_index,
     )?;
+    let selected_evidence = fact_reader.evidence_by_ids(
+        anchors
+            .iter()
+            .flat_map(|anchor| anchor.evidence_ids.iter().cloned()),
+    )?;
+    let evidence_by_id = selected_evidence
+        .iter()
+        .map(|evidence| (evidence.id.clone(), evidence))
+        .collect::<BTreeMap<_, _>>();
     let excerpts = build_excerpts(
         repository_root,
         &anchors,
@@ -951,12 +961,19 @@ mod tests {
         };
         crate::fact_graph::import_and_publish(&app_data, manifest.workspace_id.as_str(), &artifact)
             .unwrap();
-        let snapshot =
-            crate::fact_graph::load_published_snapshot(&app_data, manifest.workspace_id.as_str())
+        let fact_reader =
+            crate::fact_graph::open_published_read_model(&app_data, manifest.workspace_id.as_str())
                 .unwrap()
                 .unwrap();
+        let snapshot = fact_reader.semantic_analysis_snapshot().unwrap();
 
-        let input = build_input(&manifest.workspace_id, &repository_root, &snapshot).unwrap();
+        let input = build_input(
+            &manifest.workspace_id,
+            &repository_root,
+            &snapshot,
+            &fact_reader,
+        )
+        .unwrap();
         let health_route_id = snapshot
             .nodes
             .iter()

@@ -888,10 +888,11 @@ mod tests {
         };
         crate::fact_graph::import_and_publish(&app_data, manifest.workspace_id.as_str(), &artifact)
             .unwrap();
-        let snapshot =
-            crate::fact_graph::load_published_snapshot(&app_data, manifest.workspace_id.as_str())
+        let reader =
+            crate::fact_graph::open_published_read_model(&app_data, manifest.workspace_id.as_str())
                 .unwrap()
                 .unwrap();
+        let snapshot = reader.semantic_analysis_snapshot().unwrap();
 
         let owners = snapshot
             .nodes
