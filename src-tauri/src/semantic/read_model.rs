@@ -26,9 +26,9 @@ use std::{
 };
 
 /// Current bounded static region-directory ceiling. Provider work is split
-/// into local Map jobs and fan-in-four hierarchical Reduce jobs, but the
-/// canonical read model still rejects a larger structural directory instead
-/// of silently omitting regions.
+/// into adaptive local jobs and joined deterministically, but the canonical
+/// read model still rejects a larger structural directory instead of silently
+/// omitting regions. This is a product safety ceiling, not a target job count.
 const MAX_GLOBAL_REGIONS: usize = 192;
 const MAX_ANCHORS_PER_REGION: usize = 12;
 const MAX_EXCERPTS: usize = 48;
@@ -144,7 +144,7 @@ fn build_input(
     let region_specs = plan_regions(workspace_id, &production_files, &nodes_by_id)?;
     if region_specs.len() > MAX_GLOBAL_REGIONS {
         return Err(format!(
-            "구조 단위가 {}개라 현재 전역 통합 안전 한도 {}개를 넘었습니다. 계층형 다단 통합 단계가 필요합니다",
+            "구조 단위가 {}개라 현재 지도 안전 한도 {}개를 넘었습니다. 더 높은 상위 구조로 축약해야 합니다",
             region_specs.len(),
             MAX_GLOBAL_REGIONS
         ));

@@ -118,16 +118,21 @@ revision is published. A trace can represent an area only when every region
 that owns the trace belongs to that area's direct or descendant membership;
 cross-area traces remain relationship information rather than area evidence.
 
-Large semantic inputs use a bounded MapReduce pipeline. Deterministic,
-disjoint local Map jobs are verified independently. The shuffle contract then
-keeps only local meaning, direct region membership, exact citations, and
-aggregated boundary counts; duplicate assignments, effective memberships,
-internal area IDs, relation evidence lists, and source excerpts are removed.
-When more than four verified inputs remain, fan-in-four Reduce jobs execute in
-parallel and their strictly verified outputs become the next level until one
-final full-packet reconciliation remains. Every Reduce prompt retains the
-512-KiB fail-closed budget and recursively splits before provider execution if
-needed. These calls are ephemeral: they do not resume or create the user's
+Large semantic inputs use adaptive, disjoint local Map jobs. The planner derives
+the partition shape from the complete prompt byte size, static region count,
+and the per-request safety budget; it does not target a fixed job count. Each
+local result is verified independently against its exact region scope. After
+all partitions pass, code joins them in stable partition/area-ID order and runs
+the ordinary full-packet verifier once. No fan-in Reduce provider calls and no
+final global AI call are used. This makes the final join linear, deterministic,
+and independent of model latency while preserving exact region coverage and
+citation checks.
+
+Provider concurrency is also calculated at runtime from the current job count,
+logical CPU count, and available memory. Optional environment values are safety
+caps only; they cannot turn the adaptive scheduler into a larger fixed pool.
+Scheduler telemetry records the inputs and selected worker count for every run.
+All provider calls are ephemeral: they do not resume or create the user's
 Codex/Claude chat session. The semantic cache key includes Fact digest,
 prompt/schema version, provider/model, and reasoning effort so identical
 approved input remains stable. When a provider

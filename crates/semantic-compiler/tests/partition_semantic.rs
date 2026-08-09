@@ -1,12 +1,11 @@
 mod support;
 
 use codebase_semantic_compiler::{
-    compile_base_repair_prompt, compile_reconciliation_partition, compile_reconciliation_prompt,
-    compile_semantic_plan_with_policy, parse_and_verify_base_response, verify_base_proposal,
+    compile_semantic_plan_with_policy, merge_verified_partitions, verify_base_proposal,
     SemanticCompileErrorCode, SemanticPartitionPolicy, VerifiedSemanticPartition,
 };
 use std::collections::BTreeSet;
-use support::{fixture_draft, structural_proposal, valid_proposal};
+use support::{fixture_draft, structural_proposal};
 
 fn forced_partition_policy(max_regions: usize) -> SemanticPartitionPolicy {
     SemanticPartitionPolicy {
@@ -111,10 +110,10 @@ fn source_evidence_is_sent_only_to_its_own_local_partition() {
 }
 
 #[test]
-fn verified_local_results_reconcile_without_resending_source_excerpts() {
-    let (draft, ids) = fixture_draft();
+fn verified_local_results_merge_deterministically_without_a_global_ai_prompt() {
+    let (draft, _) = fixture_draft();
     let plan = compile_semantic_plan_with_policy(draft, forced_partition_policy(1)).unwrap();
-    let verified = plan
+    let mut verified = plan
         .partitions
         .iter()
         .map(|partition| {
@@ -128,38 +127,18 @@ fn verified_local_results_reconcile_without_resending_source_excerpts() {
             }
         })
         .collect::<Vec<_>>();
+    let first = merge_verified_partitions(&plan.base, &verified).unwrap();
+    verified.reverse();
+    let second = merge_verified_partitions(&plan.base, &verified).unwrap();
 
-    let reconciliation = compile_reconciliation_prompt(&plan.base, &verified).unwrap();
-    let rendered = reconciliation.rendered_prompt();
-
-    assert!(rendered.contains("RECONCILIATION_PAYLOAD_JSON"));
-    assert!(rendered.contains("verifiedPartitions"));
-    assert!(rendered.contains("localAreaIndex"));
-    assert!(rendered.contains("directMemberRegionIds"));
-    assert!(!rendered.contains("\"areaId\""));
-    assert!(!rendered.contains("\"effectiveMemberRegionIds\""));
-    assert!(!rendered.contains("\"assignments\""));
-    assert!(!rendered.contains("\"representativeEdgeIds\""));
-    assert!(!rendered.contains(&plan.base.packet.input.excerpts[0].text));
-    assert!(!rendered.contains(&plan.base.packet.input.excerpts[1].text));
-    assert_eq!(reconciliation.packet, plan.base.packet);
-
-    let reduced_partition = compile_reconciliation_partition(&plan.base, &verified).unwrap();
-    assert!(reduced_partition.partition_key.starts_with("reduce-"));
-    assert_eq!(reduced_partition.region_ids.len(), 2);
-    assert_eq!(reduced_partition.prompt.packet.input.regions.len(), 2);
-
-    let rejected = "{}";
-    let verifier_error = parse_and_verify_base_response(&reconciliation, rejected).unwrap_err();
-    let repair = compile_base_repair_prompt(&reconciliation, rejected, &verifier_error).unwrap();
-    assert!(repair.task_prompt.contains("verifiedPartitions"));
-    assert!(repair.system_policy.contains("RECONCILIATION"));
-    assert!(repair.system_policy.contains("VERIFIER-GUIDED REPAIR"));
-
-    // Final publication still goes through the original full-packet verifier.
-    let proposal = valid_proposal(&reconciliation, &ids);
-    let approved = verify_base_proposal(&reconciliation.packet, proposal).unwrap();
-    assert_eq!(approved.assignments.len(), 2);
+    assert_eq!(first, second);
+    assert_eq!(
+        first.semantic_input_digest,
+        plan.base.packet.semantic_input_digest
+    );
+    assert_eq!(first.assignments.len(), 2);
+    assert_eq!(first.areas.len(), 2);
+    assert!(first.project.summary.contains("검증된 코드 영역 2개"));
 }
 
 #[test]

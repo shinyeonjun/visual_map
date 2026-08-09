@@ -45,7 +45,7 @@ flowchart LR
 | 코드 관계 | import/export, call/construct, type hierarchy/use, framework route/handler, test 관계 |
 | Fact Graph | 결정적 ID, evidence, gap, immutable SQLite bundle, tamper 검증 |
 | 실행 흐름 | confirmed direct edge만 사용하는 bounded `TracePath` |
-| AI 의미 분석 | L0/L1 영역 이름·책임·요약, 분할 실행, 검증·캐시·전역 통합 |
+| AI 의미 분석 | L0/L1 영역 이름·책임·요약, 규모별 동적 분할, 독립 검증·캐시, 결정적 통합 |
 | UI | Fluent 2 기반 단일 workspace와 계층형 코드 지도 |
 | DB | metadata-only 엔진은 남아 있으나 새 지도 ingestion은 아직 연결하지 않음 |
 | 대화 | 제품 목표에는 포함되지만 현재 vertical slice에는 연결하지 않음 |

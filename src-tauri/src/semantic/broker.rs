@@ -11,10 +11,15 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const DEFAULT_INITIAL_PROVIDER_JOBS: usize = 4;
-const DEFAULT_RECOVERY_PROVIDER_JOBS: usize = 2;
-const MAX_CONFIGURED_PROVIDER_JOBS: usize = 8;
+const AI_WORKER_MEMORY_MB: usize = 384;
+const SYSTEM_MEMORY_RESERVE_MB: usize = 1_024;
 static STAGING_NONCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BatchPhase {
+    Initial,
+    Repair,
+}
 
 pub(super) fn run_provider(
     runtime: &provider::ResolvedProvider,
@@ -53,7 +58,8 @@ pub(super) fn run_provider_batch(
         prompts,
         configured_provider_parallelism(
             "CODEBASE_WORKSPACE_AI_MAX_PARALLEL",
-            DEFAULT_INITIAL_PROVIDER_JOBS,
+            prompts,
+            BatchPhase::Initial,
         ),
         "initial",
         operation_id,
@@ -61,26 +67,7 @@ pub(super) fn run_provider_batch(
     );
 }
 
-pub(super) fn run_provider_reduce_batch(
-    runtime: &provider::ResolvedProvider,
-    prompts: &[CompiledBasePrompt],
-    operation_id: &str,
-    on_completed: impl FnMut(usize, Result<String, String>),
-) {
-    run_provider_batch_with_limit(
-        runtime,
-        prompts,
-        configured_provider_parallelism(
-            "CODEBASE_WORKSPACE_AI_MAX_PARALLEL",
-            DEFAULT_INITIAL_PROVIDER_JOBS,
-        ),
-        "reduce",
-        operation_id,
-        on_completed,
-    );
-}
-
-/// Verifier-guided repairs and execution retries use a lower bound than the
+/// Verifier-guided repairs and execution retries use lower concurrency than the
 /// normal path. Conservative recovery avoids turning one invalid response or
 /// transient provider failure into a parallel retry storm.
 pub(super) fn run_provider_repair_batch(
@@ -94,7 +81,8 @@ pub(super) fn run_provider_repair_batch(
         prompts,
         configured_provider_parallelism(
             "CODEBASE_WORKSPACE_AI_RETRY_MAX_PARALLEL",
-            DEFAULT_RECOVERY_PROVIDER_JOBS,
+            prompts,
+            BatchPhase::Repair,
         ),
         "repair",
         operation_id,
@@ -113,7 +101,7 @@ fn run_provider_batch_with_limit(
     if prompts.is_empty() {
         return;
     }
-    let worker_count = worker_count(prompts.len(), max_parallel);
+    let worker_count = prompts.len().min(max_parallel.max(1));
     let batch_started = Instant::now();
     eprintln!(
         "@codebase-workspace-ai-batch {}",
@@ -194,16 +182,102 @@ fn run_provider_batch_with_limit(
     );
 }
 
-fn configured_provider_parallelism(variable: &str, default: usize) -> usize {
-    env::var(variable)
+fn configured_provider_parallelism(
+    variable: &str,
+    prompts: &[CompiledBasePrompt],
+    phase: BatchPhase,
+) -> usize {
+    let hardware_threads = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(2);
+    let available_memory_mb = available_memory_mb();
+    let adaptive = adaptive_worker_count(prompts.len(), hardware_threads, available_memory_mb);
+    // An environment value is a user safety cap, not a replacement fixed job
+    // count. The runtime never exceeds its workload/hardware/memory decision.
+    let configured_cap = env::var(variable)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| (1..=MAX_CONFIGURED_PROVIDER_JOBS).contains(value))
-        .unwrap_or(default)
+        .filter(|value| *value > 0);
+    let workers = configured_cap
+        .map(|value| value.min(adaptive))
+        .unwrap_or(adaptive);
+    eprintln!(
+        "@codebase-workspace-ai-scheduler {}",
+        serde_json::json!({
+            "phase": match phase {
+                BatchPhase::Initial => "initial",
+                BatchPhase::Repair => "repair",
+            },
+            "jobs": prompts.len(),
+            "inputBytes": prompts
+                .iter()
+                .map(|prompt| prompt.rendered_prompt().len())
+                .sum::<usize>(),
+            "hardwareThreads": hardware_threads,
+            "availableMemoryMb": available_memory_mb,
+            "configuredCap": configured_cap,
+            "workers": workers,
+        })
+    );
+    workers
 }
 
-fn worker_count(prompt_count: usize, max_parallel: usize) -> usize {
-    prompt_count.min(max_parallel.max(1))
+fn adaptive_worker_count(
+    prompt_count: usize,
+    hardware_threads: usize,
+    available_memory_mb: Option<usize>,
+) -> usize {
+    if prompt_count == 0 {
+        return 0;
+    }
+    // This is a workload ratio, not a fixed worker count. Both initial and
+    // verifier-guided repair work aim for two waves; hardware and current
+    // memory remain the actual safety ceilings.
+    let workload_target = prompt_count.div_ceil(2);
+    let memory_target = available_memory_mb
+        .map(|available| {
+            available
+                .saturating_sub(SYSTEM_MEMORY_RESERVE_MB)
+                .div_ceil(AI_WORKER_MEMORY_MB)
+                .max(1)
+        })
+        .unwrap_or_else(|| hardware_threads.div_ceil(2).max(1));
+    prompt_count
+        .min(workload_target.max(1))
+        .min(hardware_threads.max(1))
+        .min(memory_target)
+}
+
+#[cfg(windows)]
+fn available_memory_mb() -> Option<usize> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: status points to an initialized MEMORYSTATUSEX with the required size.
+    (unsafe { GlobalMemoryStatusEx(&mut status) } != 0)
+        .then_some((status.ullAvailPhys / 1_048_576) as usize)
+}
+
+#[cfg(target_os = "linux")]
+fn available_memory_mb() -> Option<usize> {
+    let meminfo = fs::read_to_string("/proc/meminfo").ok()?;
+    meminfo.lines().find_map(|line| {
+        let value = line.strip_prefix("MemAvailable:")?;
+        value
+            .split_whitespace()
+            .next()?
+            .parse::<usize>()
+            .ok()
+            .map(|kib| kib / 1_024)
+    })
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn available_memory_mb() -> Option<usize> {
+    None
 }
 
 fn run_codex(
@@ -450,12 +524,14 @@ mod tests {
     }
 
     #[test]
-    fn semantic_batch_parallelism_is_bounded_without_serializing_normal_work() {
-        assert_eq!(worker_count(16, DEFAULT_INITIAL_PROVIDER_JOBS), 4);
-        assert_eq!(worker_count(16, DEFAULT_RECOVERY_PROVIDER_JOBS), 2);
-        assert_eq!(worker_count(1, DEFAULT_INITIAL_PROVIDER_JOBS), 1);
-        assert_eq!(worker_count(0, DEFAULT_INITIAL_PROVIDER_JOBS), 0);
-        assert_eq!(worker_count(3, 0), 1);
+    fn semantic_batch_parallelism_adapts_to_workload_and_hardware() {
+        assert_eq!(adaptive_worker_count(0, 16, Some(8_192)), 0);
+        assert_eq!(adaptive_worker_count(1, 16, Some(8_192)), 1);
+        assert_eq!(adaptive_worker_count(4, 16, Some(8_192)), 2);
+        assert_eq!(adaptive_worker_count(16, 16, Some(8_192)), 8);
+        assert_eq!(adaptive_worker_count(40, 4, Some(8_192)), 4);
+        assert_eq!(adaptive_worker_count(40, 32, Some(1_800)), 3);
+        assert_eq!(adaptive_worker_count(5, 16, Some(8_192)), 3);
     }
 
     fn semantic_prompt_fixture() -> CompiledBasePrompt {

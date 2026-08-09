@@ -4,7 +4,6 @@ mod broker;
 mod map_view;
 mod read_model;
 mod recovery;
-mod reduce;
 mod store;
 
 use crate::{
@@ -13,7 +12,8 @@ use crate::{
     workspace::Workspace,
 };
 use codebase_semantic_compiler::{
-    compile_semantic_plan, CompiledSemanticPlan, VerifiedSemanticPartition,
+    compile_semantic_plan, merge_verified_partitions, CompiledSemanticPlan,
+    VerifiedSemanticPartition,
 };
 use recovery::{
     compile_recovery_prompt, continue_recovery_prompt, run_provider_with_repair,
@@ -34,6 +34,15 @@ pub(crate) fn analyze_and_publish(
         .ok_or_else(|| "게시된 canonical Fact snapshot이 없습니다".to_string())?;
     let plan = compile_semantic_plan(read_model::build_base_draft(workspace, &snapshot)?)
         .map_err(|error| format!("AI 의미 입력을 만들지 못했습니다: {error}"))?;
+    eprintln!(
+        "@codebase-workspace-ai-plan {}",
+        serde_json::json!({
+            "regions": plan.base.packet.input.regions.len(),
+            "inputBytes": plan.base.rendered_prompt().len(),
+            "partitions": plan.partitions.len(),
+            "mode": if plan.is_direct() { "direct" } else { "partitioned-deterministic-merge" },
+        })
+    );
     if let Some(current) = store::load_current(app_data_dir, &workspace.id)? {
         if current.packet == plan.base.packet {
             return Ok(current.revision.revision_id.to_string());
@@ -217,15 +226,16 @@ fn analyze_partitioned(
             result.ok_or_else(|| partition_error(plan, index, "검증된 결과가 생성되지 않았습니다"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    reduce::reconcile_hierarchically(
-        runtime,
-        &plan.base,
-        verified,
-        operation_id,
+    emit_progress(
         progress,
+        "검증된 분할 결과를 결정적으로 결합하는 중",
         plan.partitions.len() as u64,
         total,
-    )
+    );
+    let merged = merge_verified_partitions(&plan.base, &verified)
+        .map_err(|error| format!("검증된 의미 분할을 결합하지 못했습니다: {error}"))?;
+    emit_progress(progress, "전체 의미 지도 검증 완료", total, total);
+    Ok(merged)
 }
 
 fn accept_verified_partition(
