@@ -225,6 +225,9 @@ impl BundleStore {
                 [snapshot_id.as_str()],
             )
             .map_err(|error| format!("cannot seal canonical bundle snapshot: {error}"))?;
+        connection
+            .execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+            .map_err(|error| format!("cannot begin canonical bundle build transaction: {error}"))?;
         Ok(Self {
             connection: Some(connection),
             temporary_path,
@@ -1049,7 +1052,8 @@ impl BundleStore {
             .ok_or_else(|| "canonical bundle database is already closed".to_string())?;
         connection
             .execute_batch(
-                "DROP TABLE stream_headers;
+                "COMMIT;
+                 DROP TABLE stream_headers;
                  DROP TABLE stream_completions;
                  DROP TABLE file_identity;
                  DROP TABLE structure_identity;
@@ -1347,10 +1351,10 @@ fn insert_exact(
         return Ok(());
     }
     connection
-        .execute(
-            &format!("INSERT INTO {table}({key_column}, payload_json) VALUES (?1, ?2)"),
-            params![key, payload],
-        )
+        .prepare_cached(&format!(
+            "INSERT INTO {table}({key_column}, payload_json) VALUES (?1, ?2)"
+        ))
+        .and_then(|mut statement| statement.execute(params![key, payload]))
         .map_err(|error| format!("cannot write {table} row: {error}"))?;
     Ok(())
 }
@@ -1362,11 +1366,10 @@ fn select_payload(
     key: &str,
 ) -> Result<Option<String>, String> {
     connection
-        .query_row(
-            &format!("SELECT payload_json FROM {table} WHERE {key_column}=?1"),
-            [key],
-            |row| row.get(0),
-        )
+        .prepare_cached(&format!(
+            "SELECT payload_json FROM {table} WHERE {key_column}=?1"
+        ))
+        .and_then(|mut statement| statement.query_row([key], |row| row.get(0)))
         .optional()
         .map_err(|error| format!("cannot read {table} row: {error}"))
 }

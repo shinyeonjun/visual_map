@@ -305,6 +305,8 @@ fn census_keeps_unenumerated_scopes_without_assigning_fake_units() {
         file_kind: SourceFileKind::Vendor,
         state: FileCoverageState::Excluded,
         byte_size: 0,
+        line_count: None,
+        non_blank_line_count: None,
         content_digest: None,
         gap_codes: vec![GapCode::ExcludedByRule],
     };
@@ -976,6 +978,8 @@ fn fixture_ir_records() -> Vec<LanguageIrRecord> {
         file_kind: SourceFileKind::Source,
         state: FileCoverageState::Indexed,
         byte_size: 128,
+        line_count: Some(1),
+        non_blank_line_count: Some(1),
         content_digest: Some(Sha256Digest::of_bytes(b"export class AuthService {}")),
         gap_codes: vec![],
     };

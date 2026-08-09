@@ -1653,6 +1653,8 @@ fn emit_unit_header_and_coverage(
             file_kind: manifest_file.file_kind,
             state,
             byte_size: manifest_file.byte_size,
+            line_count: manifest_file.line_count,
+            non_blank_line_count: manifest_file.non_blank_line_count,
             content_digest: manifest_file.content_digest,
             gap_codes,
         };

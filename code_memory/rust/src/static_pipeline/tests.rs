@@ -84,6 +84,40 @@ fn census_is_deterministic_and_records_every_non_measured_reason() {
 }
 
 #[test]
+fn census_parallel_measurement_is_identical_to_serial_measurement() {
+    let project = TestProject::new("census-parity");
+    for index in 0..48 {
+        project.write(
+            &format!("src/module_{index:02}.ts"),
+            format!("export const value{index} = {index};\n").as_bytes(),
+        );
+    }
+    project.write("src/binary.rs", b"pub\0fn");
+    project.write("docs/readme.md", b"excluded documentation\n");
+
+    let serial = SourceCensus::scan_with_options(
+        &project.root,
+        SourceCensusOptions {
+            read_buffer_bytes: 8 * 1024,
+            max_entries: 1_000,
+            measurement_workers: 1,
+        },
+    )
+    .unwrap();
+    let parallel = SourceCensus::scan_with_options(
+        &project.root,
+        SourceCensusOptions {
+            read_buffer_bytes: 8 * 1024,
+            max_entries: 1_000,
+            measurement_workers: 8,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(parallel.manifest, serial.manifest);
+}
+
+#[test]
 fn census_streams_large_sources_and_hashes_the_complete_content() {
     let project = TestProject::new("large-source");
     let mut source = String::from("export const marker = '한글';\n\n");
@@ -98,6 +132,7 @@ fn census_streams_large_sources_and_hashes_the_complete_content() {
             // reads; the output must equal whole-buffer semantics.
             read_buffer_bytes: 7,
             max_entries: 100,
+            measurement_workers: 4,
         },
     )
     .unwrap();
@@ -132,6 +167,7 @@ fn census_counts_a_giant_single_line_without_a_line_sized_buffer() {
         SourceCensusOptions {
             read_buffer_bytes: 4 * 1024,
             max_entries: 100,
+            measurement_workers: 4,
         },
     )
     .unwrap();

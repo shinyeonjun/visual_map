@@ -11,6 +11,11 @@ use ignore::Match;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
+};
+use std::thread;
 
 use crate::source::{
     is_managed_provider_root, measure_source_file, DEFAULT_SOURCE_READ_BUFFER_BYTES,
@@ -23,6 +28,7 @@ const DEFAULT_MAX_ENTRIES: usize = 1_000_000;
 pub(crate) struct SourceCensusOptions {
     pub(crate) read_buffer_bytes: usize,
     pub(crate) max_entries: usize,
+    pub(crate) measurement_workers: usize,
 }
 
 impl Default for SourceCensusOptions {
@@ -30,6 +36,7 @@ impl Default for SourceCensusOptions {
         Self {
             read_buffer_bytes: DEFAULT_SOURCE_READ_BUFFER_BYTES,
             max_entries: DEFAULT_MAX_ENTRIES,
+            measurement_workers: default_measurement_workers(),
         }
     }
 }
@@ -49,9 +56,12 @@ impl SourceCensus {
         root: &Path,
         options: SourceCensusOptions,
     ) -> Result<Self, String> {
-        if options.read_buffer_bytes < 4 || options.max_entries == 0 {
+        if options.read_buffer_bytes < 4
+            || options.max_entries == 0
+            || options.measurement_workers == 0
+        {
             return Err(
-                "source census read buffer must be at least four bytes and entry limit must be positive"
+                "source census read buffer must be at least four bytes and entry/worker limits must be positive"
                     .to_string(),
             );
         }
@@ -73,10 +83,16 @@ impl SourceCensus {
             security_root,
             options,
             files: Vec::new(),
+            pending_measurements: Vec::new(),
             scopes: Vec::new(),
             entry_count: 0,
         };
         scanner.walk_directory(root, &mut Vec::new(), true)?;
+        scanner.files.extend(measure_pending_files(
+            &scanner.pending_measurements,
+            options.read_buffer_bytes,
+            options.measurement_workers,
+        )?);
         let manifest = SourceManifest::new(workspace_id, scanner.files, scanner.scopes)
             .map_err(|error| format!("invalid source manifest: {error}"))?;
         manifest
@@ -131,6 +147,7 @@ struct Scanner {
     security_root: PathBuf,
     options: SourceCensusOptions,
     files: Vec<SourceManifestFile>,
+    pending_measurements: Vec<PendingMeasurement>,
     scopes: Vec<SourceScopeCoverageRecord>,
     entry_count: usize,
 }
@@ -346,71 +363,151 @@ impl Scanner {
             }
             FilePolicy::Measure => {}
         }
-        let measurement = match measure_source_file(path, self.options.read_buffer_bytes) {
-            Ok(measurement) => measurement,
-            Err(_) => {
-                self.files.push(SourceManifestFile {
-                    path: relative,
-                    languages: classification.languages,
-                    file_kind: classification.kind,
-                    state: SourceEntryState::Failed,
-                    byte_size: metadata.len(),
-                    line_count: None,
-                    non_blank_line_count: None,
-                    content_digest: None,
-                    encoding: SourceEncoding::NotRead,
-                    link_state: SourceLinkState::Regular,
-                    gap_codes: vec![GapCode::UnreadableFile],
-                });
-                return Ok(());
-            }
-        };
-        if measurement.encoding == SourceEncoding::Binary {
-            self.files.push(SourceManifestFile {
-                path: relative,
-                languages: classification.languages,
-                file_kind: classification.kind,
-                state: SourceEntryState::Unsupported,
-                byte_size: measurement.byte_size,
-                line_count: None,
-                non_blank_line_count: None,
-                content_digest: None,
-                encoding: SourceEncoding::Binary,
-                link_state: SourceLinkState::Regular,
-                gap_codes: vec![GapCode::BinarySource],
-            });
-            return Ok(());
-        }
-        if measurement.encoding == SourceEncoding::InvalidUtf8 {
-            self.files.push(SourceManifestFile {
-                path: relative,
-                languages: classification.languages,
-                file_kind: classification.kind,
-                state: SourceEntryState::Unsupported,
-                byte_size: measurement.byte_size,
-                line_count: None,
-                non_blank_line_count: None,
-                content_digest: None,
-                encoding: SourceEncoding::InvalidUtf8,
-                link_state: SourceLinkState::Regular,
-                gap_codes: vec![GapCode::UnsupportedEncoding],
-            });
-            return Ok(());
-        }
-        self.files.push(SourceManifestFile {
-            path: relative,
+        self.pending_measurements.push(PendingMeasurement {
+            path: path.to_path_buf(),
+            relative,
+            metadata_len: metadata.len(),
             languages: classification.languages,
             file_kind: classification.kind,
-            state: SourceEntryState::Included,
-            byte_size: measurement.byte_size,
-            line_count: measurement.line_count,
-            non_blank_line_count: measurement.non_blank_line_count,
-            content_digest: Some(measurement.content_digest),
-            encoding: measurement.encoding,
-            link_state: SourceLinkState::Regular,
-            gap_codes: vec![],
         });
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PendingMeasurement {
+    path: PathBuf,
+    relative: RepositoryPath,
+    metadata_len: u64,
+    languages: Vec<ProgrammingLanguage>,
+    file_kind: SourceFileKind,
+}
+
+fn default_measurement_workers() -> usize {
+    thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(16)
+        .max(1)
+}
+
+fn measure_pending_files(
+    pending: &[PendingMeasurement],
+    read_buffer_bytes: usize,
+    requested_workers: usize,
+) -> Result<Vec<SourceManifestFile>, String> {
+    if pending.is_empty() {
+        return Ok(Vec::new());
+    }
+    let worker_count = requested_workers.min(pending.len()).max(1);
+    let next = AtomicUsize::new(0);
+    let (sender, receiver) = mpsc::channel();
+    thread::scope(|scope| -> Result<(), String> {
+        let mut workers = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            let sender = sender.clone();
+            let next = &next;
+            workers.push(scope.spawn(move || loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(file) = pending.get(index) else {
+                    break;
+                };
+                if sender
+                    .send((index, measure_pending_file(file, read_buffer_bytes)))
+                    .is_err()
+                {
+                    break;
+                }
+            }));
+        }
+        drop(sender);
+        for worker in workers {
+            worker
+                .join()
+                .map_err(|_| "source census measurement worker panicked".to_string())?;
+        }
+        Ok(())
+    })?;
+
+    let mut ordered = std::iter::repeat_with(|| None)
+        .take(pending.len())
+        .collect::<Vec<_>>();
+    for (index, file) in receiver {
+        ordered[index] = Some(file);
+    }
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(index, file)| {
+            file.ok_or_else(|| format!("source census measurement {index} produced no result"))
+        })
+        .collect()
+}
+
+fn measure_pending_file(
+    pending: &PendingMeasurement,
+    read_buffer_bytes: usize,
+) -> SourceManifestFile {
+    let measurement = match measure_source_file(&pending.path, read_buffer_bytes) {
+        Ok(measurement) => measurement,
+        Err(_) => {
+            return SourceManifestFile {
+                path: pending.relative.clone(),
+                languages: pending.languages.clone(),
+                file_kind: pending.file_kind,
+                state: SourceEntryState::Failed,
+                byte_size: pending.metadata_len,
+                line_count: None,
+                non_blank_line_count: None,
+                content_digest: None,
+                encoding: SourceEncoding::NotRead,
+                link_state: SourceLinkState::Regular,
+                gap_codes: vec![GapCode::UnreadableFile],
+            };
+        }
+    };
+    if measurement.encoding == SourceEncoding::Binary {
+        return SourceManifestFile {
+            path: pending.relative.clone(),
+            languages: pending.languages.clone(),
+            file_kind: pending.file_kind,
+            state: SourceEntryState::Unsupported,
+            byte_size: measurement.byte_size,
+            line_count: None,
+            non_blank_line_count: None,
+            content_digest: None,
+            encoding: SourceEncoding::Binary,
+            link_state: SourceLinkState::Regular,
+            gap_codes: vec![GapCode::BinarySource],
+        };
+    }
+    if measurement.encoding == SourceEncoding::InvalidUtf8 {
+        return SourceManifestFile {
+            path: pending.relative.clone(),
+            languages: pending.languages.clone(),
+            file_kind: pending.file_kind,
+            state: SourceEntryState::Unsupported,
+            byte_size: measurement.byte_size,
+            line_count: None,
+            non_blank_line_count: None,
+            content_digest: None,
+            encoding: SourceEncoding::InvalidUtf8,
+            link_state: SourceLinkState::Regular,
+            gap_codes: vec![GapCode::UnsupportedEncoding],
+        };
+    }
+    SourceManifestFile {
+        path: pending.relative.clone(),
+        languages: pending.languages.clone(),
+        file_kind: pending.file_kind,
+        state: SourceEntryState::Included,
+        byte_size: measurement.byte_size,
+        line_count: measurement.line_count,
+        non_blank_line_count: measurement.non_blank_line_count,
+        content_digest: Some(measurement.content_digest),
+        encoding: measurement.encoding,
+        link_state: SourceLinkState::Regular,
+        gap_codes: vec![],
     }
 }
 

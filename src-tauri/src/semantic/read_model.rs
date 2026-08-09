@@ -165,8 +165,11 @@ fn build_input(
             let coverage = coverage_by_path
                 .get(&path)
                 .ok_or_else(|| format!("source coverage가 없습니다: {path}"))?;
-            effective_loc =
-                effective_loc.saturating_add(measure_nonblank_lines(repository_root, coverage)?);
+            let nonblank_lines = coverage
+                .non_blank_line_count
+                .map(Ok)
+                .unwrap_or_else(|| measure_nonblank_lines(repository_root, coverage))?;
+            effective_loc = effective_loc.saturating_add(nonblank_lines);
             region_by_file.insert(file.id.clone(), spec.region_id.clone());
         }
         regions.push(StaticRegionSummary {

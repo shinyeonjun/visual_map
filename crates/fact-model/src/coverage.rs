@@ -391,6 +391,10 @@ pub struct FileCoverageRecord {
     pub file_kind: SourceFileKind,
     pub state: FileCoverageState,
     pub byte_size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub non_blank_line_count: Option<u64>,
     pub content_digest: Option<Sha256Digest>,
     pub gap_codes: Vec<GapCode>,
 }
@@ -405,6 +409,17 @@ impl Validate for FileCoverageRecord {
             ));
         }
         ensure_unique(self.gap_codes.iter(), "gapCodes")?;
+        match (self.line_count, self.non_blank_line_count) {
+            (Some(lines), Some(non_blank)) if non_blank <= lines => {}
+            (None, None) => {}
+            _ => {
+                return Err(ContractError::new(
+                    ContractErrorCode::InvalidReceipt,
+                    "lineCount",
+                    "line and non-blank line counts must be present together and non-blank cannot exceed total",
+                ));
+            }
+        }
         if !self.gap_codes.windows(2).all(|pair| pair[0] <= pair[1]) {
             return Err(ContractError::new(
                 ContractErrorCode::NonCanonicalValue,
