@@ -7,7 +7,7 @@ import type { ProviderKind, ReasoningEffort } from "./contracts";
  * uses the aliases exposed by `claude --help`, so the CLI remains responsible
  * for resolving them to the newest model available to the signed-in account.
  */
-export interface ProviderModel {
+interface ProviderModel {
   id: string;
   label: string;
   note: string;
@@ -15,7 +15,7 @@ export interface ProviderModel {
   efforts: ReasoningEffort[];
 }
 
-export interface EffortOption {
+interface EffortOption {
   id: ReasoningEffort;
   label: string;
   note: string;

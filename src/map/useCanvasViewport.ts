@@ -20,7 +20,7 @@ const GRID = 24;
 /** Room left around the content when fitting, so nothing touches the edge. */
 const FIT_PADDING = 64;
 
-export interface Viewport {
+interface Viewport {
   scale: number;
   x: number;
   y: number;
