@@ -68,6 +68,19 @@ The removed `language-index`, `architecture-index`, and `collection-report`
 formats have no runtime path. Provider DTOs and Language IR JSONL are bounded
 job staging and are cleaned after publication.
 
+### Sidecar identity and development startup
+
+The code sidecar publishes a machine-readable CLI contract. The desktop adapter
+and bundled manifest require contract v3, which includes `contract`, `list`,
+`doctor`, `detect-languages`, and `index` and excludes the removed collector and
+JSON-index commands. `npm run tauri dev` first performs a pinned, locked,
+incremental release build, probes that contract, atomically stages the verified
+executable under `src-tauri/engines`, and updates its development checksum.
+Debug runtime resolution points directly at that staged directory; Cargo
+`target/debug/engines` and `target/release/engines` copies are not runtime
+authorities. Production still resolves only packaged resources verified during
+the build.
+
 ### Static trust rules
 
 - Similar names and nearby directories never resolve a relation.

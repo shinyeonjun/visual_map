@@ -85,20 +85,17 @@ cd visual_map
 npm ci
 ```
 
-로컬 sidecar를 빌드하고 앱이 읽는 위치에 배치합니다.
+개발 앱은 시작 전에 코드 sidecar를 증분 release build하고, CLI 계약을 검증한 뒤 앱이 읽는 단일 개발 위치에 원자적으로 배치합니다.
 
 ```powershell
-cargo build --locked --release --manifest-path code_memory/rust/Cargo.toml
 cargo build --locked --release -p database-memory-cli --manifest-path db_memory/Cargo.toml
-
-Copy-Item code_memory/rust/target/release/code-memory-language.exe `
-  src-tauri/engines/code-memory-language.exe -Force
 Copy-Item db_memory/target/release/database-memory.exe `
   src-tauri/engines/database-memory.exe -Force
 
-npm run verify:engines
 npm run tauri dev
 ```
+
+`npm run tauri dev`의 `beforeDevCommand`가 `prepare:dev-code-engine`을 실행합니다. 따라서 코드 엔진을 수동 복사하지 않습니다. 소스와 번들 해시가 다르면 최신 EXE와 개발 영수증만 교체하며, `contract`·`detect-languages`·`index`가 포함된 CLI 계약 v3이 아니면 Vite와 앱을 시작하지 않습니다. 별도로 확인하려면 `npm run verify:engines`를 실행합니다.
 
 `src-tauri/engines/*.exe`, provider runtime, analysis cache와 bundle은 소스 형상관리에 포함되지 않습니다.
 

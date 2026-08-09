@@ -36,6 +36,32 @@ fn optional_value(args: &[String], flag: &str) -> Option<String> {
     None
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeEngineContract {
+    schema: &'static str,
+    version: &'static str,
+    contract_version: &'static str,
+    commands: &'static [&'static str],
+}
+
+fn code_engine_contract() -> CodeEngineContract {
+    CodeEngineContract {
+        schema: CODE_ENGINE_CONTRACT_SCHEMA,
+        version: CODE_ENGINE_VERSION,
+        contract_version: CODE_ENGINE_CONTRACT_VERSION,
+        commands: CODE_ENGINE_COMMANDS,
+    }
+}
+
+fn print_code_engine_contract() -> Result<(), String> {
+    let stdout = std::io::stdout();
+    let mut output = stdout.lock();
+    write_json(&mut output, &code_engine_contract())
+        .map_err(|error| format!("cannot encode code engine contract: {error}"))?;
+    writeln!(&mut output).map_err(|error| format!("cannot write code engine contract: {error}"))
+}
+
 fn list_languages() -> Result<(), String> {
     for lang in LANGUAGES {
         let provider = match lang.provider {
@@ -45,6 +71,27 @@ fn list_languages() -> Result<(), String> {
         println!("{}\t{}\t{}\t{}", lang.id, lang.name, provider, lang.tool);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::{code_engine_contract, CODE_ENGINE_COMMANDS};
+
+    #[test]
+    fn code_engine_contract_declares_the_current_product_commands_only() {
+        let contract = code_engine_contract();
+
+        assert_eq!(
+            contract.schema,
+            "codebase-workspace.code-engine-contract.v1"
+        );
+        assert_eq!(contract.version, "0.1.0");
+        assert_eq!(contract.contract_version, "3");
+        for required in ["contract", "list", "doctor", "detect-languages", "index"] {
+            assert!(contract.commands.contains(&required));
+        }
+        assert!(!CODE_ENGINE_COMMANDS.contains(&"collect"));
+    }
 }
 
 fn validate_framework_packs(root: &Path) -> Result<(), String> {

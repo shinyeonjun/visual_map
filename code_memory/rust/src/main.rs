@@ -9,6 +9,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const _: &str = codebase_fact_model::ContractSchema::LanguageIrV2.as_str();
+const CODE_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+const CODE_ENGINE_CONTRACT_VERSION: &str = "3";
+const CODE_ENGINE_CONTRACT_SCHEMA: &str = "codebase-workspace.code-engine-contract.v1";
+const CODE_ENGINE_COMMANDS: &[&str] = &[
+    "contract",
+    "list",
+    "doctor",
+    "detect-languages",
+    "index",
+    "framework-packs",
+    "compare-scip",
+];
 
 mod cache;
 mod frameworks;
@@ -56,6 +68,7 @@ fn main() {
 fn run() -> Result<(), String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
+        Some("contract") => print_code_engine_contract(),
         Some("list") => list_languages(),
         Some("framework-packs") => {
             let rest: Vec<String> = args.collect();
@@ -78,10 +91,7 @@ fn run() -> Result<(), String> {
         Some("detect-languages") => {
             let rest: Vec<String> = args.collect();
             let root = required_path(&rest, "--root")?;
-            detect_source_languages(
-                &root,
-                optional_path(&rest, "--manifest-out").as_deref(),
-            )
+            detect_source_languages(&root, optional_path(&rest, "--manifest-out").as_deref())
         }
         Some("index") => {
             let rest: Vec<String> = args.collect();
@@ -119,12 +129,13 @@ fn run() -> Result<(), String> {
             )
         }
         Some(command) => Err(format!(
-            "unknown command '{command}'. Use list, doctor, detect-languages, compare-scip, or index."
+            "unknown command '{command}'. Supported commands: {}.",
+            CODE_ENGINE_COMMANDS.join(", ")
         )),
-        None => Err(
-            "missing command. Use list, doctor, detect-languages, compare-scip, or index."
-                .to_string(),
-        ),
+        None => Err(format!(
+            "missing command. Supported commands: {}.",
+            CODE_ENGINE_COMMANDS.join(", ")
+        )),
     }
 }
 

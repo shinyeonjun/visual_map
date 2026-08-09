@@ -4258,6 +4258,72 @@ canonical-only 전환 중 구형 coordinator를 제거하는 데 집중하면서
 
 ---
 
+## TS-2026-08-09-96 — 소스 CLI와 개발 앱 sidecar는 하나의 실행 계약으로 잠근다
+
+### 증상
+
+앱에서 분석을 누르면 source language 확인 단계가 즉시 실패하며
+`unknown command 'detect-languages'. Use list, doctor, index, or collect.`가 표시됐다. Rust 소스에는
+`detect-languages` 구현과 테스트가 있었지만 앱이 실행한 EXE에는 그 명령이 없었다.
+
+### 영향
+
+정적 분석과 AI 분석은 시작되지 않았다. 더 위험한 점은 엔진 manifest의 개발 해시가 구형 EXE와 일치해
+앱의 기존 checksum/version 검사가 이를 정상 엔진으로 승인했다는 것이다. 소스 테스트 통과와 실제 제품
+실행 성공이 분리돼 있었다.
+
+### 잘못 짚기 쉬운 원인
+
+`detect-languages`의 인자 파서나 Tauri invoke 이름 문제가 아니었다. 명령을 다시 구현하거나 앱에서
+`list`로 우회하면 구형 collector 경로를 되살리고 동일 문제가 다음 CLI 변경 때 반복된다. Cargo
+`target/debug/engines`의 복사본만 수동 교체하는 것도 다른 개발 PC와 release build를 고치지 못한다.
+
+### 근본 원인
+
+- 코드 엔진에 새 명령을 추가하면서 sidecar contract version을 올리지 않았다.
+- `npm run tauri dev`가 Vite만 시작했고 코드 엔진 build/stage를 수행하지 않았다.
+- 개발 resolver가 source-staged engine보다 Cargo `target/*/engines`의 오래된 resource copy를 우선했다.
+- manifest는 명령 집합이 아니라 수동 입력한 버전·해시만 확인했다.
+
+### 적용한 수정
+
+- 코드 엔진에 machine-readable `contract` 명령과 CLI contract v3을 추가했다.
+- v3은 `contract/list/doctor/detect-languages/index`를 필수로 선언하고 제거한
+  `collect/language-index/architecture-index`를 허용하지 않는다.
+- `npm run tauri dev`는 먼저 pinned Rust 1.96.1 locked release build, contract probe, atomic EXE stage,
+  development checksum 갱신을 수행한다.
+- 개발 앱은 `src-tauri/engines`의 검증된 원본만 사용한다. Cargo target의 복사본은 runtime authority가
+  아니다.
+- release asset 준비와 `verify:engines`도 동일한 contract probe를 실행한다.
+- 압축 전 구형 cache를 읽고 자동 이관하던 호환 분기를 제거했다. 현재 `.json.gz` cache만 읽는다.
+
+### 검증 결과
+
+- source build와 실제 bundled EXE가 동일 SHA-256을 가진다.
+- 두 EXE의 `contract` 출력이 schema/version/contract v3과 필수 명령 집합을 통과한다.
+- bundled EXE로 실제 fixture에 `detect-languages --manifest-out`을 실행해 source manifest와
+  TypeScript/Python 감지 receipt를 생성했다.
+- 개발 준비 스크립트를 연속 실행했을 때 두 번째 실행은 rebuild/copy/manifest rewrite 없이 현재 상태를
+  재검증한다.
+- contract 단위 테스트, Tauri contract mismatch 차단 테스트, 개발 source-stage 선택 테스트를 추가했다.
+
+### 재발 시 점검 순서
+
+1. 오류 원문의 지원 명령 목록이 현재 source와 다른지 확인한다.
+2. `src-tauri/engines/code-memory-language.exe contract`를 직접 실행한다.
+3. `npm run prepare:dev-code-engine`이 build, source probe, atomic stage, bundled probe를 모두 통과하는지 본다.
+4. `src-tauri/engines/manifest.json`의 contractVersion과 development checksum을 확인한다.
+5. 새 제품 명령을 추가·제거할 때 command constant, contract test, Tauri adapter version을 같은 변경으로
+   갱신한다.
+
+### 남은 한계 또는 후속 gate
+
+개발 시작 전 release sidecar 증분 build가 추가되므로 Rust 소스가 바뀐 첫 실행에는 컴파일 시간이 든다.
+변경이 없으면 Cargo가 즉시 재사용한다. provider pack과 DB sidecar는 각자의 독립 계약을 유지하며, 코드
+엔진 명령 변경을 이유로 함께 재빌드하지 않는다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text

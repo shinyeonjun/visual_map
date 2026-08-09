@@ -106,12 +106,8 @@ pub(crate) fn framework_cache_key(
     format!("{hash:016x}")
 }
 pub(crate) fn load_framework_cache(path: &Path) -> Option<crate::frameworks::Analysis> {
-    let (bytes, legacy) = read_compressed_or_legacy(path).ok()?;
-    let analysis = serde_json::from_slice(&bytes).ok()?;
-    if legacy && write_compressed_json(path, &analysis).is_ok() {
-        let _ = fs::remove_file(path.with_extension(""));
-    }
-    Some(analysis)
+    let bytes = read_compressed_cache(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 pub(crate) fn write_framework_cache(
     path: &Path,
@@ -461,24 +457,6 @@ fn write_compressed(
             path.display()
         )
     })
-}
-
-pub(crate) fn read_compressed_or_legacy(path: &Path) -> Result<(Vec<u8>, bool), String> {
-    match read_compressed_cache(path) {
-        Ok(bytes) => Ok((bytes, false)),
-        Err(compressed_error) => {
-            let legacy = path.with_extension("");
-            fs::read(&legacy)
-                .map(|bytes| (bytes, true))
-                .map_err(|legacy_error| {
-                    format!(
-                        "cannot read cache {} ({compressed_error}); legacy {}: {legacy_error}",
-                        path.display(),
-                        legacy.display()
-                    )
-                })
-        }
-    }
 }
 
 fn normalized_cache_path(path: &Path) -> String {
@@ -1004,7 +982,7 @@ pub(crate) fn load_language_cache(
 ) -> LanguageCacheRead {
     let io_started = Instant::now();
     let path = language_cache_path(root, lang, key);
-    let Ok((value, legacy)) = read_compressed_or_legacy(&path) else {
+    let Ok(value) = read_compressed_cache(&path) else {
         return LanguageCacheRead {
             value: None,
             io_ms: io_started.elapsed().as_millis(),
@@ -1030,13 +1008,6 @@ pub(crate) fn load_language_cache(
                     .iter()
                     .any(|diagnostic| diagnostic.code == DiagnosticCode::EmptySemantic))
     });
-    if legacy {
-        if let Some(cached) = value.as_ref() {
-            if write_compressed_json(&path, cached).is_ok() {
-                let _ = fs::remove_file(path.with_extension(""));
-            }
-        }
-    }
     LanguageCacheRead {
         value,
         io_ms,

@@ -17,13 +17,23 @@ missing provider or incomplete compile context is a typed gap, never an empty
 successful analysis.
 
 ```powershell
+cargo run --manifest-path rust\Cargo.toml -- contract
 cargo run --manifest-path rust\Cargo.toml -- list
 cargo run --manifest-path rust\Cargo.toml -- doctor --providers-root providers
+cargo run --manifest-path rust\Cargo.toml -- detect-languages `
+  --root D:\path\to\repo `
+  --manifest-out $env:TEMP\source-manifest.json
 cargo run --manifest-path rust\Cargo.toml -- index `
   --root D:\path\to\repo `
   --providers-root providers `
   --packs-root .
 ```
+
+`contract` is the machine-readable executable boundary used by the desktop and
+build scripts. Contract v3 includes `detect-languages`; the removed `collect`,
+`language-index`, and `architecture-index` commands can never satisfy it. The
+development app always executes the source-staged engine verified against this
+contract rather than an older copy below Cargo `target`.
 
 `index` does not accept an output path. It publishes one immutable,
 content-addressed canonical Fact artifact below the local engine cache and

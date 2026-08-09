@@ -38,6 +38,10 @@ try {
   if ($sourceCodeEngineHash -ne $bundledCodeEngineHash) {
     throw "Bundled code engine is stale. Expected source build $sourceCodeEngineHash but found $bundledCodeEngineHash."
   }
+  Invoke-Checked "code engine command contract" {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-code-engine-contract.ps1 `
+      -EnginePath $bundledCodeEngine
+  }
   if ($internal -and $env:CODEBASE_WORKSPACE_SKIP_PROVIDER_RESOURCES -eq "1") {
     Write-Output "SKIP: managed language providers (internal CI build)"
   } elseif ($internal) {

@@ -53,7 +53,6 @@ pub(crate) fn engine_registry_for_app(app: &tauri::AppHandle) -> Result<EngineRe
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(PathBuf::from));
-    let override_dir = std::env::var_os("CODEBASE_WORKSPACE_ENGINE_DIR").map(PathBuf::from);
     let mode = if cfg!(debug_assertions) {
         EngineRuntimeMode::Dev
     } else if cfg!(codebase_workspace_internal_build) {
@@ -61,6 +60,9 @@ pub(crate) fn engine_registry_for_app(app: &tauri::AppHandle) -> Result<EngineRe
     } else {
         EngineRuntimeMode::Production
     };
+    let override_dir = std::env::var_os("CODEBASE_WORKSPACE_ENGINE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| development_engine_dir(mode));
     Ok(engine::engine_registry(
         mode,
         app_data_dir,
@@ -68,6 +70,26 @@ pub(crate) fn engine_registry_for_app(app: &tauri::AppHandle) -> Result<EngineRe
         exe_dir.as_deref(),
         override_dir.as_deref(),
     ))
+}
+
+fn development_engine_dir(mode: EngineRuntimeMode) -> Option<PathBuf> {
+    (mode == EngineRuntimeMode::Dev)
+        .then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("engines"))
+}
+
+#[cfg(test)]
+mod development_engine_tests {
+    use super::*;
+
+    #[test]
+    fn development_uses_the_source_staged_engine_directory_only_in_dev_mode() {
+        assert_eq!(
+            development_engine_dir(EngineRuntimeMode::Dev),
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("engines"))
+        );
+        assert_eq!(development_engine_dir(EngineRuntimeMode::Internal), None);
+        assert_eq!(development_engine_dir(EngineRuntimeMode::Production), None);
+    }
 }
 
 #[tauri::command]

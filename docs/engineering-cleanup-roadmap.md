@@ -18,6 +18,10 @@ remaining measured completion gates.
   compatibility JSON, and their JSON-output gates are removed.
 - The signed provider release gate now runs ten-language canonical publication
   plus independent bundle-byte determinism.
+- The code sidecar exposes CLI contract v3. Development startup rebuilds,
+  probes, atomically stages, and checksum-pins that exact executable before the
+  app starts. Debug runtime no longer prefers stale Cargo `target` resource
+  copies, and uncompressed pre-canonical cache migration has been removed.
 
 ### Coordinator decomposition
 
@@ -127,10 +131,10 @@ remaining measured completion gates.
 
 ## Final local certification
 
-- Code Memory: 322 passed, 0 failed.
+- Code Memory: 323 passed, 0 failed.
 - Fact/Semantic contracts: 18 + 3 + 27 passed; three authenticated Codex
   evaluations remain intentionally ignored in local automation.
-- Tauri: 78 passed, 0 failed, 4 external-environment tests ignored.
+- Tauri: 79 passed, 0 failed, 4 external-environment tests ignored.
 - Frontend: 12 passed; typecheck, ESLint, Prettier, and production build passed.
 - Canonical provider gate: 9 project runs, 10 language contracts, 0 skipped.
 - Independent cache runs produced identical semantic digests and identical

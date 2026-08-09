@@ -256,10 +256,10 @@ fn manifest_version_and_contract_must_match_the_adapter() {
     let hash = sha256_file(&engine_dir.join("code-memory-language.exe")).unwrap();
     write_test_manifest(&engine_dir, &hash, &"0".repeat(64), None);
     let manifest_path = engine_dir.join("manifest.json");
-    let manifest = fs::read_to_string(&manifest_path)
-        .unwrap()
-        .replace(r#""contractVersion":"2""#, r#""contractVersion":"99""#);
-    fs::write(&manifest_path, manifest).unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["engines"][0]["contractVersion"] = serde_json::json!("99");
+    fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
     let registry = engine_registry(EngineRuntimeMode::Dev, &root, None, None, Some(&engine_dir));
     let code = registry

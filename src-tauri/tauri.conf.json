@@ -4,7 +4,7 @@
   "version": "1.0.0-demo.1",
   "identifier": "com.codebaseworkspace.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev:desktop",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build:desktop-assets",
     "frontendDist": "../dist"
@@ -40,12 +40,6 @@
       "engines/provider-bundles": "engines/provider-bundles",
       "engines/database-memory.exe": "engines/database-memory.exe"
     },
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ]
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
   }
 }
