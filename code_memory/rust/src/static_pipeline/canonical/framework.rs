@@ -78,7 +78,7 @@ pub(super) fn ingest_framework_routes(
                 route.unit_id
             ));
         }
-        if store.evidence(route.evidence_id.as_str())?.is_none() {
+        if !store.has_evidence(route.evidence_id.as_str())? {
             return Err(format!(
                 "Framework IR route references missing evidence {}",
                 route.evidence_id

@@ -57,8 +57,14 @@ Source Census
 - The normal Language IR receipt is bounded to identity, digests, completion
   counts, and release blockers. Per-language audit tables and samples are
   emitted only when `CODE_MEMORY_LANGUAGE_IR_DIAGNOSTICS=1`.
-- The linker registers identities first, then resolves relations and evidence.
-  Similar names and nearby folders never resolve a target.
+- The linker uses two parsed passes. The first ingests receipts/evidence and
+  registers all definition identities; the second resolves relations after the
+  complete identity set exists. Valid forward evidence references are deferred
+  within pass one. Similar names and nearby folders never resolve a target.
+- Canonical SQLite staging keeps only a compact source-evidence ID/path index
+  for hot existence and ownership checks. Full evidence JSON is read only on a
+  real duplicate/collision path, and the staging index is removed before final
+  publication.
 - The published SQLite bundle is the only product output. The removed
   `language-index`, `architecture-index`, and `collection-report` formats have
   no runtime or release-gate consumer.

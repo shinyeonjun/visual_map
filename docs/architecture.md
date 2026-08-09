@@ -47,9 +47,13 @@ the last verified static snapshot.
    emit one validated Language IR v2 authority. File-local AST inventories run
    in a CPU- and memory-bounded pool and are merged back in repository-path
    order; record serialization reuses a bounded buffer.
-6. The linker registers identities, resolves evidence-backed relations,
-   deduplicates, prunes visualization-irrelevant details, and verifies graph
-   invariants.
+6. The linker reads the Language IR in two parsed passes: the first ingests
+   receipts/evidence and registers definition identities, including valid
+   forward evidence references; the second resolves evidence-backed
+   relations. The SQLite staging store keeps a compact source-evidence index
+   so identity and path checks do not deserialize the full evidence payload.
+   It then deduplicates, prunes visualization-irrelevant details, and verifies
+   graph invariants.
 7. The store fsyncs an immutable content-addressed SQLite bundle and completion
    manifest, then emits the canonical receipt.
 

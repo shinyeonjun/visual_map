@@ -50,6 +50,22 @@ remaining measured completion gates.
 - The index reuses that manifest instead of performing an additional source
   scan, and the existing final census still rejects mixed source generations.
 
+### Canonical publication hot path
+
+- Language IR verification remains an independent raw-byte gate, while the
+  parsed linker work is reduced from three full JSONL passes to two.
+- Receipt/structure ingestion and definition identity registration share the
+  first parsed pass; relations remain a separate second pass so endpoints are
+  never resolved before all definitions exist.
+- Valid definition-before-evidence streams are deferred and resolved after the
+  first pass instead of silently tightening the shared IR ordering contract.
+- Unique evidence takes a SQLite insert fast path. A temporary compact
+  source-evidence identity table serves existence/path checks without reading
+  and deserializing the full evidence JSON; it is dropped before immutable
+  publication.
+- Duplicate evidence still runs full identity-collision validation and summary
+  merging, so the optimization does not weaken the fact contract.
+
 ### Lifecycle controls
 
 - One shared operation ID covers static analysis and every parallel semantic
@@ -69,7 +85,7 @@ remaining measured completion gates.
 
 ## Local certification result
 
-- Code Memory: 317 passed, 0 failed.
+- Code Memory: 322 passed, 0 failed.
 - Fact/Semantic contracts: 18 + 3 + 22 passed; one authenticated Codex
   evaluation remains intentionally ignored in local automation.
 - Tauri: 70 passed, 0 failed, 4 external-environment tests ignored.

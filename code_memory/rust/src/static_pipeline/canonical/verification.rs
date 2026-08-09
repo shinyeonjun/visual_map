@@ -71,10 +71,7 @@ pub(super) fn ingest_test_relations(
                 test_case.unit_id
             ));
         }
-        if store
-            .evidence(test_case.marker_evidence_id.as_str())?
-            .is_none()
-        {
+        if !store.has_evidence(test_case.marker_evidence_id.as_str())? {
             return Err(format!(
                 "Test IR case references missing evidence {}",
                 test_case.marker_evidence_id
@@ -159,7 +156,7 @@ pub(super) fn ingest_test_relations(
                 )
             })?;
         for evidence_id in &relation.evidence_ids {
-            if store.evidence(evidence_id.as_str())?.is_none() {
+            if !store.has_evidence(evidence_id.as_str())? {
                 return Err(format!(
                     "Test IR relation references missing evidence {evidence_id}"
                 ));

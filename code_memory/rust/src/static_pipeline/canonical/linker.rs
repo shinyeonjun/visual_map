@@ -117,7 +117,7 @@ pub(crate) fn normalize_language_ir(
     for scope in &input.manifest.scopes {
         store.insert_source_scope_coverage(scope)?;
     }
-    ingest_receipts_and_structure(
+    let provider_definition_identity_count = ingest_receipts_structure_and_definitions(
         &mut store,
         &input,
         &units,
@@ -126,16 +126,7 @@ pub(crate) fn normalize_language_ir(
     )?;
     emit_canonical_timing(
         timing_enabled,
-        "structure_and_receipts",
-        phase_started,
-        total_started,
-    );
-    phase_started = Instant::now();
-    let provider_definition_identity_count =
-        register_definitions(&store, input.ir_path, &units, &expected_snapshot)?;
-    emit_canonical_timing(
-        timing_enabled,
-        "register_definitions",
+        "structure_receipts_and_definitions",
         phase_started,
         total_started,
     );
@@ -255,18 +246,20 @@ fn emit_canonical_timing(enabled: bool, phase: &str, started: Instant, total: In
     }
 }
 
-fn ingest_receipts_and_structure(
+fn ingest_receipts_structure_and_definitions(
     store: &mut BundleStore,
     input: &CanonicalLanguageInput<'_>,
     units: &BTreeMap<AnalysisUnitId, &AnalysisUnit>,
     repository_id: &FactNodeId,
     snapshot_id: &SnapshotId,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     let mut validator = None::<LanguageIrStreamValidator>;
     let mut current_header = None::<LanguageIrHeader>;
     let mut seen_units = BTreeSet::new();
     let mut first_structure_evidence = None::<EvidenceId>;
     let mut record_count = 0_u64;
+    let mut registered_definition_count = 0_u64;
+    let mut pending_definitions = Vec::new();
     visit_language_ir_records(input.ir_path, |record| {
         record_count += 1;
         if matches!(record, LanguageIrRecord::Header(_)) {
@@ -384,6 +377,21 @@ fn ingest_receipts_and_structure(
                 )?)?;
             }
             LanguageIrRecord::Evidence(evidence) => store.insert_evidence(&evidence)?,
+            LanguageIrRecord::Definition(definition) => {
+                if store
+                    .source_evidence_path(definition.definition_evidence_id.as_str())?
+                    .is_some()
+                {
+                    registered_definition_count +=
+                        u64::from(register_definition(store, &definition, units)?);
+                } else {
+                    // The current producer emits evidence before definitions.
+                    // Keep the shared IR contract order-independent by
+                    // deferring the exceptional forward reference instead of
+                    // silently tightening the accepted stream grammar.
+                    pending_definitions.push(definition);
+                }
+            }
             LanguageIrRecord::CapabilityReceipt(receipt) => {
                 store.insert_capability_receipt(&receipt)?
             }
@@ -403,7 +411,7 @@ fn ingest_receipts_and_structure(
                     completion,
                 })?;
             }
-            LanguageIrRecord::Definition(_) | LanguageIrRecord::Relation(_) => {}
+            LanguageIrRecord::Relation(_) => {}
         }
         Ok(())
     })?;
@@ -430,6 +438,9 @@ fn ingest_receipts_and_structure(
             "canonical publication requires one closed Language IR stream per Analysis Plan unit; missing={}",
             missing.join(",")
         ));
+    }
+    for definition in pending_definitions {
+        registered_definition_count += u64::from(register_definition(store, &definition, units)?);
     }
     let evidence_id = first_structure_evidence.ok_or_else(|| {
         "canonical repository node requires at least one manifest-backed file".to_string()
@@ -461,57 +472,46 @@ fn ingest_receipts_and_structure(
         },
         true,
     )?;
-    Ok(())
+    Ok(registered_definition_count)
 }
 
-fn register_definitions(
+fn register_definition(
     store: &BundleStore,
-    ir_path: &Path,
+    definition: &codebase_fact_model::language_ir::IrDefinition,
     units: &BTreeMap<AnalysisUnitId, &AnalysisUnit>,
-    snapshot_id: &SnapshotId,
-) -> Result<u64, String> {
-    let mut count = 0_u64;
-    visit_language_ir_records(ir_path, |record| {
-        let LanguageIrRecord::Definition(definition) = record else {
-            return Ok(());
-        };
-        let unit = units.get(&definition.unit_id).ok_or_else(|| {
-            format!(
-                "definition references unknown Analysis Plan unit {}",
-                definition.unit_id
-            )
-        })?;
-        let evidence = store
-            .evidence(definition.definition_evidence_id.as_str())?
-            .ok_or_else(|| {
-                format!(
-                    "definition {} references missing evidence {}",
-                    definition.symbol_id, definition.definition_evidence_id
-                )
-            })?;
-        if !matches!(evidence.location, EvidenceLocation::Source { .. }) {
-            return Err(format!(
-                "definition {} requires exact source evidence",
-                definition.symbol_id
-            ));
-        }
-        let node_id = contract(
-            FactNode::stable_id(
-                definition.canonical_kind_hint,
-                Some(unit.language),
-                Some(&definition.unit_id),
-                &definition.qualified_name,
-                definition.signature.as_deref(),
-            ),
-            "cannot build canonical definition identity",
-        )?;
-        if store.register_definition(&definition, &node_id)? {
-            count += 1;
-        }
-        let _ = snapshot_id;
-        Ok(())
+) -> Result<bool, String> {
+    let unit = units.get(&definition.unit_id).ok_or_else(|| {
+        format!(
+            "definition references unknown Analysis Plan unit {}",
+            definition.unit_id
+        )
     })?;
-    Ok(count)
+    if !store.has_evidence(definition.definition_evidence_id.as_str())? {
+        return Err(format!(
+            "definition {} references missing evidence {}",
+            definition.symbol_id, definition.definition_evidence_id
+        ));
+    }
+    if store
+        .source_evidence_path(definition.definition_evidence_id.as_str())?
+        .is_none()
+    {
+        return Err(format!(
+            "definition {} requires exact source evidence",
+            definition.symbol_id
+        ));
+    }
+    let node_id = contract(
+        FactNode::stable_id(
+            definition.canonical_kind_hint,
+            Some(unit.language),
+            Some(&definition.unit_id),
+            &definition.qualified_name,
+            definition.signature.as_deref(),
+        ),
+        "cannot build canonical definition identity",
+    )?;
+    store.register_definition(definition, &node_id)
 }
 
 fn materialize_definition_nodes(
@@ -559,13 +559,9 @@ fn materialize_definition_nodes(
             let declared_parent = definitions
                 .iter()
                 .any(|definition| definition.parent_symbol_id.is_some());
-            let evidence = store
-                .evidence(first.definition_evidence_id.as_str())?
+            let source_path = store
+                .source_evidence_path(first.definition_evidence_id.as_str())?
                 .ok_or_else(|| "definition evidence disappeared during linking".to_string())?;
-            let source_path = match evidence.location {
-                EvidenceLocation::Source { span } => span.path,
-                _ => return Err("definition evidence is not source-backed".to_string()),
-            };
             let file_parent = store
                 .resolve_file_exact(&first.unit_id, unit.language, &source_path)?
                 .ok_or_else(|| {
@@ -682,7 +678,7 @@ fn link_relations(
             ));
         }
         for evidence_id in &relation.evidence_ids {
-            if store.evidence(evidence_id.as_str())?.is_none() {
+            if !store.has_evidence(evidence_id.as_str())? {
                 return Err(format!(
                     "relation references missing evidence {}",
                     evidence_id

@@ -4009,6 +4009,68 @@ peak memory를 기록해야 이 성능 항목을 완료로 올린다.
 
 ---
 
+## TS-2026-08-09-92 — canonical linker의 중복 전체 scan과 evidence JSON 재조회 제거
+
+### 증상
+
+provider와 Language IR 생성이 끝난 뒤에도 canonical publication이 Language IR JSONL을 반복해서 읽고,
+definition/relation마다 SQLite evidence payload를 다시 읽어 JSON으로 역직렬화했다. 대형 저장소에서는 근거
+수가 노드·관계 수와 함께 증가하므로 provider cache가 적중해도 이 비용이 그대로 남는다.
+
+### 영향
+
+정적 사실은 이미 만들어졌는데 최종 SQLite bundle이 늦게 공개되어 첫 분석과 warm 분석 모두 불필요하게
+길어진다. 존재 여부나 source path만 필요한 조회가 full evidence payload 비용을 지불한다.
+
+### 잘못 짚기 쉬운 원인
+
+두 pass linker 자체가 문제인 것은 아니다. 모든 정의 identity가 등록된 뒤 관계를 해석하는 순서는 정확성을
+위해 유지해야 한다. 또한 raw IR digest/record 검증 scan을 제거하면 publication 경계의 무결성이 약해진다.
+
+### 근본 원인
+
+raw 검증 뒤 parsed IR을 receipt/structure, definition registration, relation linking으로 세 번 읽었다. 또한
+`insert_evidence`는 대부분 최초 등장인 evidence에도 먼저 `SELECT payload_json`을 실행했고, evidence 존재와
+source path 확인도 매번 전체 JSON을 역직렬화했다.
+
+### 적용한 수정
+
+- raw IR 검증은 유지하고 parsed pass는 두 번으로 줄였다.
+- 첫 parsed pass가 receipt/structure/evidence 수집과 definition identity 등록을 함께 수행한다.
+- evidence가 definition 뒤에 오는 유효 stream은 pending definition으로 보류했다가 첫 pass 끝에서 등록해 IR
+  record-order 계약을 좁히지 않았다.
+- unique evidence는 `INSERT ... ON CONFLICT(id) DO NOTHING` fast path를 사용한다. 실제 중복일 때만 기존 payload를
+  읽어 identity collision과 summary merge를 검증한다.
+- SQLite staging에 `source_evidence_identity(id, path)`를 두어 존재·source path 조회에서 full JSON을 읽지 않는다.
+  이 테이블은 최종 schema 정리와 `VACUUM` 전에 삭제되므로 제품 bundle 계약에는 추가되지 않는다.
+- prepared statement를 재사용하고 framework/test/relation 검증도 경량 evidence identity 조회를 사용한다.
+
+### 검증 결과
+
+- definition이 evidence보다 먼저 오는 회귀 fixture가 정상 publication되는 것을 고정했다.
+- 10언어 단일 canonical bundle 결정성 테스트와 worker 1/8의 IR·semantic·SQLite bundle digest 동일성 테스트가
+  통과했다.
+- Code Memory 전체 322개 테스트가 통과했다.
+- 64파일 구조 fixture의 두 canonical 실행은 130ms와 140ms였다. 변경 직전 같은 fixture의 161~166ms보다
+  짧지만, 이 값은 구조 회귀 관찰치이며 대형 저장소 성능 주장으로 사용하지 않는다.
+
+### 재발 시 점검 순서
+
+1. `CODE_MEMORY_CANONICAL_TIMING=1`로 raw verify, first parsed pass, definition materialization, relation pass,
+   digest, SQLite finalize를 분리한다.
+2. parsed IR 전체 scan이 두 번보다 늘지 않았는지 확인한다.
+3. unique evidence 경로에서 `SELECT payload_json`이나 `FactEvidence` 역직렬화가 실행되지 않는지 확인한다.
+4. duplicate evidence가 collision 검증과 summary merge를 우회하지 않는지 확인한다.
+5. staging identity table이 immutable bundle에 남지 않는지 schema gate로 확인한다.
+
+### 남은 한계 또는 후속 gate
+
+node/edge/gap/issue upsert에는 아직 최초 레코드에서도 merge용 SELECT가 있다. 먼저 C#/Java frozen corpus에서
+각 table의 unique/duplicate 비율과 canonical phase 시간을 측정한 뒤, 중복이 드문 table만 같은 fast path로
+옮긴다. 의미 digest와 최종 SQLite bytes가 동일하지 않으면 채택하지 않는다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text

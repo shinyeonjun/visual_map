@@ -4,7 +4,7 @@ use codebase_fact_model::coverage::{
     AnalysisStage, AnalysisUnitReceipt, CapabilityReceipt, FileCoverageRecord, GapCode,
     SourceScopeCoverageRecord,
 };
-use codebase_fact_model::evidence::FactEvidence;
+use codebase_fact_model::evidence::{EvidenceLocation, FactEvidence};
 use codebase_fact_model::fact_graph::{
     DispatchKind, FactBundleManifest, FactEdge, FactNode, FactRoleAssignment, FactTruth,
     ResolutionMethod, Visibility,
@@ -119,6 +119,10 @@ impl BundleStore {
                    id TEXT PRIMARY KEY NOT NULL,
                    payload_json TEXT NOT NULL
                  ) STRICT;
+                 CREATE TABLE source_evidence_identity (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   path TEXT NOT NULL
+                 ) WITHOUT ROWID;
                  CREATE TABLE nodes (
                    id TEXT PRIMARY KEY NOT NULL,
                    snapshot_id TEXT NOT NULL,
@@ -294,35 +298,79 @@ impl BundleStore {
             .validate()
             .map_err(|error| format!("invalid canonical evidence: {error}"))?;
         let connection = self.connection()?;
-        let existing = select_payload(connection, "evidence", "id", evidence.id.as_str())?;
-        let merged = match existing {
-            None => evidence.clone(),
-            Some(payload) => {
-                let mut existing: FactEvidence = from_json(&payload)?;
-                if existing.id != evidence.id
-                    || existing.kind != evidence.kind
-                    || existing.producer != evidence.producer
-                    || existing.location != evidence.location
-                {
-                    return Err(format!("evidence identity collision for {}", evidence.id));
-                }
-                existing.summary = merge_optional_text(existing.summary, evidence.summary.clone());
-                existing
-            }
-        };
-        connection
+        let payload = to_json(evidence)?;
+        let inserted = connection
             .execute(
                 "INSERT INTO evidence(id, payload_json) VALUES (?1, ?2)
-                 ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json",
-                params![merged.id.as_str(), to_json(&merged)?],
+                 ON CONFLICT(id) DO NOTHING",
+                params![evidence.id.as_str(), payload],
             )
             .map_err(|error| format!("cannot write canonical evidence: {error}"))?;
+        if inserted == 1 {
+            self.register_source_evidence_identity(evidence)?;
+            return Ok(());
+        }
+
+        // Identity collisions are exceptional. Keep the expensive JSON read
+        // and merge on that path instead of paying it for every unique source
+        // evidence record in a large repository.
+        let existing = select_payload(connection, "evidence", "id", evidence.id.as_str())?
+            .ok_or_else(|| format!("evidence {} disappeared after conflict", evidence.id))?;
+        let mut merged: FactEvidence = from_json(&existing)?;
+        if merged.id != evidence.id
+            || merged.kind != evidence.kind
+            || merged.producer != evidence.producer
+            || merged.location != evidence.location
+        {
+            return Err(format!("evidence identity collision for {}", evidence.id));
+        }
+        merged.summary = merge_optional_text(merged.summary, evidence.summary.clone());
+        let merged_payload = to_json(&merged)?;
+        if merged_payload != existing {
+            connection
+                .execute(
+                    "UPDATE evidence SET payload_json=?2 WHERE id=?1",
+                    params![merged.id.as_str(), merged_payload],
+                )
+                .map_err(|error| format!("cannot merge canonical evidence: {error}"))?;
+        }
         Ok(())
     }
 
-    pub(super) fn evidence(&self, id: &str) -> Result<Option<FactEvidence>, String> {
-        select_payload(self.connection()?, "evidence", "id", id)?
-            .map(|payload| from_json(&payload))
+    fn register_source_evidence_identity(&self, evidence: &FactEvidence) -> Result<(), String> {
+        let EvidenceLocation::Source { span } = &evidence.location else {
+            return Ok(());
+        };
+        self.connection()?
+            .execute(
+                "INSERT INTO source_evidence_identity(id, path) VALUES (?1, ?2)",
+                params![evidence.id.as_str(), span.path.as_str()],
+            )
+            .map_err(|error| format!("cannot register source evidence identity: {error}"))?;
+        Ok(())
+    }
+
+    pub(super) fn has_evidence(&self, id: &str) -> Result<bool, String> {
+        self.connection()?
+            .prepare_cached("SELECT 1 FROM evidence WHERE id=?1")
+            .map_err(|error| format!("cannot prepare canonical evidence lookup: {error}"))?
+            .query_row([id], |_| Ok(()))
+            .optional()
+            .map(|row| row.is_some())
+            .map_err(|error| format!("cannot check canonical evidence identity: {error}"))
+    }
+
+    pub(super) fn source_evidence_path(&self, id: &str) -> Result<Option<RepositoryPath>, String> {
+        self.connection()?
+            .prepare_cached("SELECT path FROM source_evidence_identity WHERE id=?1")
+            .map_err(|error| format!("cannot prepare source evidence lookup: {error}"))?
+            .query_row([id], |row| row.get::<_, String>(0))
+            .optional()
+            .map_err(|error| format!("cannot read source evidence identity: {error}"))?
+            .map(|path| {
+                RepositoryPath::parse(path)
+                    .map_err(|error| format!("invalid stored source evidence path: {error}"))
+            })
             .transpose()
     }
 
@@ -1058,6 +1106,7 @@ impl BundleStore {
                  DROP TABLE file_identity;
                  DROP TABLE structure_identity;
                  DROP TABLE definition_identity;
+                 DROP TABLE source_evidence_identity;
                  VACUUM;",
             )
             .map_err(|error| format!("cannot finalize canonical bundle schema: {error}"))?;

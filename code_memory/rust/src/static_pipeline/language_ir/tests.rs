@@ -117,6 +117,36 @@ fn parallel_source_inventory_is_byte_identical_to_the_serial_path() {
         parallel.artifact.content_digest
     );
     assert_eq!(serial.artifact.record_count, parallel.artifact.record_count);
+
+    let normalize = |emission: &super::direct::DirectLanguageIrEmission, name: &str| {
+        let output = TestProject::new(name);
+        normalize_language_ir(CanonicalLanguageInput {
+            project_root: &fixture.project.root,
+            repository_display_name: "fixture",
+            manifest: &fixture.census.manifest,
+            plan: &fixture.plan,
+            ir_path: &emission.artifact.path,
+            ir_snapshot_id: &emission.artifact.snapshot_id,
+            ir_content_digest: emission.artifact.content_digest,
+            ir_record_count: emission.artifact.record_count,
+            provider_set_digest: emission.receipt.provider_set_digest,
+            execution_context_set_digest: emission.receipt.execution_context_set_digest,
+            framework_ir: None,
+            test_ir: None,
+            output_root: &output.root,
+        })
+        .unwrap()
+    };
+    let serial_bundle = normalize(&serial, "serial-source-inventory-bundle");
+    let parallel_bundle = normalize(&parallel, "parallel-source-inventory-bundle");
+    assert_eq!(
+        serial_bundle.receipt.semantic_digest,
+        parallel_bundle.receipt.semantic_digest
+    );
+    assert_eq!(
+        serial_bundle.artifact.bundle_digest,
+        parallel_bundle.artifact.bundle_digest
+    );
 }
 
 #[test]
@@ -476,6 +506,61 @@ fn canonical_linker_merges_duplicate_logical_edges_without_losing_evidence() {
     assert_eq!(canonical.receipt.merged_edge_count, 1);
     assert_eq!(canonical.manifest.edge_count, 4);
     assert_eq!(canonical.receipt.duplicate_logical_edge_count, 0);
+}
+
+#[test]
+fn canonical_linker_keeps_valid_forward_definition_evidence_references() {
+    let fixture = DonorFixture::one_language(ProgrammingLanguage::TypeScript);
+    let emission = fixture.emit().unwrap();
+    let mut records = read_ir_records(&emission.artifact.path);
+    let definition_evidence_id = records
+        .iter()
+        .find_map(|record| match record {
+            LanguageIrRecord::Definition(definition) => {
+                Some(definition.definition_evidence_id.clone())
+            }
+            _ => None,
+        })
+        .expect("fixture definition evidence");
+    let evidence_index = records
+        .iter()
+        .position(|record| {
+            matches!(record, LanguageIrRecord::Evidence(evidence) if evidence.id == definition_evidence_id)
+        })
+        .expect("fixture evidence record");
+    let evidence = records.remove(evidence_index);
+    let relation_index = records
+        .iter()
+        .position(|record| matches!(record, LanguageIrRecord::Relation(_)))
+        .expect("fixture relation");
+    assert!(records[..relation_index].iter().any(|record| {
+        matches!(record, LanguageIrRecord::Definition(definition) if definition.definition_evidence_id == definition_evidence_id)
+    }));
+    records.insert(relation_index, evidence);
+
+    let rewritten = TestProject::new("canonical-forward-definition-evidence-ir");
+    let (ir_path, digest, count) = write_ir_records(&rewritten, &records);
+    let output = TestProject::new("canonical-forward-definition-evidence-bundle");
+    let canonical = normalize_language_ir(CanonicalLanguageInput {
+        project_root: &fixture.project.root,
+        repository_display_name: "fixture",
+        manifest: &fixture.census.manifest,
+        plan: &fixture.plan,
+        ir_path: &ir_path,
+        ir_snapshot_id: &emission.artifact.snapshot_id,
+        ir_content_digest: digest,
+        ir_record_count: count,
+        provider_set_digest: emission.receipt.provider_set_digest,
+        execution_context_set_digest: emission.receipt.execution_context_set_digest,
+        framework_ir: None,
+        test_ir: None,
+        output_root: &output.root,
+    })
+    .unwrap();
+
+    assert_eq!(canonical.receipt.provider_definition_identity_count, 2);
+    assert_eq!(canonical.receipt.resolved_relation_count, 1);
+    assert_eq!(canonical.receipt.confirmed_without_evidence_count, 0);
 }
 
 #[test]
