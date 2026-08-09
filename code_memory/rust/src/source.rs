@@ -22,7 +22,6 @@ pub(crate) struct StreamedSourceMeasurement {
     pub(crate) line_count: Option<u64>,
     pub(crate) non_blank_line_count: Option<u64>,
     pub(crate) content_digest: Sha256Digest,
-    pub(crate) cache_hash: u64,
     pub(crate) encoding: SourceEncoding,
 }
 
@@ -50,7 +49,6 @@ fn measure_source_reader(
 ) -> io::Result<StreamedSourceMeasurement> {
     let mut buffer = vec![0_u8; buffer_bytes];
     let mut sha256 = Sha256::new();
-    let mut cache_hash = 0xcbf29ce484222325_u64;
     let mut byte_size = 0_u64;
     let mut has_nul = false;
     let mut prefix = Vec::with_capacity(3);
@@ -68,10 +66,6 @@ fn measure_source_reader(
             io::Error::new(io::ErrorKind::InvalidData, "source byte count overflow")
         })?;
         sha256.update(bytes);
-        for byte in bytes {
-            cache_hash ^= u64::from(*byte);
-            cache_hash = cache_hash.wrapping_mul(0x100000001b3);
-        }
         has_nul |= bytes.contains(&0);
 
         let mut offset = 0;
@@ -121,7 +115,6 @@ fn measure_source_reader(
         line_count,
         non_blank_line_count,
         content_digest,
-        cache_hash,
         encoding,
     })
 }
@@ -266,7 +259,9 @@ pub(crate) fn load_source_snapshot_metadata_from_files(
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
-        file_hashes.insert(relative, measurement.cache_hash);
+        let mut prefix = [0_u8; 8];
+        prefix.copy_from_slice(&measurement.content_digest.as_bytes()[..8]);
+        file_hashes.insert(relative, u64::from_be_bytes(prefix));
         source_paths.push(path.clone());
     }
     SourceSnapshot {

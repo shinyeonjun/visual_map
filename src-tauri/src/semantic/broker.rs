@@ -236,10 +236,7 @@ fn adaptive_worker_count(
     let workload_target = prompt_count.div_ceil(2);
     let memory_target = available_memory_mb
         .map(|available| {
-            available
-                .saturating_sub(SYSTEM_MEMORY_RESERVE_MB)
-                .div_ceil(AI_WORKER_MEMORY_MB)
-                .max(1)
+            (available.saturating_sub(SYSTEM_MEMORY_RESERVE_MB) / AI_WORKER_MEMORY_MB).max(1)
         })
         .unwrap_or_else(|| hardware_threads.div_ceil(2).max(1));
     prompt_count
@@ -530,7 +527,8 @@ mod tests {
         assert_eq!(adaptive_worker_count(4, 16, Some(8_192)), 2);
         assert_eq!(adaptive_worker_count(16, 16, Some(8_192)), 8);
         assert_eq!(adaptive_worker_count(40, 4, Some(8_192)), 4);
-        assert_eq!(adaptive_worker_count(40, 32, Some(1_800)), 3);
+        assert_eq!(adaptive_worker_count(40, 32, Some(1_800)), 2);
+        assert_eq!(adaptive_worker_count(40, 32, Some(1_400)), 1);
         assert_eq!(adaptive_worker_count(5, 16, Some(8_192)), 3);
     }
 
