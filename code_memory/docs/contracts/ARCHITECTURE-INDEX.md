@@ -1,15 +1,22 @@
 # Architecture Index Contract
 
-The architecture index is the compact output for Visual Map's large-scale
-code view. It is intentionally separate from the raw language index: the raw
-index keeps symbol and occurrence detail, while this file contains the stable
-tree, boundaries, relations, and user-visible flows.
+현재 provider 성능·정확도 검증 기록은
+[10-language cold-first audit](COLD-FIRST-MULTILANGUAGE-AUDIT-2026-08-09.md)를 따른다.
 
-## Output
+`code-memory.architecture-index.v4` is the bounded, source-backed architecture
+view emitted beside `code-memory.language-index.v2`. The language index retains
+symbol and occurrence detail; the architecture index keeps the ownership tree,
+verified boundaries, module relations, and quality ledgers used
+to populate the desktop Fact Graph.
 
-`code-memory.architecture-index.v3`
-
-The Rust bridge writes it next to the normal index output:
+This is a transitional donor contract. It is not the canonical Fact Graph and
+must not become a second product truth surface. The
+`codebase-workspace.language-ir.v2` authority, typed Framework IR for backend
+static HTTP routes, and two-pass canonical SQLite bundle now run before this
+compatibility artifact. Backend `HTTP_ROUTE`/`HANDLES` product truth has moved
+to canonical `HttpRoute`/`Exposes`/`Handles`; this donor remains for the other
+framework/API/ORM/asset families until typed parity and desktop import are
+complete.
 
 ```text
 language-index.json
@@ -18,110 +25,109 @@ language-index.architecture.json
 
 `index --architecture-out <path>` overrides the default sibling path.
 
+## Authority boundary
+
+This output contains extractor facts only. It does not generate final business
+areas, business names, canvas coordinates, task modes, or AI explanations.
+Those are replaceable derived artifacts in the desktop semantic layer.
+
 ## Nodes
 
 | Kind | Meaning |
-|---|---|
-| `PROJECT` | The indexed repository. |
-| `PACKAGE` | A dependency manifest boundary such as npm, PyPI, Cargo, or Maven. |
-| `MODULE` | A source directory/module grouping. |
-| `FILE` | A source file. |
-| `ENDPOINT` | A verified HTTP or RPC entrypoint. |
-| `COMPONENT` | A verified UI/component boundary. |
-| `SERVICE` | A verified service boundary. |
-| `JOB` | A verified scheduled job or server action. |
-| `EVENT` | A verified event or async boundary. |
-| `DYNAMIC_BOUNDARY` | A statically detected call whose target depends on runtime values. |
-| `EXTERNAL_LIBRARY` | An imported package that is outside the repository. |
-| `DATA_RESOURCE` | A database or file boundary inferred from source code. |
+| --- | --- |
+| `PROJECT` | Indexed repository root. |
+| `PACKAGE` | Dependency/build manifest boundary. |
+| `MODULE` | Compact source module/directory boundary. |
+| `FILE` | Source file retained for coverage. |
+| `ENDPOINT` | Verified HTTP/RPC entrypoint. |
+| `COMPONENT` | Verified UI/component fact. |
+| `SERVICE` | Verified service fact. |
+| `JOB` | Verified scheduled job/server action. |
+| `EVENT` | Verified event/async boundary. |
+| `DYNAMIC_BOUNDARY` | Explicit runtime-dependent dispatch. |
+| `EXTERNAL_LIBRARY` | Imported package outside the repository. |
+| `DATA_RESOURCE` | Source-backed database/file boundary candidate. |
 
-Every node has a stable `id`, display `label`, optional source `path`, and
-properties. External packages have `external: true`.
+Every node has a stable `id`, `kind`, name/label, optional source path/range,
+properties, and external flag. A consumer must key by `id`, never display text.
 
-`diagnostics[].code` is a stable kebab-case machine category. Consumers must
-branch on this field, not on the human-readable `message`. The same diagnostic
-also carries its evidence path when the gap is file-scoped.
-The default external-library label is `<package> 라이브러리` (for example,
-`pandas 라이브러리`). The stable node ID and the `name` property retain the
-machine package name.
+`FILE` and `MODULE` may carry `semantic=indexed|empty`. Empty means retained for
+coverage with no provider symbol/occurrence facts; it is not safe to delete or
+report as unanalysed. Modules are compact structural boundaries rather than an
+automatic one-node-per-directory mirror.
 
-`FILE` nodes have a `semantic` property: `indexed` means the language provider
-returned symbols or occurrences for the file, while `empty` means the file is
-kept for source coverage but has no semantic facts (for example a package
-`__init__.py`). Visual Map may hide `empty` files in the overview without
-deleting them from the raw language index.
+Framework facts preserve `fact_kind`. `execution_root=true` is restricted to
+externally triggered `HTTP_ROUTE`, `RPC_ENDPOINT`, `SCHEDULED_JOB`,
+`SERVER_ACTION`, and async-provider `EVENT_HANDLER` facts. Components, services,
+async calls, and UI/desktop/game event facts remain queryable but do not become
+execution roots. Unknown kinds fail closed.
 
-`MODULE` nodes use the same `semantic` property. A module is a structural
-boundary, not automatically every directory: directories with multiple source
-files, multiple child directories, or a package manifest become boundaries;
-single-file directory chains are folded into the nearest boundary. The file
-tree remains complete through `FILE` nodes, and `source_files` gives the number
-of files grouped into the compact module.
+Diagnostics use a stable machine `code`; clients must not branch on localized
+human messages. File-scoped gaps retain their evidence path.
 
-Provider stderr is operational noise, not a language diagnostic. Known
-provider info lines are suppressed; actionable provider messages are kept in
-the process log with a `[provider:<name>]` prefix. They do not change a
-language's success status unless the provider itself fails or returns invalid
-output.
+For backend static HTTP registrations, these fields are compatibility-only.
+New consumers must read typed `FactNodeDetails::HttpRoute { method, path }`
+from the canonical bundle and exact `Exposes`/`Handles` edges. They must not
+parse this artifact's label or infer a handler from a similar name.
 
 ## Edges
 
-`level: tree` edges describe scope:
+Tree-level:
 
-- `CONTAINS`: project/package/module/file ownership.
+- `CONTAINS`: repository/package/module/file ownership.
 
-`level: summary` edges describe the map:
+Summary-level:
 
-- `ENTRYPOINT_TO`: verified framework entrypoint to its source module.
-- `CALLS`: provider-resolved module call relation.
+- `ENTRYPOINT_TO`: verified framework entrypoint to source owner.
+- `CALLS`: provider-resolved call relation.
 - `IMPLEMENTS`: provider-resolved implementation relation.
-- `IMPORTS`: provider-resolved module import relation.
-- `USES_LIBRARY`: source module uses an external package.
-- `DYNAMIC_CALL`: source module contains an explicit runtime-dependent dispatch pattern.
-- `READS`, `WRITES`: source-level database/file boundary candidates.
+- `IMPORTS`: provider/project-model resolved import relation.
+- `USES_LIBRARY`: source module to external package.
+- `DYNAMIC_CALL`: explicit dynamic-dispatch boundary.
+- `READS`, `WRITES`: conservative source-level data/file relation candidate.
 
-Each edge carries source evidence. An edge is not emitted when the target
-cannot be resolved to a repository module or a recognized boundary. This keeps
-the visual map from presenting guessed routes or guessed call targets as facts.
+Every emitted edge retains evidence. An unresolved internal target is not
+invented. External resolution remains an explicit library boundary. Static SQL
+can target a table-specific `DATA_RESOURCE` with table, optional schema,
+qualified name, source path, and range; a generic DB call stays generic.
 
-For imports, `resolution: external` means the imported target was not found in
-the indexed project sources. The edge is a library boundary, not a guessed
-internal `CALLS` edge. Local relative imports and local package/module sources
-are excluded from this boundary. C/C++ angle-bracket includes are represented
-as system-library boundaries unless a matching project header is indexed.
+The code engine does not claim that a table named in source exists. The desktop
+may promote the candidate only after exact unique reconciliation with a
+certified DB metadata object. Missing or ambiguous matches fail closed.
 
-TypeScript and JavaScript local module imports are emitted from the compiler
-project model as `resolution: internal` file-level edges. This covers aliases,
-project references, package exports, and Vue SFC script imports without
-requiring the imported file to be a direct SCIP config root.
+## Execution paths
 
-External libraries are represented at package level only. The core engine does
-not maintain a package-name/API-operation table; framework or database packs
-may add a verified, project-specific boundary when they have evidence.
+This artifact does not emit a `flows` array. The removed field was an unordered
+reachability set and could not satisfy the product's ordered, evidence-backed
+`TracePath` contract. The desktop now derives representative and selected paths
+from the canonical Fact Graph with bounded depth/expansion, explicit
+complete/partial/gap/cycle/depth-limit state, and evidence. This architecture
+artifact remains intentionally free of a second `flows` projection.
 
-## Flows
+## Quality ledger
 
-`flows` are bounded summaries starting at verified framework entrypoints. Each
-flow contains its entrypoint node, reachable node IDs, and edge IDs. They are
-for the first screen of Visual Map; the raw index remains available when a
-developer needs exact symbols and source ranges.
+The output carries provider provenance, per-language summaries, file coverage,
+analysis units, framework summaries, and diagnostics. UI coverage metrics must
+use the appropriate source-unit weighting and keep `indexed`, `partial`,
+`excluded`, `missing`, and `unsupported` distinct.
 
-## Deliberate boundary
+## Determinism and limits
 
-Database names and operations found in code are represented as
-`DATA_RESOURCE` placeholders with `resolution: db_memory`. `db_memory` can
-later replace or enrich these nodes when a database schema is connected. The
-code engine does not pretend that a database schema was discovered from a code
-string alone.
+- Stable IDs and canonical ordering must survive repeated unchanged analysis.
+- Evidence ordering is canonicalized.
+- Source/provider/config changes invalidate the corresponding cache key.
+- Provider noise alone does not change success status; provider failure or
+  invalid output does.
+- The engine never executes the indexed application.
 
-The architecture layer is static. It does not execute the project and does
-not claim runtime-only dispatch, reflection, dependency injection, or dynamic
-plugin behavior without a provider/framework fact that resolves it. Explicit
-static markers such as `getattr`, `Class.forName`, `eval`, `dlsym`, and
-equivalent patterns are represented as `DYNAMIC_BOUNDARY` nodes instead of
-guessed call targets.
+## Deliberate omissions
 
-The raw language index also contains `coverage`. Each discovered source file is
-listed as `indexed`, `excluded`, or `missing`, with a machine-readable reason.
-This keeps the overview compact while allowing the UI to explain why a source
-file is absent from semantic relations.
+- no synthetic `DOMAIN` nodes or `DOMAIN_MEMBER` edges;
+- no Leiden or other final semantic grouping;
+- no guessed route/call targets;
+- no runtime-only dispatch claims without evidence;
+- no UI layout or task mode contract;
+- no AI-generated meaning.
+
+These omissions are required so the desktop can combine facts and AI without
+confusing a heuristic projection with source truth.

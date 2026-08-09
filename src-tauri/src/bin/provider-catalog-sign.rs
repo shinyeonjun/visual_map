@@ -52,13 +52,15 @@ fn run() -> Result<(), String> {
 fn signing_key(args: &[String]) -> Result<SigningKey, String> {
     let encoded = if args.iter().any(|value| value == "--development") {
         return Ok(SigningKey::from_bytes(&DEVELOPMENT_SEED));
-    } else if let Ok(value) = env::var("VISUAL_MAP_PROVIDER_SIGNING_KEY") {
+    } else if let Ok(value) = env::var("CODEBASE_WORKSPACE_PROVIDER_SIGNING_KEY") {
         value
-    } else if let Ok(path) = env::var("VISUAL_MAP_PROVIDER_SIGNING_KEY_FILE") {
+    } else if let Ok(path) = env::var("CODEBASE_WORKSPACE_PROVIDER_SIGNING_KEY_FILE") {
         fs::read_to_string(&path)
             .map_err(|error| format!("cannot read signing key file {path}: {error}"))?
     } else {
-        return Err("set VISUAL_MAP_PROVIDER_SIGNING_KEY(_FILE) or pass --development".to_string());
+        return Err(
+            "set CODEBASE_WORKSPACE_PROVIDER_SIGNING_KEY(_FILE) or pass --development".to_string(),
+        );
     };
     let bytes = STANDARD
         .decode(encoded.trim())

@@ -208,6 +208,51 @@ fn extract_generic_facts(
     extract_generic_facts_with_index(pack, path, source, &symbol_index, facts);
 }
 
+fn javascript_middleware_belongs_to_pack(
+    pack: &FrameworkPack,
+    source: &str,
+    line: &str,
+) -> bool {
+    if !matches!(pack.language.as_str(), "javascript" | "typescript") {
+        return true;
+    }
+    match pack.id.as_str() {
+        "nestjs" => [
+            "@UseGuards(",
+            "@UseInterceptors(",
+            "@UsePipes(",
+            "@UseFilters(",
+            "useGlobalGuards(",
+            "useGlobalInterceptors(",
+            "useGlobalPipes(",
+            "useGlobalFilters(",
+            "consumer.apply(",
+        ]
+        .iter()
+        .any(|marker| line.contains(marker)),
+        // addHook is Fastify-owned syntax. It remains valid on chained and
+        // member receivers (`this.instance.addHook`) where a single line does
+        // not carry the constructor binding.
+        "fastify" => line.contains("addHook("),
+        "express" | "koa" => {
+            javascript_source_has_framework_identity(&pack.id, source)
+                && line.match_indices(".use(").any(|(start, _)| {
+                    let receiver = line[..start]
+                        .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
+                        .find(|value| !value.is_empty())
+                        .unwrap_or_default();
+                    !receiver.is_empty()
+                        && (javascript_receiver_is_framework_instance(&pack.id, source, receiver)
+                            || matches!(
+                                receiver.to_ascii_lowercase().as_str(),
+                                "app" | "router" | "server" | "application"
+                            ))
+                })
+        }
+        _ => false,
+    }
+}
+
 fn extract_generic_facts_with_index(
     pack: &FrameworkPack,
     path: &str,
@@ -224,6 +269,11 @@ fn extract_generic_facts_with_index(
         let code_line = code_lines.get(index).copied().unwrap_or_default();
         for output in &pack.rules {
             if matches!(output.as_str(), "HTTP_ROUTE" | "HANDLES") {
+                continue;
+            }
+            if output == "MIDDLEWARE"
+                && !javascript_middleware_belongs_to_pack(pack, source, code_line)
+            {
                 continue;
             }
             if pack.language == "java"
@@ -279,7 +329,18 @@ fn extract_generic_facts_with_index(
                 .flatten();
             let fact_line = dependency_context.as_deref().unwrap_or(line);
             let handler_name =
-                if pack.language == "java" && matches!(output.as_str(), "SERVICE" | "COMPONENT") {
+                if matches!(pack.language.as_str(), "javascript" | "typescript")
+                    && output == "MIDDLEWARE"
+                {
+                    // Registration calls may continue with inline closures or
+                    // callback parameters on following lines. A nearby-name
+                    // fallback turned those parameters (`done`, `next`) into
+                    // middleware implementations. No explicit target means
+                    // unresolved, not guessed.
+                    fact_target_name(output, fact_line)
+                } else if pack.language == "java"
+                    && matches!(output.as_str(), "SERVICE" | "COMPONENT")
+                {
                     fact_target_name(output, line).or_else(|| java_nearby_type(&lines, index))
                 } else {
                     fact_target_name(output, fact_line).or_else(|| nearby_handler(&lines, index))

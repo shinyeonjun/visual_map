@@ -92,6 +92,8 @@ pub(crate) fn build_with_sources(
     builder.emit_framework_boundaries(output);
     let mut architecture = builder.finish();
     architecture.provider_provenance = output.provider_provenance.clone();
+    architecture.coverage = output.coverage.clone();
+    architecture.analysis_units = output.analysis_units.clone();
     architecture.languages = output
         .languages
         .iter()

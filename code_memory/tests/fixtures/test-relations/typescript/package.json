@@ -1,0 +1,7 @@
+{
+  "name": "test-relations-typescript",
+  "private": true,
+  "devDependencies": {
+    "vitest": "1.6.0"
+  }
+}

@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Backend Visual Map uses the following local sidecar programs. They run only as
+Codebase Workspace uses the following local sidecar programs. They run only as
 internal metadata-analysis tools. The application does not automatically
 register either program with an MCP client.
 
@@ -11,13 +11,14 @@ register either program with an MCP client.
 - Bundled program: `code-memory-language.exe`
 - License: Apache-2.0
 
-The bridge is the Visual Map-owned executable and does not bundle or execute
+The bridge is a Codebase Workspace-owned executable and does not bundle or execute
 an external MCP server.
 
 ## database-memory
 
-- Project: `shinyeonjun/rdb-memory-mcp`
-- Source: https://github.com/shinyeonjun/rdb-memory-mcp
+- Project: `shinyeonjun/visual_map/db_memory`
+- Integrated source: https://github.com/shinyeonjun/visual_map/tree/main/db_memory
+- Upstream provenance: https://github.com/shinyeonjun/rdb-memory-mcp
 - Bundled program: `database-memory.exe`
 - License: MIT
 - Copyright (c) 2026

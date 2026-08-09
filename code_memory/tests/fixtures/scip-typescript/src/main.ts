@@ -8,3 +8,5 @@ export function run(): number {
   const box = new Box(new User("user-1"));
   return add(1, 2) + box.get().id.length;
 }
+
+export const normalize = (value: number): number => value;

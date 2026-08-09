@@ -32,7 +32,7 @@ function Get-ProductUninstallEntries {
     foreach ($key in Get-ChildItem -LiteralPath $registryRoot -ErrorAction SilentlyContinue) {
       $entry = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
       $displayName = $entry.PSObject.Properties["DisplayName"]
-      if ($null -eq $displayName -or [string]$displayName.Value -ne "Backend Visual Map") { continue }
+      if ($null -eq $displayName -or [string]$displayName.Value -ne "Codebase Workspace") { continue }
       $installLocation = $entry.PSObject.Properties["InstallLocation"]
       $uninstallString = $entry.PSObject.Properties["UninstallString"]
       [pscustomobject]@{
@@ -96,10 +96,10 @@ $hash = Get-Sha256 $InstallerPath
 if ($ExerciseInstall) {
   $existingEntries = @(Get-ProductUninstallEntries)
   if ($existingEntries.Count -gt 0) {
-    throw "Refusing installer smoke because Backend Visual Map is already installed."
+    throw "Refusing installer smoke because Codebase Workspace is already installed."
   }
   $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-  $installRoot = Join-Path $tempBase ("bvm-release-smoke-" + [guid]::NewGuid().ToString("N"))
+  $installRoot = Join-Path $tempBase ("codebase-workspace-release-smoke-" + [guid]::NewGuid().ToString("N"))
   $resolvedInstallRoot = [IO.Path]::GetFullPath($installRoot)
   if (-not $resolvedInstallRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to use install path outside the temp directory: $resolvedInstallRoot"
@@ -121,7 +121,7 @@ if ($ExerciseInstall) {
         throw "Installer registered an uninstall entry outside the isolated install root: $($entry.Key)"
       }
     }
-    $app = Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter "backend-visual-map.exe" -File -Recurse | Select-Object -First 1
+    $app = Get-ChildItem -LiteralPath $resolvedInstallRoot -Filter "codebase-workspace.exe" -File -Recurse | Select-Object -First 1
     if (-not $app) { throw "Installed application executable was not found." }
     $installedEngines = @{}
     foreach ($engine in "code-memory-language.exe", "database-memory.exe") {
@@ -131,21 +131,19 @@ if ($ExerciseInstall) {
       }
       $installedEngines[$engine] = $installedEngine.FullName
     }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-code-engine-contract.ps1 `
-      -EnginePath $installedEngines["code-memory-language.exe"] `
-      -RequireJavaProvider `
-      -UseProviderBundles
+    & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-code-determinism.ps1 `
+      -EnginePath $installedEngines["code-memory-language.exe"]
     if ($LASTEXITCODE -ne 0) {
-      throw "Installed Java provider contract failed with exit code $LASTEXITCODE."
+      throw "Installed static extraction determinism failed with exit code $LASTEXITCODE."
     }
-    $previousAppData = $env:BACKEND_VISUAL_MAP_APP_DATA_DIR
+    $previousAppData = $env:CODEBASE_WORKSPACE_APP_DATA_DIR
     $previousWebViewData = $env:WEBVIEW2_USER_DATA_FOLDER
     try {
-      $env:BACKEND_VISUAL_MAP_APP_DATA_DIR = $smokeAppData
+      $env:CODEBASE_WORKSPACE_APP_DATA_DIR = $smokeAppData
       $env:WEBVIEW2_USER_DATA_FOLDER = $smokeWebViewData
       $process = Start-Process -FilePath $app.FullName -PassThru -WindowStyle Hidden
     } finally {
-      $env:BACKEND_VISUAL_MAP_APP_DATA_DIR = $previousAppData
+      $env:CODEBASE_WORKSPACE_APP_DATA_DIR = $previousAppData
       $env:WEBVIEW2_USER_DATA_FOLDER = $previousWebViewData
     }
     Start-Sleep -Seconds 5

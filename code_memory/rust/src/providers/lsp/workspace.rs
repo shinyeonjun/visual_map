@@ -41,7 +41,6 @@ pub(crate) fn workspace_has_marker(language: &str, path: &Path) -> bool {
             "build.gradle.kts",
         ],
         "dart" => &["pubspec.yaml"],
-        "ruby" => &["Gemfile", ".ruby-version"],
         "python" => &[
             "pyproject.toml",
             "pyrightconfig.json",

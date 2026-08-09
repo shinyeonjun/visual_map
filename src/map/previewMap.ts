@@ -1,0 +1,215 @@
+import type { MapView, Selection } from "./types";
+
+/**
+ * A hand-written map, for looking at the canvas before the engine can fill it.
+ *
+ * The canonical Fact Graph is not published to the app yet, so there is no
+ * real map to draw. This stands in during development only — `App` gates it
+ * on `import.meta.env.DEV` and labels the canvas while it is showing, because
+ * a screen that cannot tell invented data from analysed data is the one
+ * failure this product cannot survive.
+ *
+ * It is deleted the day the first published snapshot renders.
+ */
+export const PREVIEW_MAP: MapView = {
+  areas: [
+    {
+      id: "area:order",
+      name: "주문",
+      originalName: "Order",
+      summary: "주문 생성 · 조회 · 상태 관리",
+      depth: 0,
+      hiddenNodeCount: 0,
+      position: { x: 48, y: 108 },
+      width: 738,
+      nodes: [],
+      areas: [
+        {
+          id: "area:order.create",
+          name: "주문 생성",
+          summary: "주문을 생성하고 저장",
+          depth: 1,
+          hiddenNodeCount: 7,
+          areas: [],
+          nodes: [
+            { id: "node:post-orders", name: "POST /orders", kind: "HTTP Endpoint", role: "endpoint" },
+            {
+              id: "node:order-controller-create",
+              name: "OrderController.create",
+              kind: "Controller",
+              role: "controller",
+            },
+            { id: "node:order-service", name: "OrderService", kind: "Service", role: "service" },
+            { id: "node:order-repository", name: "OrderRepository", kind: "Repository", role: "repository" },
+            { id: "node:orders-table", name: "orders", kind: "PostgreSQL Table", role: "table" },
+          ],
+        },
+        {
+          id: "area:order.read",
+          name: "주문 조회",
+          summary: "주문 목록 · 상세 조회",
+          depth: 1,
+          hiddenNodeCount: 7,
+          areas: [],
+          nodes: [
+            { id: "node:get-orders", name: "GET /orders", kind: "HTTP Endpoint", role: "endpoint" },
+            { id: "node:order-controller-get", name: "OrderController.get", kind: "Controller", role: "controller" },
+            { id: "node:order-query-service", name: "OrderQueryService", kind: "Service", role: "service" },
+          ],
+        },
+        {
+          id: "area:order.inventory",
+          name: "재고 확인",
+          summary: "재고 확인 및 차감",
+          depth: 1,
+          hiddenNodeCount: 4,
+          areas: [],
+          nodes: [
+            { id: "node:inventory-service", name: "InventoryService", kind: "Service", role: "service" },
+            { id: "node:inventory-repository", name: "InventoryRepository", kind: "Repository", role: "repository" },
+            { id: "node:inventory-table", name: "inventory", kind: "PostgreSQL Table", role: "table" },
+          ],
+        },
+      ],
+    },
+    {
+      id: "area:auth",
+      name: "인증·세션",
+      originalName: "Auth",
+      summary: "인증 · 인가 · 세션 관리",
+      depth: 0,
+      hiddenNodeCount: 0,
+      position: { x: 930, y: 96 },
+      width: 210,
+      areas: [],
+      nodes: [],
+    },
+    {
+      id: "area:payment",
+      name: "결제",
+      originalName: "Payment",
+      summary: "결제 처리 · 환불 · 정산",
+      depth: 0,
+      hiddenNodeCount: 0,
+      position: { x: 930, y: 272 },
+      width: 210,
+      areas: [],
+      nodes: [],
+    },
+    {
+      id: "area:user",
+      name: "사용자",
+      originalName: "User",
+      summary: "사용자 프로필 · 권한",
+      depth: 0,
+      hiddenNodeCount: 0,
+      position: { x: 930, y: 448 },
+      width: 210,
+      areas: [],
+      nodes: [],
+    },
+    {
+      id: "area:product",
+      name: "상품",
+      originalName: "Product",
+      summary: "상품 · 카테고리 · 가격 관리",
+      depth: 0,
+      hiddenNodeCount: 0,
+      position: { x: 176, y: 780 },
+      width: 236,
+      areas: [],
+      nodes: [],
+    },
+    {
+      id: "area:notification",
+      name: "알림",
+      originalName: "Notification",
+      summary: "이메일 · 푸시 · SMS 발송",
+      depth: 0,
+      hiddenNodeCount: 0,
+      position: { x: 448, y: 780 },
+      width: 232,
+      areas: [],
+      nodes: [],
+    },
+    {
+      id: "area:shared",
+      name: "공통 인프라",
+      originalName: "Shared Infra",
+      summary: "구성 · 로깅 · 보안 · 유틸",
+      depth: 0,
+      hiddenNodeCount: 0,
+      position: { x: 716, y: 780 },
+      width: 252,
+      areas: [],
+      nodes: [],
+    },
+  ],
+  relations: [
+    { id: "rel:order-auth", from: "area:order", to: "area:auth", truth: "verified", label: "호출", count: 9 },
+    { id: "rel:order-payment", from: "area:order", to: "area:payment", truth: "verified", label: "호출", count: 22 },
+    { id: "rel:order-user", from: "area:order", to: "area:user", truth: "verified", label: "호출", count: 16 },
+    { id: "rel:order-product", from: "area:order", to: "area:product", truth: "verified", label: "호출", count: 13 },
+    {
+      id: "rel:order-notification",
+      from: "area:order",
+      to: "area:notification",
+      truth: "verified",
+      label: "호출",
+      count: 8,
+    },
+    { id: "rel:order-shared", from: "area:order", to: "area:shared", truth: "verified", label: "호출", count: 11 },
+    { id: "rel:payment-shared", from: "area:payment", to: "area:shared", truth: "structural", label: "구성", count: 7 },
+    {
+      id: "rel:product-shared",
+      from: "area:product",
+      to: "area:shared",
+      truth: "structural",
+      label: "사용",
+      count: 12,
+    },
+    {
+      id: "rel:order-auth-candidate",
+      from: "area:auth",
+      to: "area:order",
+      truth: "candidate",
+      label: "후보",
+      count: 3,
+    },
+  ],
+};
+
+export const PREVIEW_SELECTION: Selection = {
+  id: "area:order.create",
+  title: "주문 생성",
+  role: "주문 생성 요청을 검증하고 저장 흐름으로 전달",
+  relations: [
+    { label: "호출 (나감)", truth: "verified", count: 18 },
+    { label: "호출 (들어옴)", truth: "verified", count: 11 },
+    { label: "사용", truth: "structural", count: 2 },
+    { label: "구성", truth: "structural", count: 1 },
+    { label: "후보", truth: "candidate", count: 3 },
+  ],
+  evidence: [
+    { path: "src/orders/order.controller.ts", line: 42 },
+    { path: "src/orders/order.service.ts", line: 91 },
+    { path: "src/orders/order.repository.ts", line: 27 },
+    { path: "src/db/migrations/20240301_orders.sql", line: 1 },
+  ],
+  source: {
+    path: "src/orders/order.service.ts",
+    startLine: 88,
+    hitLine: 91,
+    lines: [
+      "public async create(req: CreateOrderRequest) {",
+      "  const dto = await this.validate(req);",
+      "  const order = this.mapToOrder(dto);",
+      "  const saved = await this.repo.save(order);",
+      "  await this.events.publish(",
+      "    new OrderCreatedEvent(saved.id)",
+      "  );",
+      "  return saved;",
+      "}",
+    ],
+  },
+};

@@ -10,9 +10,13 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.IO.Compression
 
+# Windows PowerShell 5.1 does not expose the newer SmallestSize enum value.
+# Optimal is available on every supported .NET runtime and keeps packaging portable.
+$ArchiveCompressionLevel = [IO.Compression.CompressionLevel]::Optimal
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
-    $SourceRoot = $env:VISUAL_MAP_PROVIDERS_ROOT
+    $SourceRoot = $env:CODEBASE_WORKSPACE_PROVIDERS_ROOT
 }
 if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
     $SourceRoot = Join-Path $repoRoot "code_memory\providers"
@@ -55,7 +59,7 @@ function Compress-Directory([string]$SourceDirectory, [string]$ArchivePath) {
                 $zip,
                 $file.FullName,
                 $relativePath,
-                [IO.Compression.CompressionLevel]::SmallestSize
+                $ArchiveCompressionLevel
             ) | Out-Null
         }
     } finally {
@@ -71,7 +75,7 @@ function Compress-RootFiles([string]$SourceDirectory, [string]$ArchivePath, [str
                 $zip,
                 (Join-Path $SourceDirectory $fileName),
                 $fileName.Replace("\", "/"),
-                [IO.Compression.CompressionLevel]::SmallestSize
+                $ArchiveCompressionLevel
             ) | Out-Null
         }
     } finally {
@@ -94,10 +98,10 @@ function Get-EntryPoint([string]$RelativePath) {
 
 function Get-PublicKey {
     if ($Release) {
-        if ([string]::IsNullOrWhiteSpace($env:VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY)) {
-            throw "Release provider catalogs require VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY."
+        if ([string]::IsNullOrWhiteSpace($env:CODEBASE_WORKSPACE_PROVIDER_CATALOG_PUBLIC_KEY)) {
+            throw "Release provider catalogs require CODEBASE_WORKSPACE_PROVIDER_CATALOG_PUBLIC_KEY."
         }
-        return $env:VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY.Trim()
+        return $env:CODEBASE_WORKSPACE_PROVIDER_CATALOG_PUBLIC_KEY.Trim()
     }
     return $DevelopmentPublicKey
 }
@@ -170,8 +174,6 @@ $packLanguages = @{
     clang = [string[]]@("c", "cpp")
     go = [string[]]@("go")
     rust = [string[]]@("rust")
-    php = [string[]]@("php")
-    ruby = [string[]]@("ruby")
     dart = [string[]]@("dart")
 }
 $packEntryPoints = @{
@@ -182,8 +184,6 @@ $packEntryPoints = @{
     clang = [string[]]@("clang/bin/clangd.exe")
     go = [string[]]@("go/gopls.exe", "go/runtime/bin/go.exe")
     rust = [string[]]@("rust/toolchain/bin/rust-analyzer.exe", "rust/toolchain/bin/cargo.exe", "rust/toolchain/bin/rustc.exe")
-    php = [string[]]@("php/scip-php.cmd", "php/runtime/php.exe")
-    ruby = [string[]]@("ruby/runtime/bin/ruby-lsp.bat", "ruby/runtime/bin/ruby.exe")
     dart = [string[]]@("dart/sdk/bin/dart.exe")
 }
 

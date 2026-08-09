@@ -1,6 +1,9 @@
 use scip::types::SymbolRole;
+use codebase_fact_model::analysis::{
+    ContextDimensionKind, ProgrammingLanguage, ProviderConfigUse, ProviderExecutionMode,
+    ProviderProtocol,
+};
 use serde_json::Value;
-use protobuf::Message;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -9,11 +12,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::static_pipeline::context_dimensions::context_dimension;
+use crate::static_pipeline::language_ir::type_relations::{
+    inventory_type_syntax, SyntaxTypeRelationSite, SyntaxTypeUseSite,
+};
 use crate::{
-    capture_provider_stderr, collect_files, find_tool, javascript_workspace, project_cache_root,
-    provider_timeout, range_contains, tool_command, typescript_config_files, Diagnostic,
-    DiagnosticCode, DocumentOutput, LanguageSpec,
-    OccurrenceOutput, ProviderProcessGuard, RelationOutput, SymbolOutput,
+    capture_provider_stderr, collect_files, executed_provider_context, generated_context_digest,
+    inventory_call_sites, probe_dotnet_sdk, provider_timeout, tool_command,
+    workspace_context_files, CallSiteForm, Diagnostic, DiagnosticCode, DocumentOutput,
+    ExecutedProviderContextInput, LanguageSpec, OccurrenceOutput, ProviderProcessGuard,
+    ProviderRoots, ProviderRunOutcome, RelationOutput, SymbolOutput, SyntaxCallSite,
 };
 
 type SourceRange = (i32, i32, i32, i32);
@@ -42,9 +50,18 @@ pub(crate) fn ensure_default_scip_output(root: &Path, out: &Path) -> Result<(), 
 }
 
 pub(crate) fn run_command(
+    command: Command,
+    language: &str,
+    provider: &str,
+) -> Result<(), String> {
+    run_command_with_timeout(command, language, provider, provider_timeout())
+}
+
+pub(crate) fn run_command_with_timeout(
     mut command: Command,
     language: &str,
     provider: &str,
+    timeout: Duration,
 ) -> Result<(), String> {
     let mut child = command
         .spawn()
@@ -54,7 +71,7 @@ pub(crate) fn run_command(
         .stderr
         .take()
         .map(|stderr| capture_provider_stderr(provider, stderr));
-    let deadline = Instant::now() + provider_timeout();
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -76,7 +93,7 @@ pub(crate) fn run_command(
                     format!(
                         "{} indexer timeout after {} seconds",
                         language,
-                        provider_timeout().as_secs()
+                        timeout.as_secs()
                     ),
                     stderr_task,
                 ));

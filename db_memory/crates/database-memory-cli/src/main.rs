@@ -1,5 +1,4 @@
 mod args;
-mod metadata;
 
 use std::env;
 use std::path::Path;
@@ -13,11 +12,6 @@ use database_memory_core::interface_contract::{
     list_objects, list_snapshot_summaries, product_contract, CompleteIndexRequest, InterfaceError,
     ObjectDetail, ObjectPage, ProductContract, SnapshotDetail, SnapshotSummary,
     INTERFACE_CONTRACT_VERSION,
-};
-use metadata::{
-    describe_table, open_existing_store, render_find_column, render_find_table,
-    render_impact_analysis, render_inventory, render_relationship_trace, render_table_description,
-    require_snapshot, resolve_snapshot_key,
 };
 use serde_json::json;
 
@@ -156,101 +150,6 @@ cache path: {}
                 describe_generic_object(&store, &selector, &object_key, Some(relationship_limit))
                     .map_err(|error| render_interface_error(&error, format))?;
             render_object_detail(&detail, format)
-        }
-        Command::DescribeTable {
-            alias,
-            object_key,
-            table_name,
-            format,
-            cache_path,
-        } => {
-            let store = open_existing_store(&cache_path)?;
-            let snapshot_key = resolve_snapshot_key(&store, &alias)?;
-            require_snapshot(&store, &snapshot_key)?;
-            let description = describe_table(
-                &store,
-                &snapshot_key,
-                object_key.as_deref(),
-                table_name.as_deref(),
-            )?;
-            Ok(render_table_description(&description, format))
-        }
-        Command::Inventory {
-            alias,
-            offset,
-            limit,
-            cache_path,
-        } => {
-            let store = open_existing_store(&cache_path)?;
-            let snapshot_key = resolve_snapshot_key(&store, &alias)?;
-            require_snapshot(&store, &snapshot_key)?;
-            render_inventory(&store, &snapshot_key, offset, limit)
-        }
-        Command::FindTable {
-            alias,
-            query,
-            format,
-            cache_path,
-        } => {
-            let store = open_existing_store(&cache_path)?;
-            let snapshot_key = resolve_snapshot_key(&store, &alias)?;
-            require_snapshot(&store, &snapshot_key)?;
-            render_find_table(&store, &snapshot_key, &query, format)
-        }
-        Command::FindColumn {
-            alias,
-            query,
-            format,
-            cache_path,
-        } => {
-            let store = open_existing_store(&cache_path)?;
-            let snapshot_key = resolve_snapshot_key(&store, &alias)?;
-            require_snapshot(&store, &snapshot_key)?;
-            render_find_column(&store, &snapshot_key, &query, format)
-        }
-        Command::ImpactAnalysis {
-            alias,
-            object_key,
-            table_name,
-            column_name,
-            direction,
-            max_depth,
-            limit,
-            cache_path,
-        } => {
-            let store = open_existing_store(&cache_path)?;
-            let snapshot_key = resolve_snapshot_key(&store, &alias)?;
-            require_snapshot(&store, &snapshot_key)?;
-            render_impact_analysis(
-                &store,
-                &snapshot_key,
-                object_key.as_deref(),
-                table_name.as_deref(),
-                column_name.as_deref(),
-                direction,
-                max_depth,
-                limit,
-            )
-        }
-        Command::TraceRelationships {
-            alias,
-            object_key,
-            direction,
-            max_depth,
-            limit,
-            cache_path,
-        } => {
-            let store = open_existing_store(&cache_path)?;
-            let snapshot_key = resolve_snapshot_key(&store, &alias)?;
-            require_snapshot(&store, &snapshot_key)?;
-            render_relationship_trace(
-                &store,
-                &snapshot_key,
-                &object_key,
-                direction,
-                max_depth,
-                limit,
-            )
         }
     }
 }
@@ -453,23 +352,19 @@ mod tests {
         assert_eq!(value["contract_version"], PRODUCT_CONTRACT_VERSION);
         assert_eq!(value["metadata_only"], true);
         assert_eq!(value["row_data_access"], false);
-        assert!(value["commands"]
-            .as_array()
-            .is_some_and(|commands| commands.iter().any(|command| command == "describe-table")));
-        assert!(value["commands"]
-            .as_array()
-            .is_some_and(|commands| commands.iter().any(|command| command == "impact-analysis")));
-        assert!(value["commands"]
-            .as_array()
-            .is_some_and(|commands| commands.iter().any(|command| command == "inventory")));
         assert_eq!(
-            value["traversal_limits"]["max_depth"],
-            args::MAX_TRAVERSAL_DEPTH
+            value["commands"],
+            json!([
+                "contract",
+                "index",
+                "list-snapshots",
+                "describe-snapshot",
+                "list-objects",
+                "find-objects",
+                "describe-object"
+            ])
         );
-        assert_eq!(
-            value["inventory_limits"]["max_tables"],
-            args::MAX_INVENTORY_TABLES
-        );
-        assert_eq!(value["inventory_limits"]["offset_pagination"], true);
+        assert!(value.get("traversal_limits").is_none());
+        assert!(value.get("inventory_limits").is_none());
     }
 }

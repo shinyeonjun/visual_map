@@ -28,18 +28,16 @@ pub(crate) fn collect(root: &Path) -> CollectorResult {
         };
         let before = result.facts.len();
         parse_file(&path, &source, &mut result);
-        if result.facts.len() == before {
-            result.diagnostics.push(diagnostic(
-                path,
-                "deployment descriptor was recognized but no supported resource was found"
-                    .to_string(),
-            ));
-        } else {
+        if result.facts.len() > before {
             result.summary.detected_by.push(path);
         }
     }
     if result.facts.is_empty() {
-        result.summary.status = CollectionStatus::Failed;
+        result.summary.status = if result.diagnostics.is_empty() {
+            CollectionStatus::NotDetected
+        } else {
+            CollectionStatus::Failed
+        };
         return result;
     }
     result.facts.push(CollectedFact {
@@ -228,6 +226,9 @@ fn parse_kubernetes_yaml(path: &str, source: &str, result: &mut CollectorResult)
         let Some(kind) = yaml_top_scalar(document, "kind") else {
             continue;
         };
+        if !is_supported_kubernetes_boundary(&kind) {
+            continue;
+        }
         let Some(name) = yaml_nested_scalar(document, "metadata", "name") else {
             continue;
         };
@@ -260,6 +261,9 @@ fn emit_kubernetes_json(path: &str, value: &Value, result: &mut CollectorResult)
     let Some(kind) = value.get("kind").and_then(Value::as_str) else {
         return;
     };
+    if !is_supported_kubernetes_boundary(kind) {
+        return;
+    }
     let Some(name) = value.pointer("/metadata/name").and_then(Value::as_str) else {
         return;
     };
@@ -293,10 +297,13 @@ fn terraform_module(path: &str, module: &Value, result: &mut CollectorResult) {
             continue;
         };
         let resource_type = resource.get("type").and_then(Value::as_str).unwrap_or("");
+        if !is_supported_terraform_boundary(resource_type) {
+            continue;
+        }
         emit(
             path,
             1,
-            "infrastructure-resource",
+            "infrastructure-boundary",
             address,
             &[
                 ("format", "terraform-plan"),
@@ -313,6 +320,60 @@ fn terraform_module(path: &str, module: &Value, result: &mut CollectorResult) {
     {
         terraform_module(path, child, result);
     }
+}
+
+fn is_supported_kubernetes_boundary(kind: &str) -> bool {
+    matches!(
+        kind.to_ascii_lowercase().as_str(),
+        "deployment"
+            | "statefulset"
+            | "daemonset"
+            | "job"
+            | "cronjob"
+            | "service"
+            | "ingress"
+            | "gateway"
+    )
+}
+
+fn is_supported_terraform_boundary(resource_type: &str) -> bool {
+    let resource_type = resource_type.to_ascii_lowercase();
+    [
+        "_lambda_function",
+        "_cloudfunctions_function",
+        "_cloudfunctions2_function",
+        "_cloud_run_service",
+        "_ecs_service",
+        "_container_app",
+        "_app_service",
+        "_web_app",
+        "_function_app",
+        "_compute_instance",
+        "_kubernetes_cluster",
+        "_api_gateway",
+        "_apigateway",
+        "_application_gateway",
+        "_load_balancer",
+        "_db_instance",
+        "_rds_cluster",
+        "_sql_database",
+        "_postgresql_",
+        "_mysql_",
+        "_mssql_",
+        "_cosmosdb_",
+        "_storage_account",
+        "_storage_bucket",
+        "_s3_bucket",
+        "_queue",
+        "_topic",
+        "_stream",
+        "_redis_",
+        "_elasticache_",
+        "_opensearch_",
+        "_servicebus_",
+    ]
+    .iter()
+    .any(|marker| resource_type.contains(marker))
 }
 
 fn emit(
@@ -417,7 +478,7 @@ mod tests {
     use super::collect;
 
     #[test]
-    fn imports_compose_kubernetes_and_terraform_topology() {
+    fn imports_only_execution_and_external_deployment_boundaries() {
         let root =
             std::env::temp_dir().join(format!("code-memory-deployment-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -429,12 +490,12 @@ mod tests {
         .unwrap();
         std::fs::write(
             root.join("k8s/deployment.yaml"),
-            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: prod\n",
+            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: prod\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: api-settings\n",
         )
         .unwrap();
         std::fs::write(
             root.join("tfplan.json"),
-            r#"{"planned_values":{"root_module":{"resources":[{"address":"aws_s3_bucket.assets","type":"aws_s3_bucket"}]}}}"#,
+            r#"{"planned_values":{"root_module":{"resources":[{"address":"aws_s3_bucket.assets","type":"aws_s3_bucket"},{"address":"aws_iam_role.runtime","type":"aws_iam_role"}]}}}"#,
         )
         .unwrap();
 
@@ -451,9 +512,14 @@ mod tests {
             .facts
             .iter()
             .any(|fact| fact.kind == "deployment-resource" && fact.name == "api"));
+        assert!(!result.facts.iter().any(|fact| fact.name == "api-settings"));
         assert!(result.facts.iter().any(|fact| {
-            fact.kind == "infrastructure-resource" && fact.name == "aws_s3_bucket.assets"
+            fact.kind == "infrastructure-boundary" && fact.name == "aws_s3_bucket.assets"
         }));
+        assert!(!result
+            .facts
+            .iter()
+            .any(|fact| fact.name == "aws_iam_role.runtime"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

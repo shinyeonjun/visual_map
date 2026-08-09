@@ -1,138 +1,169 @@
-# Backend Visual Map
+# Codebase Workspace
 
-백엔드 코드와 관계형 데이터베이스 메타데이터의 관계를 **근거와 함께** 탐색하는 Windows 우선 Tauri + React 데스크톱 앱입니다.
+> 코드를 직접 전부 읽기 전에, 프로젝트의 구조와 실행 관계를 근거와 함께 빠르게 파악하는 로컬 개발자 도구입니다.
 
-## Why it exists
+Codebase Workspace는 로컬 코드베이스를 정적 분석해 검증 가능한 Fact Graph로 만들고, 설치된 Codex 또는 Claude CLI를 이용해 그 사실 위에 영역 이름과 짧은 설명을 더합니다. 제품이 사용자의 작업 방식을 정하지는 않습니다. 같은 지도를 보고 온보딩, 기능 개발, API 설계, 디버깅, 리팩터링 검토 등 필요한 가치를 사용자가 직접 찾는 것이 제품 원칙입니다.
 
-큰 백엔드 저장소에서 "이 API가 어떤 코드와 데이터 경계를 통과하는가?"를 코드·스키마를 오가며 추적하는 비용을 줄입니다. raw dependency graph를 그대로 던지지 않고, 하나의 캔버스에서 프로젝트 → 패키지 → 모듈 → 코드 구조를 펼치고 선택 대상의 근거와 연결 경로를 확인합니다.
+> **현재 상태**
+>
+> 코드 전용 vertical slice는 폴더 선택부터 정적 분석, canonical SQLite bundle, AI 의미 분석, Fluent 기반 지도 표시까지 연결되어 있습니다. 아직 일반 배포용 완성본은 아닙니다. DB 통합, 앱 내 대화, 대형 저장소용 계층형 의미 통합, 구형 compatibility 출력 제거가 남아 있습니다.
 
-**Product boundary:** row data는 읽지 않고, DB 비밀번호·토큰·연결 secret은 workspace 파일에 저장하지 않습니다.
+## 제품 원칙
 
-## What it does
+- **빠른 정보 제공**: 도구는 사실과 구조를 보여주고, 사용 목적은 강제하지 않습니다.
+- **정적 사실 우선**: 파일, 정의, 호출, 타입, route, test 관계와 위치는 정적 분석기가 소유합니다.
+- **AI는 의미만 보강**: AI는 기존 Fact ID만 사용해 영역 이름, 책임, 요약을 제안하며 사실을 바꾸지 못합니다.
+- **모르면 비워 둠**: 동적 호출, 모호한 대상, 미지원 범위는 그럴듯한 선이 아니라 typed gap으로 남깁니다.
+- **근거 없는 확정 관계 0개**: confirmed 관계에는 source evidence가 반드시 필요합니다.
+- **로컬 우선**: workspace, Fact Graph, 의미 revision은 로컬에 저장됩니다. 분석용 AI 호출은 일회성이며 채팅 세션으로 남기지 않습니다.
 
-- local folder 또는 GitHub URL로 workspace 생성 후 코드 인덱싱
-- SQLite, SQLite DDL, PostgreSQL, YugabyteDB YSQL, MySQL, MariaDB, SQL Server, Oracle 메타데이터 인덱싱
-- 고정 내비게이션에서 전체 구조, API 읽기 경로, 코드, DB 구조, 변경 영향을 focused view로 탐색
-- API·코드·파일·테이블·컬럼 중 2~8개를 골라 전체 연결, 호출, 데이터, 영향 관계만 조합해 보기
-- 실행 호출에 직접 연결된 정적 SQL을 근거로 `READS`, `WRITES`, `USES_COLUMN` 관계 확인
-- 확정 근거, 후보, 미확인 영역과 분석 범위를 구분해 표시
-- code-memory-language `0.1.0 / contract 1`과 database-memory `0.2.0 / contract 2`를 bundled sidecar로 실행
+## 분석 흐름
 
-## Quick start
+```mermaid
+flowchart LR
+    A["로컬 프로젝트"] --> B["Source Census"]
+    B --> C["Analysis Plan"]
+    C --> D["언어별 SCIP / LSP provider"]
+    D --> E["Language IR"]
+    E --> F["Canonical linker"]
+    F --> G["Immutable SQLite Fact Graph"]
+    G --> H["Static TracePath"]
+    G --> I["AI semantic compiler"]
+    H --> J["Hierarchical canvas"]
+    I --> J
+    G -. "변경 불가" .-> I
+```
 
-소스에서 실행하려면 다음 명령을 사용합니다. 엔진 실행 파일은 Git에 포함하지 않으므로 최초 한 번 준비해야 합니다.
+정적 분석 결과가 권위 있는 원본입니다. AI 결과는 동일한 Fact Graph에서 다시 만들 수 있는 파생 revision이며, 실패해도 마지막으로 검증된 Fact snapshot을 덮어쓰지 않습니다.
+
+## 현재 가능한 것
+
+| 영역 | 현재 상태 |
+| --- | --- |
+| 로컬 workspace | 폴더 연결, provider/model/추론 강도 저장 |
+| 정적 코드 분석 | 10개 언어, source/config/provider 근거와 typed coverage |
+| 코드 관계 | import/export, call/construct, type hierarchy/use, framework route/handler, test 관계 |
+| Fact Graph | 결정적 ID, evidence, gap, immutable SQLite bundle, tamper 검증 |
+| 실행 흐름 | confirmed direct edge만 사용하는 bounded `TracePath` |
+| AI 의미 분석 | L0/L1 영역 이름·책임·요약, 분할 실행, 검증·캐시·전역 통합 |
+| UI | Fluent 2 기반 단일 workspace와 계층형 코드 지도 |
+| DB | metadata-only 엔진은 남아 있으나 새 지도 ingestion은 아직 연결하지 않음 |
+| 대화 | 제품 목표에는 포함되지만 현재 vertical slice에는 연결하지 않음 |
+
+## 지원 언어
+
+현재 정적 계약은 다음 10개 언어로 고정되어 있습니다.
+
+`TypeScript` · `JavaScript` · `Python` · `Java` · `C#` · `C` · `C++` · `Go` · `Rust` · `Dart`
+
+언어별 SCIP/compiler/LSP provider와 독립적인 CST 검증을 조합합니다. provider가 없거나 정확한 compile context를 만들 수 없는 경우 성공으로 위장하지 않고 누락 범위를 기록합니다. Ruby, PHP, Swift는 현재 제품 계약에 포함되지 않습니다.
+
+## 신뢰 경계
+
+- 분석 대상 애플리케이션 코드를 임의로 실행하지 않습니다.
+- DB row 데이터는 읽지 않습니다.
+- source range와 파일 digest가 맞지 않는 evidence는 폐기합니다.
+- 이름이나 가까운 폴더만으로 관계 대상을 연결하지 않습니다.
+- 분석 중 source가 변경되면 혼합 snapshot을 공개하지 않습니다.
+- AI 출력은 기존 Fact/Region/Evidence ID만 참조할 수 있습니다.
+- 취소·실패·검증 실패는 이전에 게시된 snapshot을 보존합니다.
+
+## 개발 환경
+
+현재 개발·패키징 기준은 Windows x64입니다.
+
+- Node.js `24.18.0`
+- Rust `1.96.1` (`x86_64-pc-windows-msvc`)
+- npm
+- Visual Studio C++ Build Tools
+- 의미 분석을 사용할 경우 설치·인증된 Codex 또는 Claude CLI
 
 ```powershell
+git clone https://github.com/shinyeonjun/visual_map.git
+cd visual_map
 npm ci
-cargo +1.96.1 build --locked --release -p database-memory-cli --manifest-path .\db_memory\Cargo.toml
-Copy-Item .\db_memory\target\release\database-memory.exe .\src-tauri\engines\database-memory.exe -Force
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-engines.ps1 -AllowDevelopmentArtifact
+```
+
+로컬 sidecar를 빌드하고 앱이 읽는 위치에 배치합니다.
+
+```powershell
+cargo build --locked --release --manifest-path code_memory/rust/Cargo.toml
+cargo build --locked --release -p database-memory-cli --manifest-path db_memory/Cargo.toml
+
+Copy-Item code_memory/rust/target/release/code-memory-language.exe `
+  src-tauri/engines/code-memory-language.exe -Force
+Copy-Item db_memory/target/release/database-memory.exe `
+  src-tauri/engines/database-memory.exe -Force
+
+npm run verify:engines
 npm run tauri dev
 ```
 
-DB 엔진 `0.2.0` 공개 바이너리는 아직 배포하지 않았으므로, 위 명령은 이 저장소의 `db_memory` 소스를 빌드합니다.
+`src-tauri/engines/*.exe`, provider runtime, analysis cache와 bundle은 소스 형상관리에 포함되지 않습니다.
 
-## Repository layout
+## 검증
+
+빠른 기본 검증:
+
+```powershell
+npm run typecheck
+npm test
+npm run lint
+npm run deadcode
+
+cargo fmt --manifest-path code_memory/rust/Cargo.toml -- --check
+cargo clippy --manifest-path code_memory/rust/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --manifest-path code_memory/rust/Cargo.toml
+
+cargo test --locked --manifest-path crates/fact-model/Cargo.toml
+cargo test --locked --manifest-path crates/semantic-model/Cargo.toml
+cargo test --locked --manifest-path crates/semantic-compiler/Cargo.toml
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+```
+
+DB 엔진을 변경한 경우:
+
+```powershell
+cargo test --locked --manifest-path db_memory/Cargo.toml --workspace
+```
+
+10개 언어의 실제 근거·결정성 gate는 [Code Memory README](code_memory/README.md)에 정리되어 있습니다. fixture의 100% 수치는 닫힌 검토 corpus 결과이며 임의의 실제 저장소 전체 정확도 100%를 뜻하지 않습니다.
+
+## 저장소 구조
 
 ```text
-visual_map/   Visual Map desktop application
-code_memory/  static code analysis engine and framework contracts
-db_memory/    metadata-only relational database analysis engine
+src/                         React + Fluent 2 desktop shell
+src-tauri/src/               workspace, sidecar, Fact import, AI broker, map API
+crates/fact-model/           provider/UI/AI와 독립적인 정적 Fact 계약
+crates/semantic-model/       provider-neutral AI input/output/revision 계약
+crates/semantic-compiler/    prompt, packet, partition, strict verifier
+code_memory/                 10개 언어 정적 코드 분석 엔진
+db_memory/                   metadata-only 관계형 DB 엔진
+docs/                        현재 architecture, security, cleanup 계획
+scripts/                     build, verification, packaging, cleanup scripts
 ```
 
-앱에서는 다음 순서로 연결합니다.
+## 현재 정리 우선순위
 
-1. `소스 관리`에서 로컬 폴더 또는 GitHub URL을 선택하고 프로젝트를 엽니다.
-2. `코드 읽기`를 누르면 인덱싱과 API·함수·클래스·파일 목록 로드를 한 번에 수행합니다.
-3. DB가 필요하면 연결 이름과 소스를 저장한 뒤 `DB 읽기`를 누릅니다.
-   - SQLite/SQLite DDL은 파일 또는 디렉터리 경로를 사용합니다.
-   - PostgreSQL, YugabyteDB YSQL, MySQL, MariaDB, SQL Server, Oracle 연결 문자열은 해당 읽기 실행에만 사용합니다. Oracle은 별도 Oracle Client 11.2 이상이 필요합니다.
-4. 고정 왼쪽 메뉴에서 `개요`, `API`, `코드`, `데이터베이스`, `변경 영향`을 오가며 근거를 확인합니다.
-5. 여러 대상을 함께 보려면 `관계`에서 2~8개를 고르고 `전체 연결`, `호출`, `데이터`, `영향` 중 하나를 선택합니다.
+새 기능을 더하기 전에 다음 구조 정리를 진행합니다.
 
-내부 설치본은 `npm run build:internal`로 생성할 수 있으며, 설치 앱에는 두 엔진이 함께 포함됩니다. 이 저장소는 소스와 로컬 빌드를 공개하며 공식 installer binary는 배포하지 않습니다.
+1. 앱 실행 경로를 canonical-only로 전환하고 폐기되는 legacy JSON 생성을 제거
+2. `index_project()`와 Language IR `emit_unit()`을 동작 변경 없이 역할별로 분리
+3. 전체 Fact snapshot 메모리 적재를 SQLite query 기반 read model로 변경
+4. 기본 실행 receipt를 축소하고 상세 audit sample은 진단 모드로 분리
+5. 남은 Go/Rust/Dart/C/C++ 실제 저장소 심층 검증 완료
 
-## Develop and verify
-
-```powershell
-npm run deadcode
-npm test -- --run
-npm run typecheck
-npm run build
-cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-cargo test --locked --manifest-path src-tauri/Cargo.toml
-```
-
-## 엔진 바이너리
-
-내부/릴리스 빌드는 엔진을 `src-tauri/engines`에서 Tauri resource로 포함합니다.
-
-- `src-tauri/engines/code-memory-language.exe`
-- `src-tauri/engines/database-memory.exe`
-
-설치 후 앱은 설치 디렉터리의 bundled resource를 우선 사용하므로 사용자가 PATH를 설정할 필요가 없습니다.
-
-로컬 개발 중에는 `BACKEND_VISUAL_MAP_ENGINE_DIR`로 엔진 폴더를 지정할 수 있습니다.
-
-엔진은 앱 내부 sidecar로만 사용합니다. Codex, Claude, 또는 다른 AI 도구에 MCP 서버로 자동 등록하지 않습니다.
-
-## 설치 파일 범위
-
-```powershell
-# 로컬 내부 검증용
-npm run build:internal
-
-# 공개 배포용: MIT 라이선스, 공개 엔진, 고지와 dependency inventory를 검증합니다.
-npm run tauri build
-```
-
-내부 설치본은 실행 중 `internal` 엔진 모드를 표시합니다. 이 저장소는 소스 공개와 로컬 빌드만 제공하며 Windows 설치 파일을 공식 배포하지 않습니다.
-
-### 제품 검증
-
-```powershell
-# 실제 Java, C#/.NET, Python/FastAPI + TypeScript monorepo를 고정 commit으로 검증
-npm run smoke:code-matrix
-
-# 로컬 검증 설치본의 형식, 엔진, notices, checksum 검증
-powershell -File scripts/release-smoke.ps1
-
-```
-
-제품 소스는 MIT입니다. 현재 코드는 `database-memory 0.2.0 / contract 2`의 고정 source commit과 candidate checksum을 사용하며 `releaseReady=false`로 공개 설치본 생성을 차단합니다. 공개 `v0.2.0` 바이너리를 게시하고 같은 checksum을 검증하기 전까지는 로컬/내부 빌드만 허용합니다.
-
-## 개인정보와 데이터 접근
-
-앱은 로컬 메타데이터 인덱싱을 기준으로 설계되어 있습니다.
-
-- DB row data를 읽지 않습니다.
-- DB 비밀번호/토큰/연결 secret을 워크스페이스 파일에 저장하지 않습니다.
-- DB 연결 문자열은 네트워크 DB 인덱싱 실행 중 세션 입력으로만 사용합니다.
-- 저장되는 파일은 workspace별 설정, content-addressed engine cache, 현재·이전 불변
-  generation SQLite, 통합 inventory snapshot SQLite입니다.
-- code-to-DB 관계는 직접 증거가 없는 한 후보(candidate)로 표시합니다. 확정 관계는 실행 호출에 직접 전달된 정적 SQL과 유일하게 식별된 테이블/컬럼이 있을 때만 만듭니다.
-- 코드 CALLS는 직접 FastAPI import 근거로 보강된 경우 또는 엔진 신뢰도 85% 이상만 확정 경로에 포함하며, 70~84%는 후보, 그 아래나 점수 없음은 미확인으로 분리합니다.
-
-## 제한사항
-
-- raw full graph를 그대로 렌더링하지 않습니다. 큰 프로젝트는 grouped/focused map으로 축약합니다.
-- 외부 DB smoke는 로컬 환경에 해당 DB와 드라이버/연결 문자열이 있을 때만 통과할 수 있습니다.
-- SQLite DDL 입력에 지원하지 않는 문법이 있으면 완전한 결과로 가장하지 않고 읽기를 실패 처리합니다.
-- 동적 SQL과 ORM 생성 쿼리는 직접 실행 근거로 확정하지 않으며 후보 또는 미확인으로 남깁니다.
-- 모든 provider를 포함한 내부 Demo installer는 검증했습니다. 코드 서명과
-  `releaseReady` manifest를 갖춘 공개 Windows 배포는 아직 차단되어 있습니다.
-- 현재 제품 목표는 Windows desktop입니다.
+세부 완료 조건은 [Engineering cleanup roadmap](docs/engineering-cleanup-roadmap.md)에 고정합니다.
 
 ## 문서
 
-- [문서 안내와 현재 기준](docs/README.md)
-- [2026-08-05 엔진·UI POC 검증 결과](docs/reports/poc-validation-2026-08-05.md)
-- [제품 지원 범위와 확정 근거 규칙](docs/product-support.md)
-- [Visual Map 코드 지능 계약](docs/contracts/visual-map-code-intelligence-contract.md)
-- [코드·DB 엔진 인덱스 데이터 계약](docs/contracts/engine-index-data-contract.md)
-- [공식 지원 스택](docs/contracts/visual-map-supported-stack-contract.md)
-- [3분 데모](docs/demo/backend-visual-map.demo.md)
-- [문제 해결](docs/troubleshooting.md)
-- [엔진 트러블슈팅 기록](docs/troubleshooting/code-memory-engine.md)
-- [보안·개인정보 경계](docs/security-privacy.md)
+- [문서 인덱스](docs/README.md)
+- [Runtime architecture](docs/architecture.md)
+- [Engineering cleanup roadmap](docs/engineering-cleanup-roadmap.md)
+- [Security and privacy](docs/security-privacy.md)
+- [Code Memory engine](code_memory/README.md)
+- [Database Memory engine](db_memory/README.md)
+
+## 라이선스
+
+[MIT](LICENSE) · 배포 시 [Third-party notices](THIRD_PARTY_NOTICES.md)를 함께 확인하세요.

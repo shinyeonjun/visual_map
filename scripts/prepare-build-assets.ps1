@@ -2,7 +2,7 @@ param()
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$internal = $env:BACKEND_VISUAL_MAP_BUILD_SCOPE -eq "internal"
+$internal = $env:CODEBASE_WORKSPACE_BUILD_SCOPE -eq "internal"
 
 function Invoke-Checked([string]$Label, [scriptblock]$Command) {
   Write-Output "CHECK: $Label"
@@ -38,7 +38,7 @@ try {
   if ($sourceCodeEngineHash -ne $bundledCodeEngineHash) {
     throw "Bundled code engine is stale. Expected source build $sourceCodeEngineHash but found $bundledCodeEngineHash."
   }
-  if ($internal -and $env:BACKEND_VISUAL_MAP_SKIP_PROVIDER_RESOURCES -eq "1") {
+  if ($internal -and $env:CODEBASE_WORKSPACE_SKIP_PROVIDER_RESOURCES -eq "1") {
     Write-Output "SKIP: managed language providers (internal CI build)"
   } elseif ($internal) {
     Invoke-Checked "existing managed language provider bundle" {

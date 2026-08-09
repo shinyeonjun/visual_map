@@ -15,82 +15,9 @@ pub(crate) fn parse_args_with_config(
         Some(command @ ("list-objects" | "find-objects" | "describe-object")) => {
             parse_object_command(command, args, &config_loader)
         }
-        Some("describe-table") => parse_describe_table_args(args, &config_loader),
-        Some("inventory") => parse_inventory_args(args, &config_loader),
-        Some("find-table") => parse_find_args("find-table", args, &config_loader),
-        Some("find-column") => parse_find_args("find-column", args, &config_loader),
-        Some("impact-analysis") => parse_traversal_args("impact-analysis", args, &config_loader),
-        Some("trace-relationships") => {
-            parse_traversal_args("trace-relationships", args, &config_loader)
-        }
         Some(command) => Err(format!("unknown command '{command}'")),
         None => Err(usage().to_owned()),
     }
-}
-
-fn parse_inventory_args(
-    mut args: impl Iterator<Item = String>,
-    config_loader: &impl Fn(&Path) -> Option<DatabaseMemoryConfig>,
-) -> Result<Command, String> {
-    let mut alias = None;
-    let mut offset = 0;
-    let mut limit = DEFAULT_INVENTORY_LIMIT;
-    let mut cache_path = None;
-    let mut config_path = None;
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--json" => {}
-            "--format" => {
-                let value = args.next().ok_or("missing value for --format")?;
-                if parse_format(&value)? != OutputFormat::Json {
-                    return Err("inventory supports JSON output only".to_owned());
-                }
-            }
-            "--limit" => {
-                let value = args.next().ok_or("missing value for --limit")?;
-                limit = value
-                    .parse()
-                    .map_err(|_| format!("invalid inventory limit '{value}'"))?;
-                if limit == 0 {
-                    return Err("inventory limit must be at least 1".to_owned());
-                }
-            }
-            "--offset" => {
-                let value = args.next().ok_or("missing value for --offset")?;
-                offset = value
-                    .parse()
-                    .map_err(|_| format!("invalid inventory offset '{value}'"))?;
-            }
-            "--cache-path" => {
-                cache_path = Some(PathBuf::from(
-                    args.next().ok_or("missing value for --cache-path")?,
-                ));
-            }
-            "--config-path" => {
-                config_path = Some(PathBuf::from(
-                    args.next().ok_or("missing value for --config-path")?,
-                ));
-            }
-            _ if arg.starts_with("--") => {
-                return Err(format!("unknown inventory flag '{arg}'"));
-            }
-            _ if alias.is_none() => alias = Some(arg),
-            _ => return Err(inventory_usage().to_owned()),
-        }
-    }
-
-    let alias = alias.ok_or_else(|| inventory_usage().to_owned())?;
-    let config_path = config_path.unwrap_or_else(default_config_file_path);
-    let profile = profile_for_alias(Some(&alias), &config_path, config_loader);
-    Ok(Command::Inventory {
-        alias,
-        offset,
-        limit,
-        cache_path: cache_path
-            .or_else(|| profile.and_then(|profile| profile.cache_path))
-            .unwrap_or_else(default_cache_path),
-    })
 }
 
 fn parse_contract_args(mut args: impl Iterator<Item = String>) -> Result<Command, String> {
@@ -362,4 +289,3 @@ fn parse_read_command_args(
             .unwrap_or_else(default_cache_path),
     })
 }
-

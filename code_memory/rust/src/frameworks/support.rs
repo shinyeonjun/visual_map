@@ -15,7 +15,12 @@ pub(crate) fn implementation_file_score(symbol: &str) -> u8 {
 }
 
 pub(crate) fn symbol_short_name(symbol: &str) -> &str {
-    let symbol = symbol.split('@').next().unwrap_or(symbol);
+    // LSP fallback identities end in `@line:column`, while valid SCIP
+    // package and property names may contain `@` anywhere (for example the
+    // npm scope `@nestjs/core`). Splitting at the first `@` made every symbol
+    // in a scoped npm package look like the short name `npm`, so exact route
+    // and service binding fell through to unrelated project-wide matches.
+    let symbol = strip_lsp_location_suffix(symbol);
     let property_descriptor = symbol.ends_with(':');
     let symbol = symbol.trim_end_matches(['.', ':', '/']);
     let symbol = symbol.trim_end_matches('#');
@@ -24,6 +29,24 @@ pub(crate) fn symbol_short_name(symbol: &str) -> &str {
     let symbol = symbol.split_whitespace().last().unwrap_or(symbol);
     if property_descriptor {
         symbol.trim_end_matches(char::is_numeric)
+    } else {
+        symbol
+    }
+}
+
+fn strip_lsp_location_suffix(symbol: &str) -> &str {
+    let Some((identity, suffix)) = symbol.rsplit_once('@') else {
+        return symbol;
+    };
+    let Some((line, column)) = suffix.split_once(':') else {
+        return symbol;
+    };
+    if !line.is_empty()
+        && !column.is_empty()
+        && line.bytes().all(|value| value.is_ascii_digit())
+        && column.bytes().all(|value| value.is_ascii_digit())
+    {
+        identity
     } else {
         symbol
     }

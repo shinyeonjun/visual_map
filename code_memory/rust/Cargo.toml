@@ -2,16 +2,31 @@
 name = "code-memory-language"
 version = "0.1.0"
 edition = "2021"
-description = "SCIP and native-LSP bridge for Visual Map code_memory"
+description = "SCIP and native-LSP bridge for Codebase Workspace"
 license = "Apache-2.0"
 
 [dependencies]
+codebase-fact-model = { path = "../../crates/fact-model" }
 flate2 = "1"
+globset = "0.4"
+ignore = "0.4.33"
 protobuf = "3.7.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 scip = "0.9.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+tree-sitter = "0.25.10"
+tree-sitter-c = "0.24.2"
+tree-sitter-c-sharp = "0.23.5"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-dart = "0.2.0"
+tree-sitter-go = "0.25.0"
+tree-sitter-java = "0.23.5"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-python = "0.25.0"
+tree-sitter-rust = "0.24.2"
+tree-sitter-typescript = "0.23.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [

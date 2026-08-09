@@ -15,7 +15,7 @@ if ([string]::IsNullOrWhiteSpace($Bridge)) { $Bridge = Join-Path $scriptRoot '..
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     # Keep staged source outside the bridge's conventional build-directory
     # exclusions; callers can still provide an explicit output path.
-    $OutputRoot = Join-Path ([IO.Path]::GetTempPath()) 'visual-map-external-gate'
+    $OutputRoot = Join-Path ([IO.Path]::GetTempPath()) 'codebase-workspace-external-gate'
 }
 $ProjectRoot = (Resolve-Path $ProjectRoot).Path
 $Root = (Resolve-Path $Root).Path
@@ -72,7 +72,7 @@ function Read-Architecture([string]$Path) {
     $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
     if ($null -ne $pwsh) {
         $literalPath = $Path.Replace("'", "''")
-        $code = '$architecture = Get-Content -LiteralPath ' + "'" + $literalPath + "'" + ' -Raw | ConvertFrom-Json -Depth 1000; $architecture | Select-Object nodes,edges,flows,diagnostics | ConvertTo-Json -Depth 100'
+        $code = '$architecture = Get-Content -LiteralPath ' + "'" + $literalPath + "'" + ' -Raw | ConvertFrom-Json -Depth 1000; $architecture | Select-Object nodes,edges,diagnostics | ConvertTo-Json -Depth 100'
         return ((& $pwsh.Source -NoProfile -Command $code) -join [Environment]::NewLine) | ConvertFrom-Json
     }
     return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
@@ -109,7 +109,8 @@ Require ($routes.Count -ge 50) "expected at least 50 FastAPI routes, found $($ro
 Require (@($routes | Where-Object { [string]::IsNullOrWhiteSpace($_.symbol) }).Count -eq 0) 'a FastAPI route has no resolved handler symbol'
 Require ($handles.Count -eq $routes.Count) "FastAPI HANDLES count $($handles.Count) does not equal route count $($routes.Count)"
 Require (@($serverArchitecture.nodes | Where-Object kind -eq 'MODULE').Count -gt 0) 'server architecture has no modules'
-Require (@($serverArchitecture.flows).Count -gt 0) 'server architecture has no route flows'
+Require (@($serverArchitecture.nodes | Where-Object { $_.kind -eq 'ENDPOINT' -and $_.properties.execution_root -eq 'true' }).Count -gt 0) 'server architecture has no verified execution roots'
+Require (@($serverArchitecture.edges | Where-Object kind -eq 'ENTRYPOINT_TO').Count -gt 0) 'server architecture has no entrypoint bindings'
 Write-Host "PASS server-routes: routes=$($routes.Count) handles=$($handles.Count)"
 
 $webStage = Join-Path $OutputRoot 'web'

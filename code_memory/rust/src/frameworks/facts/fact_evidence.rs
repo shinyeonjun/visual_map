@@ -1,5 +1,34 @@
 pub(crate) fn output_evidence(pack: &FrameworkPack, output: &str, line: &str) -> Option<String> {
     let line = line.trim();
+    if output == "MIDDLEWARE"
+        && matches!(pack.language.as_str(), "javascript" | "typescript")
+    {
+        match pack.id.as_str() {
+            // These four packs share a repository-level candidate pool, but
+            // their middleware syntax is not interchangeable. In particular,
+            // Nest decorators must never become Express/Fastify facts merely
+            // because those adapters are dependencies of the same monorepo.
+            "nestjs" => {
+                return first_marker(
+                    line,
+                    &[
+                        "@UseGuards(",
+                        "@UseInterceptors(",
+                        "@UsePipes(",
+                        "@UseFilters(",
+                        "useGlobalGuards(",
+                        "useGlobalInterceptors(",
+                        "useGlobalPipes(",
+                        "useGlobalFilters(",
+                        "consumer.apply(",
+                    ],
+                );
+            }
+            "express" | "koa" => return first_marker(line, &[".use("]),
+            "fastify" => return first_marker(line, &["addHook("]),
+            _ => {}
+        }
+    }
     if pack.id == "react" && output == "COMPONENT" {
         return react_component_evidence(line);
     }
@@ -13,13 +42,6 @@ pub(crate) fn output_evidence(pack: &FrameworkPack, output: &str, line: &str) ->
         // defineComponent declares a component; it is not render evidence
         // unless the line contains a template/render body.
         return first_marker(line, &["template:", "render(", "return <"]);
-    }
-    if pack.id == "api-platform" && output == "SCHEMA" {
-        // API Platform schema facts require its resource declaration; a
-        // generic PHP \`Entity\` type is not an API Platform resource.
-        return line
-            .contains("ApiResource")
-            .then_some("ApiResource".to_string());
     }
     if pack.id == "tauri" && output == "ASYNC_CALLS" {
         return line.contains("invoke(").then_some("invoke(".to_string());
@@ -167,7 +189,6 @@ pub(crate) fn output_evidence(pack: &FrameworkPack, output: &str, line: &str) ->
                 ".with(",
                 "Middleware",
                 "Pipeline",
-                "Rack::Builder",
                 "Filter",
                 "filter(",
                 "ADD_FILTER",
@@ -452,11 +473,32 @@ pub(crate) fn fact_target_name(output: &str, line: &str) -> Option<String> {
                 || (line.contains("def ") && line.contains("middleware("))
             {
                 None
+            } else if line.contains("addHook(") && line.contains("=>") {
+                // The final identifier on an inline arrow signature is a
+                // parameter (commonly `done`), not the hook implementation.
+                // Keep the hook fact and abstain from inventing a target.
+                None
             } else {
                 call_last_argument_handler(line, ".use(")
+                    .or_else(|| call_last_argument_handler(line, ".addHook("))
                     .or_else(|| generic_argument_after(line, &["UseMiddleware<"]))
                     .or_else(|| {
-                        constructed_type_after(line, &[".addMiddleware(", "->addMiddleware("])
+                        constructed_type_after(
+                            line,
+                            &[
+                                ".addMiddleware(",
+                                "->addMiddleware(",
+                                "@UseGuards(",
+                                "@UseInterceptors(",
+                                "@UsePipes(",
+                                "@UseFilters(",
+                                "useGlobalGuards(",
+                                "useGlobalInterceptors(",
+                                "useGlobalPipes(",
+                                "useGlobalFilters(",
+                                "consumer.apply(",
+                            ],
+                        )
                     })
                     .or_else(|| {
                         argument_after(
@@ -473,6 +515,12 @@ pub(crate) fn fact_target_name(output: &str, line: &str) -> Option<String> {
                                 "@UseGuards(",
                                 "@UseInterceptors(",
                                 "@UsePipes(",
+                                "@UseFilters(",
+                                "useGlobalGuards(",
+                                "useGlobalInterceptors(",
+                                "useGlobalPipes(",
+                                "useGlobalFilters(",
+                                "consumer.apply(",
                                 "before_request(",
                                 "after_request(",
                                 "add_middleware(",

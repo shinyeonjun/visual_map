@@ -1,14 +1,11 @@
 mod build_graph;
-mod ci_evidence;
 mod contracts;
 mod database_assets;
 mod deployment;
 mod discovery;
-mod frameworks;
 mod messaging;
 mod model;
 mod revision;
-mod telemetry;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -21,58 +18,42 @@ use model::{CollectionDiagnostic, CollectionMode, CollectionStatus, CollectorRes
 #[derive(Clone, Copy)]
 enum CollectorTask {
     BuildGraph,
-    CiEvidence,
-    Frameworks,
     Contracts,
     DatabaseAssets,
     Deployment,
     Messaging,
     Revision,
-    Telemetry,
 }
 
 impl CollectorTask {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 6] = [
         Self::BuildGraph,
-        Self::CiEvidence,
-        Self::Frameworks,
         Self::Contracts,
         Self::DatabaseAssets,
         Self::Deployment,
         Self::Messaging,
         Self::Revision,
-        Self::Telemetry,
     ];
 
     fn collect(
         self,
         root: &Path,
-        pack_root: &Path,
         providers_root: Option<&Path>,
         snapshot: &crate::SourceSnapshot,
     ) -> CollectorResult {
         match self {
             Self::BuildGraph => build_graph::collect(root, providers_root),
-            Self::CiEvidence => ci_evidence::collect(root),
-            Self::Frameworks => frameworks::collect(root, pack_root, snapshot),
             Self::Contracts => contracts::collect(root),
             Self::DatabaseAssets => database_assets::collect(root),
             Self::Deployment => deployment::collect(root),
             Self::Messaging => messaging::collect(snapshot),
             Self::Revision => revision::collect(root, providers_root),
-            Self::Telemetry => telemetry::collect(root),
         }
     }
 
     fn failed(self, message: String) -> CollectorResult {
         let (id, capability, mode) = match self {
             Self::BuildGraph => ("build-graph", "build-graph", CollectionMode::Passive),
-            Self::CiEvidence => (
-                "ci-evidence",
-                "verification-evidence",
-                CollectionMode::Passive,
-            ),
-            Self::Frameworks => ("frameworks", "framework-semantics", CollectionMode::Passive),
             Self::Contracts => ("contracts", "api-contracts", CollectionMode::Passive),
             Self::DatabaseAssets => (
                 "database-assets",
@@ -86,7 +67,6 @@ impl CollectorTask {
                 "source-revision",
                 CollectionMode::ToolAssisted,
             ),
-            Self::Telemetry => ("telemetry", "runtime-traces", CollectionMode::Passive),
         };
         let mut result = CollectorResult::new(id, capability, mode);
         result.summary.status = CollectionStatus::Failed;
@@ -103,7 +83,6 @@ impl CollectorTask {
 
 pub(crate) fn collect_project(
     root: &Path,
-    pack_root: &Path,
     providers_root: Option<&Path>,
 ) -> Result<CollectionReport, String> {
     let root = crate::source::canonical_project_root(root)?;
@@ -116,7 +95,7 @@ pub(crate) fn collect_project(
     for result in bounded_map(CollectorTask::ALL.len(), workers, |ordinal| {
         let task = CollectorTask::ALL[ordinal];
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            task.collect(&root, pack_root, providers_root, &snapshot)
+            task.collect(&root, providers_root, &snapshot)
         }))
         .unwrap_or_else(|payload| task.failed(panic_message(payload)))
     }) {

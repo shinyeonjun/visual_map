@@ -192,27 +192,50 @@ struct AnalysisUnitRun {
     elapsed_ms: u128,
 }
 
+fn record_analysis_unit_run(
+    runs: &mut HashMap<(String, String), AnalysisUnitRun>,
+    language: &str,
+    unit_id: &str,
+    run: AnalysisUnitRun,
+) {
+    let key = (language.to_string(), unit_id.to_string());
+    runs.entry(key)
+        .and_modify(|existing| {
+            if existing.provider != run.provider {
+                existing.provider = "mixed";
+            }
+            if existing.execution != run.execution {
+                existing.execution = "mixed";
+            }
+            existing.elapsed_ms = existing.elapsed_ms.saturating_add(run.elapsed_ms);
+        })
+        .or_insert(run);
+}
+
 fn build_analysis_units(
-    project_root: &Path,
-    plans: &[(String, String, PathBuf, Vec<PathBuf>, usize)],
+    plan: &codebase_fact_model::analysis_plan::AnalysisPlan,
     coverage: &[FileCoverageOutput],
     runs: &HashMap<(String, String), AnalysisUnitRun>,
 ) -> Vec<AnalysisUnitOutput> {
-    let mut units = plans
+    let mut paths_by_unit = HashMap::<String, HashSet<String>>::new();
+    for assignment in &plan.assignments {
+        for unit_id in &assignment.unit_ids {
+            paths_by_unit
+                .entry(unit_id.as_str().to_string())
+                .or_default()
+                .insert(assignment.path.as_str().to_string());
+        }
+    }
+    let mut units = plan
+        .units
         .iter()
-        .map(|(id, language, root, files, project_excluded)| {
-            let paths: HashSet<String> = files
-                .iter()
-                .map(|file| {
-                    file.strip_prefix(project_root)
-                        .unwrap_or(file)
-                        .to_string_lossy()
-                        .replace('\\', "/")
-                })
-                .collect();
+        .map(|unit| {
+            let id = unit.id.as_str().to_string();
+            let language = unit.language.as_str().to_string();
+            let paths = paths_by_unit.get(&id).cloned().unwrap_or_default();
             let entries: Vec<&FileCoverageOutput> = coverage
                 .iter()
-                .filter(|entry| entry.language == *language && paths.contains(&entry.path))
+                .filter(|entry| entry.language == language && paths.contains(&entry.path))
                 .collect();
             let indexed = entries
                 .iter()
@@ -226,11 +249,11 @@ fn build_analysis_units(
                 .iter()
                 .filter(|entry| entry.status == "missing")
                 .count();
-            let status = if missing == 0 && excluded == 0 && *project_excluded == 0 {
+            let status = if missing == 0 && excluded == 0 && entries.len() == paths.len() {
                 "indexed"
             } else if indexed > 0 {
                 "indexed-partial"
-            } else if missing == 0 && excluded > 0 {
+            } else if missing == 0 && excluded > 0 && entries.len() == paths.len() {
                 "excluded"
             } else {
                 "provider-failed"
@@ -248,13 +271,13 @@ fn build_analysis_units(
                     elapsed_ms: 0,
                 });
             AnalysisUnitOutput {
-                id: id.clone(),
-                language: language.clone(),
-                root: root.to_string_lossy().into_owned(),
-                files_found: files.len() + *project_excluded,
+                id,
+                language,
+                root: unit.root.as_str().to_string(),
+                files_found: paths.len(),
                 files_indexed: indexed,
-                files_excluded: excluded + *project_excluded,
-                files_missing: missing,
+                files_excluded: excluded,
+                files_missing: missing + paths.len().saturating_sub(entries.len()),
                 status,
                 provider: run.provider,
                 execution: run.execution,
@@ -343,12 +366,12 @@ fn prepare_typescript_units(
     Ok(())
 }
 
-fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
+fn analyze_provider_job(job: ProviderJob) -> Vec<ProviderUnitBatch> {
     if job.members.len() == 1 {
         let member = &job.members[0];
         let mut analysis = analyze_language(member);
         analysis.project_excluded_files = member.project_excluded_files;
-        rebase_language_analysis(&mut analysis, &member.root, &member.project_root);
+        rebase_provider_batch(&mut analysis, &member.root, &member.project_root);
         return vec![analysis];
     }
 
@@ -358,7 +381,15 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
         .work
         .join(format!("{}.scip", job.key.replace(':', "_")));
     let _ = fs::remove_file(&scip_path);
-    let is_clangd_job = job.key.starts_with("provider:clangd-c-cpp:");
+    let is_clangd_job = job.key.starts_with("provider:clangd:");
+    let is_batched_typescript_job = job
+        .key
+        .starts_with("provider:scip-typescript:configured:");
+    let provider_execution_root = if is_batched_typescript_job {
+        &primary.project_root
+    } else {
+        &primary.root
+    };
     if is_clangd_job && !has_compile_context_for_files(&primary.root, &files) {
         return job
             .members
@@ -378,26 +409,62 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
         run_native_lsp_with_server(
             &primary.lang,
             "clangd",
-            &primary.root,
+            ProviderRoots::new(&primary.project_root, &primary.root),
             &scip_path,
             primary.providers_root.as_deref(),
             &files,
+        )
+    } else if is_batched_typescript_job {
+        let provider_configs = job
+            .members
+            .iter()
+            .filter_map(|member| member.provider_config.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        run_scip_indexer_with_configs(
+            &primary.lang,
+            ProviderRoots::new(&primary.project_root, provider_execution_root),
+            &scip_path,
+            primary.providers_root.as_deref(),
+            &provider_configs,
+            &files,
+            primary.max_project_source_file_bytes,
         )
     } else {
         run_scip_indexer(
             &primary.lang,
-            &primary.root,
+            ProviderRoots::new(&primary.project_root, &primary.root),
             &scip_path,
             primary.providers_root.as_deref(),
             primary.provider_config.as_deref(),
             &files,
-            primary.project_config_digest,
+            primary.max_project_source_file_bytes,
         )
     };
 
-    let provider_diagnostics = match result {
-        Ok(diagnostics) => diagnostics,
+    let provider_outcome = match result {
+        Ok(outcome) => outcome,
         Err(error) => {
+            if is_batched_typescript_job {
+                // One malformed project must not downgrade unrelated projects.
+                // Retry the established exact per-config path; each member can
+                // then succeed or fail independently with its own receipt.
+                return job
+                    .members
+                    .iter()
+                    .map(|member| {
+                        let mut analysis = analyze_language(member);
+                        analysis.project_excluded_files = member.project_excluded_files;
+                        rebase_provider_batch(
+                            &mut analysis,
+                            &member.root,
+                            &member.project_root,
+                        );
+                        analysis
+                    })
+                    .collect();
+            }
             return job
                 .members
                 .iter()
@@ -412,12 +479,19 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
                 .collect();
         }
     };
+    let provider_diagnostics = provider_outcome.diagnostics;
+    let execution_context = provider_outcome.execution_context;
 
     let parsed = read_scip(
         &scip_path,
         primary.lang.id,
-        &primary.root,
-        &allowed_document_paths(&primary.root, &files),
+        if is_clangd_job {
+            codebase_fact_model::analysis::ProviderProtocol::LanguageServerProtocol
+        } else {
+            codebase_fact_model::analysis::ProviderProtocol::Scip
+        },
+        provider_execution_root,
+        &allowed_document_paths(provider_execution_root, &files),
         Some(&primary.call_ranges),
     );
     let _ = fs::remove_file(&scip_path);
@@ -457,7 +531,40 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
     job.members
         .iter()
         .map(|member| {
-            let allowed = allowed_document_paths(&member.root, &member.files);
+            let member_execution_context = if is_batched_typescript_job {
+                let Some(config) = member.provider_config.as_deref() else {
+                    return language_failure(
+                        member.lang,
+                        "scip",
+                        &member.files,
+                        "batched TypeScript project omitted its planned config".to_string(),
+                    );
+                };
+                match configured_scip_execution_context(
+                    &member.lang,
+                    ProviderRoots::new(&member.project_root, &member.root),
+                    config,
+                    &member.files,
+                ) {
+                    Ok(context) => context,
+                    Err(error) => {
+                        return language_failure(
+                            member.lang,
+                            "scip",
+                            &member.files,
+                            format!("cannot reconstruct batched provider context: {error}"),
+                        )
+                    }
+                }
+            } else {
+                execution_context.clone()
+            };
+            let member_payload_root = if is_batched_typescript_job {
+                &member.project_root
+            } else {
+                &member.root
+            };
+            let allowed = allowed_document_paths(member_payload_root, &member.files);
             let mut documents: Vec<DocumentOutput> = allowed
                 .iter()
                 .filter_map(|path| documents_by_path.get(path))
@@ -497,7 +604,7 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
                 language_analysis_from_index(
                     member.lang,
                     provider,
-                    &member.root,
+                    member_payload_root,
                     &member.files,
                     documents,
                     relations,
@@ -509,10 +616,11 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
             if provider_partial && analysis.language.status == "indexed" {
                 analysis.language.status = "indexed-partial";
             }
+            analysis.execution_context = member_execution_context;
             let member_paths: HashSet<String> = member
                 .files
                 .iter()
-                .filter_map(|file| file.strip_prefix(&primary.root).ok())
+                .filter_map(|file| file.strip_prefix(provider_execution_root).ok())
                 .map(|path| path.to_string_lossy().replace('\\', "/"))
                 .collect();
             analysis.diagnostics.extend(
@@ -530,6 +638,12 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
                         diagnostic
                     }),
             );
+            if is_batched_typescript_job && member.root != member.project_root {
+                // The shared SCIP process emits project-root-relative paths.
+                // Member caches retain their established module-local shape so
+                // cache hits rebase exactly as before the batching change.
+                rebase_provider_batch(&mut analysis, &member.project_root, &member.root);
+            }
             write_language_cache(
                 &member.root,
                 member.lang,
@@ -537,8 +651,9 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<LanguageAnalysis> {
                 &analysis.documents,
                 &analysis.relations,
                 &analysis.diagnostics,
+                &analysis.execution_context,
             );
-            rebase_language_analysis(&mut analysis, &member.root, &member.project_root);
+            rebase_provider_batch(&mut analysis, &member.root, &member.project_root);
             analysis.project_excluded_files = member.project_excluded_files;
             analysis
         })

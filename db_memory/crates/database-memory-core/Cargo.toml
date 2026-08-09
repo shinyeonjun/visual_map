@@ -17,6 +17,7 @@ bench-support = []
 odbc = ["dep:odbc-api"]
 
 [dependencies]
+codebase-fact-model = { path = "../../../crates/fact-model" }
 rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 postgres = "0.19"
 postgres-native-tls = "0.5"

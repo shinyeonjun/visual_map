@@ -1,0 +1,18 @@
+[package]
+name = "codebase-semantic-model"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Provider-neutral AI semantic-analysis contracts for Codebase Workspace"
+
+[lib]
+name = "codebase_semantic_model"
+path = "src/lib.rs"
+
+[dependencies]
+codebase-fact-model = { path = "../fact-model" }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json = "1"

@@ -110,8 +110,6 @@ impl SourcePathIndex {
     }
 }
 
-pub(crate) type PhpNamespaceIndex = HashMap<String, String>;
-
 pub(crate) struct EdgeDraft {
     pub(crate) from: String,
     pub(crate) to: String,
@@ -127,10 +125,11 @@ pub(crate) struct ArchitectureOutput {
     pub(crate) project_root: String,
     pub(crate) provider_provenance: Vec<crate::ProviderProvenance>,
     pub(crate) languages: Vec<ArchitectureLanguageSummary>,
+    pub(crate) coverage: Vec<crate::FileCoverageOutput>,
+    pub(crate) analysis_units: Vec<crate::AnalysisUnitOutput>,
     pub(crate) frameworks: Vec<ArchitectureFrameworkSummary>,
     pub(crate) nodes: Vec<ArchitectureNode>,
     pub(crate) edges: Vec<ArchitectureEdge>,
-    pub(crate) flows: Vec<ArchitectureFlow>,
     pub(crate) diagnostics: Vec<ArchitectureDiagnostic>,
 }
 
@@ -194,18 +193,6 @@ pub(crate) struct ArchitectureEvidence {
     pub(crate) path: String,
     pub(crate) range: Vec<i32>,
     pub(crate) note: Option<String>,
-}
-
-#[derive(Serialize)]
-pub(crate) struct ArchitectureFlow {
-    pub(crate) id: String,
-    pub(crate) kind: String,
-    pub(crate) label: String,
-    pub(crate) entrypoint: String,
-    pub(crate) node_ids: Vec<String>,
-    pub(crate) edge_ids: Vec<String>,
-    pub(crate) truncated: bool,
-    pub(crate) omitted_node_count: usize,
 }
 
 #[derive(Serialize)]

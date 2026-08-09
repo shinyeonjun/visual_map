@@ -1,0 +1,163 @@
+{
+  "schema": "codebase-workspace.import-ground-truth.v1",
+  "fixture": "import-ground-truth",
+  "review": {
+    "reviewedAt": "2026-08-08",
+    "reviewer": "Codex manual source review",
+    "scope": "Every explicit source import/export site in the pinned fixture, including internal, external, unresolved, and conditional forms",
+    "countingRule": "One explicit source statement is one site; imported member lists do not multiply graph relations; comments and non-literal dynamic loads are forbidden outputs"
+  },
+  "edgeCasePolicy": {
+    "ambiguityLanguages": ["python", "java", "csharp"],
+    "unresolvedLanguages": ["typescript", "javascript", "python", "java", "csharp", "c", "cpp", "go", "rust", "dart"],
+    "rule": "Require ambiguity only where more than one language-valid static candidate can exist without enough ordering metadata; all active languages require at least one fail-closed unresolved or ambiguous site"
+  },
+  "sourceFiles": [
+    { "path": ".gitignore", "sha256": "a29bd8c60fb4f64f378db01de1aaec54e6b76c0e1508ba733d698de231eadbb4" },
+    { "path": "c-family/compile_commands.json", "sha256": "f3f8c244ee59bb86c41037f16978725b9af9ec004c231300df230f911ac59426" },
+    { "path": "c-family/include/local.h", "sha256": "ed6ec615008cf303c91b59cb0a892b16347d7c55f34af66132d8339d2a6bb4e8" },
+    { "path": "c-family/include/local.hpp", "sha256": "57d7c2662772c7cd4161ecb439ba453bac00610a4032d9431b7997c8ff19a4b4" },
+    { "path": "c-family/main.c", "sha256": "c49bcc4202163a6c47e561640346d79461af2e14508ca68618d0d51a3503860d" },
+    { "path": "c-family/main.cpp", "sha256": "b59c9a6b94dc7af4798bdc8771efeedadc6017cd052a534c07b3d19ac279f88a" },
+    { "path": "csharp/import-ground-truth.csproj", "sha256": "1c33313c5d9d1917f7f5cc49a95a426ae017d21583cd4dd0ed2a8b3ea4e48dfb" },
+    { "path": "csharp/Local.cs", "sha256": "e84affff567b48b3e2ee17ee47f87eac61e6b4fc1c7ecf5bb0daff06ec4bbf94" },
+    { "path": "csharp/left/left.csproj", "sha256": "e44c6aa5d69d0526c6b7961331a2020122c313ee9ea087d1daa3f4e7cab34bad" },
+    { "path": "csharp/left/Shared.cs", "sha256": "f8700dbd21710dfd8d91e77e5a6002d853d617e437d83a309a83e5249bbafd5a" },
+    { "path": "csharp/Program.cs", "sha256": "16a3b04f566ca555ae18809f73d692f7778cd51b634909c6796e2a8f903755ed" },
+    { "path": "csharp/right/right.csproj", "sha256": "e44c6aa5d69d0526c6b7961331a2020122c313ee9ea087d1daa3f4e7cab34bad" },
+    { "path": "csharp/right/Shared.cs", "sha256": "9ef25713b23337e2b7c5687313bae2cc26cc33e4fc1ddd6bd2f4a330d06fbf2b" },
+    { "path": "dart/lib/io.dart", "sha256": "fdf645be295eb8df30649414927d8e953cbe35e916baa9c19736aa6467841fbb" },
+    { "path": "dart/lib/local.dart", "sha256": "3d60128a59e8c382fe48d2a8a79bae709773e3840c0522d13c989c7729076ff5" },
+    { "path": "dart/lib/main.dart", "sha256": "36fca284257315cbd08f22fafd26b3eaa640c23c907c445e6678319fa540877e" },
+    { "path": "dart/lib/stub.dart", "sha256": "35640947b629c54d120a470a2252a495408beaf60f8f7c0324f0ebc03af01c17" },
+    { "path": "dart/pubspec.yaml", "sha256": "18276b2f653b1b9414ef65652f68b71a656abbe3f273f27ed561eae9f11582aa" },
+    { "path": "go/go.mod", "sha256": "426bcb22ecd68482038e696566aa4e52f3122de968655292f8912845fb0bdb64" },
+    { "path": "go/local/local.go", "sha256": "825e75a444a0927d031de6610c0c17afa3488daf1fcdc2a23d6b623a18e6411f" },
+    { "path": "go/main.go", "sha256": "1ce4712515fb7fbb6910b711aa8cfe04a33a480ceb2e8030bcbd9f7017cf082c" },
+    { "path": "java/pom.xml", "sha256": "2c7469eba1f02ac2837f7403dae986905ac09ada2a2f4b5cf53a942c08f69e96" },
+    { "path": "java/left/pom.xml", "sha256": "9cb13e600b1a4ecab832ea4000491f55231d0c0d9eb1d8bc30382e14b689907d" },
+    { "path": "java/left/src/main/java/example/shared/Left.java", "sha256": "b95df508aed433ed347a9b51116d9b0dea8490c4588a1d8f5fa29fe4dcb881c7" },
+    { "path": "java/right/pom.xml", "sha256": "8c6737beebe021173a1b936f0bbf901a3a88910eeba38f7bc4d3d5793a5335fa" },
+    { "path": "java/right/src/main/java/example/shared/Right.java", "sha256": "8c466391f35b4e7e55bb65dc7ea452eae5625035278b8067de041d34b3f825be" },
+    { "path": "java/src/main/java/example/imports/LocalType.java", "sha256": "e3ae1d5ef813523fbba113fb173dc81016026a3459924f9e668b38a47696b73a" },
+    { "path": "java/src/main/java/example/imports/Main.java", "sha256": "e9dea7e83917a2d7539aea31895bb5b5d0803f4ee29feb28fb965472ebb43084" },
+    { "path": "javascript/local.js", "sha256": "1b120c1010240881c2867a0ec5d2f8f3f9f15f2feb023b3740e6bb3b823a9db8" },
+    { "path": "javascript/main.js", "sha256": "92db1bca872b1345cf3944c8654fd8e9ed026c4cb8959fd5e51d6c1e4f9481d9" },
+    { "path": "javascript/tsconfig.json", "sha256": "0f0668f88cb95fb4120a0c10a09537c864466454e3e08dbf21f5905b9b3fbbaf" },
+    { "path": "python/pkg/__init__.py", "sha256": "03472f0b459bf0a97eb1327674c442cc754a067564844879e6650ca80b3b96d1" },
+    { "path": "python/pkg/local.py", "sha256": "a0f4b4c2577699103e3deeb3ef96ddec128d3a5bcc2baf2c80e83f66c22cf832" },
+    { "path": "python/pkg/main.py", "sha256": "33337dfb3b443e2f79b24c83571682934cc5b196bdcc93abdaf0ec30763d804c" },
+    { "path": "python/left/pyproject.toml", "sha256": "75b103d6d24260ddb7663f243853052727f584c9bf567ad00c41cbc8b889dfcc" },
+    { "path": "python/left/shared.py", "sha256": "4d728162c0c2340f8d8564554cac86069d775114b5d49f79149e6f40b2eadf70" },
+    { "path": "python/pyproject.toml", "sha256": "404d62494e3223fce532e1b02d78431a9c7e81fc99472d7feb4c11a6d6de58b7" },
+    { "path": "python/right/pyproject.toml", "sha256": "3c48a5ab00ee6331c2bf7916cef47779c9d7f5c98737921a0c971bf5efadb04d" },
+    { "path": "python/right/shared.py", "sha256": "38e99dd6fb2e6d3b32e0edb0e7c3791b010ccb1cd2b28f943145946b78c7d106" },
+    { "path": "rust/Cargo.toml", "sha256": "8687584e3eceab807c631716285ca790a690214b48e0137f22bd32e153c7c7eb" },
+    { "path": "rust/src/local.rs", "sha256": "9d2da97ce783c0a9e3823d9b5ced1456b826a44b7e692d47c07ca4bd1204028b" },
+    { "path": "rust/src/main.rs", "sha256": "4b1ad8a7da34e302f5be5629f6265a04edf9dd4914c62229e823d7a587521981" },
+    { "path": "typescript/src/local.ts", "sha256": "52f9b76439da04b7a7c18d2fd11d600f8ff3a0721c7dadc0f346516a56818b77" },
+    { "path": "typescript/src/main.ts", "sha256": "e43324c638e97d851cf823aabb66c3f94e207cb9f920ce46026693e4f3bcc97f" },
+    { "path": "typescript/tsconfig.json", "sha256": "379f71cf2584b0a984cf82c718b3d3503e306421b783d6eaf16bcac7713b588b" }
+  ],
+  "languages": [
+    {
+      "language": "typescript",
+      "forbiddenSpecifiers": ["dynamicPath", "./commented"],
+      "sites": [
+        { "id": "ts-internal", "path": "typescript/src/main.ts", "line": 0, "token": "./local", "capability": "imports", "specifier": "./local", "outcome": "internal", "target": "file:typescript/src/local.ts", "resolutionMethod": "project_model" },
+        { "id": "ts-external", "path": "typescript/src/main.ts", "line": 1, "token": "node:fs", "capability": "imports", "specifier": "node:fs", "outcome": "known_external" },
+        { "id": "ts-unresolved", "path": "typescript/src/main.ts", "line": 2, "token": "./missing", "capability": "imports", "specifier": "./missing", "outcome": "unresolved", "gapCode": "unresolved_target" },
+        { "id": "ts-export", "path": "typescript/src/main.ts", "line": 3, "token": "./local", "capability": "exports", "specifier": "./local", "outcome": "internal", "target": "file:typescript/src/local.ts", "resolutionMethod": "project_model" }
+      ]
+    },
+    {
+      "language": "javascript",
+      "forbiddenSpecifiers": ["dynamicPath", "./commented"],
+      "sites": [
+        { "id": "js-internal", "path": "javascript/main.js", "line": 0, "token": "./local", "capability": "imports", "specifier": "./local", "outcome": "internal", "target": "file:javascript/local.js", "resolutionMethod": "project_model" },
+        { "id": "js-external", "path": "javascript/main.js", "line": 1, "token": "\"fs\"", "capability": "imports", "specifier": "fs", "outcome": "known_external" },
+        { "id": "js-unresolved", "path": "javascript/main.js", "line": 2, "token": "./missing", "capability": "imports", "specifier": "./missing", "outcome": "unresolved", "gapCode": "unresolved_target" }
+      ]
+    },
+    {
+      "language": "python",
+      "forbiddenSpecifiers": ["module_name", "pkg.commented"],
+      "sites": [
+        { "id": "python-relative", "path": "python/pkg/main.py", "line": 0, "token": ".local", "capability": "imports", "specifier": ".local", "outcome": "internal", "target": "file:python/pkg/local.py", "resolutionMethod": "syntax_exact" },
+        { "id": "python-absolute", "path": "python/pkg/main.py", "line": 1, "token": "pkg.local", "capability": "imports", "specifier": "pkg.local", "outcome": "internal", "target": "file:python/pkg/local.py", "resolutionMethod": "syntax_exact" },
+        { "id": "python-stdlib-unproven", "path": "python/pkg/main.py", "line": 2, "token": "json", "capability": "imports", "specifier": "json", "outcome": "unresolved", "gapCode": "missing_dependency_metadata" },
+        { "id": "python-missing", "path": "python/pkg/main.py", "line": 3, "token": ".missing", "capability": "imports", "specifier": ".missing", "outcome": "unresolved", "gapCode": "unresolved_target" },
+        { "id": "python-ambiguous-roots", "path": "python/pkg/main.py", "line": 4, "token": "shared", "capability": "imports", "specifier": "shared", "outcome": "ambiguous", "gapCode": "unresolved_target", "candidateCount": 2 }
+      ]
+    },
+    {
+      "language": "java",
+      "forbiddenSpecifiers": ["example.commented.Fake"],
+      "sites": [
+        { "id": "java-type", "path": "java/src/main/java/example/imports/Main.java", "line": 2, "token": "example.imports.LocalType", "capability": "imports", "specifier": "example.imports.LocalType", "outcome": "internal", "target": "file:java/src/main/java/example/imports/LocalType.java", "resolutionMethod": "syntax_exact" },
+        { "id": "java-package", "path": "java/src/main/java/example/imports/Main.java", "line": 3, "token": "example.imports", "capability": "imports", "specifier": "example.imports", "outcome": "internal", "targetSuffix": ":namespace:example.imports", "resolutionMethod": "syntax_exact" },
+        { "id": "java-external", "path": "java/src/main/java/example/imports/Main.java", "line": 4, "token": "java.util.List", "capability": "imports", "specifier": "java.util.List", "outcome": "known_external" },
+        { "id": "java-missing", "path": "java/src/main/java/example/imports/Main.java", "line": 5, "token": "example.missing.MissingType", "capability": "imports", "specifier": "example.missing.MissingType", "outcome": "unresolved", "gapCode": "missing_dependency_metadata" },
+        { "id": "java-split-package-ambiguous", "path": "java/src/main/java/example/imports/Main.java", "line": 6, "token": "example.shared", "capability": "imports", "specifier": "example.shared", "outcome": "ambiguous", "gapCode": "unresolved_target", "candidateCount": 2 }
+      ]
+    },
+    {
+      "language": "csharp",
+      "forbiddenSpecifiers": ["Commented.Fake"],
+      "sites": [
+        { "id": "csharp-namespace", "path": "csharp/Program.cs", "line": 0, "token": "ImportGroundTruth.Local", "capability": "imports", "specifier": "ImportGroundTruth.Local", "outcome": "internal", "targetSuffix": ":namespace:ImportGroundTruth.Local", "resolutionMethod": "syntax_exact" },
+        { "id": "csharp-static-type", "path": "csharp/Program.cs", "line": 1, "token": "ImportGroundTruth.Local.Helper", "capability": "imports", "specifier": "ImportGroundTruth.Local.Helper", "outcome": "internal", "target": "file:csharp/Local.cs", "resolutionMethod": "syntax_exact" },
+        { "id": "csharp-missing-project-reference-ambiguous", "path": "csharp/Program.cs", "line": 2, "token": "ImportGroundTruth.Ambiguous.Shared", "capability": "imports", "specifier": "ImportGroundTruth.Ambiguous.Shared", "outcome": "ambiguous", "gapCode": "unresolved_target", "candidateCount": 2 },
+        { "id": "csharp-external", "path": "csharp/Program.cs", "line": 3, "token": "System.Text", "capability": "imports", "specifier": "System.Text", "outcome": "known_external" },
+        { "id": "csharp-missing", "path": "csharp/Program.cs", "line": 4, "token": "Missing.Product", "capability": "imports", "specifier": "Missing.Product", "outcome": "unresolved", "gapCode": "missing_dependency_metadata" }
+      ]
+    },
+    {
+      "language": "c",
+      "forbiddenSpecifiers": ["commented.h"],
+      "sites": [
+        { "id": "c-internal", "path": "c-family/main.c", "line": 0, "token": "include/local.h", "capability": "imports", "specifier": "include/local.h", "outcome": "internal", "target": "file:c-family/include/local.h", "resolutionMethod": "syntax_exact" },
+        { "id": "c-system-unproven", "path": "c-family/main.c", "line": 1, "token": "stdio.h", "capability": "imports", "specifier": "stdio.h", "outcome": "unresolved", "gapCode": "missing_compile_context" },
+        { "id": "c-macro", "path": "c-family/main.c", "line": 3, "token": "C_HEADER_ALIAS", "capability": "imports", "specifier": "C_HEADER_ALIAS", "outcome": "unresolved", "gapCode": "missing_compile_context" }
+      ]
+    },
+    {
+      "language": "cpp",
+      "forbiddenSpecifiers": ["commented.hpp"],
+      "sites": [
+        { "id": "cpp-internal", "path": "c-family/main.cpp", "line": 0, "token": "include/local.hpp", "capability": "imports", "specifier": "include/local.hpp", "outcome": "internal", "target": "file:c-family/include/local.hpp", "resolutionMethod": "syntax_exact" },
+        { "id": "cpp-system-unproven", "path": "c-family/main.cpp", "line": 1, "token": "vector", "capability": "imports", "specifier": "vector", "outcome": "unresolved", "gapCode": "missing_compile_context" },
+        { "id": "cpp-macro", "path": "c-family/main.cpp", "line": 3, "token": "CPP_HEADER_ALIAS", "capability": "imports", "specifier": "CPP_HEADER_ALIAS", "outcome": "unresolved", "gapCode": "missing_compile_context" }
+      ]
+    },
+    {
+      "language": "go",
+      "forbiddenSpecifiers": ["example.com/commented/fake"],
+      "sites": [
+        { "id": "go-internal", "path": "go/main.go", "line": 3, "token": "example.com/importgroundtruth/local", "capability": "imports", "specifier": "example.com/importgroundtruth/local", "outcome": "internal", "targetSuffix": ":package:example.com/importgroundtruth/local", "resolutionMethod": "project_model" },
+        { "id": "go-stdlib", "path": "go/main.go", "line": 4, "token": "fmt", "capability": "imports", "specifier": "fmt", "outcome": "known_external" },
+        { "id": "go-missing", "path": "go/main.go", "line": 5, "token": "example.com/missing/dependency", "capability": "imports", "specifier": "example.com/missing/dependency", "outcome": "unresolved", "gapCode": "missing_dependency_metadata" }
+      ]
+    },
+    {
+      "language": "rust",
+      "forbiddenSpecifiers": ["commented_crate::Fake"],
+      "sites": [
+        { "id": "rust-internal", "path": "rust/src/main.rs", "line": 2, "token": "crate::local::LocalType", "capability": "imports", "specifier": "crate::local::LocalType", "outcome": "internal", "target": "file:rust/src/local.rs", "resolutionMethod": "syntax_exact" },
+        { "id": "rust-stdlib", "path": "rust/src/main.rs", "line": 3, "token": "std::collections::HashMap", "capability": "imports", "specifier": "std::collections::HashMap", "outcome": "known_external" },
+        { "id": "rust-missing", "path": "rust/src/main.rs", "line": 4, "token": "missing_crate::MissingType", "capability": "imports", "specifier": "missing_crate::MissingType", "outcome": "unresolved", "gapCode": "unresolved_target" }
+      ]
+    },
+    {
+      "language": "dart",
+      "forbiddenSpecifiers": ["commented.dart"],
+      "sites": [
+        { "id": "dart-internal", "path": "dart/lib/main.dart", "line": 0, "token": "local.dart", "capability": "imports", "specifier": "local.dart", "outcome": "internal", "target": "file:dart/lib/local.dart", "resolutionMethod": "syntax_exact" },
+        { "id": "dart-sdk", "path": "dart/lib/main.dart", "line": 1, "token": "dart:async", "capability": "imports", "specifier": "dart:async", "outcome": "known_external" },
+        { "id": "dart-missing", "path": "dart/lib/main.dart", "line": 2, "token": "missing.dart", "capability": "imports", "specifier": "missing.dart", "outcome": "unresolved", "gapCode": "unresolved_target" },
+        { "id": "dart-conditional", "path": "dart/lib/main.dart", "line": 3, "token": "stub.dart", "capability": "imports", "specifier": "stub.dart", "outcome": "unresolved", "gapCode": "missing_project_metadata" },
+        { "id": "dart-export", "path": "dart/lib/main.dart", "line": 4, "token": "local.dart", "capability": "exports", "specifier": "local.dart", "outcome": "internal", "target": "file:dart/lib/local.dart", "resolutionMethod": "syntax_exact" }
+      ]
+    }
+  ]
+}

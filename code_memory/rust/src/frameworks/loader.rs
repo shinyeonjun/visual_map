@@ -427,8 +427,6 @@ pub(crate) fn metadata_matches_language(relative: &str, language: &str) -> bool 
         ),
         "go" => file_name == "go.mod",
         "rust" => file_name == "cargo.toml",
-        "php" => file_name == "composer.json",
-        "ruby" => file_name == "gemfile",
         "dart" => file_name == "pubspec.yaml",
         "csharp" => file_name.ends_with(".csproj") || file_name.ends_with(".sln"),
         _ => false,
@@ -537,10 +535,8 @@ pub(crate) fn collect_metadata_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
                     | "build.gradle.kts"
                     | "pyproject.toml"
                     | "requirements.txt"
-                    | "composer.json"
                     | "go.mod"
                     | "Cargo.toml"
-                    | "Gemfile"
                     | "pubspec.yaml"
                     | "CMakeLists.txt"
                     | "vcpkg.json"

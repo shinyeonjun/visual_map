@@ -1,0 +1,17 @@
+[package]
+name = "codebase-fact-model"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Versioned static-analysis contracts shared by Codebase Workspace engines and desktop"
+
+[lib]
+name = "codebase_fact_model"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json = "1"

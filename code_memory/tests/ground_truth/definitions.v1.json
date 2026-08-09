@@ -1,0 +1,256 @@
+{
+  "schema": "codebase-workspace.definition-ground-truth.v1",
+  "review": {
+    "reviewedAt": "2026-08-08",
+    "reviewer": "Codex manual source review",
+    "scope": "Exhaustive product-relevant explicit type, function, method, constructor, and field declarations in the listed sources",
+    "countingRule": "Each listed source declaration must produce exactly one Language IR definition with the listed canonical kind and owner; listed local, parameter, receiver, and type-parameter names must not become definitions",
+    "excludedFromScore": [
+      "packages, modules, and namespaces handled by project structure",
+      "local variables, parameters, receivers, and generic type parameters",
+      "implicit or runtime-created fields",
+      "generated, vendor, standard-library, and dependency definitions",
+      "constants and globals unless they become a product-relevant relation endpoint"
+    ]
+  },
+  "releaseGate": {
+    "minimumPrecision": 1.0,
+    "minimumRecall": 1.0,
+    "minimumKindAccuracy": 1.0,
+    "minimumOwnerAccuracy": 1.0,
+    "minimumInventoryCoverage": 1.0,
+    "requireDeterminism": true
+  },
+  "metadataReview": {
+    "reviewedAt": "2026-08-08",
+    "reviewer": "Codex manual source review",
+    "scope": "Language-defined visibility and body-free source declaration headers for representative product definitions in every supported language",
+    "rules": [
+      "Callable signatures are normalized source declaration headers without bodies, decorators, attributes, or constructor initializer lists",
+      "Visibility uses explicit modifiers and language-defined defaults; CommonJS export binding remains a separate export fact",
+      "Non-callable provider signatures are optional and are not required by this metadata gate",
+      "Unknown visibility or a missing callable signature fails the complete reviewed definition denominator"
+    ]
+  },
+  "metadataCases": [
+    { "project": "typescript", "language": "typescript", "path": "src/main.ts", "kind": "function", "name": "add", "owner": "-", "visibility": "public", "signature": "function add(a: number, b: number): number" },
+    { "project": "typescript", "language": "typescript", "path": "src/main.ts", "kind": "function", "name": "normalize", "owner": "-", "visibility": "public", "signature": "normalize = (value: number): number" },
+    { "project": "typescript", "language": "typescript", "path": "src/types.ts", "kind": "field", "name": "value", "owner": "Box", "visibility": "private", "signature": null },
+    { "project": "typescript", "language": "typescript", "path": "src/types.ts", "kind": "method", "name": "get", "owner": "Box", "visibility": "public", "signature": "get(): T" },
+
+    { "project": "javascript", "language": "javascript", "path": "main.js", "kind": "function", "name": "add", "owner": "-", "visibility": "internal", "signature": "function add(left, right)" },
+    { "project": "javascript", "language": "javascript", "path": "types.js", "kind": "class", "name": "BaseEntity", "owner": "-", "visibility": "internal", "signature": null },
+    { "project": "javascript", "language": "javascript", "path": "types.js", "kind": "method", "name": "execute", "owner": "Handler", "visibility": "public", "signature": "execute = (value)" },
+
+    { "project": "python", "language": "python", "path": "main.py", "kind": "function", "name": "add", "owner": "-", "visibility": "public", "signature": "def add(left: int, right: int) -> int" },
+    { "project": "python", "language": "python", "path": "models.py", "kind": "constructor", "name": "__init__", "owner": "Box", "visibility": "public", "signature": "def __init__(self, value: T) -> None" },
+    { "project": "python", "language": "python", "path": "models.py", "kind": "field", "name": "user_id", "owner": "User", "visibility": "public", "signature": null },
+
+    { "project": "java", "language": "java", "path": "src/main/java/demo/Base.java", "kind": "class", "name": "Base", "owner": "-", "visibility": "public", "signature": null },
+    { "project": "java", "language": "java", "path": "src/main/java/demo/Base.java", "kind": "method", "name": "baseValue", "owner": "Base", "visibility": "protected", "signature": "protected int baseValue()" },
+    { "project": "java", "language": "java", "path": "src/main/java/demo/Box.java", "kind": "field", "name": "value", "owner": "Box", "visibility": "private", "signature": null },
+    { "project": "java", "language": "java", "path": "src/main/java/demo/Runner.java", "kind": "method", "name": "run", "owner": "Runner", "visibility": "public", "signature": "int run()" },
+
+    { "project": "csharp", "language": "csharp", "path": "BaseProgram.cs", "kind": "method", "name": "BaseValue", "owner": "BaseProgram", "visibility": "protected", "signature": "protected int BaseValue()" },
+    { "project": "csharp", "language": "csharp", "path": "Box.cs", "kind": "field", "name": "value", "owner": "Box", "visibility": "private", "signature": null },
+    { "project": "csharp", "language": "csharp", "path": "IRunner.cs", "kind": "method", "name": "Run", "owner": "IRunner", "visibility": "public", "signature": "int Run()" },
+    { "project": "csharp", "language": "csharp", "path": "Program.cs", "kind": "method", "name": "Add", "owner": "Program", "visibility": "public", "signature": "public static int Add(int left, int right)" },
+
+    { "project": "native-c-family", "language": "c", "path": "main.c", "kind": "function", "name": "add", "owner": "-", "visibility": "public", "signature": "int add(int left, int right)" },
+    { "project": "native-c-family", "language": "c", "path": "types.h", "kind": "function", "name": "box_id", "owner": "-", "visibility": "internal", "signature": "static inline const char *box_id(const Box *box)" },
+    { "project": "native-c-family", "language": "c", "path": "types.h", "kind": "field", "name": "id", "owner": "User", "visibility": "public", "signature": "const char *" },
+
+    { "project": "native-c-family", "language": "cpp", "path": "declarations.hpp", "kind": "function", "name": "declared_value", "owner": "-", "visibility": "public", "signature": "int declared_value(int value)" },
+    { "project": "native-c-family", "language": "cpp", "path": "declarations.hpp", "kind": "method", "name": "run", "owner": "Contract", "visibility": "public", "signature": "virtual int run() const = 0" },
+    { "project": "native-c-family", "language": "cpp", "path": "main.cpp", "kind": "constructor", "name": "BoxValue", "owner": "BoxValue", "visibility": "public", "signature": "explicit BoxValue(T value)" },
+    { "project": "native-c-family", "language": "cpp", "path": "main.cpp", "kind": "field", "name": "value_", "owner": "BoxValue", "visibility": "private", "signature": "T" },
+
+    { "project": "go", "language": "go", "path": "main.go", "kind": "function", "name": "Add", "owner": "-", "visibility": "public", "signature": "func Add(a, b int) int" },
+    { "project": "go", "language": "go", "path": "main.go", "kind": "function", "name": "main", "owner": "-", "visibility": "internal", "signature": "func main()" },
+    { "project": "go", "language": "go", "path": "main.go", "kind": "method", "name": "ID", "owner": "Entity", "visibility": "public", "signature": "ID() string" },
+    { "project": "go", "language": "go", "path": "main.go", "kind": "field", "name": "Value", "owner": "Box", "visibility": "public", "signature": "T" },
+
+    { "project": "rust", "language": "rust", "path": "src/main.rs", "kind": "function", "name": "add", "owner": "-", "visibility": "private", "signature": "fn add(left: i32, right: i32) -> i32" },
+    { "project": "rust", "language": "rust", "path": "src/types.rs", "kind": "trait", "name": "Entity", "owner": "-", "visibility": "public", "signature": null },
+    { "project": "rust", "language": "rust", "path": "src/types.rs", "kind": "method", "name": "id", "owner": "Entity", "visibility": "public", "signature": "fn id(&self) -> &str" },
+    { "project": "rust", "language": "rust", "path": "src/types.rs", "kind": "method", "name": "id", "owner": "User", "visibility": "public", "signature": "fn id(&self) -> &str" },
+    { "project": "rust", "language": "rust", "path": "src/types.rs", "kind": "method", "name": "get", "owner": "EntityBox", "visibility": "public", "signature": "pub fn get(&self) -> &T" },
+
+    { "project": "dart", "language": "dart", "path": "lib/main.dart", "kind": "function", "name": "add", "owner": "-", "visibility": "public", "signature": "int add(int left, int right)" },
+    { "project": "dart", "language": "dart", "path": "lib/types.dart", "kind": "constructor", "name": "Box", "owner": "Box", "visibility": "public", "signature": "Box(this.value)" },
+    { "project": "dart", "language": "dart", "path": "lib/types.dart", "kind": "method", "name": "get", "owner": "Box", "visibility": "public", "signature": "T get()" }
+  ],
+  "projects": [
+    {
+      "id": "typescript",
+      "fixture": "scip-typescript",
+      "sourceFiles": [
+        { "path": "src/main.ts", "sha256": "1756fb3f7e27bdae6f8698ab019472e122aac29a636a3172052e000a8bfcbce3" },
+        { "path": "src/types.ts", "sha256": "eb206a09966be67f553792b0def4d4922a70c1bb81e9956a9731686b7fcc9b32" }
+      ],
+      "languages": [
+        {
+          "language": "typescript",
+          "files": [
+            { "path": "src/main.ts", "definitions": ["function:add:-", "function:run:-", "function:normalize:-"], "forbiddenNames": ["a", "b", "box", "value"] },
+            { "path": "src/types.ts", "definitions": ["interface:Entity:-", "field:id:Entity", "class:User:-", "constructor:constructor:User", "field:id:User", "class:Box:-", "constructor:constructor:Box", "field:value:Box", "method:get:Box", "class:Handler:-", "method:execute:Handler"], "forbiddenNames": ["T"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "javascript",
+      "fixture": "scip-javascript",
+      "sourceFiles": [
+        { "path": "main.js", "sha256": "57dc82ef41329ef223845e051a5a0043ab2bd7e3686897e0b071c643ad0c88a5" },
+        { "path": "types.js", "sha256": "c15d9a1ddc75c0fa0a3aae67db4c8be99300dc5c04bedca11e9934ac671a11fd" }
+      ],
+      "languages": [
+        {
+          "language": "javascript",
+          "files": [
+            { "path": "main.js", "definitions": ["function:add:-", "function:run:-", "function:normalize:-"], "forbiddenNames": ["left", "right", "user", "value"] },
+            { "path": "types.js", "definitions": ["class:BaseEntity:-", "constructor:constructor:BaseEntity", "class:User:-", "function:box:-", "class:Handler:-", "method:execute:Handler"], "forbiddenNames": ["value"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "python",
+      "fixture": "scip-python",
+      "sourceFiles": [
+        { "path": "main.py", "sha256": "cefab7e2ade000bbab6406d9f670dbd6bcf05f0fa560aec1075fa2bb8f9aa354" },
+        { "path": "models.py", "sha256": "4883d79bc55dd70a3612ef3b1b982126f5e3c3ecadbbece191acc51e5b86bca1" }
+      ],
+      "languages": [
+        {
+          "language": "python",
+          "files": [
+            { "path": "main.py", "definitions": ["function:add:-", "function:main:-"], "forbiddenNames": ["left", "right", "user"] },
+            { "path": "models.py", "definitions": ["class:User:-", "field:user_id:User", "class:Box:-", "constructor:__init__:Box", "method:get:Box"], "forbiddenNames": ["self", "value"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "java",
+      "fixture": "scip-java",
+      "sourceFiles": [
+        { "path": "src/main/java/demo/Base.java", "sha256": "fc6d54a45ad7211294a569d3e74a4354fdeed3b4992aad8d52babb46dc26d3e0" },
+        { "path": "src/main/java/demo/Box.java", "sha256": "6e675ed188326bd678c78210ee40683b356e43c46c66d335ba9c05df1e69e355" },
+        { "path": "src/main/java/demo/Main.java", "sha256": "df1e192530a758dc16413fccc494e9b6fe7759bc071582e11e70ed2ab46ca8fa" },
+        { "path": "src/main/java/demo/Runner.java", "sha256": "0c109c08140688f49a9e42244822f2847ecb27a6f9f5061ec0d88b081fcfc497" }
+      ],
+      "languages": [
+        {
+          "language": "java",
+          "files": [
+            { "path": "src/main/java/demo/Base.java", "definitions": ["class:Base:-", "method:baseValue:Base"] },
+            { "path": "src/main/java/demo/Box.java", "definitions": ["class:Box:-", "field:value:Box", "constructor:Box:Box", "method:get:Box"], "forbiddenNames": ["T"] },
+            { "path": "src/main/java/demo/Main.java", "definitions": ["class:Main:-", "method:add:Main", "method:main:Main", "method:run:Main"], "forbiddenNames": ["left", "right", "args", "box"] },
+            { "path": "src/main/java/demo/Runner.java", "definitions": ["interface:Runner:-", "method:run:Runner"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "csharp",
+      "fixture": "scip-dotnet",
+      "sourceFiles": [
+        { "path": "BaseProgram.cs", "sha256": "abdded709b18424ac63ce21e851d0688f4fce9af9acae4ec33de96ea1019f717" },
+        { "path": "Box.cs", "sha256": "398f42c175f59e31e72148c826d3d803d98543720789b8c8db10f3c78f6f6fae" },
+        { "path": "IRunner.cs", "sha256": "dd79892835dd357864ed9e9e4ac12ba219119d414cc3386e3b51c319a6b79b15" },
+        { "path": "Program.cs", "sha256": "ee04b6e8a795c75484f7704c359ebd7fded982809cdc43be0b3ad8202d0d4e03" }
+      ],
+      "languages": [
+        {
+          "language": "csharp",
+          "files": [
+            { "path": "BaseProgram.cs", "definitions": ["class:BaseProgram:-", "method:BaseValue:BaseProgram"] },
+            { "path": "Box.cs", "definitions": ["class:Box:-", "field:value:Box", "constructor:Box:Box", "method:Get:Box"], "forbiddenNames": ["T"] },
+            { "path": "IRunner.cs", "definitions": ["interface:IRunner:-", "method:Run:IRunner"] },
+            { "path": "Program.cs", "definitions": ["class:Program:-", "method:Add:Program", "method:Main:Program", "method:Run:Program"], "forbiddenNames": ["left", "right", "box"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "native-c-family",
+      "fixture": "native-lsp-c",
+      "sourceFiles": [
+        { "path": "main.c", "sha256": "e1fbc3bac36d5a031a33f6362e12570bbbccfd65522af280fdf322b4d5f67f2d" },
+        { "path": "types.h", "sha256": "f5182b761343a9f3bc9911aa6ba95b525c9cc5f2ce3b821639b2715d7dc338d4" },
+        { "path": "declarations.hpp", "sha256": "30d0837020b8d098dc02f9f2e17e6bdf4c0f3a5a3889704207daed2bd997367d" },
+        { "path": "implementations.cpp", "sha256": "68d9aabec7d0090f47a0e46b2b3fecc5f444cc4863cd1760043879caff8ac1c8" },
+        { "path": "main.cpp", "sha256": "5c805b1b0ffcf20d86a375d11d98db0cbb1e8033a48c0dba116ba604e3904b14" }
+      ],
+      "languages": [
+        {
+          "language": "c",
+          "files": [
+            { "path": "main.c", "definitions": ["function:add:-", "function:main:-"], "forbiddenNames": ["left", "right", "box"] },
+            { "path": "types.h", "definitions": ["struct:User:-", "field:id:User", "type_alias:User:-", "struct:Box:-", "field:value:Box", "type_alias:Box:-", "function:box_id:-"] }
+          ]
+        },
+        {
+          "language": "cpp",
+          "files": [
+            { "path": "types.h", "definitions": ["struct:User:-", "field:id:User", "type_alias:User:-", "struct:Box:-", "field:value:Box", "type_alias:Box:-", "function:box_id:-"] },
+            { "path": "declarations.hpp", "definitions": ["function:declared_value:-", "class:Contract:-", "method:run:Contract"] },
+            { "path": "implementations.cpp", "definitions": ["function:declared_value:-", "class:Implementation:-", "method:run:Implementation"] },
+            { "path": "main.cpp", "definitions": ["class:Base:-", "method:base_value:Base", "class:Runner:-", "method:run:Runner", "class:BoxValue:-", "constructor:BoxValue:BoxValue", "method:get:BoxValue", "field:value_:BoxValue", "function:multiply:-", "function:main:-"], "forbiddenNames": ["T", "left", "right", "box"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "go",
+      "fixture": "native-lsp-go",
+      "sourceFiles": [
+        { "path": "main.go", "sha256": "93bb9cc2aeef80c4e192e3e1582ac336acf76bc093db9034312917a66e7eec31" }
+      ],
+      "languages": [
+        {
+          "language": "go",
+          "files": [
+            { "path": "main.go", "definitions": ["interface:Entity:-", "method:ID:Entity", "struct:User:-", "field:IDValue:User", "method:ID:User", "struct:Box:-", "field:Value:Box", "method:Get:Box", "function:Add:-", "function:main:-"], "forbiddenNames": ["u", "b", "a", "box", "T"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "rust",
+      "fixture": "native-lsp-rust",
+      "sourceFiles": [
+        { "path": "src/main.rs", "sha256": "8aca5db75f2a19f1a31e8221f45d1578f4efbb33a98c6fc6889321664f864fe7" },
+        { "path": "src/types.rs", "sha256": "41f0e54afc5e69a49045aef7119001dbfb44437a4d9a5254df03a146d1aa1a7a" }
+      ],
+      "languages": [
+        {
+          "language": "rust",
+          "files": [
+            { "path": "src/main.rs", "definitions": ["function:add:-", "function:main:-"], "forbiddenNames": ["left", "right", "box_value"] },
+            { "path": "src/types.rs", "definitions": ["trait:Entity:-", "method:id:Entity", "struct:User:-", "field:id_value:User", "method:id:User", "struct:EntityBox:-", "field:value:EntityBox", "method:get:EntityBox"], "forbiddenNames": ["self", "T"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dart",
+      "fixture": "native-lsp-dart",
+      "sourceFiles": [
+        { "path": "lib/main.dart", "sha256": "c238ffeb820c15d945c43201dae70a82a52ad0e5c57129284ad85ec89173cfff" },
+        { "path": "lib/types.dart", "sha256": "c9199d0f99b24e424ba2f9cb72f5188ccfe3d9cc842c75336be15f7a4547c546" }
+      ],
+      "languages": [
+        {
+          "language": "dart",
+          "files": [
+            { "path": "lib/main.dart", "definitions": ["function:add:-", "function:main:-"], "forbiddenNames": ["left", "right", "user"] },
+            { "path": "lib/types.dart", "definitions": ["class:Entity:-", "field:id:Entity", "class:User:-", "field:id:User", "constructor:User:User", "class:Box:-", "field:value:Box", "constructor:Box:Box", "method:get:Box"], "forbiddenNames": ["T"] }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -8,10 +8,11 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::{
     dotnet_requires_unavailable_legacy_sdk, find_tool, has_compile_context_for_files,
-    is_fatal_lsp_error, lsp_failure_code, normalize_scip_path, read_scip, run_native_lsp,
-    run_native_lsp_source_only, run_native_lsp_with_server, run_scip_indexer, write_language_cache,
-    Diagnostic, DiagnosticCode, DocumentCoverage, DocumentOutput, FileCoverageOutput,
-    LanguageAnalysis, LanguageJob, LanguageOutput, LanguageSpec, ProviderKind, RelationOutput,
+    is_fatal_lsp_error, lsp_failure_code, normalize_scip_path, not_executed_provider_context,
+    read_scip, run_native_lsp, run_native_lsp_source_only, run_native_lsp_with_server,
+    run_scip_indexer, write_language_cache, Diagnostic, DiagnosticCode, DocumentCoverage,
+    DocumentOutput, FileCoverageOutput, LanguageJob, LanguageOutput, LanguageSpec, ProviderKind,
+    ProviderRoots, ProviderUnitBatch, RelationOutput,
 };
 
 static RUST_BUILD_TOOL_GAP_CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
@@ -21,9 +22,9 @@ pub(crate) fn language_failure(
     provider: &'static str,
     files: &[PathBuf],
     error: String,
-) -> LanguageAnalysis {
+) -> ProviderUnitBatch {
     let (message, detail) = provider_error_parts(&error, lang.name);
-    LanguageAnalysis {
+    ProviderUnitBatch {
         language: LanguageOutput {
             id: lang.id.to_string(),
             name: lang.name.to_string(),
@@ -34,6 +35,8 @@ pub(crate) fn language_failure(
             files_missing: files.len(),
             status: "indexer-failed",
         },
+        source_files: Vec::new(),
+        execution_context: not_executed_provider_context(&lang),
         documents: Vec::new(),
         relations: Vec::new(),
         diagnostics: vec![Diagnostic {
@@ -64,8 +67,8 @@ pub(crate) fn language_invalid_output(
     provider: &'static str,
     files: &[PathBuf],
     error: String,
-) -> LanguageAnalysis {
-    LanguageAnalysis {
+) -> ProviderUnitBatch {
+    ProviderUnitBatch {
         language: LanguageOutput {
             id: lang.id.to_string(),
             name: lang.name.to_string(),
@@ -76,6 +79,8 @@ pub(crate) fn language_invalid_output(
             files_missing: files.len(),
             status: "invalid-output",
         },
+        source_files: Vec::new(),
+        execution_context: not_executed_provider_context(&lang),
         documents: Vec::new(),
         relations: Vec::new(),
         diagnostics: vec![Diagnostic {
@@ -96,9 +101,9 @@ pub(crate) fn language_empty_output(
     provider: &'static str,
     root: &Path,
     files: &[PathBuf],
-) -> LanguageAnalysis {
+) -> ProviderUnitBatch {
     let coverage = language_document_coverage(root, lang, files, &[]);
-    LanguageAnalysis {
+    ProviderUnitBatch {
         language: LanguageOutput {
             id: lang.id.to_string(),
             name: lang.name.to_string(),
@@ -106,12 +111,14 @@ pub(crate) fn language_empty_output(
             files_found: files.len(),
             files_indexed: 0,
             // An empty provider result is not a deliberate source exclusion.
-            // Keep the files in coverage as missing so VisualMap never treats
+            // Keep the files in coverage as missing so the desktop never treats
             // an unanalyzed module as complete.
             files_excluded: coverage.excluded,
             files_missing: coverage.missing,
             status: "empty-semantic",
         },
+        source_files: Vec::new(),
+        execution_context: not_executed_provider_context(&lang),
         documents: Vec::new(),
         relations: Vec::new(),
         diagnostics: vec![Diagnostic {
@@ -137,7 +144,7 @@ pub(crate) fn language_analysis_from_index(
     files: &[PathBuf],
     documents: Vec<DocumentOutput>,
     relations: Vec<RelationOutput>,
-) -> LanguageAnalysis {
+) -> ProviderUnitBatch {
     let semantic_items: usize = documents
         .iter()
         .map(|doc| doc.symbols.len() + doc.occurrences.len())
@@ -147,7 +154,7 @@ pub(crate) fn language_analysis_from_index(
     }
     let (status, diagnostics) = classify_language_documents(root, &lang, files, &documents);
     let coverage = language_document_coverage(root, lang, files, &documents);
-    LanguageAnalysis {
+    ProviderUnitBatch {
         language: LanguageOutput {
             id: lang.id.to_string(),
             name: lang.name.to_string(),
@@ -158,6 +165,8 @@ pub(crate) fn language_analysis_from_index(
             files_missing: coverage.missing,
             status,
         },
+        source_files: Vec::new(),
+        execution_context: not_executed_provider_context(&lang),
         documents,
         relations,
         diagnostics,
@@ -165,7 +174,7 @@ pub(crate) fn language_analysis_from_index(
     }
 }
 
-pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
+pub(crate) fn analyze_language(job: &LanguageJob) -> ProviderUnitBatch {
     let lang = job.lang;
     let root = &job.root;
     let work = &job.work;
@@ -174,7 +183,25 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
     let providers_root = job.providers_root.as_deref();
     let provider_config = job.provider_config.as_deref();
     let call_ranges = job.call_ranges.as_ref();
-    let project_config_digest = job.project_config_digest;
+    let max_project_source_file_bytes = job.max_project_source_file_bytes;
+    let workspace_turn = match job.writable_workspace.as_ref() {
+        Some(binding) => match binding.begin() {
+            Ok(turn) => Some(turn),
+            Err(error) => {
+                return language_failure(
+                    lang,
+                    if matches!(lang.provider, ProviderKind::Scip) {
+                        "scip"
+                    } else {
+                        "native-lsp"
+                    },
+                    files,
+                    error,
+                )
+            }
+        },
+        None => None,
+    };
     if lang.id == "rust" && files.len() > rust_semantic_file_limit() {
         return language_excluded(
             lang,
@@ -232,10 +259,10 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
     } else {
         "native-lsp"
     };
-    // Do not send files that the coverage policy already excludes to the
-    // provider. Build-tag-only Go modules are the common case, but the same
-    // rule also prevents generated/oversized files from producing a false
-    // empty-semantic unit. Keep the original file list for final coverage.
+    // Do not send files that the explicit source policy excludes to the
+    // provider. File size is deliberately not a policy: a legitimate large
+    // source must be attempted and any provider resource failure must remain
+    // visible as partial/failed coverage.
     let provider_files: Vec<PathBuf> = files
         .iter()
         .filter(|file| source_exclusion_reason(file).is_none())
@@ -250,21 +277,46 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
             "all files in this provider unit are excluded by source policy",
         );
     }
-    let ruby_bundle_warning = (lang.id == "ruby")
-        .then(|| root.join(".ruby-lsp").join("install_error"))
-        .filter(|path| path.is_file())
-        .map(|path| Diagnostic {
-            language: lang.id.to_string(),
-            level: "warning",
-            code: DiagnosticCode::RubyBundleWarning,
-            message: format!(
-                "Ruby LSP previously reported a bundle setup problem at {}; provider results are retained, but project gem resolution may be incomplete",
-                path.display()
-            ),
-            detail: None,
-            path: Some(".ruby-lsp/install_error".to_string()),
-            line: None,
-        });
+    let (
+        execution_project_root,
+        execution_root,
+        execution_provider_files,
+        execution_provider_config,
+    ) = if let Some(turn) = workspace_turn.as_ref() {
+        if let Err(error) = turn.ensure_materialized() {
+            return language_failure(lang, provider, files, error);
+        }
+        let execution_root = match turn.map_path(root) {
+            Ok(path) => path,
+            Err(error) => return language_failure(lang, provider, files, error),
+        };
+        let execution_provider_files = match provider_files
+            .iter()
+            .map(|path| turn.map_path(path))
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(paths) => paths,
+            Err(error) => return language_failure(lang, provider, files, error),
+        };
+        let execution_provider_config = match provider_config.map(|path| turn.map_path(path)) {
+            Some(Ok(path)) => Some(path),
+            Some(Err(error)) => return language_failure(lang, provider, files, error),
+            None => None,
+        };
+        (
+            turn.execution_root().to_path_buf(),
+            execution_root,
+            execution_provider_files,
+            execution_provider_config,
+        )
+    } else {
+        (
+            job.project_root.clone(),
+            root.clone(),
+            provider_files.clone(),
+            provider_config.map(Path::to_path_buf),
+        )
+    };
     // Each project unit can run concurrently. Include its content cache key so
     // providers never write to the same SCIP file.
     let scip_path = work.join(format!("{}_{}.scip", lang.id, cache_key));
@@ -273,30 +325,47 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
         ProviderKind::Scip if use_clangd_fallback => run_native_lsp_with_server(
             &lang,
             "clangd",
-            root,
+            ProviderRoots::new(&execution_project_root, &execution_root),
             &scip_path,
             providers_root,
-            &provider_files,
+            &execution_provider_files,
         ),
         ProviderKind::Scip => run_scip_indexer(
             &lang,
-            root,
+            ProviderRoots::new(&execution_project_root, &execution_root),
             &scip_path,
             providers_root,
-            provider_config,
-            &provider_files,
-            project_config_digest,
+            execution_provider_config.as_deref(),
+            &execution_provider_files,
+            max_project_source_file_bytes,
         ),
-        ProviderKind::Lsp => {
-            run_native_lsp(&lang, root, &scip_path, providers_root, &provider_files)
-        }
+        ProviderKind::Lsp => run_native_lsp(
+            &lang,
+            ProviderRoots::new(&execution_project_root, &execution_root),
+            &scip_path,
+            providers_root,
+            &execution_provider_files,
+        ),
     };
 
     match result {
-        Ok(mut provider_diagnostics) => {
-            let allowed_paths = allowed_document_paths(root, &provider_files);
-            let mut parsed =
-                read_scip(&scip_path, lang.id, root, &allowed_paths, Some(call_ranges));
+        Ok(provider_outcome) => {
+            let mut provider_diagnostics = provider_outcome.diagnostics;
+            let mut execution_context = provider_outcome.execution_context;
+            let allowed_paths = allowed_document_paths(&execution_root, &execution_provider_files);
+            let protocol = if use_clangd_fallback || matches!(lang.provider, ProviderKind::Lsp) {
+                codebase_fact_model::analysis::ProviderProtocol::LanguageServerProtocol
+            } else {
+                codebase_fact_model::analysis::ProviderProtocol::Scip
+            };
+            let mut parsed = read_scip(
+                &scip_path,
+                lang.id,
+                protocol,
+                &execution_root,
+                &allowed_paths,
+                Some(call_ranges),
+            );
             let mut java_source_fallback_used = false;
             let java_needs_source_fallback = lang.id == "java"
                 && parsed
@@ -306,21 +375,23 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                 let _ = fs::remove_file(&scip_path);
                 match run_native_lsp_source_only(
                     &lang,
-                    root,
+                    ProviderRoots::new(&execution_project_root, &execution_root),
                     &scip_path,
                     providers_root,
-                    &provider_files,
+                    &execution_provider_files,
                 ) {
-                    Ok(fallback_diagnostics) => {
+                    Ok(fallback_outcome) => {
                         match read_scip(
                             &scip_path,
                             lang.id,
-                            root,
+                            codebase_fact_model::analysis::ProviderProtocol::LanguageServerProtocol,
+                            &execution_root,
                             &allowed_paths,
                             Some(call_ranges),
                         ) {
                             Ok((documents, relations)) if !semantic_output_is_empty(&documents) => {
                                 java_source_fallback_used = true;
+                                execution_context = fallback_outcome.execution_context;
                                 provider_diagnostics.push(Diagnostic {
                                     language: lang.id.to_string(),
                                     level: "warning",
@@ -330,10 +401,10 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                                     path: None,
                                     line: None,
                                 });
-                                provider_diagnostics.extend(fallback_diagnostics);
+                                provider_diagnostics.extend(fallback_outcome.diagnostics);
                                 parsed = Ok((documents, relations));
                             }
-                            Ok(_) => provider_diagnostics.extend(fallback_diagnostics),
+                            Ok(_) => provider_diagnostics.extend(fallback_outcome.diagnostics),
                             Err(error) => provider_diagnostics.push(Diagnostic {
                                 language: lang.id.to_string(),
                                 level: "warning",
@@ -389,9 +460,7 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                     if provider_partial && analysis.language.status == "indexed" {
                         analysis.language.status = "indexed-partial";
                     }
-                    if let Some(warning) = ruby_bundle_warning.clone() {
-                        analysis.diagnostics.push(warning);
-                    }
+                    analysis.execution_context = execution_context;
                     analysis.diagnostics.extend(provider_diagnostics);
                     write_language_cache(
                         root,
@@ -400,10 +469,15 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> LanguageAnalysis {
                         &analysis.documents,
                         &analysis.relations,
                         &analysis.diagnostics,
+                        &analysis.execution_context,
                     );
                     analysis
                 }
-                Err(error) => language_invalid_output(lang, provider, files, error),
+                Err(error) => {
+                    let mut analysis = language_invalid_output(lang, provider, files, error);
+                    analysis.execution_context = execution_context;
+                    analysis
+                }
             }
         }
         Err(error) => {
@@ -529,8 +603,8 @@ pub(crate) fn language_excluded(
     files: &[PathBuf],
     code: DiagnosticCode,
     reason: &str,
-) -> LanguageAnalysis {
-    LanguageAnalysis {
+) -> ProviderUnitBatch {
+    ProviderUnitBatch {
         language: LanguageOutput {
             id: lang.id.to_string(),
             name: lang.name.to_string(),
@@ -541,6 +615,8 @@ pub(crate) fn language_excluded(
             files_missing: 0,
             status: "excluded",
         },
+        source_files: Vec::new(),
+        execution_context: not_executed_provider_context(&lang),
         documents: Vec::new(),
         relations: Vec::new(),
         diagnostics: vec![Diagnostic {
@@ -574,9 +650,9 @@ pub(crate) fn classify_language_documents(
 ) -> (&'static str, Vec<Diagnostic>) {
     let coverage = language_document_coverage(root, *lang, files, documents);
     let expected = allowed_document_paths(root, files);
-    let indexed: HashSet<&str> = documents
+    let indexed: HashSet<(&str, &str)> = documents
         .iter()
-        .map(|document| document.path.as_str())
+        .map(|document| (document.language.as_str(), document.path.as_str()))
         .collect();
     if indexed.len() >= expected.len() || coverage.missing == 0 {
         return ("indexed", Vec::new());
@@ -690,9 +766,9 @@ pub(crate) fn build_file_coverage(
     languages: &[LanguageOutput],
     project_model_files: &[String],
 ) -> Vec<FileCoverageOutput> {
-    let indexed: HashSet<&str> = documents
+    let indexed: HashSet<(&str, &str)> = documents
         .iter()
-        .map(|document| document.path.as_str())
+        .map(|document| (document.language.as_str(), document.path.as_str()))
         .collect();
     let language_status: HashMap<&str, &str> = languages
         .iter()
@@ -716,6 +792,12 @@ pub(crate) fn build_file_coverage(
         .filter(|(language, _)| language == "csharp")
         .map(|(_, file)| file.clone())
         .collect();
+    let active_csharp_files = if csharp_files.is_empty() {
+        None
+    } else {
+        let (active, excluded) = crate::active_csharp_files(root, &csharp_files);
+        (excluded > 0).then(|| active.into_iter().collect::<HashSet<_>>())
+    };
     let dotnet_project_roots =
         crate::providers::dotnet_project_roots_for_files(root, &csharp_files);
     let reachable_c_headers = if active_c_files.is_some() {
@@ -753,14 +835,19 @@ pub(crate) fn build_file_coverage(
                 && active_c_files.as_ref().is_some_and(|active| {
                     !is_c_family_header_path(file) && !active.contains(&canonical)
                 });
-            let status = if indexed.contains(path.as_str()) || modeled_vue {
+            let inactive_csharp_file = language == "csharp"
+                && active_csharp_files
+                    .as_ref()
+                    .is_some_and(|active| !active.contains(file));
+            let status = if indexed.contains(&(language.as_str(), path.as_str())) || modeled_vue {
                 "indexed"
             } else if source_exclusion.is_some()
                 || no_compile_context
-                || provider_excluded
                 || header_not_reachable
                 || dotnet_outside_project
                 || inactive_c_file
+                || inactive_csharp_file
+                || provider_excluded
             {
                 "excluded"
             } else {
@@ -770,10 +857,11 @@ pub(crate) fn build_file_coverage(
                 source_exclusion
                     .map(str::to_string)
                     .or_else(|| no_compile_context.then_some("no-compile-context".to_string()))
-                    .or_else(|| provider_excluded.then_some("provider-excluded".to_string()))
                     .or_else(|| header_not_reachable.then_some("header-not-reachable".to_string()))
                     .or_else(|| dotnet_outside_project.then_some("project-config".to_string()))
                     .or_else(|| inactive_c_file.then_some("not-in-active-build".to_string()))
+                    .or_else(|| inactive_csharp_file.then_some("not-in-active-build".to_string()))
+                    .or_else(|| provider_excluded.then_some("provider-excluded".to_string()))
             } else if status == "missing" {
                 let project_scoped = matches!(language.as_str(), "typescript" | "javascript")
                     && !project_model_files.is_empty()
@@ -812,9 +900,9 @@ pub(crate) fn build_file_coverage(
         };
         (&left.path, rank(left), &left.language).cmp(&(&right.path, rank(right), &right.language))
     });
-    // A C/C++ header can match both language extension sets. Keep one
-    // coverage record, preferring the provider that actually indexed it.
-    coverage.dedup_by(|left, right| left.path == right.path);
+    // A shared C/C++ header is two semantic measurements even though it is one
+    // physical file. Never let one provider's result stand in for the other.
+    coverage.dedup_by(|left, right| left.path == right.path && left.language == right.language);
     coverage
 }
 
@@ -870,10 +958,7 @@ pub(crate) fn source_exclusion_reason(path: &Path) -> Option<&'static str> {
             }
         }
     }
-    fs::metadata(path)
-        .ok()
-        .filter(|metadata| metadata.len() > 1_000_000)
-        .map(|_| "provider-size-limit")
+    None
 }
 
 pub(crate) fn allowed_document_paths(root: &Path, files: &[PathBuf]) -> HashSet<String> {

@@ -19,7 +19,7 @@ fn validate_sidecar_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn run_command(
+pub fn run_command(
     executable: &Path,
     args: &[&str],
     timeout: Duration,
@@ -27,7 +27,7 @@ pub(crate) fn run_command(
     run_command_with_env(executable, args, timeout, &[])
 }
 
-pub(crate) fn run_command_with_env(
+pub fn run_command_with_env(
     executable: &Path,
     args: &[&str],
     timeout: Duration,
@@ -42,12 +42,43 @@ pub(crate) fn run_command_with_env(
     )
 }
 
-pub(crate) fn run_command_with_env_observer(
+pub fn run_command_with_env_observer(
     executable: &Path,
     args: &[&str],
     policy: EngineRunPolicy,
     envs: &[(&str, &str)],
     observer: Option<EngineObserver>,
+) -> Result<EngineRunResult, String> {
+    run_command_internal(executable, args, policy, envs, observer, None, None)
+}
+
+pub fn run_command_with_input(
+    executable: &Path,
+    args: &[&str],
+    policy: EngineRunPolicy,
+    envs: &[(&str, &str)],
+    current_dir: &Path,
+    input: Vec<u8>,
+) -> Result<EngineRunResult, String> {
+    run_command_internal(
+        executable,
+        args,
+        policy,
+        envs,
+        None,
+        Some(current_dir),
+        Some(input),
+    )
+}
+
+fn run_command_internal(
+    executable: &Path,
+    args: &[&str],
+    policy: EngineRunPolicy,
+    envs: &[(&str, &str)],
+    observer: Option<EngineObserver>,
+    current_dir: Option<&Path>,
+    input: Option<Vec<u8>>,
 ) -> Result<EngineRunResult, String> {
     let started_at = timestamp();
     let process_started = Instant::now();
@@ -55,7 +86,7 @@ pub(crate) fn run_command_with_env_observer(
     let last_activity_ms = Arc::new(AtomicU64::new(0));
     let cancellation = envs
         .iter()
-        .find(|(key, _)| *key == "BACKEND_VISUAL_MAP_OPERATION_ID")
+        .find(|(key, _)| *key == "CODEBASE_WORKSPACE_OPERATION_ID")
         .and_then(|(_, operation_id)| cancellation_for_operation(operation_id));
     if cancellation
         .as_ref()
@@ -67,9 +98,16 @@ pub(crate) fn run_command_with_env_observer(
     command
         .args(args)
         .envs(envs.iter().copied())
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
     hide_console_window(&mut command);
     let mut child = command
         .spawn()
@@ -116,12 +154,28 @@ pub(crate) fn run_command_with_env_observer(
             "stderr",
         )
     });
+    let mut input_writer = input.map(|input| {
+        let mut stdin = child.stdin.take();
+        thread::spawn(move || {
+            let mut stdin = stdin
+                .take()
+                .ok_or_else(|| "도구 stdin을 열지 못했습니다".to_string())?;
+            use std::io::Write as _;
+            stdin
+                .write_all(&input)
+                .map_err(|error| format!("도구 입력을 전달하지 못했습니다: {error}"))?;
+            stdin
+                .flush()
+                .map_err(|error| format!("도구 입력을 flush하지 못했습니다: {error}"))
+        })
+    });
 
     loop {
         let status = match child.try_wait() {
             Ok(status) => status,
             Err(error) => {
                 process_guard.terminate(&mut child);
+                let _ = collect_input_writer(input_writer.take());
                 let _ = collect_process_streams(stdout_reader, stderr_reader);
                 return Err(format!("읽기 도구 상태 확인 실패: {error}"));
             }
@@ -131,6 +185,7 @@ pub(crate) fn run_command_with_env_observer(
             // pipe. Ask the platform to terminate the tree before joining
             // readers; the bounded join below is the final no-hang guard.
             process_guard.terminate(&mut child);
+            collect_input_writer(input_writer.take())?;
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
 
             return Ok(EngineRunResult {
@@ -145,6 +200,7 @@ pub(crate) fn run_command_with_env_observer(
 
         if output_limit_reached.load(Ordering::Acquire) {
             process_guard.terminate(&mut child);
+            let _ = collect_input_writer(input_writer.take());
             let _ = collect_process_streams(stdout_reader, stderr_reader);
             return Err(format!(
                 "읽기 도구 출력이 안전 한도({MAX_ENGINE_STREAM_BYTES} bytes)를 초과했습니다"
@@ -156,12 +212,14 @@ pub(crate) fn run_command_with_env_observer(
             .is_some_and(|value| value.load(Ordering::Acquire))
         {
             process_guard.terminate(&mut child);
+            collect_input_writer(input_writer.take())?;
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
             return Ok(cancelled_engine_run(started_at, stdout, stderr));
         }
 
         if Instant::now() >= deadline {
             process_guard.terminate(&mut child);
+            let _ = collect_input_writer(input_writer.take());
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
             let stderr = String::from_utf8_lossy(&stderr);
             let stderr = if stderr.trim().is_empty() {
@@ -187,6 +245,7 @@ pub(crate) fn run_command_with_env_observer(
         let idle_ms = policy.idle_timeout.as_millis().min(u128::from(u64::MAX)) as u64;
         if elapsed_ms.saturating_sub(last_activity_ms.load(Ordering::Acquire)) >= idle_ms {
             process_guard.terminate(&mut child);
+            let _ = collect_input_writer(input_writer.take());
             let (stdout, stderr) = collect_process_streams(stdout_reader, stderr_reader)?;
             let stderr = String::from_utf8_lossy(&stderr);
             let message = format!(
@@ -210,6 +269,17 @@ pub(crate) fn run_command_with_env_observer(
 
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn collect_input_writer(
+    writer: Option<thread::JoinHandle<Result<(), String>>>,
+) -> Result<(), String> {
+    let Some(writer) = writer else {
+        return Ok(());
+    };
+    writer
+        .join()
+        .map_err(|_| "도구 입력 writer가 비정상 종료되었습니다".to_string())?
 }
 
 struct EngineProcessGuard {
@@ -438,7 +508,7 @@ fn notify_progress_lines(
             .to_string();
         let consumed = (boundary + usize::from(boundary < pending.len())).min(pending.len());
         pending.drain(..consumed);
-        if line.starts_with("@visual-map-progress ") || line.starts_with("timing stage=") {
+        if line.starts_with("@codebase-workspace-progress ") || line.starts_with("timing stage=") {
             observer(EngineProcessEvent {
                 stream,
                 line: redact_secrets(&line),
@@ -478,7 +548,7 @@ fn collect_process_streams(
     Ok((stdout.bytes, stderr.bytes))
 }
 
-pub(crate) fn redact_secrets(input: &str) -> String {
+pub fn redact_secrets(input: &str) -> String {
     if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(input) {
         redact_json_value(&mut value);
         if let Ok(redacted) = serde_json::to_string(&value) {

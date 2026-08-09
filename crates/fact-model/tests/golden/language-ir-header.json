@@ -1,0 +1,60 @@
+{
+  "recordType": "header",
+  "record": {
+    "schema": "codebase-workspace.language-ir.v2",
+    "snapshotId": "snapshot-1f913a7dc2b1e3c573d1a5063729bf0dcc306d900a980a9db2b97a2037dbfb0b",
+    "sourceManifestDigest": "10a0bfb672905dc3609003f3ce63ff2b61fd809f95a73f15f5c22ee3acf0bca5",
+    "unit": {
+      "id": "unit-565c02854f7914019c0ab7c4de391727b7edc7d93729a71729655545b89fe842",
+      "workspaceId": "ws-0123456789abcdef",
+      "language": "typescript",
+      "root": ".",
+      "context": {
+        "id": "context-78a0a4bb90f64e54ed6b7e4bd9703c1c707a58d2e148d52877444cb3991e42ab",
+        "kind": "compiler_project",
+        "fingerprint": "dc8d464e1c697ffc0944e743a294ff7896d4911e9c293c513fbf8e4b1c245585",
+        "configFiles": [
+          "tsconfig.json"
+        ],
+        "dimensions": [
+          {
+            "kind": "module_mode",
+            "value": "node16"
+          }
+        ]
+      },
+      "eligibleFileCount": 1
+    },
+    "provider": {
+      "name": "scip-typescript",
+      "version": "1.0.0",
+      "protocol": "scip",
+      "origin": "managed_bundle",
+      "artifactDigest": "5c4c1964340aca5b65393bbe9d3249cdd71be26665b3320ad694f034f2743283"
+    },
+    "executionContext": {
+      "mode": "project",
+      "analysisRoot": ".",
+      "sourceScopeDigest": "45c66caeb06866f9609c3c10bd352d8626b08bbd40b63815ad94dcafd4420041",
+      "sourceFileCount": 1,
+      "configArtifacts": [
+        {
+          "path": "tsconfig.json",
+          "contentDigest": "dc8d464e1c697ffc0944e743a294ff7896d4911e9c293c513fbf8e4b1c245585",
+          "usage": "explicit_argument"
+        }
+      ],
+      "generatedContextDigest": null,
+      "dimensions": [
+        {
+          "kind": "module_mode",
+          "value": "node16"
+        }
+      ],
+      "missingDimensions": [
+        "target"
+      ],
+      "fingerprint": "6682c6b571b15e4944463cead409bd2827f2d6e0b5c34ab1f77d12ff1029166f"
+    }
+  }
+}

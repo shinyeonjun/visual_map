@@ -272,7 +272,7 @@ async fn connect_sqlserver(
         connection_failure(request, connection_string, error.to_string(), false)
     })?;
     config.readonly(true);
-    config.application_name("database-memory-mcp");
+    config.application_name("database-memory");
     let tcp = TcpStream::connect(config.get_addr())
         .await
         .map_err(|error| connection_failure(request, connection_string, error.to_string(), true))?;
@@ -646,4 +646,3 @@ struct ServerFacts {
     containment: String,
     encrypted_transport: bool,
 }
-

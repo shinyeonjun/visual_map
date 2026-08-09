@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
-    Diagnostic, DiagnosticCode, DocumentOutput, FileRelationOutput, IndexOutput, LanguageOutput,
-    OccurrenceOutput, RelationOutput, SymbolOutput,
+    AnalysisUnitOutput, Diagnostic, DiagnosticCode, DocumentOutput, FileCoverageOutput,
+    FileRelationOutput, IndexOutput, LanguageOutput, OccurrenceOutput, RelationOutput,
+    SymbolOutput,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -58,22 +59,21 @@ fn sample_output() -> IndexOutput {
 #[test]
 fn excluded_language_reason_is_stable_for_ui_consumers() {
     let diagnostics = vec![Diagnostic {
-        language: "php".to_string(),
+        language: "python".to_string(),
         level: "warning",
         code: DiagnosticCode::MissingDependencyMetadata,
-        message:
-            "PHP semantic analysis skipped because Composer dependency metadata is unavailable"
-                .to_string(),
+        message: "Python semantic analysis skipped because project metadata is unavailable"
+            .to_string(),
         detail: None,
         path: None,
         line: None,
     }];
     assert_eq!(
-        language_exclusion_reason("php", "excluded", &diagnostics).as_deref(),
+        language_exclusion_reason("python", "excluded", &diagnostics).as_deref(),
         Some("missing-dependency")
     );
     assert_eq!(
-        language_exclusion_reason("php", "indexed", &diagnostics),
+        language_exclusion_reason("python", "indexed", &diagnostics),
         None
     );
 }
@@ -81,7 +81,7 @@ fn excluded_language_reason_is_stable_for_ui_consumers() {
 #[test]
 fn diagnostic_code_does_not_depend_on_human_message_wording() {
     let diagnostics = vec![Diagnostic {
-        language: "php".to_string(),
+        language: "python".to_string(),
         level: "warning",
         code: DiagnosticCode::MissingDependencyMetadata,
         message: "provider wording changed in a future release".to_string(),
@@ -91,7 +91,7 @@ fn diagnostic_code_does_not_depend_on_human_message_wording() {
     }];
 
     assert_eq!(
-        language_exclusion_reason("php", "excluded", &diagnostics).as_deref(),
+        language_exclusion_reason("python", "excluded", &diagnostics).as_deref(),
         Some("missing-dependency")
     );
 }
@@ -106,6 +106,26 @@ fn architecture_exposes_language_and_framework_quality_summary() {
     fs::create_dir_all(&root).unwrap();
 
     let mut output = sample_output();
+    output.coverage.push(FileCoverageOutput {
+        language: "python".to_string(),
+        path: "app/routes.py".to_string(),
+        status: "indexed",
+        reason: None,
+    });
+    output.analysis_units.push(AnalysisUnitOutput {
+        id: "python:root".to_string(),
+        language: "python".to_string(),
+        root: ".".to_string(),
+        files_found: 1,
+        files_indexed: 1,
+        files_excluded: 0,
+        files_missing: 0,
+        status: "indexed",
+        provider: "native-lsp",
+        execution: "local",
+        elapsed_ms: 7,
+        reason: None,
+    });
     output.frameworks.push(crate::frameworks::FrameworkOutput {
         id: "fastapi".to_string(),
         language: "python".to_string(),
@@ -133,9 +153,11 @@ fn architecture_exposes_language_and_framework_quality_summary() {
 
     let architecture = build(&root, &output);
 
-    assert_eq!(architecture.schema, "code-memory.architecture-index.v3");
+    assert_eq!(architecture.schema, "code-memory.architecture-index.v4");
     assert_eq!(architecture.languages[0].id, "python");
     assert_eq!(architecture.languages[0].status, "indexed");
+    assert_eq!(architecture.coverage[0].path, "app/routes.py");
+    assert_eq!(architecture.analysis_units[0].id, "python:root");
     assert_eq!(architecture.frameworks[0].id, "fastapi");
     assert_eq!(architecture.frameworks[0].fact_count, 1);
     assert_eq!(architecture.frameworks[0].relation_count, 0);
@@ -219,6 +241,127 @@ fn unresolved_framework_route_is_kept_as_an_endpoint() {
     );
     assert!(!result.edges.iter().any(|edge| edge.kind == "ENTRYPOINT_TO"));
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn framework_facts_mark_only_verified_external_execution_roots() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-architecture-entrypoint-kinds-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("app")).unwrap();
+    fs::write(root.join("app/routes.py"), "def handler():\n    pass\n").unwrap();
+
+    let make_fact = |id: &str, kind: &str, framework: &str| crate::frameworks::FrameworkFact {
+        id: id.to_string(),
+        kind: kind.to_string(),
+        framework: framework.to_string(),
+        symbol: Some("fixture/handler().".to_string()),
+        method: (kind == "HTTP_ROUTE").then(|| "GET".to_string()),
+        path: (kind == "HTTP_ROUTE").then(|| "/health".to_string()),
+        source_file: "app/routes.py".to_string(),
+        source_line: 1,
+        source_end_line: 1,
+        source_range: vec![0, 0, 0, 13],
+        evidence: vec!["fixture".to_string()],
+        properties: BTreeMap::new(),
+    };
+    let framework = |id: &str, kind: &str, facts| crate::frameworks::FrameworkOutput {
+        id: id.to_string(),
+        language: "python".to_string(),
+        name: id.to_string(),
+        kind: kind.to_string(),
+        adapter: "fixture".to_string(),
+        status: "detected".to_string(),
+        matched_signals: Vec::new(),
+        files: vec!["app/routes.py".to_string()],
+        facts,
+    };
+
+    let mut output = sample_output();
+    output.documents[0].symbols.push(SymbolOutput {
+        symbol: "fixture/handler().".to_string(),
+        kind: "Function".to_string(),
+        display_name: Some("handler".to_string()),
+        documentation: Vec::new(),
+        signature: None,
+        enclosing_symbol: None,
+    });
+    output.frameworks = vec![
+        framework(
+            "react",
+            "ui",
+            vec![
+                make_fact("component", "COMPONENT", "react"),
+                make_fact("click", "EVENT_HANDLER", "react"),
+                make_fact("service", "SERVICE", "react"),
+            ],
+        ),
+        framework(
+            "libevent",
+            "async",
+            vec![
+                make_fact("event", "EVENT_HANDLER", "libevent"),
+                make_fact("spawn", "ASYNC_CALLS", "libevent"),
+            ],
+        ),
+        framework(
+            "fastapi",
+            "web",
+            vec![make_fact("route", "HTTP_ROUTE", "fastapi")],
+        ),
+    ];
+
+    let result = build(&root, &output);
+    let roots = ["entrypoint:fastapi:route", "entrypoint:libevent:event"];
+    for id in [
+        "entrypoint:react:component",
+        "entrypoint:react:click",
+        "entrypoint:react:service",
+        "entrypoint:libevent:spawn",
+    ] {
+        let node = result.nodes.iter().find(|node| node.id == id).unwrap();
+        assert_eq!(
+            node.properties.get("execution_root").map(String::as_str),
+            Some("false"),
+            "{id} must remain a fact without becoming an execution root"
+        );
+        assert!(!result
+            .edges
+            .iter()
+            .any(|edge| edge.kind == "ENTRYPOINT_TO" && edge.from == id));
+    }
+    assert!(roots.iter().all(|id| result.nodes.iter().any(|node| {
+        node.id == *id && node.properties.get("execution_root").map(String::as_str) == Some("true")
+    })));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn execution_entrypoint_whitelist_is_explicit_and_fails_closed() {
+    for kind in [
+        "HTTP_ROUTE",
+        "RPC_ENDPOINT",
+        "SCHEDULED_JOB",
+        "SERVER_ACTION",
+    ] {
+        assert!(is_execution_entrypoint_fact("web", kind), "{kind}");
+    }
+    assert!(is_execution_entrypoint_fact("async", "EVENT_HANDLER"));
+    for (framework, kind) in [
+        ("ui", "EVENT_HANDLER"),
+        ("desktop", "EVENT_HANDLER"),
+        ("web", "COMPONENT"),
+        ("rpc", "SERVICE"),
+        ("async", "ASYNC_CALLS"),
+        ("web", "FUTURE_FACT_KIND"),
+    ] {
+        assert!(
+            !is_execution_entrypoint_fact(framework, kind),
+            "{framework}:{kind} must not silently become a root"
+        );
+    }
 }
 
 #[test]
@@ -598,41 +741,6 @@ fn project_metadata_recognizes_python_and_gradle_manifests() {
 }
 
 #[test]
-fn php_namespace_import_resolves_psr4_style_project_file() {
-    let root = std::env::temp_dir().join(format!(
-        "code-memory-architecture-php-namespace-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(root.join("src/Service")).unwrap();
-    fs::write(
-        root.join("routes.php"),
-        "<?php\nuse App\\Service\\UserService;\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("src/Service/UserService.php"),
-        "<?php\nnamespace App\\Service;\nclass UserService {}\n",
-    )
-    .unwrap();
-    let result = build(
-        &root,
-        &IndexOutput {
-            languages: vec![],
-            documents: Vec::new(),
-            ..sample_output()
-        },
-    );
-    assert!(result.edges.iter().any(|edge| {
-        edge.kind == "IMPORTS"
-            && edge.from == "file:routes.php"
-            && edge.to == "file:src/Service/UserService.php"
-            && edge.properties.get("resolution").map(String::as_str) == Some("internal")
-    }));
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
 fn c_headers_use_external_boundaries_but_local_headers_do_not() {
     let root = std::env::temp_dir().join(format!(
         "code-memory-architecture-c-headers-{}",
@@ -822,4 +930,80 @@ fn database_boundary_ignores_comments_strings_and_dynamic_sql() {
         static_database_operation("cursor.execute(sql)"),
         Some("DB_CALL")
     );
+
+    let joined = static_database_accesses(
+        "cursor.execute(\"SELECT o.id FROM public.orders o JOIN customers c ON c.id = o.customer_id\")",
+    );
+    assert!(joined.contains(&StaticDatabaseAccess {
+        operation: "READ",
+        table: "public.orders".to_string(),
+    }));
+    assert!(joined.contains(&StaticDatabaseAccess {
+        operation: "READ",
+        table: "customers".to_string(),
+    }));
+    assert_eq!(
+        static_database_accesses("cursor.execute('SELECT * FROM \"public\".\"orders\"')"),
+        vec![StaticDatabaseAccess {
+            operation: "READ",
+            table: "public.orders".to_string(),
+        }]
+    );
+    assert_eq!(
+        static_database_accesses("cursor.execute(\"UPDATE public.orders SET status = 'paid'\")"),
+        vec![StaticDatabaseAccess {
+            operation: "WRITE",
+            table: "public.orders".to_string(),
+        }]
+    );
+    assert!(static_database_accesses("sql = \"SELECT * FROM \" + table").is_empty());
+    assert!(static_database_accesses("sql = f\"SELECT * FROM {table}\"").is_empty());
+    assert!(static_database_accesses(
+        "sql = \"WITH recent AS (SELECT * FROM orders) SELECT * FROM recent\""
+    )
+    .is_empty());
+    assert!(static_database_accesses(
+        "cursor.execute(\"SELECT * FROM orders; DELETE FROM users\")"
+    )
+    .is_empty());
+    assert!(static_database_accesses("sql = \"SELECT * FROM users, orders\"").is_empty());
+    assert!(static_database_accesses("sql = \"SELECT * FROM generate_series(1, 10)\"").is_empty());
+}
+
+#[test]
+fn architecture_emits_static_sql_table_resources() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-architecture-static-sql-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("app")).unwrap();
+    fs::write(
+        root.join("app/routes.py"),
+        "sql = \"SELECT id FROM public.orders\"\ncursor.execute(\"UPDATE public.orders SET status = 'paid'\")\n",
+    )
+    .unwrap();
+
+    let result = build(&root, &sample_output());
+    let table = result
+        .nodes
+        .iter()
+        .find(|node| node.id == "data:table:public.orders")
+        .expect("static SQL table resource");
+    assert_eq!(table.kind, "DATA_RESOURCE");
+    assert_eq!(table.name, "orders");
+    assert_eq!(
+        table.properties.get("schema").map(String::as_str),
+        Some("public")
+    );
+    assert!(result
+        .edges
+        .iter()
+        .any(|edge| edge.kind == "READS" && edge.to == table.id));
+    assert!(result
+        .edges
+        .iter()
+        .any(|edge| edge.kind == "WRITES" && edge.to == table.id));
+
+    let _ = fs::remove_dir_all(root);
 }

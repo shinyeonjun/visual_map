@@ -1,17 +1,17 @@
 [
   {
     "directory": ".",
-    "command": "clang -c main.c",
+    "command": "clang -std=c17 --target=x86_64-pc-windows-msvc -c main.c",
     "file": "main.c"
   },
   {
     "directory": ".",
-    "command": "clang++ -std=c++17 -c main.cpp",
+    "command": "clang++ -std=c++17 --target=x86_64-pc-windows-msvc -c main.cpp",
     "file": "main.cpp"
   },
   {
     "directory": ".",
-    "command": "clang++ -std=c++17 -c implementations.cpp",
+    "command": "clang++ -std=c++17 --target=x86_64-pc-windows-msvc -c implementations.cpp",
     "file": "implementations.cpp"
   }
 ]

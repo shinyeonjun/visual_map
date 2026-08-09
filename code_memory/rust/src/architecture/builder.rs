@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use super::*;
@@ -14,9 +14,7 @@ pub(crate) struct ArchitectureBuilder {
     source_texts: HashMap<String, String>,
     source_index: SourcePathIndex,
     packages: Vec<PackageInfo>,
-    php_namespace_index: PhpNamespaceIndex,
     imports: Vec<ImportUse>,
-    entrypoints: Vec<(String, String, String)>,
     pub(crate) diagnostics: Vec<ArchitectureDiagnostic>,
 }
 
@@ -27,7 +25,6 @@ impl ArchitectureBuilder {
         packages: Vec<PackageInfo>,
     ) -> Self {
         let root_string = root.to_string_lossy().into_owned();
-        let php_namespace_index = build_php_namespace_index(&source_texts);
         let source_index = SourcePathIndex::new(&source_texts);
         let mut builder = Self {
             root: root_string,
@@ -40,9 +37,7 @@ impl ArchitectureBuilder {
             source_texts,
             source_index,
             packages,
-            php_namespace_index,
             imports: Vec::new(),
-            entrypoints: Vec::new(),
             diagnostics: Vec::new(),
         };
         builder.node(
@@ -120,7 +115,7 @@ impl ArchitectureBuilder {
         let evidence_key = format!("{}|{:?}|{:?}", evidence.path, evidence.range, evidence.note);
         // ponytail: evidence de-duplication is O(1) instead of scanning every
         // prior occurrence on a module edge; the serialized evidence stays
-        // unchanged for VisualMap.
+        // unchanged for desktop consumers.
         if self
             .evidence_keys
             .entry(key.clone())
@@ -382,9 +377,6 @@ impl ArchitectureBuilder {
                 if language == "go" && trimmed.starts_with("module ") {
                     local_prefixes.insert(trimmed[7..].trim().to_string());
                 }
-                if language == "php" && trimmed.starts_with("namespace ") {
-                    local_prefixes.insert(trimmed[10..].trim_end_matches(';').trim().to_string());
-                }
             }
         }
         for (path, language) in files {
@@ -396,7 +388,6 @@ impl ArchitectureBuilder {
                     &import,
                     &self.source_texts,
                     &self.packages,
-                    &self.php_namespace_index,
                     &self.source_index,
                 );
                 if local_target.is_none()
@@ -422,7 +413,6 @@ impl ArchitectureBuilder {
                 &import,
                 &self.source_texts,
                 &self.packages,
-                &self.php_namespace_index,
                 &self.source_index,
             ) {
                 if import.path != target {
@@ -549,6 +539,7 @@ impl ArchitectureBuilder {
 
         let mut dynamic = Vec::new();
         let mut database = Vec::new();
+        let mut database_tables = BTreeMap::<String, (String, Option<String>)>::new();
         let mut files = Vec::new();
         // ponytail: one lexical pass is intentional; semantic providers remain
         // authoritative for calls and types.
@@ -568,32 +559,69 @@ impl ArchitectureBuilder {
                     ));
                 }
 
-                let operation = static_database_operation(line);
-                if let Some(operation) = operation {
-                    database.push(EdgeDraft {
-                        from: module.clone(),
-                        to: database_id.clone(),
-                        kind: if operation == "READ" {
-                            "READS"
-                        } else {
-                            "WRITES"
-                        }
-                        .to_string(),
-                        level: "summary".to_string(),
-                        properties: BTreeMap::from([
-                            ("operation".to_string(), operation.to_string()),
-                            ("resolution".to_string(), "source-candidate".to_string()),
-                            (
-                                "source".to_string(),
-                                "lexical-database-boundary".to_string(),
+                if let Some(operation) = static_database_operation(line) {
+                    let accesses = static_database_accesses(line);
+                    if accesses.is_empty() {
+                        database.push(EdgeDraft {
+                            from: module.clone(),
+                            to: database_id.clone(),
+                            kind: if operation == "READ" {
+                                "READS"
+                            } else {
+                                "WRITES"
+                            }
+                            .to_string(),
+                            level: "summary".to_string(),
+                            properties: BTreeMap::from([
+                                ("operation".to_string(), operation.to_string()),
+                                ("resolution".to_string(), "source-candidate".to_string()),
+                                (
+                                    "source".to_string(),
+                                    "lexical-database-boundary".to_string(),
+                                ),
+                            ]),
+                            evidence: Self::evidence(
+                                path,
+                                line_number + 1,
+                                Some("static database boundary".to_string()),
                             ),
-                        ]),
-                        evidence: Self::evidence(
-                            path,
-                            line_number + 1,
-                            Some("static database boundary".to_string()),
-                        ),
-                    });
+                        });
+                    } else {
+                        for access in accesses {
+                            let table_id = format!("data:table:{}", access.table);
+                            let (schema, table_name) = access
+                                .table
+                                .rsplit_once('.')
+                                .map_or((None, access.table.as_str()), |(schema, table)| {
+                                    (Some(schema.to_string()), table)
+                                });
+                            database_tables
+                                .entry(table_id.clone())
+                                .or_insert_with(|| (table_name.to_string(), schema));
+                            database.push(EdgeDraft {
+                                from: module.clone(),
+                                to: table_id,
+                                kind: if access.operation == "READ" {
+                                    "READS"
+                                } else {
+                                    "WRITES"
+                                }
+                                .to_string(),
+                                level: "summary".to_string(),
+                                properties: BTreeMap::from([
+                                    ("operation".to_string(), access.operation.to_string()),
+                                    ("qualified_table".to_string(), access.table.clone()),
+                                    ("resolution".to_string(), "source-candidate".to_string()),
+                                    ("source".to_string(), "static-sql".to_string()),
+                                ]),
+                                evidence: Self::evidence(
+                                    path,
+                                    line_number + 1,
+                                    Some(format!("static SQL table {}", access.table)),
+                                ),
+                            });
+                        }
+                    }
                 }
 
                 let read = contains_any(
@@ -637,6 +665,35 @@ impl ArchitectureBuilder {
             }
         }
 
+        let has_database_tables = !database_tables.is_empty();
+        for (table_id, (table_name, schema)) in database_tables {
+            let qualified_name = schema.as_deref().map_or_else(
+                || table_name.clone(),
+                |schema| format!("{schema}.{table_name}"),
+            );
+            let mut properties = BTreeMap::from([
+                ("qualified_name".to_string(), qualified_name.clone()),
+                ("resolution".to_string(), "source-candidate".to_string()),
+                ("resource_kind".to_string(), "table".to_string()),
+                ("source".to_string(), "static-sql".to_string()),
+                ("table".to_string(), table_name.clone()),
+            ]);
+            if let Some(schema) = schema {
+                properties.insert("schema".to_string(), schema);
+            }
+            self.node(
+                table_id,
+                "DATA_RESOURCE",
+                table_name,
+                qualified_name,
+                None,
+                None,
+                Some(database_id.clone()),
+                true,
+                properties,
+            );
+        }
+
         for (path, module, language, line_number, marker) in dynamic {
             let id = format!("dynamic:{language}:{path}:{line_number}");
             self.node(
@@ -672,7 +729,7 @@ impl ArchitectureBuilder {
                 draft.evidence,
             );
         }
-        if !self.edges.values().any(|edge| edge.to == database_id) {
+        if !has_database_tables && !self.edges.values().any(|edge| edge.to == database_id) {
             self.nodes.remove(&database_id);
         }
         if !self.edges.values().any(|edge| edge.to == file_id) {
@@ -780,6 +837,10 @@ impl ArchitectureBuilder {
                 let id = format!("entrypoint:{}:{}", framework.id, fact.id);
                 let mut properties = fact.properties.clone();
                 properties.insert("framework".to_string(), framework.id.clone());
+                properties.insert("fact_kind".to_string(), fact.kind.clone());
+                let execution_root =
+                    is_execution_entrypoint_fact(&framework.kind, fact.kind.as_str());
+                properties.insert("execution_root".to_string(), execution_root.to_string());
                 if fact.kind == "HTTP_ROUTE" {
                     properties
                         .entry("runtime_reachability".to_string())
@@ -815,99 +876,42 @@ impl ArchitectureBuilder {
                     false,
                     properties,
                 );
-                if let Some(target) = target {
-                    self.edge(
-                        &id,
-                        &target,
-                        "ENTRYPOINT_TO",
-                        "summary",
-                        BTreeMap::from([(String::from("framework"), framework.id.clone())]),
-                        ArchitectureEvidence {
-                            path: fact.source_file.clone(),
-                            range: fact.source_range.clone(),
-                            note: fact.evidence.first().cloned(),
-                        },
-                    );
-                }
-                self.entrypoints.push((id, kind.to_string(), label));
-            }
-        }
-    }
-
-    pub(crate) fn build_flows(&self) -> Vec<ArchitectureFlow> {
-        let mut adjacency: HashMap<String, Vec<&ArchitectureEdge>> = HashMap::new();
-        for edge in self.edges.values() {
-            if edge.level == "summary" && edge.kind != "CONTAINS" {
-                adjacency.entry(edge.from.clone()).or_default().push(edge);
-            }
-        }
-        for edges in adjacency.values_mut() {
-            edges.sort_by(|left, right| left.id.cmp(&right.id));
-        }
-        let mut flows = Vec::new();
-        for (entrypoint, kind, label) in &self.entrypoints {
-            let mut queue = VecDeque::from([entrypoint.clone()]);
-            let mut reachable = BTreeSet::new();
-            let mut nodes = BTreeSet::new();
-            while let Some(node) = queue.pop_front() {
-                if !reachable.insert(node.clone()) {
-                    continue;
-                }
-                if nodes.len() < 50 {
-                    nodes.insert(node.clone());
-                }
-                for edge in adjacency.get(&node).into_iter().flatten() {
-                    if !reachable.contains(&edge.to) {
-                        queue.push_back(edge.to.clone());
+                if execution_root {
+                    if let Some(target) = target {
+                        self.edge(
+                            &id,
+                            &target,
+                            "ENTRYPOINT_TO",
+                            "summary",
+                            BTreeMap::from([(String::from("framework"), framework.id.clone())]),
+                            ArchitectureEvidence {
+                                path: fact.source_file.clone(),
+                                range: fact.source_range.clone(),
+                                note: fact.evidence.first().cloned(),
+                            },
+                        );
                     }
                 }
             }
-            if nodes.len() <= 1 {
-                continue;
-            }
-            let edge_ids = self
-                .edges
-                .values()
-                .filter(|edge| {
-                    edge.level == "summary"
-                        && edge.kind != "CONTAINS"
-                        && nodes.contains(&edge.from)
-                        && nodes.contains(&edge.to)
-                })
-                .map(|edge| edge.id.clone())
-                .collect();
-            let omitted_node_count = reachable.len().saturating_sub(nodes.len());
-            flows.push(ArchitectureFlow {
-                id: format!("flow:{entrypoint}"),
-                kind: kind.clone(),
-                label: label.clone(),
-                entrypoint: entrypoint.clone(),
-                node_ids: nodes.into_iter().collect(),
-                edge_ids,
-                truncated: omitted_node_count > 0,
-                omitted_node_count,
-            });
         }
-        flows.sort_by(|left, right| left.id.cmp(&right.id));
-        flows
     }
 
     pub(crate) fn finish(mut self) -> ArchitectureOutput {
-        let flows = self.build_flows();
         for edge in self.edges.values_mut() {
             edge.evidence.sort_by(|left, right| {
                 (&left.path, &left.range, &left.note).cmp(&(&right.path, &right.range, &right.note))
             });
         }
         ArchitectureOutput {
-            schema: "code-memory.architecture-index.v3",
+            schema: "code-memory.architecture-index.v4",
             project_root: self.root,
             provider_provenance: Vec::new(),
             languages: Vec::new(),
+            coverage: Vec::new(),
+            analysis_units: Vec::new(),
             frameworks: Vec::new(),
             nodes: self.nodes.into_values().collect(),
             edges: self.edges.into_values().collect(),
-            flows,
             diagnostics: self.diagnostics,
         }
     }
@@ -942,48 +946,5 @@ mod tests {
             .map(|evidence| evidence.path.as_str())
             .collect();
         assert_eq!(paths, ["a.rs", "z.rs"]);
-    }
-
-    #[test]
-    fn flow_cap_reports_every_hidden_node_without_dangling_edges() {
-        let mut builder = ArchitectureBuilder::new(Path::new("."), HashMap::new(), Vec::new());
-        for index in 0..55 {
-            builder.node(
-                format!("node-{index}"),
-                "MODULE",
-                format!("node-{index}"),
-                format!("node-{index}"),
-                None,
-                None,
-                None,
-                false,
-                BTreeMap::new(),
-            );
-            if index > 0 {
-                builder.edge(
-                    &format!("node-{}", index - 1),
-                    &format!("node-{index}"),
-                    "CALLS",
-                    "summary",
-                    BTreeMap::new(),
-                    ArchitectureEvidence {
-                        path: "src/chain.java".to_string(),
-                        range: Vec::new(),
-                        note: None,
-                    },
-                );
-            }
-        }
-        builder.entrypoints.push((
-            "node-0".to_string(),
-            "ENDPOINT".to_string(),
-            "GET /chain".to_string(),
-        ));
-
-        let flow = builder.build_flows().pop().unwrap();
-        assert_eq!(flow.node_ids.len(), 50);
-        assert_eq!(flow.edge_ids.len(), 49);
-        assert!(flow.truncated);
-        assert_eq!(flow.omitted_node_count, 5);
     }
 }

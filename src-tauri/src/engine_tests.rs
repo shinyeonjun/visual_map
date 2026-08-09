@@ -6,9 +6,9 @@ use std::{thread, time::Duration};
 
 #[test]
 fn dev_mode_prefers_exe_engines_directory_when_present() {
-    let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\BackendVisualMap");
+    let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\CodebaseWorkspace");
     let root = std::env::temp_dir().join(format!(
-        "backend-visual-map-dev-engine-test-{}",
+        "codebase-workspace-dev-engine-test-{}",
         std::process::id()
     ));
     let exe_dir = root.join("target").join("debug");
@@ -22,7 +22,7 @@ fn dev_mode_prefers_exe_engines_directory_when_present() {
     let engine_dir = resolve_engine_dir(
         EngineRuntimeMode::Dev,
         &app_data_dir,
-        Some(Path::new(r"C:\Program Files\Backend Visual Map\resources")),
+        Some(Path::new(r"C:\Program Files\Codebase Workspace\resources")),
         Some(&exe_dir),
         None,
     );
@@ -34,7 +34,7 @@ fn dev_mode_prefers_exe_engines_directory_when_present() {
 
 #[test]
 fn dev_mode_falls_back_to_app_data_engines_directory() {
-    let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\BackendVisualMap");
+    let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\CodebaseWorkspace");
 
     let engine_dir = resolve_engine_dir(EngineRuntimeMode::Dev, &app_data_dir, None, None, None);
 
@@ -43,14 +43,14 @@ fn dev_mode_falls_back_to_app_data_engines_directory() {
 
 #[test]
 fn production_mode_prefers_resource_engines_directory() {
-    let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\BackendVisualMap");
-    let resource_dir = PathBuf::from(r"C:\Program Files\Backend Visual Map\resources");
+    let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\CodebaseWorkspace");
+    let resource_dir = PathBuf::from(r"C:\Program Files\Codebase Workspace\resources");
 
     let engine_dir = resolve_engine_dir(
         EngineRuntimeMode::Production,
         &app_data_dir,
         Some(&resource_dir),
-        Some(Path::new(r"C:\Program Files\Backend Visual Map")),
+        Some(Path::new(r"C:\Program Files\Codebase Workspace")),
         None,
     );
 
@@ -59,8 +59,8 @@ fn production_mode_prefers_resource_engines_directory() {
 
 #[test]
 fn production_mode_falls_back_to_exe_engines_directory() {
-    let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\BackendVisualMap");
-    let exe_dir = PathBuf::from(r"C:\Program Files\Backend Visual Map");
+    let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\CodebaseWorkspace");
+    let exe_dir = PathBuf::from(r"C:\Program Files\Codebase Workspace");
 
     let engine_dir = resolve_engine_dir(
         EngineRuntimeMode::Production,
@@ -75,7 +75,7 @@ fn production_mode_falls_back_to_exe_engines_directory() {
 
 #[test]
 fn override_directory_wins_in_any_mode() {
-    let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\BackendVisualMap");
+    let app_data_dir = PathBuf::from(r"C:\Users\dev\AppData\Local\CodebaseWorkspace");
     let override_dir = PathBuf::from(r"D:\engines");
 
     let engine_dir = resolve_engine_dir(
@@ -92,7 +92,7 @@ fn override_directory_wins_in_any_mode() {
 #[test]
 fn registry_requires_a_matching_manifest_checksum_without_running_engines() {
     let root = std::env::temp_dir().join(format!(
-        "backend-visual-map-engine-test-{}",
+        "codebase-workspace-engine-test-{}",
         std::process::id()
     ));
     let engine_dir = root.join("engines");
@@ -134,7 +134,7 @@ fn registry_requires_a_matching_manifest_checksum_without_running_engines() {
 #[test]
 fn development_artifact_is_allowed_only_in_dev_mode() {
     let root = std::env::temp_dir().join(format!(
-        "backend-visual-map-dev-artifact-test-{}",
+        "codebase-workspace-dev-artifact-test-{}",
         std::process::id()
     ));
     let engine_dir = root.join("engines");
@@ -197,7 +197,7 @@ fn development_artifact_is_allowed_only_in_dev_mode() {
 #[test]
 fn unpublished_release_hash_is_never_releasable() {
     let root = std::env::temp_dir().join(format!(
-        "backend-visual-map-unpublished-engine-test-{}",
+        "codebase-workspace-unpublished-engine-test-{}",
         std::process::id()
     ));
     let engine_dir = root.join("engines");
@@ -244,7 +244,7 @@ fn unpublished_release_hash_is_never_releasable() {
 #[test]
 fn manifest_version_and_contract_must_match_the_adapter() {
     let root = std::env::temp_dir().join(format!(
-        "backend-visual-map-contract-mismatch-test-{}",
+        "codebase-workspace-contract-mismatch-test-{}",
         std::process::id()
     ));
     let engine_dir = root.join("engines");
@@ -258,7 +258,7 @@ fn manifest_version_and_contract_must_match_the_adapter() {
     let manifest_path = engine_dir.join("manifest.json");
     let manifest = fs::read_to_string(&manifest_path)
         .unwrap()
-        .replace(r#""contractVersion":"1""#, r#""contractVersion":"99""#);
+        .replace(r#""contractVersion":"2""#, r#""contractVersion":"99""#);
     fs::write(&manifest_path, manifest).unwrap();
 
     let registry = engine_registry(EngineRuntimeMode::Dev, &root, None, None, Some(&engine_dir));
@@ -386,6 +386,27 @@ fn command_runner_passes_explicit_environment() {
 
 #[cfg(windows)]
 #[test]
+fn command_runner_delivers_provider_prompt_through_stdin() {
+    let current_dir = std::env::temp_dir();
+    let result = run_command_with_input(
+        Path::new("node.exe"),
+        &[
+            "-e",
+            "let body='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>body+=chunk);process.stdin.on('end',()=>process.stdout.write(body))",
+        ],
+        EngineRunPolicy::fixed(Duration::from_secs(5)),
+        &[],
+        &current_dir,
+        b"bounded semantic prompt".to_vec(),
+    )
+    .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.stdout, "bounded semantic prompt");
+}
+
+#[cfg(windows)]
+#[test]
 fn run_engine_command_preserves_empty_arguments() {
     let engine = EngineAvailability {
         id: "test-node".to_string(),
@@ -456,7 +477,7 @@ fn command_runner_forwards_progress_and_stops_after_idle_timeout() {
         Path::new("node.exe"),
         &[
             "-e",
-            "console.error('@visual-map-progress {\"stage\":\"test\"}'); setTimeout(() => {}, 5000)",
+            "console.error('@codebase-workspace-progress {\"stage\":\"test\"}'); setTimeout(() => {}, 5000)",
         ],
         EngineRunPolicy {
             hard_timeout: Duration::from_secs(5),
@@ -490,7 +511,7 @@ fn command_runner_kills_a_cancelled_operation() {
                     "require('child_process').spawn(process.execPath,['-e','setTimeout(()=>{},5000)'],{stdio:'inherit'});setTimeout(()=>{},5000)",
                 ],
                 Duration::from_secs(10),
-                &[("BACKEND_VISUAL_MAP_OPERATION_ID", operation_id.as_str())],
+                &[("CODEBASE_WORKSPACE_OPERATION_ID", operation_id.as_str())],
             )
             .unwrap()
         }
@@ -582,7 +603,7 @@ fn write_test_manifest(
             {
                 "id": "codebase-memory",
                 "version": "0.1.0",
-                "contractVersion": "1",
+                "contractVersion": CODEBASE_MEMORY_CONTRACT_VERSION,
                 "releaseReady": true,
                 "executable": {
                     "fileName": "code-memory-language.exe",

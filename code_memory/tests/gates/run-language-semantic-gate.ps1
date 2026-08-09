@@ -4,6 +4,8 @@ param(
     [switch]$AllowMissingProvider
 )
 
+. (Join-Path $PSScriptRoot 'lib\language-ir-stream-authority.ps1')
+
 $ErrorActionPreference = 'Stop'
 if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
     $PSNativeCommandUseErrorActionPreference = $false
@@ -25,8 +27,6 @@ $cases = @(
     @{ Id = 'cpp'; Path = 'native-lsp-c'; Target = '#multiply@' },
     @{ Id = 'go'; Path = 'native-lsp-go'; Target = '#Add@' },
     @{ Id = 'rust'; Path = 'native-lsp-rust'; Target = '#add@' },
-    @{ Id = 'php'; Path = 'scip-php'; Target = 'add\(\)' },
-    @{ Id = 'ruby'; Path = 'native-lsp-ruby'; Target = '#add@' },
     @{ Id = 'dart'; Path = 'native-lsp-dart'; Target = '#add@' }
 )
 
@@ -44,14 +44,56 @@ foreach ($case in $cases) {
     if (-not [string]::IsNullOrWhiteSpace($ProvidersRoot)) {
         $arguments += @('--providers-root', (Resolve-Path $ProvidersRoot).Path)
     }
-    & $Bridge @arguments
-    if ($LASTEXITCODE -ne 0) {
+    $bridgeOutput = @(& $Bridge @arguments 2>&1)
+    $bridgeExitCode = $LASTEXITCODE
+    $bridgeOutput | ForEach-Object { Write-Host $_ }
+    if ($bridgeExitCode -ne 0) {
         if ($AllowMissingProvider) {
             Write-Host "SKIP $($case.Id): bridge failed"
             $skipped++
             continue
         }
         throw "$($case.Id): bridge failed"
+    }
+
+    $receiptPrefix = '@codebase-workspace-language-ir '
+    $receiptLine = @($bridgeOutput | ForEach-Object { $_.ToString() } | Where-Object {
+            $_.StartsWith($receiptPrefix, [StringComparison]::Ordinal)
+        }) | Select-Object -Last 1
+    if ([string]::IsNullOrWhiteSpace($receiptLine)) {
+        throw "$($case.Id): Language IR receipt is missing"
+    }
+    $receipt = $receiptLine.Substring($receiptPrefix.Length) | ConvertFrom-Json
+    if ($receipt.schema -ne 'codebase-workspace.language-ir-migration-receipt.v6') {
+        throw "$($case.Id): unsupported Language IR receipt schema $($receipt.schema)"
+    }
+    $null = Get-LanguageIrStreamAuthority -BridgeOutput $bridgeOutput -Receipt $receipt -Context $case.Id
+
+    $contextPrefix = '@codebase-workspace-provider-execution-context '
+    $contextLine = @($bridgeOutput | ForEach-Object { $_.ToString() } | Where-Object {
+            $_.StartsWith($contextPrefix)
+        }) | Select-Object -Last 1
+    if ([string]::IsNullOrWhiteSpace($contextLine)) {
+        throw "$($case.Id): provider execution context receipt is missing"
+    }
+    $context = $contextLine.Substring($contextPrefix.Length) | ConvertFrom-Json
+    if ($context.schema -ne 'codebase-workspace.provider-execution-context-reconciliation.v3') {
+        throw "$($case.Id): unsupported provider execution context schema $($context.schema)"
+    }
+    if ($context.executionCount -lt 1 -or
+        $context.exactExecutionCount -ne $context.executionCount -or
+        $context.partialExecutionCount -ne 0 -or
+        $context.notExecutedCount -ne 0) {
+        throw "$($case.Id): reviewed fixture did not use an exact provider execution context"
+    }
+    if ($context.contextSetDigest -notmatch '^[0-9a-f]{64}$') {
+        throw "$($case.Id): provider execution context digest is invalid"
+    }
+    if ($receipt.executionContextSetDigest -ne $context.contextSetDigest) {
+        throw "$($case.Id): Language IR and execution-context receipts disagree"
+    }
+    if ($context.detailsTruncated -or @($context.executionSample).Count -ne [int]$context.executionCount) {
+        throw "$($case.Id): reviewed fixture execution-context evidence is incomplete"
     }
 
     $result = Get-Content $out -Raw | ConvertFrom-Json
@@ -92,7 +134,11 @@ foreach ($case in $cases) {
             throw 'cpp: expected one indexed project header document'
         }
     }
-    $duplicateDocuments = @($result.documents | Group-Object path | Where-Object Count -gt 1)
+    # One physical header can legitimately have distinct C and C++ semantic
+    # documents. Provider document identity is (language, path), not path.
+    $duplicateDocuments = @($result.documents |
+        Group-Object { "$($_.language)`t$($_.path)" } |
+        Where-Object Count -gt 1)
     if ($duplicateDocuments.Count -gt 0) {
         throw "$($case.Id): duplicate semantic documents were emitted for $($duplicateDocuments[0].Name)"
     }

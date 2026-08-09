@@ -1,7 +1,44 @@
-# 보안과 개인정보
+# Security and privacy boundary
 
-- 소스 코드와 스키마 메타데이터는 로컬에 남습니다.
-- DB row data 접근은 범위 밖입니다.
-- 워크스페이스 DB 프로필은 비밀번호를 저장하지 않습니다.
-- 스캔 이벤트는 저장 전에 민감정보를 마스킹합니다.
-- 코드-DB 후보 연결은 근거가 있는 추정이며 확정 사실이 아닙니다.
+## Product default
+
+The desktop app is local-first and single-user. Project paths, graph snapshots,
+map state, and conversations are stored only in the application's local data
+directory. There is no account, sync, sharing, collaboration, telemetry, or
+automatic GitHub upload in the current product boundary.
+
+## AI boundary
+
+The user selects one installed Codex or Claude CLI adapter for both semantic-map
+analysis and chat. No provider is selected automatically. Static and database
+analysis remains available from the last published snapshot when the provider
+is unavailable; AI-derived refresh and chat are unavailable.
+
+Before AI integration is enabled, the implementation must enforce:
+
+- explicit provider/model selection;
+- bounded, purpose-specific evidence retrieval instead of whole-repository
+  prompt dumps;
+- secret/path redaction at the process boundary;
+- no raw DB row access;
+- no credential persistence in workspace or conversation records;
+- visible analysis version and stale-state handling after source changes.
+
+## Filesystem and process boundary
+
+- Workspace paths are canonicalized and constrained to local directories.
+- Source opening/reveal commands reject escape through relative paths or
+  symlinks/reparse points.
+- Sidecars are selected through a verified manifest and run with bounded output,
+  timeout, cancellation, and descendant-process cleanup.
+- Fact Graph publication is transactional and fail closed.
+
+## Database boundary
+
+Database Memory reads catalogs, schema objects, SQLite metadata, or isolated DDL
+metadata. `row_data_access: false` is part of its executable contract. Connection
+strings are runtime secrets and are not written to Fact Graph snapshots.
+
+Any future cloud sync, team sharing, browser service, direct provider API, or
+agent-facing unified retrieval server requires an explicit threat-model update
+before implementation.

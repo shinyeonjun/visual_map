@@ -17,7 +17,7 @@ use crate::introspection::CancellationToken;
 use crate::redact::redact_connection_string;
 use crate::{adapters, ddl, ObjectKey, ObjectKind};
 
-pub const INTERFACE_CONTRACT_VERSION: u32 = 2;
+pub const INTERFACE_CONTRACT_VERSION: u32 = 3;
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 pub const MAX_TIMEOUT_MS: u64 = 86_400_000;
 pub const DEFAULT_OBJECT_PAGE_LIMIT: usize = 100;
@@ -1034,23 +1034,8 @@ pub struct ProductContract {
     pub operations: Vec<String>,
     pub commands: Vec<String>,
     pub object_kinds: Vec<String>,
-    pub traversal_limits: LegacyTraversalLimits,
-    pub inventory_limits: LegacyInventoryLimits,
     pub limits: ContractLimits,
     pub support: Vec<SupportLedgerEntry>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct LegacyTraversalLimits {
-    pub max_depth: u32,
-    pub max_results: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct LegacyInventoryLimits {
-    pub default_tables: usize,
-    pub max_tables: usize,
-    pub offset_pagination: bool,
 }
 
 pub fn product_contract() -> ProductContract {
@@ -1083,26 +1068,11 @@ pub fn product_contract() -> ProductContract {
             "list-objects".to_owned(),
             "find-objects".to_owned(),
             "describe-object".to_owned(),
-            "describe-table".to_owned(),
-            "inventory".to_owned(),
-            "find-table".to_owned(),
-            "find-column".to_owned(),
-            "impact-analysis".to_owned(),
-            "trace-relationships".to_owned(),
         ],
         object_kinds: ALL_OBJECT_KINDS
             .iter()
             .map(ToString::to_string)
             .collect(),
-        traversal_limits: LegacyTraversalLimits {
-            max_depth: 8,
-            max_results: 200,
-        },
-        inventory_limits: LegacyInventoryLimits {
-            default_tables: 1_000,
-            max_tables: 5_000,
-            offset_pagination: true,
-        },
         limits: ContractLimits {
             max_timeout_ms: MAX_TIMEOUT_MS,
             default_object_page_limit: DEFAULT_OBJECT_PAGE_LIMIT,
@@ -1239,6 +1209,18 @@ mod tests {
         assert!(!contract.row_data_access);
         assert_eq!(contract.authoritative_outcomes, vec!["complete", "failed"]);
         assert_eq!(contract.object_kinds.len(), ALL_OBJECT_KINDS.len());
+        assert_eq!(
+            contract.commands,
+            vec![
+                "contract",
+                "index",
+                "list-snapshots",
+                "describe-snapshot",
+                "list-objects",
+                "find-objects",
+                "describe-object",
+            ]
+        );
         assert_eq!(
             contract
                 .support

@@ -1,10 +1,12 @@
 use super::*;
 
 #[test]
-fn registry_has_exactly_twelve_languages() {
-    assert_eq!(LANGUAGES.len(), 12);
+fn registry_has_exactly_ten_languages() {
+    assert_eq!(LANGUAGES.len(), 10);
     assert!(LANGUAGES.iter().any(|lang| lang.id == "typescript"));
-    assert!(LANGUAGES.iter().any(|lang| lang.id == "php"));
+    assert!(LANGUAGES.iter().any(|lang| lang.id == "dart"));
+    assert!(!LANGUAGES.iter().any(|lang| lang.id == "php"));
+    assert!(!LANGUAGES.iter().any(|lang| lang.id == "ruby"));
     assert!(!LANGUAGES.iter().any(|lang| lang.id == "swift"));
 }
 
@@ -147,7 +149,7 @@ fn strict_gate_still_fails_provider_missing_files() {
 }
 
 #[test]
-fn mixed_c_family_headers_merge_to_one_document() {
+fn mixed_c_family_headers_keep_one_document_per_semantic_context() {
     let document = |language: &str| DocumentOutput {
         language: language.to_string(),
         path: "include/types.h".to_string(),
@@ -161,7 +163,7 @@ fn mixed_c_family_headers_merge_to_one_document() {
         }],
         occurrences: Vec::new(),
     };
-    let analysis = |language: &str, document: DocumentOutput| LanguageAnalysis {
+    let analysis = |language: &str, document: DocumentOutput| ProviderUnitBatch {
         language: LanguageOutput {
             id: language.to_string(),
             name: language.to_string(),
@@ -172,19 +174,96 @@ fn mixed_c_family_headers_merge_to_one_document() {
             files_missing: 0,
             status: "indexed",
         },
+        source_files: vec![document.path.clone()],
+        execution_context: not_executed_provider_context(
+            LANGUAGES
+                .iter()
+                .find(|spec| spec.id == language)
+                .expect("closed language"),
+        ),
         documents: vec![document],
         relations: Vec::new(),
         diagnostics: Vec::new(),
         project_excluded_files: 0,
     };
-    let (_, documents, _, _) = merge_language_analyses(vec![
+    let (_, documents, _, _) = merge_provider_batches(vec![
         analysis("c", document("c")),
         analysis("cpp", document("cpp")),
     ]);
-    assert_eq!(documents.len(), 1);
+    assert_eq!(documents.len(), 2);
     assert_eq!(documents[0].path, "include/types.h");
-    assert_eq!(documents[0].language, "cpp");
+    assert_eq!(documents[0].language, "c");
     assert_eq!(documents[0].symbols.len(), 1);
+    assert_eq!(documents[1].path, "include/types.h");
+    assert_eq!(documents[1].language, "cpp");
+    assert_eq!(documents[1].symbols.len(), 1);
+}
+
+#[test]
+fn shared_c_family_header_keeps_independent_language_coverage() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-c-family-coverage-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("include")).expect("create coverage fixture");
+    let header = root.join("include/types.h");
+    fs::write(&header, "struct Value {};\n").expect("write shared header");
+    let documents = vec![DocumentOutput {
+        language: "cpp".to_string(),
+        path: "include/types.h".to_string(),
+        symbols: Vec::new(),
+        occurrences: Vec::new(),
+    }];
+    let languages = vec![
+        LanguageOutput {
+            id: "c".to_string(),
+            name: "C".to_string(),
+            provider: "native-lsp",
+            files_found: 1,
+            files_indexed: 0,
+            files_excluded: 0,
+            files_missing: 1,
+            status: "indexed-partial",
+        },
+        LanguageOutput {
+            id: "cpp".to_string(),
+            name: "C++".to_string(),
+            provider: "native-lsp",
+            files_found: 1,
+            files_indexed: 1,
+            files_excluded: 0,
+            files_missing: 0,
+            status: "indexed",
+        },
+    ];
+    let coverage = build_file_coverage(
+        &root,
+        &[
+            ("c".to_string(), header.clone()),
+            ("cpp".to_string(), header),
+        ],
+        &documents,
+        &languages,
+        &[],
+    );
+
+    assert_eq!(coverage.len(), 2);
+    assert_eq!(
+        coverage
+            .iter()
+            .find(|entry| entry.language == "c")
+            .map(|entry| entry.status),
+        Some("missing")
+    );
+    assert_eq!(
+        coverage
+            .iter()
+            .find(|entry| entry.language == "cpp")
+            .map(|entry| entry.status),
+        Some("indexed")
+    );
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -258,6 +337,7 @@ fn large_rust_semantic_enrichment_stays_at_public_boundaries() {
         range_end_character: 12,
         selection_line: 0,
         selection_character: 4,
+        parent: None,
     };
     let private = LspSymbol {
         name: "helper".to_string(),
@@ -269,12 +349,17 @@ fn large_rust_semantic_enrichment_stays_at_public_boundaries() {
         range_end_character: 12,
         selection_line: 0,
         selection_character: 3,
+        parent: None,
     };
     assert!(rust_large_symbol_is_public("pub fn run() {}", &public));
     assert!(!rust_large_symbol_is_public("fn helper() {}", &private));
-    assert!(!rust_large_symbol_is_public(
+    let mut public_method = public.clone();
+    public_method.name = "method".to_string();
+    public_method.detail = Some("fn method()".to_string());
+    public_method.selection_character = 11;
+    assert!(rust_large_symbol_is_public(
         "    pub fn method() {}",
-        &public
+        &public_method
     ));
 }
 
@@ -290,6 +375,7 @@ fn large_map_enrichment_uses_language_visibility_without_guessing_targets() {
         range_end_character: 12,
         selection_line: 0,
         selection_character: 4,
+        parent: None,
     };
     let private_go = LspSymbol {
         name: "serve".to_string(),
@@ -301,6 +387,7 @@ fn large_map_enrichment_uses_language_visibility_without_guessing_targets() {
         range_end_character: 12,
         selection_line: 0,
         selection_character: 4,
+        parent: None,
     };
     assert!(large_symbol_is_map_boundary(
         "go",
@@ -330,6 +417,7 @@ fn large_map_enrichment_uses_language_visibility_without_guessing_targets() {
             range_end_character: 8,
             selection_line: 0,
             selection_character: 4,
+            parent: None,
         },
     ));
 }
@@ -443,8 +531,59 @@ fn c_coverage_marks_files_outside_the_active_build() {
 }
 
 #[test]
+fn csharp_coverage_distinguishes_msbuild_exclusion_from_provider_failure() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-csharp-active-coverage-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("App/Baselines")).expect("create C# coverage root");
+    let active = root.join("App/Program.cs");
+    let excluded = root.join("App/Baselines/Generated.cs");
+    fs::write(&active, "public class Program {}\n").expect("write active C# file");
+    fs::write(&excluded, "public class Generated {}\n").expect("write excluded C# file");
+    fs::write(
+        root.join("App/App.csproj"),
+        r#"<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><Compile Remove="Baselines\**\*" /></ItemGroup></Project>"#,
+    )
+    .expect("write C# project");
+
+    let coverage = build_file_coverage(
+        &root,
+        &[
+            ("csharp".to_string(), active),
+            ("csharp".to_string(), excluded),
+        ],
+        &[DocumentOutput {
+            language: "csharp".to_string(),
+            path: "App/Program.cs".to_string(),
+            symbols: Vec::new(),
+            occurrences: Vec::new(),
+        }],
+        &[LanguageOutput {
+            id: "csharp".to_string(),
+            name: "C#".to_string(),
+            provider: "scip",
+            files_found: 2,
+            files_indexed: 1,
+            files_excluded: 1,
+            files_missing: 0,
+            status: "indexed-partial",
+        }],
+        &[],
+    );
+    let excluded = coverage
+        .iter()
+        .find(|item| item.path == "App/Baselines/Generated.cs")
+        .unwrap();
+    assert_eq!(excluded.status, "excluded");
+    assert_eq!(excluded.reason.as_deref(), Some("not-in-active-build"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn merged_language_status_cannot_hide_provider_missing_files() {
-    let analysis = LanguageAnalysis {
+    let analysis = ProviderUnitBatch {
         language: LanguageOutput {
             id: "go".to_string(),
             name: "Go".to_string(),
@@ -455,12 +594,19 @@ fn merged_language_status_cannot_hide_provider_missing_files() {
             files_missing: 8,
             status: "indexed",
         },
+        source_files: vec!["src/main.rs".to_string()],
+        execution_context: not_executed_provider_context(
+            LANGUAGES
+                .iter()
+                .find(|language| language.id == "go")
+                .expect("Go language"),
+        ),
         documents: Vec::new(),
         relations: Vec::new(),
         diagnostics: Vec::new(),
         project_excluded_files: 0,
     };
-    let (languages, _, _, _) = module_plan::merge_language_analyses(vec![analysis]);
+    let (languages, _, _, _) = provider_batch::merge_provider_batches(vec![analysis]);
     assert_eq!(languages[0].files_missing, 8);
     assert_eq!(languages[0].status, "indexed-partial");
 }
@@ -585,11 +731,11 @@ fn semantic_ranges_support_scip_short_and_lsp_long_forms() {
 #[test]
 fn scip_absolute_document_paths_are_project_relative() {
     let root = std::env::temp_dir().join(format!("code-memory-scip-path-{}", std::process::id()));
-    let file = root.join("src").join("fixture.php");
+    let file = root.join("src").join("fixture.rs");
     fs::create_dir_all(file.parent().unwrap()).expect("create SCIP path fixture");
-    fs::write(&file, "<?php").expect("write SCIP path fixture");
+    fs::write(&file, "fn main() {}").expect("write SCIP path fixture");
     let raw = file.to_string_lossy().replace('\\', "/");
-    assert_eq!(normalize_scip_path(&raw, &root), "src/fixture.php");
+    assert_eq!(normalize_scip_path(&raw, &root), "src/fixture.rs");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -605,21 +751,8 @@ fn semantic_call_detection_uses_source_range() {
 }
 
 #[test]
-fn ruby_member_call_detection_supports_implicit_parentheses() {
-    let source = "OrderService.new.create_order\n";
-    assert!(is_ruby_member_call_occurrence(
-        Some(source),
-        &[0, 17, 0, 29]
-    ));
-    assert!(!is_ruby_member_call_occurrence(
-        Some("create_order\n"),
-        &[0, 0, 0, 12]
-    ));
-}
-
-#[test]
 fn scip_numeric_language_uses_worker_language() {
-    assert_eq!(normalize_scip_language("19", "php"), "php");
+    assert_eq!(normalize_scip_language("19", "rust"), "rust");
     assert_eq!(normalize_scip_language("", "rust"), "rust");
     assert_eq!(
         normalize_scip_language("typescript", "javascript"),
@@ -695,6 +828,7 @@ fn lexical_call_candidates_scan_identifiers_once() {
         range_end_character: 7,
         selection_line: 0,
         selection_character: 0,
+        parent: None,
     }];
     let candidates = lexical_call_candidates(
         "defined()\n  defined(); unrelated();",
@@ -732,10 +866,28 @@ fn language_cache_key_changes_when_one_source_file_changes() {
         .find(|language| language.id == "typescript")
         .copied()
         .expect("typescript language");
-    let first = language_cache_key(&root, &language, &files, None, 0, &first_snapshot);
+    let first = language_cache_key(LanguageCacheKeyInput {
+        root: &root,
+        lang: &language,
+        files: &files,
+        providers_root: None,
+        config_digest: 0,
+        source_snapshot: &first_snapshot,
+        execution_scope_id: "tsjs:root",
+        provider_config: None,
+    });
     fs::write(&file, "export const value = 2;\n").expect("write changed fingerprint fixture");
     let second_snapshot = load_source_snapshot_from_files(&root, &files);
-    let second = language_cache_key(&root, &language, &files, None, 0, &second_snapshot);
+    let second = language_cache_key(LanguageCacheKeyInput {
+        root: &root,
+        lang: &language,
+        files: &files,
+        providers_root: None,
+        config_digest: 0,
+        source_snapshot: &second_snapshot,
+        execution_scope_id: "tsjs:root",
+        provider_config: None,
+    });
     assert_ne!(first, second);
     let _ = fs::remove_dir_all(root);
 }
@@ -863,6 +1015,36 @@ fn cache_impact_includes_importers_of_changed_files() {
 }
 
 #[test]
+fn exact_retry_after_late_failure_can_reuse_provider_caches() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-provider-retry-input-{}",
+        std::process::id()
+    ));
+    let source = root.join("src").join("main.ts");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(source.parent().unwrap()).expect("create retry fixture");
+    fs::write(&source, "export const value = 1;\n").expect("write retry source");
+    let dependency_context_digest = 19;
+    let first = load_source_snapshot_from_files(&root, std::slice::from_ref(&source));
+
+    assert!(cache_impact(&root, &first, dependency_context_digest).force_all);
+    write_provider_run_input_manifest(&root, &first, dependency_context_digest)
+        .expect("write provisional provider input receipt");
+
+    let unchanged = load_source_snapshot_metadata_from_files(&root, std::slice::from_ref(&source));
+    let exact_retry = cache_impact(&root, &unchanged, dependency_context_digest);
+    assert!(!exact_retry.force_all);
+    assert!(exact_retry.affected_paths.is_empty());
+
+    fs::write(&source, "export const value = 2;\n").expect("change retry source");
+    let changed = load_source_snapshot_metadata_from_files(&root, &[source]);
+    assert!(cache_impact(&root, &changed, dependency_context_digest).force_all);
+    assert!(cache_impact(&root, &unchanged, dependency_context_digest + 1).force_all);
+    let _ = fs::remove_dir_all(project_cache_root(&root));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn source_snapshot_detects_same_size_same_timestamp_edits() {
     let root = std::env::temp_dir().join(format!(
         "code-memory-source-hash-exactness-{}",
@@ -935,6 +1117,7 @@ fn language_cache_preserves_pathless_provider_diagnostics() {
         path: None,
         line: None,
     }];
+    let execution_context = not_executed_provider_context(&language);
 
     write_language_cache(
         &root,
@@ -943,6 +1126,7 @@ fn language_cache_preserves_pathless_provider_diagnostics() {
         &documents,
         &[],
         &diagnostics,
+        &execution_context,
     );
     let cached = load_language_cache(&root, &language, "diagnostic-key")
         .value
@@ -959,7 +1143,49 @@ fn language_cache_preserves_pathless_provider_diagnostics() {
 }
 
 #[test]
-fn large_source_snapshot_keeps_the_path_without_loading_content() {
+fn language_cache_reuses_an_explicit_completed_empty_result() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-cache-empty-semantic-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create empty cache fixture");
+    let language = LANGUAGES
+        .iter()
+        .find(|language| language.id == "dart")
+        .copied()
+        .expect("dart language");
+    let diagnostics = vec![Diagnostic {
+        language: "dart".to_string(),
+        level: "info",
+        code: DiagnosticCode::EmptySemantic,
+        message: "Dart provider analyzed the unit but returned no semantic facts".to_string(),
+        detail: None,
+        path: None,
+        line: None,
+    }];
+
+    write_language_cache(
+        &root,
+        language,
+        "empty-key",
+        &[],
+        &[],
+        &diagnostics,
+        &not_executed_provider_context(&language),
+    );
+
+    let cached = load_language_cache(&root, &language, "empty-key")
+        .value
+        .expect("completed empty result remains reusable");
+    assert!(cached.documents.is_empty());
+    assert_eq!(cached.diagnostics[0].code, DiagnosticCode::EmptySemantic);
+    let _ = fs::remove_dir_all(project_cache_root(&root));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn large_source_snapshot_loads_real_content_instead_of_an_empty_placeholder() {
     let root = std::env::temp_dir().join(format!(
         "code-memory-large-source-snapshot-{}",
         std::process::id()
@@ -969,11 +1195,27 @@ fn large_source_snapshot_keeps_the_path_without_loading_content() {
     fs::create_dir_all(file.parent().unwrap()).expect("create large snapshot fixture");
     fs::write(&file, vec![b'x'; 1_000_001]).expect("write large snapshot fixture");
     let snapshot = load_source_snapshot_from_files(&root, std::slice::from_ref(&file));
-    assert_eq!(
-        snapshot.files,
-        vec![("src/generated.dart".to_string(), String::new())]
-    );
+    assert_eq!(snapshot.files.len(), 1);
+    assert_eq!(snapshot.files[0].0, "src/generated.dart");
+    assert_eq!(snapshot.files[0].1.len(), 1_000_001);
+    assert!(snapshot.files[0].1.bytes().all(|byte| byte == b'x'));
     assert!(snapshot.file_hashes.contains_key("src/generated.dart"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn legitimate_large_source_is_not_excluded_before_provider_execution() {
+    let root = std::env::temp_dir().join(format!(
+        "code-memory-large-provider-source-{}",
+        std::process::id()
+    ));
+    let file = root.join("src").join("main.ts");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(file.parent().unwrap()).expect("create large provider fixture");
+    fs::write(&file, vec![b' '; 1_000_001]).expect("write large provider fixture");
+
+    assert_eq!(source_exclusion_reason(&file), None);
+
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1222,137 +1464,6 @@ fn multiple_nested_lsp_modules_keep_caller_root() {
 }
 
 #[test]
-fn module_planner_assigns_files_to_deepest_project_module() {
-    let root = std::env::temp_dir().join(format!("code-memory-module-plan-{}", std::process::id()));
-    let nested = root.join("services").join("api");
-    fs::create_dir_all(&nested).expect("create module fixture");
-    fs::write(root.join("go.work"), "go 1.22\n").expect("write workspace marker");
-    fs::write(nested.join("go.mod"), "module example.com/api\n").expect("write module marker");
-    let root_file = root.join("main.go");
-    let nested_file = nested.join("main.go");
-    fs::write(&root_file, "package main\n").expect("write root source");
-    fs::write(&nested_file, "package api\n").expect("write nested source");
-    let lang = LANGUAGES
-        .iter()
-        .find(|lang| lang.id == "go")
-        .copied()
-        .expect("go language");
-    let modules = plan_language_modules(&root, lang, &[root_file, nested_file.clone()]);
-    assert_eq!(modules.len(), 2);
-    assert!(modules
-        .iter()
-        .any(|module| module.files == vec![nested_file.clone()]));
-    assert!(modules.iter().any(|module| module.id == "root"));
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn rust_workspace_uses_one_provider_module() {
-    let root = std::env::temp_dir().join(format!(
-        "code-memory-rust-workspace-plan-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(root.join("crates/app/src")).expect("create rust workspace");
-    fs::write(
-        root.join("Cargo.toml"),
-        "[workspace]\nmembers = [\"crates/app\"]\n",
-    )
-    .expect("write workspace manifest");
-    let file = root.join("crates/app/src/main.rs");
-    fs::write(&file, "fn main() {}\n").expect("write rust source");
-    let lang = LANGUAGES
-        .iter()
-        .find(|lang| lang.id == "rust")
-        .copied()
-        .unwrap();
-    let modules = module_plan::plan_language_modules(&root, lang, std::slice::from_ref(&file));
-    assert_eq!(modules.len(), 1);
-    assert_eq!(modules[0].id, "root");
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn java_maven_reactor_uses_one_provider_module() {
-    let root = std::env::temp_dir().join(format!(
-        "code-memory-java-reactor-plan-{}",
-        std::process::id()
-    ));
-    fs::create_dir_all(root.join("service/src")).expect("create java reactor");
-    fs::write(
-        root.join("pom.xml"),
-        "<project><modules><module>service</module></modules></project>",
-    )
-    .expect("write reactor manifest");
-    let file = root.join("service/src/Main.java");
-    fs::write(&file, "class Main {}\n").expect("write java source");
-    let lang = LANGUAGES
-        .iter()
-        .find(|lang| lang.id == "java")
-        .copied()
-        .unwrap();
-    let modules = module_plan::plan_language_modules(&root, lang, std::slice::from_ref(&file));
-    assert_eq!(modules.len(), 1);
-    assert_eq!(modules[0].id, "root");
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn java_gradle_reactor_uses_one_provider_module() {
-    let root = std::env::temp_dir().join(format!(
-        "code-memory-java-gradle-reactor-plan-{}",
-        std::process::id()
-    ));
-    let nested = root.join("service");
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(nested.join("src/main/java")).expect("create gradle reactor");
-    fs::create_dir_all(nested.join("build")).expect("create nested build marker");
-    fs::write(root.join("settings.gradle"), "include 'service'\n")
-        .expect("write gradle reactor manifest");
-    fs::write(nested.join("build.gradle"), "plugins { id 'java' }\n")
-        .expect("write nested gradle manifest");
-    let file = nested.join("src/main/java/Main.java");
-    fs::write(&file, "class Main {}\n").expect("write java source");
-    let lang = LANGUAGES
-        .iter()
-        .find(|lang| lang.id == "java")
-        .copied()
-        .expect("java language");
-    let modules = module_plan::plan_language_modules(&root, lang, std::slice::from_ref(&file));
-    assert_eq!(modules.len(), 1);
-    assert_eq!(modules[0].id, "root");
-    assert_eq!(modules[0].root, root);
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn dart_workspace_uses_one_provider_module() {
-    let root = std::env::temp_dir().join(format!(
-        "code-memory-dart-workspace-plan-{}",
-        std::process::id()
-    ));
-    fs::create_dir_all(root.join("packages/app/lib")).expect("create dart workspace");
-    fs::write(
-        root.join("pubspec.yaml"),
-        "name: workspace\nworkspace:\n  - packages/app\n",
-    )
-    .expect("write dart workspace manifest");
-    let file = root.join("packages/app/lib/main.dart");
-    fs::write(&file, "void main() {}\n").expect("write dart source");
-    let lang = LANGUAGES
-        .iter()
-        .find(|lang| lang.id == "dart")
-        .expect("dart language");
-
-    let modules = plan_language_modules(&root, *lang, std::slice::from_ref(&file));
-    assert_eq!(modules.len(), 1);
-    assert_eq!(modules[0].root, root);
-    assert_eq!(modules[0].files, vec![file]);
-
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
 fn dart_melos_workspace_keeps_package_lsp_root() {
     let root = std::env::temp_dir().join(format!(
         "code-memory-dart-melos-root-{}",
@@ -1377,30 +1488,6 @@ fn dart_melos_workspace_keeps_package_lsp_root() {
         lsp_workspace_root(&lang, &module, std::slice::from_ref(&file)),
         module
     );
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn large_dart_package_is_split_without_changing_workspace_root() {
-    let root = std::env::temp_dir().join(format!(
-        "code-memory-dart-large-plan-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).expect("create large Dart plan root");
-    fs::write(root.join("pubspec.yaml"), "name: sample\n").expect("write Dart manifest");
-    let lang = *LANGUAGES
-        .iter()
-        .find(|lang| lang.id == "dart")
-        .expect("Dart language");
-    let files = (0..513)
-        .map(|index| root.join(format!("lib/file_{index}.dart")))
-        .collect::<Vec<_>>();
-    let modules = plan_language_modules(&root, lang, &files);
-    assert_eq!(modules.len(), 2);
-    assert_eq!(modules[0].files.len(), 512);
-    assert_eq!(modules[1].files.len(), 1);
-    assert!(modules.iter().all(|module| module.root == root));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1457,7 +1544,7 @@ fn dependency_metadata_fallback_is_reported_as_partial() {
 }
 
 #[test]
-fn typescript_config_discovery_includes_nested_and_named_configs() {
+fn project_config_discovery_includes_nested_and_named_typescript_configs() {
     let root = std::env::temp_dir().join(format!(
         "code-memory-typescript-configs-{}",
         std::process::id()
@@ -1485,24 +1572,17 @@ fn typescript_config_discovery_includes_nested_and_named_configs() {
     .expect("write provider manifest");
     fs::write(providers.join("tsconfig.provider.json"), "{}").expect("write provider config");
 
-    let configs = typescript_config_files(&root);
-    assert_eq!(configs.len(), 4);
-    assert!(configs
+    let project_configs = project_config_files(&root);
+    assert_eq!(project_configs.len(), 4);
+    assert!(project_configs
         .iter()
         .all(|path| !path.starts_with(root.join("node_modules"))));
-    assert!(configs
-        .iter()
-        .any(|path| path.ends_with("tsconfig.build.json")));
-    assert!(configs.iter().any(|path| path.ends_with("jsconfig.json")));
-    assert!(configs
-        .iter()
-        .any(|path| path.ends_with("tsconfig.test.json")));
-    assert!(configs
+    assert!(project_configs
         .iter()
         .all(|path| !path.starts_with(root.join("NODE_MODULES"))));
-    assert!(configs.iter().all(|path| !path.starts_with(&providers)));
-
-    let project_configs = project_config_files(&root);
+    assert!(project_configs
+        .iter()
+        .any(|path| path.ends_with("jsconfig.json")));
     assert!(project_configs
         .iter()
         .any(|path| path.ends_with("tsconfig.build.json")));

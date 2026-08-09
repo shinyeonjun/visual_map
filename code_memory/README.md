@@ -1,128 +1,145 @@
-# Visual Map Code Memory
+# Code Memory engine
 
-This directory is the source boundary for Visual Map's code-graph engine.
-The production engine is the Rust executable under `rust/`; framework packs,
-provider assets, contracts, and end-to-end fixtures live beside it.
+This directory contains the static/provider code-analysis engine used by
+Codebase Workspace. It extracts source-backed facts; it does not decide the
+final business areas, canvas layout, or user workflow.
 
-## 12-language semantic bridge
+## Supported languages
 
-The Rust bridge in `rust/` fixes the supported language list at:
+The executable contract fixes exactly ten languages:
 
-`TypeScript, JavaScript, Python, Java, C#, C, C++, Go, Rust, PHP, Ruby, Dart`
+`TypeScript, JavaScript, Python, Java, C#, C, C++, Go, Rust, Dart`
 
-It uses dedicated SCIP indexers where they exist and native LSP clients for
-Go, Java, Python, Rust, Ruby, and Dart. All providers are static-analysis tools;
-the application is never executed. The current contract and semantic checks
-are documented in `docs/contracts/LANGUAGE-SEMANTICS.md`.
+Dedicated SCIP indexers are used where available and native LSP clients cover
+the remaining languages. Providers are static-analysis tools; application code
+is not executed. Missing providers, unsupported project context, exclusions,
+and partial coverage remain explicit in diagnostics and coverage records.
 
 ```powershell
 cargo run --manifest-path rust\Cargo.toml -- list
 cargo run --manifest-path rust\Cargo.toml -- doctor
-cargo run --manifest-path rust\Cargo.toml -- index --root D:\path\to\repo --out D:\path\to\language-index.json
-# Installed app resolves providers/manifest.json first; PATH is fallback.
-cargo run --manifest-path rust\Cargo.toml -- doctor --providers-root D:\VisualMap\providers
-cargo run --manifest-path rust\Cargo.toml -- index --root D:\path\to\repo --providers-root D:\VisualMap\providers
+cargo run --manifest-path rust\Cargo.toml -- index --root D:\path\to\repo --out D:\temp\language-index.json
 ```
 
-The output is `code-memory.language-index.v2`: documents, symbols,
-definition/reference occurrences, source ranges, detected framework packs,
-framework facts, provider status, provider provenance, and diagnostics. It is an interchange file
-for the later Visual Map graph adapter, not the graph database itself.
+## Outputs
 
-Indexing is precision-first: there is no separate fast mode. Each language is
-analyzed by its SCIP or native LSP provider, while generated files, dependency
-folders, build output, tests, docs, caches, and `.git` metadata are excluded.
-Providers run through a CPU- and available-memory-aware weighted scheduler
-(with a conservative concurrency fallback when memory telemetry is unavailable),
-write partial output after each language, and stop safely on a per-provider timeout.
-The desktop app isolates results under the selected workspace instead of the
-old global cache:
+- `codebase-workspace.language-ir.v2`: bounded, job-scoped provider-to-normalizer
+  JSONL authority with exact source evidence, capability/gap receipts, and
+  executed provider context.
+- `codebase-workspace.canonical-fact.v1`: immutable fixed-schema SQLite Fact
+  Bundle and completion manifest. `index` validates the Language IR bytes,
+  resolves exact identities in two passes, applies deterministic relevance,
+  checks graph invariants, fsyncs the content-addressed bundle, and only then
+  publishes its manifest under the application cache outside the repository.
+- typed Framework IR: backend static HTTP method/path/source facts are validated
+  against the same census and plan, then published as canonical `HttpRoute`,
+  file `Exposes`, and exact handler `Handles` records. Unresolved handlers never
+  become guessed edges.
+- `code-memory.language-index.v2`: documents, symbols, occurrences, relations,
+  source ranges, provider provenance, coverage, and diagnostics.
+- `code-memory.architecture-index.v4`: project/package/module/file hierarchy,
+  verified framework entrypoints, resource boundaries, and module relations.
+  Ordered execution paths are deliberately not precomputed by this artifact.
+- `code-memory.collection-report.v1`: optional evidence from API contracts,
+  build descriptors, migrations, explicit messaging APIs, deployment
+  boundaries, and revision state.
 
-```text
-%LOCALAPPDATA%\VisualMap\workspaces\<workspace-id>\engines\
-  codebase-memory\0.1.0\contract-1\cache\
-```
+The engine deliberately does not emit synthetic final “DOMAIN” groups. The
+desktop Fact Graph ingests canonical source facts; a separate AI semantic
+compiler may derive replaceable names and areas without changing those facts.
 
-`CBM_CACHE_DIR` points at that directory and `CODE_MEMORY_CACHE_ROOT` points at
-its `runtime` child. Provider/framework/architecture caches use
-source/config/provider checksums and compressed `*.json.gz` payloads. Published
-app generations use immutable SQLite files and retain only the current and
-previous complete generation. The standalone CLI uses its temporary-directory
-fallback unless the caller sets those variables.
+## Precision and safety
 
-Set `CODE_MEMORY_MAX_PARALLEL`, `CODE_MEMORY_MAX_PROVIDER_WEIGHT`,
-`CODE_MEMORY_MEMORY_BUDGET_MB`, `CODE_MEMORY_PROVIDER_TIMEOUT_SECONDS`, or
-`CODE_MEMORY_LSP_MAX_SECONDS` only when a machine needs different limits.
-
-JavaScript and TypeScript projects without `tsconfig.json` or `jsconfig.json`
-are analyzed with a temporary inferred workspace in that cache; the project is
-not modified. Nested Rust projects are resolved from their nearest
-`Cargo.toml`, which allows monorepos to keep their existing layout.
-
-Every `index` run also writes a sibling `*.architecture.json` file using
-`code-memory.architecture-index.v3`. This is the Visual Map-oriented view:
-project/package/module/file tree, verified framework entrypoints, external
-library boundaries, database/file boundaries, module-level relations, and
-bounded entrypoint flows. Use `--architecture-out` to choose another path.
-The contract is documented in `docs/contracts/ARCHITECTURE-INDEX.md`.
-
-## Evidence providers
-
-`collect` adds non-language evidence without changing the SCIP/LSP provider
-contract. It reads project descriptors and existing artifacts; it does not run
-builds, tests, containers, Terraform, or application code.
+- `index` starts with `codebase-workspace.source-manifest.v1`: full SHA-256
+  content identity, VCS/product ignore rules, explicit non-enumerated scopes,
+  encoding/size/link status, and stable exclusion reasons.
+- A deterministic `codebase-workspace.analysis-plan.v1` owns every included
+  language candidate and is the sole provider-scheduling authority. The
+  subordinate `codebase-workspace.provider-schedule.v1` receipt proves that
+  every planned file is scheduled exactly once or has an explicit typed
+  omission; provider-specific execution shards cannot change plan ownership.
+- Scheduler-owned provider batches are converted directly under that plan,
+  revalidate exact source coordinates and provider provenance, emit bounded
+  `codebase-workspace.language-ir.v2` streams, and write deterministic
+  `codebase-workspace.language-ir-migration-receipt.v6` plus
+  `provider-execution-context-reconciliation.v3` receipts. The compatibility
+  projection is no longer converted back into a second IR stream.
+- A provider-independent syntax inventory measures explicit type/function/
+  method/constructor/field definitions in every assigned source. The provider
+  must match that denominator at an exact source location; final name, kind, and
+  owner are checked against the source instead of protocol display strings.
+- Provider results are source/config/provider-checksum keyed and deterministic.
+- Java and C# providers that are known to materialize build/IDE state execute
+  against a manifest-sealed writable copy under the local cache. Every index
+  run rescans the selected repository before publishing and fails closed if
+  its Source Manifest changed.
+- Analysis is CPU/memory weighted, timeout bounded, and cancellation aware.
+- Dependency/build/cache scopes are excluded by explicit policy and remain
+  visible as non-enumerated coverage receipts rather than fake zero-file data.
+- Unresolved targets and dynamic behavior are boundaries, not invented edges.
+- Confirmed relations preserve file/range evidence.
+- The engine emits extraction artifacts and an immutable canonical import
+  bundle. Selecting/publishing the active product generation and serving graph
+  queries still belong to the desktop Tauri layer.
 
 ```powershell
-cargo run --manifest-path rust\Cargo.toml -- collect --root D:\path\to\repo --packs-root .
+cargo run --manifest-path rust\Cargo.toml -- collect --root D:\path\to\repo
 ```
 
-The output is `.code_memory\collection-report.json` using
-`code-memory.collection-report.v1`. It contains build units, framework facts,
-API contracts, Git revision state, CI evidence, migrations, explicit messaging
-APIs, deployment descriptors, and aggregated OTLP traces. Missing inputs are
-reported as `not-detected`, not fabricated as empty facts. The provider and
-safety contract is documented in
-`docs/contracts/EVIDENCE-PROVIDERS.md`.
-
-Command execution is separate and explicit:
+## Build and test
 
 ```powershell
-cargo run --manifest-path rust\Cargo.toml -- verify --root D:\path\to\repo `
-  --tool cargo --arg test --label "Rust tests"
+cargo fmt --manifest-path rust\Cargo.toml -- --check
+cargo test --locked --manifest-path rust\Cargo.toml
+cargo build --locked --release --manifest-path rust\Cargo.toml
+.\tests\gates\run-definition-ground-truth-gate.ps1 -Runs 2
+.\tests\gates\run-semantic-ground-truth-gate.ps1 -Runs 2
+.\tests\gates\run-large-source-semantic-gate.ps1 -Runs 2
+.\tests\gates\run-import-ground-truth-gate.ps1 -Runs 2
+.\tests\gates\run-type-relation-ground-truth-gate.ps1 -Runs 2
+.\tests\gates\run-test-relation-ground-truth-gate.ps1 -Runs 2
+.\tests\gates\run-execution-context-ground-truth-gate.ps1 -Runs 2
+.\tests\gates\run-framework-flow-gate.ps1
+.\tests\gates\run-import-ground-truth-gate.ps1 -Runs 2 -MinimumSourceBytes 1100000 `
+  -OutputRoot .\build\large-source-import
 ```
 
-`verify` never accepts a shell command string. It stores only status, duration,
-exit code, provenance, and bounded output sizes; raw command output remains in
-the terminal. Network-oriented package-manager environment is disabled unless
-`CODE_MEMORY_ALLOW_NETWORK=1` is set by the caller.
+The definition gate's pinned closed corpus currently measures 117 definitions
+and 55 owned members across all ten languages with TP 117, FP 0, FN 0 and 100%
+kind, owner, inventory-coverage, and cold/warm determinism. These are scoped
+fixture results, not a claim of perfect analysis for arbitrary repositories.
+The independent import fixture currently pins 45 reviewed source/config files
+and 39 reviewed sites across all ten languages. The baseline passes with 15
+internal, 7 known-external, 14 typed unresolved, and 3 genuinely ambiguous
+outcomes. Python, Java, and C# use separate valid project roots to create the
+three candidate-multiplicity cases; the other seven languages keep explicit
+missing-context/unresolved cases instead of manufacturing impossible ambiguity.
+Both the clean baseline and the import-specific
+1.1 MB variant now run from pinned-file-only temporary fixtures and pass two-run
+Source Manifest, Analysis Plan, IR stream, semantic payload, target, and
+evidence determinism. Ambiguous sites fail closed as typed gaps and never become
+an internal edge.
 
-## Framework packs
+The independent type-relation corpus pins 17 reviewed source/config files and
+90 relations across all ten languages: 11 extends, 7 implements, 1 mixes-in,
+13 overrides, and 58 declaration-bound uses-type relations. It also checks 22
+reviewed negatives, exact evidence, source immutability, direct/donor parity,
+and two-run determinism. These are scoped fixture results, not an arbitrary
+repository accuracy claim.
 
-The supported framework catalog is under `packs/framework`. Validate every
-declared pack with:
+The independent test-relation corpus covers all ten languages with one exact
+test-to-production call and one name-only negative per language. The gate pins
+the reviewed source hashes, inspects the immutable canonical SQLite bundle,
+requires 10 exact confirmed `Tests` edges, rejects all 10 name-only candidates,
+preserves the rejected cases as typed static gaps for possible later AI review,
+and verifies two-run determinism without mutating source.
 
-```powershell
-.\tests\gates\run-framework-pack-gate.ps1
-.\tests\gates\run-framework-semantic-gate.ps1
-.\tests\gates\run-uniform-core-quality-gate.ps1
-.\tests\gates\compare-index-to-source.ps1 -ProjectRoot D:\meeting-overlay-assistant
-cargo run --manifest-path rust\Cargo.toml -- framework-packs --root .
-cargo run --manifest-path rust\Cargo.toml -- framework-packs --root . --self-test
-cargo run --manifest-path rust\Cargo.toml -- index --root D:\path\to\repo --packs-root .
-```
+The execution-context gate independently pins nine configured projects and
+nine config-removed variants spanning all ten languages. Every configured unit
+must be exact, every missing-context unit must remain partial/not-executed as
+specified, config artifact SHA-256 values must match the source, and two runs
+must preserve context, snapshot, stream, and authoritative-content digests.
 
-The semantic gate runs every declared pack through its adapter family and
-checks that each declared rule emits a source-located fact. The index output
-also records the selected adapter, evidence marker, and fact properties.
-
-Required provider commands are `scip-typescript`, `scip-dotnet`,
-`scip-clang`, `gopls`, and `scip-php`.
-Native LSP commands are `pyright-langserver`, `jdtls`, `rust-analyzer`,
-`ruby-lsp`, and `dart`.
-The C/Tree-sitter extractor remains available even when an external semantic
-provider is missing.
-
-Current real-repository results, including partial route-to-handler coverage,
-are recorded in
-[`../docs/reports/poc-validation-2026-08-05.md`](../docs/reports/poc-validation-2026-08-05.md).
-Do not infer equal framework quality from the 12-language provider list.
+Provider binaries are managed under `providers/` and packaged through the
+parent repository's signed provider catalog. Framework declarations are under
+`packs/framework/`. Authoritative engine contracts live in `docs/contracts/`.

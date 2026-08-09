@@ -1,9 +1,0 @@
-include!("code/base.rs");
-include!("code/indexing.rs");
-include!("code/diagnostics.rs");
-include!("code/inventory.rs");
-include!("code/routes.rs");
-include!("code/summary.rs");
-include!("code/items.rs");
-#[cfg(test)]
-include!("code_tests.rs");

@@ -9,4 +9,6 @@ function run() {
   return add(1, 2) + user.id.length;
 }
 
-module.exports = { add, run };
+const normalize = (value) => value;
+
+module.exports = { add, normalize, run };

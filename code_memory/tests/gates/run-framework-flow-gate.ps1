@@ -2,8 +2,11 @@ param(
     [string]$Bridge = (Join-Path $PSScriptRoot '..\..\rust\target\release\code-memory-language.exe'),
     [string]$Root = (Join-Path $PSScriptRoot '..\..'),
     [string]$ProvidersRoot = '',
-    [string]$OutputRoot = ''
+    [string]$OutputRoot = '',
+    [string]$CaseId = ''
 )
+
+. (Join-Path $PSScriptRoot 'lib\language-ir-stream-authority.ps1')
 
 $ErrorActionPreference = 'Stop'
 if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
@@ -41,26 +44,18 @@ function Invoke-FlowCase {
         New-Item -ItemType Directory -Force -Path $dartTool | Out-Null
         Set-Content -LiteralPath (Join-Path $dartTool 'package_config.json') -Value '{"configVersion":2,"packages":[]}' -NoNewline
     }
-    if ($Case.language -eq 'php') {
-        $vendorSource = Join-Path $Root 'tests\fixtures\scip-php\vendor'
-        Copy-Item -LiteralPath $vendorSource -Destination (Join-Path $project 'vendor') -Recurse -Force
-        Copy-Item -LiteralPath (Join-Path $Root 'tests\fixtures\scip-php\composer.lock') -Destination (Join-Path $project 'composer.lock') -Force
-        Copy-Item -LiteralPath (Join-Path $Root 'tests\fixtures\scip-php\main.php') -Destination (Join-Path $project 'main.php') -Force
-        $phpTypes = Join-Path $Root 'tests\fixtures\scip-php\src\Types.php'
-        New-Item -ItemType Directory -Force -Path (Join-Path $project 'src') | Out-Null
-        Copy-Item -LiteralPath $phpTypes -Destination (Join-Path $project 'src\Types.php') -Force
-    }
     $arguments = @('index', '--root', $project, '--out', $out, '--packs-root', $Root)
     if (-not [string]::IsNullOrWhiteSpace($ProvidersRoot)) {
         $arguments += @('--providers-root', $ProvidersRoot)
     }
     $bridgeErrorAction = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    & $Bridge @arguments 2>&1 | Out-Null
+    $bridgeOutput = @(& $Bridge @arguments 2>&1)
     $bridgeExitCode = $LASTEXITCODE
     $ErrorActionPreference = $bridgeErrorAction
     if ($bridgeExitCode -ne 0 -or -not (Test-Path $out)) {
-        throw "$($Case.id): bridge failed"
+        $detail = ($bridgeOutput | ForEach-Object { $_.ToString() }) -join "`n"
+        throw "$($Case.id): bridge failed`n$detail"
     }
 
     $result = Get-Content $out -Raw | ConvertFrom-Json
@@ -101,6 +96,36 @@ function Invoke-FlowCase {
         })
     if ($handles.Count -ne 1) {
         throw "$($Case.id): entrypoint does not have exactly one $relationKind relation"
+    }
+
+    if ($entrypointKind -eq 'HTTP_ROUTE') {
+        $languageIr = Get-TaggedJsonReceipt -BridgeOutput $bridgeOutput `
+            -Prefix '@codebase-workspace-language-ir ' -Context $Case.id
+        if ($languageIr.schema -ne 'codebase-workspace.language-ir-migration-receipt.v6') {
+            throw "$($Case.id): unsupported Language IR receipt schema $($languageIr.schema)"
+        }
+        $null = Get-LanguageIrStreamAuthority -BridgeOutput $bridgeOutput `
+            -Receipt $languageIr -Context $Case.id
+        $frameworkIr = Get-TaggedJsonReceipt -BridgeOutput $bridgeOutput `
+            -Prefix '@codebase-workspace-framework-ir ' -Context $Case.id
+        $canonical = Get-TaggedJsonReceipt -BridgeOutput $bridgeOutput `
+            -Prefix '@codebase-workspace-canonical-linker ' -Context $Case.id
+        if ($frameworkIr.schema -ne 'codebase-workspace.framework-ir.v1') {
+            throw "$($Case.id): unsupported Framework IR schema $($frameworkIr.schema)"
+        }
+        if ([int64]$frameworkIr.plannedRouteRecordCount -ne
+            ([int64]$frameworkIr.emittedRouteRecordCount + [int64]$frameworkIr.rejectedRouteRecordCount)) {
+            throw "$($Case.id): Framework IR route accounting is inconsistent"
+        }
+        if ([int64]$frameworkIr.emittedRouteRecordCount -lt 1 -or
+            [int64]$frameworkIr.handlerReferenceCount -lt 1) {
+            throw "$($Case.id): reviewed route did not enter typed Framework IR"
+        }
+        if ([int64]$canonical.frameworkRouteNodeCount -lt 1 -or
+            [int64]$canonical.frameworkExposesEdgeCount -lt 1 -or
+            [int64]$canonical.frameworkHandlesEdgeCount -lt 1) {
+            throw "$($Case.id): reviewed route did not enter the canonical Fact Graph"
+        }
     }
 
     $calls = @($result.relations | Where-Object {
@@ -353,69 +378,6 @@ dependencies:
         )
     },
     [pscustomobject]@{
-        id = 'php-laravel'
-        language = 'php'
-        framework = 'laravel'
-        route = '/orders'
-        service = 'createOrder'
-        servicePath = 'src/OrderService.php'
-        files = @(
-            @{ path = 'src/Routes.php'; source = @'
-<?php
-use Illuminate\Support\Facades\Route;
-require_once __DIR__ . '/OrderService.php';
-
-class FixtureController {
-    public function handler() {
-        return OrderService::createOrder();
-    }
-}
-
-Route::get("/orders", "FixtureController::handler");
-'@ },
-            @{ path = 'src/OrderService.php'; source = @'
-<?php
-class OrderService {
-    public static function createOrder() { return "ok"; }
-}
-'@ },
-            @{ path = 'composer.json'; source = '{"name":"flow/fixture","require":{"php":">=8.1","nikic/php-parser":"^5.0"},"autoload":{"classmap":["src"]}}' }
-        )
-    },
-    [pscustomobject]@{
-        id = 'ruby-rails'
-        language = 'ruby'
-        framework = 'rails'
-        route = '/orders'
-        service = 'create_order'
-        servicePath = 'app/services/order_service.rb'
-        files = @(
-            @{ path = 'config/routes.rb'; source = @'
-require "rails"
-Rails.application.routes.draw do
-  get "/orders", to: "orders#handler"
-end
-'@ },
-            @{ path = 'app/controllers/orders_controller.rb'; source = @'
-require "rails"
-require_relative "../services/order_service"
-class OrdersController < ApplicationController
-  def handler
-    OrderService.new.create_order
-  end
-end
-'@ },
-            @{ path = 'app/services/order_service.rb'; source = @'
-class OrderService
-  def create_order
-    "ok"
-  end
-end
-'@ },
-            @{ path = 'Gemfile'; source = 'source "https://rubygems.org"`ngem "rails"`n' }
-        )
-    },
-    [pscustomobject]@{
         id = 'c-gtk-glib'
         language = 'c'
         framework = 'gtk-glib'
@@ -532,6 +494,7 @@ public class OrderService {
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-web</artifactId>
+      <version>6.1.8</version>
     </dependency>
   </dependencies>
 </project>
@@ -562,7 +525,13 @@ public class OrderService {
     }
 )
 
+$selectedCases = if ([string]::IsNullOrWhiteSpace($CaseId)) {
+    @($cases)
+} else {
+    @($cases | Where-Object id -eq $CaseId)
+}
+if ($selectedCases.Count -eq 0) { throw "Unknown framework flow case: $CaseId" }
 if (Test-Path $OutputRoot) { Remove-Item -LiteralPath $OutputRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
-foreach ($case in $cases) { Invoke-FlowCase $case }
-Write-Host "framework flow gate: passed=$($cases.Count) total=$($cases.Count)"
+foreach ($case in $selectedCases) { Invoke-FlowCase $case }
+Write-Host "framework flow gate: passed=$($selectedCases.Count) total=$($selectedCases.Count)"

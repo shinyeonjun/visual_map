@@ -121,12 +121,6 @@ fn classify(path: &Path) -> Option<Asset> {
             framework: "prisma",
         });
     }
-    if normalized.ends_with("/db/schema.rb") || normalized.ends_with("/db/structure.sql") {
-        return Some(Asset {
-            kind: "orm-schema",
-            framework: "rails",
-        });
-    }
     if name == "ormconfig.json" || name.starts_with("sequelize.config.") {
         return Some(Asset {
             kind: "orm-config",
@@ -149,13 +143,11 @@ fn classify(path: &Path) -> Option<Asset> {
         || normalized.contains("/migrate/")
         || normalized.contains("/db/migration/")
         || normalized.contains("/versions/");
-    if !migration_path || !matches!(extension.as_str(), "sql" | "py" | "rb" | "cs" | "js" | "ts") {
+    if !migration_path || !matches!(extension.as_str(), "sql" | "py" | "cs" | "js" | "ts") {
         return None;
     }
     let framework = if normalized.contains("/prisma/migrations/") {
         "prisma"
-    } else if normalized.contains("/db/migrate/") && extension == "rb" {
-        "rails"
     } else if normalized.contains("/db/migration/") && extension == "sql" {
         "flyway"
     } else if normalized.contains("/versions/") && extension == "py" {

@@ -1,0 +1,1 @@
+const platformValue = 'stub';

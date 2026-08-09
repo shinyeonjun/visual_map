@@ -1,3 +1,4 @@
+use codebase_fact_model::identity::Sha256Digest;
 use serde_json::Value;
 
 use std::collections::{HashMap, HashSet};
@@ -48,6 +49,10 @@ pub(crate) struct ProviderResolution {
     pub(crate) path: Option<PathBuf>,
     pub(crate) origin: &'static str,
     pub(crate) version: Option<String>,
+    /// Expected digest from the managed provider catalog when available. The
+    /// Language IR boundary still hashes the actual file and rejects a
+    /// mismatch before this value can become provenance.
+    pub(crate) artifact_digest: Option<Sha256Digest>,
 }
 
 pub(crate) fn resolve_tool(program: &str, providers_root: Option<&Path>) -> ProviderResolution {
@@ -57,6 +62,7 @@ pub(crate) fn resolve_tool(program: &str, providers_root: Option<&Path>) -> Prov
                 path: Some(entry.path),
                 origin: "managed-manifest",
                 version: entry.version,
+                artifact_digest: entry.artifact_digest,
             };
         }
         if let Some(path) = find_managed_tool(root, program) {
@@ -64,6 +70,7 @@ pub(crate) fn resolve_tool(program: &str, providers_root: Option<&Path>) -> Prov
                 path: Some(path),
                 origin: "managed-root",
                 version: None,
+                artifact_digest: None,
             };
         }
     }
@@ -72,6 +79,7 @@ pub(crate) fn resolve_tool(program: &str, providers_root: Option<&Path>) -> Prov
         origin: if path.is_some() { "path" } else { "missing" },
         path,
         version: None,
+        artifact_digest: None,
     }
 }
 
@@ -108,6 +116,7 @@ fn find_managed_tool(root: &Path, program: &str) -> Option<PathBuf> {
 struct ProviderManifestEntry {
     path: PathBuf,
     version: Option<String>,
+    artifact_digest: Option<Sha256Digest>,
     runtime_paths: Vec<PathBuf>,
     environment: Vec<(String, String)>,
 }
@@ -158,6 +167,11 @@ fn provider_manifest_entry(root: &Path, program: &str) -> Option<ProviderManifes
             .get("version")
             .and_then(Value::as_str)
             .map(str::to_string),
+        artifact_digest: provider
+            .get("sha256")
+            .and_then(Value::as_str)
+            .map(str::to_ascii_lowercase)
+            .and_then(|digest| Sha256Digest::parse(&digest).ok()),
         runtime_paths,
         environment,
     })
@@ -215,6 +229,73 @@ pub(crate) fn tool_command(
     apply_provider_environment(&mut command);
     hide_console_window(&mut command);
     Ok(command)
+}
+
+/// Resolves the SDK exactly as the managed `scip-dotnet` process will see it.
+/// Running this inexpensive probe before restore distinguishes an unsupported
+/// repository SDK from an indexer failure and avoids spending minutes on a
+/// build that cannot possibly load.
+pub(crate) fn probe_dotnet_sdk(
+    working_directory: &Path,
+    providers_root: Option<&Path>,
+) -> Result<String, String> {
+    let manifest_entry =
+        providers_root.and_then(|root| provider_manifest_entry(root, "scip-dotnet"));
+    let dotnet = manifest_entry
+        .as_ref()
+        .and_then(|entry| {
+            entry
+                .environment
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("DOTNET_ROOT"))
+                .map(|(_, value)| {
+                    PathBuf::from(value).join(if cfg!(windows) {
+                        "dotnet.exe"
+                    } else {
+                        "dotnet"
+                    })
+                })
+        })
+        .filter(|path| path.is_file())
+        .or_else(|| find_on_path("dotnet"))
+        .ok_or_else(|| "required .NET SDK resolver is unavailable".to_string())?;
+    let mut command = Command::new(dotnet);
+    command.arg("--version").current_dir(working_directory);
+    if let Some(entry) = manifest_entry {
+        if !entry.runtime_paths.is_empty() {
+            let mut path_entries = entry.runtime_paths;
+            if let Some(path) = env::var_os("PATH") {
+                path_entries.extend(env::split_paths(&path));
+            }
+            if let Ok(path) = env::join_paths(path_entries) {
+                command.env("PATH", path);
+            }
+        }
+        for (key, value) in entry.environment {
+            command.env(key, value);
+        }
+    }
+    hide_console_window(&mut command);
+    let output = command.output().map_err(|error| {
+        format!(
+            "cannot resolve the .NET SDK required by {}: {error}",
+            working_directory.display()
+        )
+    })?;
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if output.status.success() && !version.is_empty() {
+        return Ok(version);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("the repository's global.json cannot be satisfied by the installed SDKs");
+    Err(format!(
+        "required .NET SDK is unavailable for {}: {detail}",
+        working_directory.display()
+    ))
 }
 
 #[cfg(windows)]
@@ -431,7 +512,7 @@ pub(crate) fn prepare_clangd_compile_database(
                 return false;
             }
             // A source file can have several configurations in a generated
-            // database. VisualMap needs one deterministic compiler context;
+            // database. The desktop needs one deterministic compiler context;
             // retaining every variant makes clangd parse the same TU again.
             seen_translation_units.insert(path)
         })

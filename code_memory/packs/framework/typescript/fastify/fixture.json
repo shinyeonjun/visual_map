@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "src/fixture.ts",
-      "source": "import fastify from 'fastify'; fastify.register(plugin); fastify.get('/fixture', handler);\napp.use(authMiddleware);"
+      "source": "import fastify from 'fastify'; fastify.register(plugin); fastify.get('/fixture', handler);\nfastify.addHook('onRequest', authMiddleware);"
     },
     {
       "path": "package.json",

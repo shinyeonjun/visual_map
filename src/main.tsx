@@ -1,12 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import App from "./App";
-import { AppErrorBoundary } from "./components/common/AppErrorBoundary";
+import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <AppErrorBoundary>
+    <FluentProvider className="fluent-root" theme={webLightTheme}>
       <App />
-    </AppErrorBoundary>
+    </FluentProvider>
   </React.StrictMode>,
 );

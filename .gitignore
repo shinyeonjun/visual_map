@@ -1,55 +1,29 @@
-# Logs
-logs
-*.log
+# JavaScript / frontend
+/node_modules/
+/dist/
+/dist-ssr/
+/.vite/
+*.tsbuildinfo
+.eslintcache
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-release-artifacts/
-src-tauri/target
-src-tauri/engines/*.exe
-*.local
-
-# Local caches and generated QA captures
-.cache/
-coverage/
-.codex/
-/.tmp/
-/build/
-
-# Environment and signing secrets
-.env
-.env.*
-!.env.example
-*.p12
-*.pfx
-*.pem
-*.key
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-!/code_memory/tests/fixtures/**/*.sln
-!/code_memory/tests/fixtures/**/*.slnx
-*.sw?
-*.scip
-
-# Integrated code-memory engine: keep source, ignore local toolchains and outputs.
-/code_memory/build/
-/code_memory/providers/
+# Rust build output
+/target/
+/src-tauri/target/
 /code_memory/rust/target/
 /code_memory/target/
+/db_memory/target/
+/db_memory/target-*/
+/crates/*/target/
+
+# Integrated code-analysis engine: source stays tracked; local providers and
+# generated analysis artifacts do not.
+/code_memory/build/
+/code_memory/providers/
 /code_memory/artifacts/
 /code_memory/.cache/
 /code_memory/.codex/
@@ -59,14 +33,16 @@ coverage/
 /code_memory/tests/fixtures/**/.cache/
 /code_memory/tests/fixtures/**/.code_memory/
 /code_memory/tests/fixtures/**/.ruby-lsp/
+/code_memory/tests/fixtures/**/.dart_tool/
+/code_memory/tests/fixtures/**/.gradle/
 
-# App-local managed providers are staged from code_memory/providers for local builds.
+# App-local managed provider and sidecar binaries are reconstructed from the
+# signed manifests and build scripts.
+/src-tauri/engines/*.exe
 /src-tauri/engines/providers/
 /src-tauri/engines/provider-bundles/
 
-# Integrated database-memory engine: keep source and examples, ignore local builds/caches.
-/db_memory/target/
-/db_memory/target-*/
+# Database engine build output and local metadata stores
 /db_memory/dist/
 /db_memory/.database-memory/
 /db_memory/*.sqlite
@@ -77,8 +53,51 @@ coverage/
 /db_memory/.codex-*.log
 /db_memory/codex-logs/
 
-# Local engine test outputs and temporary integration artifacts.
-/target/
+# Python/tool caches that may be produced by analysis fixtures
+**/__pycache__/
+*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+
+# Local verification, coverage, staging, and release output
+/.cache/
+/.qa/
+/.codex/
+/.tmp/
+/.build/
+/build/
+/coverage/
 /e2e_runs/
 /release-artifacts/
 /_cleanup_pending/
+*.log
+*.scip
+*.profraw
+*.profdata
+
+# Environment, credentials, and signing material
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.pem
+*.key
+*.local
+
+# Editors and operating systems
+/.vscode/*
+!/.vscode/extensions.json
+**/.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+!/code_memory/tests/fixtures/**/*.sln
+!/code_memory/tests/fixtures/**/*.slnx
+*.sw?

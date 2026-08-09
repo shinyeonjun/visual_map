@@ -1,9 +1,9 @@
 [package]
-name = "backend-visual-map"
+name = "codebase-workspace"
 version = "1.0.0-demo.1"
-default-run = "backend-visual-map"
+default-run = "codebase-workspace"
 license = "MIT"
-description = "Local desktop visual map for backend systems"
+description = "Local evidence-backed codebase workspace"
 authors = []
 edition = "2021"
 
@@ -13,11 +13,11 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "backend_visual_map_lib"
+name = "codebase_workspace_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "backend-visual-map"
+name = "codebase-workspace"
 path = "src/main.rs"
 test = false
 bench = false
@@ -26,17 +26,18 @@ bench = false
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+codebase-fact-model = { path = "../crates/fact-model" }
+codebase-semantic-model = { path = "../crates/semantic-model" }
+codebase-semantic-compiler = { path = "../crates/semantic-compiler" }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 base64 = "0.22"
 ed25519-dalek = "2.2"
-fs2 = "0.4"
-flate2 = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 tauri-plugin-dialog = "2"
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"

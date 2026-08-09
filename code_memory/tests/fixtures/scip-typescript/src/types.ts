@@ -13,3 +13,7 @@ export class Box<T extends Entity> {
     return this.value;
   }
 }
+
+export class Handler {
+  readonly execute = (value: number): number => value;
+}

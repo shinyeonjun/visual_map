@@ -13,6 +13,8 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+type DefinitionLocations = Vec<(Option<String>, Vec<i32>)>;
+
 pub(super) struct LspConnection {
     child: std::process::Child,
     process_guard: ProviderProcessGuard,
@@ -22,8 +24,11 @@ pub(super) struct LspConnection {
     deadline: Instant,
     request_count: usize,
     max_requests: usize,
+    request_metrics: HashMap<String, LspRequestMetric>,
     request_cache: HashMap<String, Value>,
+    definition_cache: HashMap<String, DefinitionLocations>,
     outgoing_call_cache: HashMap<String, Vec<(String, String, Vec<i32>)>>,
+    timed_out_query_scopes: HashSet<String>,
     workspace_settings: Value,
     pub(super) fatal_error: Option<String>,
     provider_diagnostics: Vec<ProviderDiagnostic>,
@@ -37,9 +42,42 @@ struct ProviderDiagnostic {
     message: String,
 }
 
+#[derive(Default)]
+struct LspRequestMetric {
+    batches: usize,
+    requests: usize,
+    errors: usize,
+    total_wall_ms: u128,
+    max_batch_ms: u128,
+}
+
 pub(super) struct LspReference {
     pub(super) uri: String,
     pub(super) range: Vec<i32>,
+}
+
+pub(super) fn complete_pending_with_error(
+    pending: &mut HashMap<i64, usize>,
+    results: &mut [Option<Result<Value, String>>],
+    error: &str,
+) -> Vec<i64> {
+    let mut request_ids = pending.keys().copied().collect::<Vec<_>>();
+    request_ids.sort_unstable();
+    for request_id in &request_ids {
+        if let Some(index) = pending.remove(request_id) {
+            results[index] = Some(Err(error.to_string()));
+        }
+    }
+    request_ids
+}
+
+pub(super) fn request_timeout_scope(method: &str, params: &Value) -> Option<String> {
+    let uri = params
+        .pointer("/textDocument/uri")
+        .or_else(|| params.pointer("/item/uri"))
+        .or_else(|| params.get("uri"))
+        .and_then(Value::as_str)?;
+    Some(format!("{method}\0{uri}"))
 }
 
 impl LspConnection {
@@ -99,8 +137,11 @@ impl LspConnection {
             deadline: Instant::now() + lsp_session_timeout(large_workspace),
             request_count: 0,
             max_requests: lsp_max_requests(),
+            request_metrics: HashMap::new(),
             request_cache: HashMap::new(),
+            definition_cache: HashMap::new(),
             outgoing_call_cache: HashMap::new(),
+            timed_out_query_scopes: HashSet::new(),
             workspace_settings: Value::Object(serde_json::Map::new()),
             fatal_error: None,
             provider_diagnostics: Vec::new(),
@@ -115,17 +156,34 @@ impl LspConnection {
         self.stdin.flush().map_err(|e| e.to_string())
     }
 
-    fn receive(&mut self) -> Result<Value, String> {
-        let remaining = self.deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+    fn receive_until(&mut self, response_deadline: Instant) -> Result<Value, String> {
+        let now = Instant::now();
+        let session_remaining = self.deadline.saturating_duration_since(now);
+        if session_remaining.is_zero() {
             return Err("native LSP session timeout".to_string());
         }
-        match self.messages.recv_timeout(self.timeout.min(remaining)) {
-            Ok(value) => Ok(value),
-            Err(RecvTimeoutError::Timeout) => Err(format!(
+        let response_remaining = response_deadline.saturating_duration_since(now);
+        if response_remaining.is_zero() {
+            return Err(format!(
                 "native LSP response timeout after {} ms",
                 self.timeout.as_millis()
-            )),
+            ));
+        }
+        match self
+            .messages
+            .recv_timeout(session_remaining.min(response_remaining))
+        {
+            Ok(value) => Ok(value),
+            Err(RecvTimeoutError::Timeout) => {
+                if Instant::now() >= self.deadline {
+                    Err("native LSP session timeout".to_string())
+                } else {
+                    Err(format!(
+                        "native LSP response timeout after {} ms",
+                        self.timeout.as_millis()
+                    ))
+                }
+            }
             Err(RecvTimeoutError::Disconnected) => Err("native LSP closed stdout".to_string()),
         }
     }
@@ -145,32 +203,142 @@ impl LspConnection {
             .max(Instant::now() + lsp_session_timeout(true));
     }
 
+    pub(super) fn remaining_request_budget(&self) -> usize {
+        self.max_requests.saturating_sub(self.request_count)
+    }
+
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.request_batch(method, vec![params])?
+            .pop()
+            .ok_or_else(|| format!("native LSP {method} returned no response"))?
+    }
+
+    /// Pipelines independent requests over one LSP connection. The provider
+    /// may return responses in any order; this method restores input order so
+    /// callers produce exactly the same deterministic facts as serial calls.
+    fn request_batch(
+        &mut self,
+        method: &str,
+        params: Vec<Value>,
+    ) -> Result<Vec<Result<Value, String>>, String> {
+        if params.is_empty() {
+            return Ok(Vec::new());
+        }
+        let request_total = params.len();
+        let started = Instant::now();
+        let result = self.request_batch_inner(method, params);
+        let error_count = match &result {
+            Ok(values) => values.iter().filter(|value| value.is_err()).count(),
+            Err(_) => request_total,
+        };
+        let elapsed_ms = started.elapsed().as_millis();
+        let metric = self.request_metrics.entry(method.to_string()).or_default();
+        metric.batches += 1;
+        metric.requests += request_total;
+        metric.errors += error_count;
+        metric.total_wall_ms += elapsed_ms;
+        metric.max_batch_ms = metric.max_batch_ms.max(elapsed_ms);
+        result
+    }
+
+    fn request_batch_inner(
+        &mut self,
+        method: &str,
+        params: Vec<Value>,
+    ) -> Result<Vec<Result<Value, String>>, String> {
         if Instant::now() >= self.deadline {
             return Err("native LSP session timeout".to_string());
         }
-        if self.request_count >= self.max_requests {
+        let request_count = params
+            .iter()
+            .filter(|params| {
+                request_timeout_scope(method, params)
+                    .as_ref()
+                    .is_none_or(|scope| !self.timed_out_query_scopes.contains(scope))
+            })
+            .count();
+        if self.request_count.saturating_add(request_count) > self.max_requests {
             return Err(format!(
                 "native LSP request budget exceeded after {} requests",
                 self.max_requests
             ));
         }
-        self.request_count += 1;
-        let id = NEXT_LSP_ID.fetch_add(1, Ordering::Relaxed);
-        self.send(&serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?;
-        loop {
-            let response = self.receive()?;
+        let mut pending = HashMap::with_capacity(params.len());
+        let mut pending_scopes = HashMap::<i64, String>::new();
+        let mut results = (0..params.len()).map(|_| None).collect::<Vec<_>>();
+        for (index, params) in params.into_iter().enumerate() {
+            let timeout_scope = request_timeout_scope(method, &params);
+            if timeout_scope
+                .as_ref()
+                .is_some_and(|scope| self.timed_out_query_scopes.contains(scope))
+            {
+                results[index] = Some(Err(format!(
+                    "native LSP response timeout previously observed for {method} on the same document"
+                )));
+                continue;
+            }
+            let id = NEXT_LSP_ID.fetch_add(1, Ordering::Relaxed);
+            pending.insert(id, index);
+            if let Some(timeout_scope) = timeout_scope {
+                pending_scopes.insert(id, timeout_scope);
+            }
+            self.send(
+                &serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
+            )?;
+        }
+        self.request_count += pending.len();
+        // One provider request can fail to answer even after its siblings have
+        // completed (JDTLS does this for source sets outside the active build
+        // path). Notifications must not keep extending the batch forever.
+        let response_deadline = (Instant::now() + self.timeout).min(self.deadline);
+        while !pending.is_empty() {
+            let response = match self.receive_until(response_deadline) {
+                Ok(response) => response,
+                Err(error) if error.contains("native LSP response timeout") => {
+                    let timed_out_scopes = pending
+                        .keys()
+                        .filter_map(|id| pending_scopes.get(id))
+                        .cloned()
+                        .collect::<HashSet<_>>();
+                    self.timed_out_query_scopes
+                        .extend(timed_out_scopes.iter().cloned());
+                    if std::env::var_os("CODE_MEMORY_LSP_TIMING").is_some() {
+                        eprintln!(
+                            "lsp batch timeout method={method} pending={} quarantined_scopes={}",
+                            pending.len(),
+                            timed_out_scopes.len()
+                        );
+                    }
+                    let pending_error = format!("{error} while awaiting {method}");
+                    let cancelled =
+                        complete_pending_with_error(&mut pending, &mut results, &pending_error);
+                    for id in cancelled {
+                        // Cancellation is best-effort. A provider that ignored
+                        // the original request may also ignore cancellation;
+                        // completed sibling responses are still valid facts.
+                        let _ = self.notify("$/cancelRequest", serde_json::json!({"id":id}));
+                    }
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
             if response.get("method").and_then(Value::as_str)
                 == Some("textDocument/publishDiagnostics")
             {
                 self.record_provider_diagnostics(&response);
                 continue;
             }
-            if response.get("id") == Some(&Value::from(id)) {
-                if let Some(error) = response.get("error") {
-                    return Err(format!("native LSP {method} failed: {error}"));
+            if response.get("method").is_none() {
+                if let Some(response_id) = response.get("id").and_then(Value::as_i64) {
+                    if let Some(index) = pending.remove(&response_id) {
+                        results[index] = Some(if let Some(error) = response.get("error") {
+                            Err(format!("native LSP {method} failed: {error}"))
+                        } else {
+                            Ok(response.get("result").cloned().unwrap_or(Value::Null))
+                        });
+                        continue;
+                    }
                 }
-                return Ok(response.get("result").cloned().unwrap_or(Value::Null));
             }
             if let (Some(other_id), Some(other_method)) =
                 (response.get("id"), response.get("method"))
@@ -184,6 +352,12 @@ impl LspConnection {
                 let _ = other_method;
             }
         }
+        Ok(results
+            .into_iter()
+            .map(|result| {
+                result.unwrap_or_else(|| Err(format!("native LSP {method} response was lost")))
+            })
+            .collect())
     }
 
     pub(super) fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
@@ -297,7 +471,7 @@ impl LspConnection {
                 // LSP publishDiagnostics are source-code diagnostics, not
                 // provider failures. Missing external packages, type-check
                 // errors, and project-specific warnings must not make a
-                // VisualMap index fail; startup, timeout, and invalid-output
+                // desktop index fail; startup, timeout, and invalid-output
                 // failures are reported by the outer analysis layer.
                 let level = if diagnostic.level == "error" {
                     "warning"
@@ -344,7 +518,7 @@ impl LspConnection {
         root_path: &str,
         language: &str,
     ) -> Result<(), String> {
-        let workspace_capabilities = if language == "rust" {
+        let workspace_capabilities = if matches!(language, "rust" | "java") {
             serde_json::json!({"workspaceFolders": true, "configuration": true})
         } else {
             serde_json::json!({"workspaceFolders": true})
@@ -391,13 +565,22 @@ impl LspConnection {
             "textDocument/documentSymbol",
             serde_json::json!({"textDocument":{"uri":uri}}),
         )?;
-        let mut symbols = Vec::new();
-        if let Some(items) = value.as_array() {
-            for item in items {
-                collect_lsp_symbols(item, &mut symbols);
-            }
-        }
-        Ok(symbols)
+        Ok(parse_document_symbols(value))
+    }
+
+    pub(super) fn document_symbols_batch(
+        &mut self,
+        uris: &[String],
+    ) -> Result<Vec<Result<Vec<LspSymbol>, String>>, String> {
+        let params = uris
+            .iter()
+            .map(|uri| serde_json::json!({"textDocument":{"uri":uri}}))
+            .collect();
+        Ok(self
+            .request_batch("textDocument/documentSymbol", params)?
+            .into_iter()
+            .map(|result| result.map(parse_document_symbols))
+            .collect())
     }
 
     pub(super) fn workspace_symbols(&mut self) -> Result<Vec<(String, LspSymbol)>, String> {
@@ -450,12 +633,7 @@ impl LspConnection {
                 // Optional call/type enrichment may time out on a large
                 // workspace with unavailable external modules. Drop only
                 // that enrichment request; document indexing remains usable.
-                if is_fatal_lsp_error(&error)
-                    && !error.contains("native LSP response timeout")
-                    && self.fatal_error.is_none()
-                {
-                    self.fatal_error = Some(error);
-                }
+                self.record_optional_error(error);
                 Value::Null
             }
         }
@@ -468,14 +646,18 @@ impl LspConnection {
         match self.request(method, params) {
             Ok(value) => value,
             Err(error) => {
-                if is_fatal_lsp_error(&error)
-                    && !error.contains("native LSP response timeout")
-                    && self.fatal_error.is_none()
-                {
-                    self.fatal_error = Some(error);
-                }
+                self.record_optional_error(error);
                 Value::Null
             }
+        }
+    }
+
+    fn record_optional_error(&mut self, error: String) {
+        if is_fatal_lsp_error(&error)
+            && !error.contains("native LSP response timeout")
+            && self.fatal_error.is_none()
+        {
+            self.fatal_error = Some(error);
         }
     }
 
@@ -559,32 +741,104 @@ impl LspConnection {
                 "callHierarchy/outgoingCalls",
                 serde_json::json!({"item":item}),
             );
-            for call in calls.as_array().into_iter().flatten() {
-                let Some(target) = call.get("to") else {
-                    continue;
-                };
-                let Some(target_symbol) = lsp_item_symbol(target, root) else {
-                    continue;
-                };
-                let Some(target_uri) = target.get("uri").and_then(Value::as_str) else {
-                    continue;
-                };
-                let target_relative = uri_to_relative_path(target_uri, root);
-                for range in call
-                    .get("fromRanges")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(parse_lsp_range)
-                {
-                    output.push((target_symbol.clone(), target_relative.clone(), range));
-                }
-            }
+            collect_outgoing_calls(&calls, root, &mut output);
         }
         if self.fatal_error.is_none() {
             self.outgoing_call_cache.insert(cache_key, output.clone());
         }
         output
+    }
+
+    /// Prefetches the two dependent call-hierarchy phases in bounded batches.
+    /// The final cache key and value are identical to `outgoing_calls`, so the
+    /// normal extraction loop remains the single consumer of call facts.
+    pub(super) fn prefetch_outgoing_calls(
+        &mut self,
+        queries: &[(String, u32, u32)],
+        root: &Path,
+        batch_size: usize,
+    ) {
+        if queries.is_empty() || self.fatal_error.is_some() {
+            return;
+        }
+        let width = batch_size.max(1);
+        for chunk in queries.chunks(width) {
+            // A call fact needs both phases. Do not spend the entire budget on
+            // prepareCallHierarchy for the whole workspace before asking a
+            // single outgoingCalls question. Each bounded chunk is completed
+            // end-to-end and cached before advancing to the next chunk.
+            if self.remaining_request_budget() < chunk.len() {
+                return;
+            }
+            let params = chunk
+                .iter()
+                .map(|(uri, line, character)| {
+                    serde_json::json!({
+                        "textDocument":{"uri":uri},
+                        "position":{"line":line,"character":character}
+                    })
+                })
+                .collect();
+            let responses = match self.request_batch("textDocument/prepareCallHierarchy", params) {
+                Ok(responses) => responses,
+                Err(error) => {
+                    self.record_optional_error(error);
+                    return;
+                }
+            };
+            let mut prepared = (0..chunk.len())
+                .map(|_| Vec::new())
+                .collect::<Vec<Vec<Value>>>();
+            for (offset, response) in responses.into_iter().enumerate() {
+                match response {
+                    Ok(value) => {
+                        prepared[offset] = value.as_array().cloned().unwrap_or_default();
+                    }
+                    Err(error) => self.record_optional_error(error),
+                }
+            }
+            if self.fatal_error.is_some() {
+                return;
+            }
+            let tasks = prepared
+                .iter()
+                .enumerate()
+                .flat_map(|(owner, items)| items.iter().cloned().map(move |item| (owner, item)))
+                .collect::<Vec<_>>();
+            if self.remaining_request_budget() < tasks.len() {
+                return;
+            }
+            let mut outputs = (0..chunk.len())
+                .map(|_| Vec::<(String, String, Vec<i32>)>::new())
+                .collect::<Vec<_>>();
+            for task_chunk in tasks.chunks(width) {
+                let params = task_chunk
+                    .iter()
+                    .map(|(_, item)| serde_json::json!({"item":item}))
+                    .collect();
+                let responses = match self.request_batch("callHierarchy/outgoingCalls", params) {
+                    Ok(responses) => responses,
+                    Err(error) => {
+                        self.record_optional_error(error);
+                        return;
+                    }
+                };
+                for ((owner, _), response) in task_chunk.iter().zip(responses) {
+                    match response {
+                        Ok(value) => collect_outgoing_calls(&value, root, &mut outputs[*owner]),
+                        Err(error) => self.record_optional_error(error),
+                    }
+                }
+                if self.fatal_error.is_some() {
+                    return;
+                }
+            }
+
+            for ((uri, line, character), output) in chunk.iter().zip(outputs) {
+                self.outgoing_call_cache
+                    .insert(format!("{uri}:{line}:{character}"), output);
+            }
+        }
     }
 
     pub(super) fn definitions_at(
@@ -593,6 +847,10 @@ impl LspConnection {
         line: u32,
         character: u32,
     ) -> Vec<(Option<String>, Vec<i32>)> {
+        let cache_key = format!("{uri}:{line}:{character}");
+        if let Some(cached) = self.definition_cache.get(&cache_key) {
+            return cached.clone();
+        }
         if self.fatal_error.is_some() {
             return Vec::new();
         }
@@ -610,27 +868,9 @@ impl LspConnection {
                     "position":{"line":line,"character":character}
                 }),
             );
-            let values = match value {
-                Value::Array(values) => values,
-                Value::Object(_) => vec![value],
-                _ => Vec::new(),
-            };
-            let results: Vec<_> = values
-                .into_iter()
-                .filter_map(|location| {
-                    let target_uri = location
-                        .get("uri")
-                        .or_else(|| location.get("targetUri"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    let range = location
-                        .get("range")
-                        .or_else(|| location.get("targetSelectionRange"))
-                        .and_then(parse_lsp_range)?;
-                    Some((target_uri, range))
-                })
-                .collect();
+            let results = parse_definition_locations(value);
             if !results.is_empty() {
+                self.definition_cache.insert(cache_key, results.clone());
                 return results;
             }
             if self.wait_for_retry(Duration::from_millis(250)).is_err() {
@@ -638,6 +878,117 @@ impl LspConnection {
             }
         }
         Vec::new()
+    }
+
+    /// Resolves independent definition positions in three provider rounds.
+    /// Serial extraction previously slept and retried each empty position on
+    /// its own. Grouping the same bounded retries lets a cold language server
+    /// finish indexing once for the whole round while preserving the exact
+    /// provider-only resolution rule.
+    pub(super) fn prefetch_definitions(
+        &mut self,
+        queries: &[(String, u32, u32)],
+        batch_size: usize,
+    ) {
+        self.prefetch_definitions_with_rounds(queries, batch_size, 3);
+    }
+
+    /// Resolves a definition work set exactly once. This is used only after a
+    /// complete document-symbol census, where repeating every empty result
+    /// cannot reveal more local source but can triple a large workspace's
+    /// latency. Empty answers remain explicit cache entries, so later
+    /// extraction cannot silently retry them one by one.
+    pub(super) fn prefetch_definitions_once(
+        &mut self,
+        queries: &[(String, u32, u32)],
+        batch_size: usize,
+    ) {
+        self.prefetch_definitions_with_rounds(queries, batch_size, 1);
+    }
+
+    fn prefetch_definitions_with_rounds(
+        &mut self,
+        queries: &[(String, u32, u32)],
+        batch_size: usize,
+        rounds: usize,
+    ) {
+        if queries.is_empty() || self.fatal_error.is_some() {
+            return;
+        }
+        let mut seen = HashSet::new();
+        let mut pending = queries
+            .iter()
+            .filter(|(uri, line, character)| {
+                let key = format!("{uri}:{line}:{character}");
+                !self.definition_cache.contains_key(&key) && seen.insert(key)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let width = batch_size.max(1);
+        let rounds = rounds.max(1);
+        for round in 0..rounds {
+            let mut unresolved = Vec::new();
+            for chunk in pending.chunks(width) {
+                if self.remaining_request_budget() < chunk.len() {
+                    for (uri, line, character) in &pending {
+                        self.definition_cache
+                            .entry(format!("{uri}:{line}:{character}"))
+                            .or_default();
+                    }
+                    return;
+                }
+                let params = chunk
+                    .iter()
+                    .map(|(uri, line, character)| {
+                        serde_json::json!({
+                            "textDocument":{"uri":uri},
+                            "position":{"line":line,"character":character}
+                        })
+                    })
+                    .collect();
+                let responses = match self.request_batch("textDocument/definition", params) {
+                    Ok(responses) => responses,
+                    Err(error) => {
+                        self.record_optional_error(error);
+                        return;
+                    }
+                };
+                for ((uri, line, character), response) in chunk.iter().zip(responses) {
+                    let cache_key = format!("{uri}:{line}:{character}");
+                    match response {
+                        Ok(value) => {
+                            let locations = parse_definition_locations(value);
+                            if locations.is_empty() {
+                                unresolved.push((uri.clone(), *line, *character));
+                            } else {
+                                self.definition_cache.insert(cache_key, locations);
+                            }
+                        }
+                        Err(error) => {
+                            self.record_optional_error(error);
+                            unresolved.push((uri.clone(), *line, *character));
+                        }
+                    }
+                }
+                if self.fatal_error.is_some() {
+                    return;
+                }
+            }
+            if unresolved.is_empty() {
+                return;
+            }
+            if round + 1 < rounds {
+                if self.wait_for_retry(Duration::from_millis(250)).is_err() {
+                    return;
+                }
+                pending = unresolved;
+            } else {
+                for (uri, line, character) in unresolved {
+                    self.definition_cache
+                        .insert(format!("{uri}:{line}:{character}"), Vec::new());
+                }
+            }
+        }
     }
 
     pub(super) fn shutdown(&mut self) -> Result<(), String> {
@@ -651,6 +1002,86 @@ impl LspConnection {
             .map(|error| Err(error.clone()))
             .unwrap_or(Ok(()))
     }
+
+    pub(super) fn request_performance_summary(&self) -> Value {
+        let mut methods = self.request_metrics.iter().collect::<Vec<_>>();
+        methods.sort_unstable_by_key(|(method, _)| *method);
+        serde_json::json!({
+            "requestCount": self.request_count,
+            "methods": methods
+                .into_iter()
+                .map(|(method, metric)| serde_json::json!({
+                    "method": method,
+                    "batches": metric.batches,
+                    "requests": metric.requests,
+                    "errors": metric.errors,
+                    "wallMs": metric.total_wall_ms,
+                    "maxBatchMs": metric.max_batch_ms,
+                }))
+                .collect::<Vec<_>>(),
+        })
+    }
+}
+
+fn parse_document_symbols(value: Value) -> Vec<LspSymbol> {
+    let mut symbols = Vec::new();
+    if let Some(items) = value.as_array() {
+        for item in items {
+            collect_lsp_symbols(item, &mut symbols);
+        }
+    }
+    symbols
+}
+
+fn collect_outgoing_calls(
+    calls: &Value,
+    root: &Path,
+    output: &mut Vec<(String, String, Vec<i32>)>,
+) {
+    for call in calls.as_array().into_iter().flatten() {
+        let Some(target) = call.get("to") else {
+            continue;
+        };
+        let Some(target_symbol) = lsp_item_symbol(target, root) else {
+            continue;
+        };
+        let Some(target_uri) = target.get("uri").and_then(Value::as_str) else {
+            continue;
+        };
+        let target_relative = uri_to_relative_path(target_uri, root);
+        for range in call
+            .get("fromRanges")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(parse_lsp_range)
+        {
+            output.push((target_symbol.clone(), target_relative.clone(), range));
+        }
+    }
+}
+
+fn parse_definition_locations(value: Value) -> Vec<(Option<String>, Vec<i32>)> {
+    let values = match value {
+        Value::Array(values) => values,
+        Value::Object(_) => vec![value],
+        _ => Vec::new(),
+    };
+    values
+        .into_iter()
+        .filter_map(|location| {
+            let target_uri = location
+                .get("uri")
+                .or_else(|| location.get("targetUri"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let range = location
+                .get("range")
+                .or_else(|| location.get("targetSelectionRange"))
+                .and_then(parse_lsp_range)?;
+            Some((target_uri, range))
+        })
+        .collect()
 }
 
 pub(super) fn initialization_options(language: &str, workspace_settings: &Value) -> Value {

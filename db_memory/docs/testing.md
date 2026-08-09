@@ -13,7 +13,7 @@ cargo test --locked --workspace
 ```
 
 This tier includes pure unit tests and local contract tests for the canonical
-model, certification, graph persistence, CLI, and MCP surfaces. Live database
+model, certification, graph persistence, and CLI surfaces. Live database
 tests appear as `ignored` in the result and are not counted as passing tests.
 
 It also includes golden-style replay coverage for the Oracle and SQL Server

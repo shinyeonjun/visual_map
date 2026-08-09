@@ -125,7 +125,7 @@ if ($VerifyOnly) {
 }
 
 New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
-$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("backend-visual-map-engines-" + [guid]::NewGuid().ToString("N"))
+$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("codebase-workspace-engines-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
 try {

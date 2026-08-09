@@ -52,26 +52,157 @@ fn rust_analyzer_settings() -> Value {
 }
 
 fn java_language_server_settings(source_only: bool) -> Value {
-    serde_json::json!({
+    java_language_server_settings_for_network(
+        source_only,
+        env::var("CODE_MEMORY_ALLOW_NETWORK").as_deref() == Ok("1"),
+        env::var("CODE_MEMORY_JAVA_TOOLCHAIN_PATHS").ok().as_deref(),
+    )
+}
+
+fn java_language_server_settings_for_network(
+    source_only: bool,
+    allow_network: bool,
+    toolchain_paths: Option<&str>,
+) -> Value {
+    let gradle_arguments = java_gradle_arguments(toolchain_paths);
+    let runtimes = java_configuration_runtimes(toolchain_paths);
+    let mut settings = serde_json::json!({
         "java": {
             "autobuild": {"enabled": false},
+            "maxConcurrentBuilds": 1,
             "import": {
                 "gradle": {
                     "enabled": !source_only,
-                    "offline": {"enabled": true},
-                    "wrapper": {"enabled": false}
+                    "offline": {"enabled": !allow_network},
+                    "wrapper": {"enabled": allow_network},
+                    // Buildship only needs project and classpath models. Test
+                    // execution cannot add code facts, but can add minutes and
+                    // unrelated runtime dependencies during first analysis.
+                    // Test source sets remain present in the imported model.
+                    // `org.gradle.java.installations.paths` is a Gradle
+                    // property. It must be sent as `-P` through the Gradle
+                    // argument channel; a plain `-D` in the JVM argument
+                    // channel was proven not to reach Spring's Tooling API
+                    // model import on Windows.
+                    "arguments": gradle_arguments
                 },
                 "maven": {
                     "enabled": !source_only,
-                    "offline": {"enabled": true}
+                    "offline": {"enabled": !allow_network}
                 }
             },
             "project": {
                 "importOnFirstTimeStartup": if source_only { "disabled" } else { "automatic" }
             },
-            "references": {"includeDecompiledSources": false}
+            "configuration": {},
+            "references": {"includeDecompiledSources": false},
+            // The product does not consume editor compiler diagnostics. They
+            // are not semantic evidence and provider startup/timeout/OOM
+            // failures are reported independently. JDTLS still parses and may
+            // reconcile opened files, but this prevents the unused diagnostics
+            // from being serialized and published to the client.
+            "diagnostic": {"filter": ["**/*.java"]},
+            "edit": {"validateAllOpenBuffersOnChanges": false},
+            "compile": {"nullAnalysis": {"mode": "disabled"}}
         }
-    })
+    });
+    if !runtimes.is_empty() {
+        settings["java"]["configuration"]["runtimes"] = Value::Array(runtimes);
+    }
+    settings
+}
+
+fn java_gradle_arguments(toolchain_paths: Option<&str>) -> String {
+    let mut arguments = "-x test".to_string();
+    let Some(paths) = toolchain_paths.map(str::trim).filter(|paths| !paths.is_empty()) else {
+        return arguments;
+    };
+    // This value is parsed as a Gradle argument string by Buildship. Reject
+    // characters that could inject a second argument, then normalize Windows
+    // separators. Product-managed toolchains never need embedded quotes.
+    if paths.chars().any(|character| character.is_control() || character == '"') {
+        return arguments;
+    }
+    let paths = paths.replace('\\', "/");
+    let property = format!("-Porg.gradle.java.installations.paths={paths}");
+    if paths.chars().any(char::is_whitespace) {
+        arguments.push_str(" \"");
+        arguments.push_str(&property);
+        arguments.push('"');
+    } else {
+        arguments.push(' ');
+        arguments.push_str(&property);
+    }
+    arguments
+}
+
+fn java_configuration_runtimes(toolchain_paths: Option<&str>) -> Vec<Value> {
+    let Some(paths) = toolchain_paths.map(str::trim).filter(|paths| !paths.is_empty()) else {
+        return Vec::new();
+    };
+    let mut runtimes = paths
+        .split(',')
+        .filter_map(|raw_path| {
+            let path = PathBuf::from(raw_path.trim());
+            if !java_home_is_usable(&path) {
+                return None;
+            }
+            let release = fs::read_to_string(path.join("release")).ok()?;
+            let major = java_release_major(&release)?;
+            let name = if major == 8 {
+                "JavaSE-1.8".to_string()
+            } else {
+                format!("JavaSE-{major}")
+            };
+            Some((major, name, path.to_string_lossy().replace('\\', "/")))
+        })
+        .collect::<Vec<_>>();
+    runtimes.sort();
+    runtimes.dedup_by(|left, right| left.1 == right.1);
+    let default_major = runtimes.iter().map(|runtime| runtime.0).max();
+    runtimes
+        .into_iter()
+        .map(|(major, name, path)| {
+            serde_json::json!({
+                "name": name,
+                "path": path,
+                "default": Some(major) == default_major
+            })
+        })
+        .collect()
+}
+
+fn java_release_major(release: &str) -> Option<u32> {
+    let version = release.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("JAVA_VERSION=")
+            .map(|value| value.trim_matches('"'))
+    })?;
+    let mut parts = version.split(['.', '-']);
+    let first = parts.next()?.parse::<u32>().ok()?;
+    if first == 1 {
+        parts.next()?.parse().ok()
+    } else {
+        Some(first)
+    }
+}
+
+fn jdtls_heap_mb(file_count: usize, memory_budget_mb: Option<usize>) -> usize {
+    const MIN_HEAP_MB: usize = 1_024;
+    const MAX_HEAP_MB: usize = 8_192;
+    const LOW_MEMORY_HEAP_MB: usize = 512;
+
+    // JDTLS keeps project indexes and open working copies in one JVM. A fixed
+    // 1 GiB heap OOMs on real multi-module repositories (Spring: 8,982 Java
+    // files). Scale conservatively with the scheduled semantic workload while
+    // reserving at least one quarter of the provider memory budget for native
+    // memory, Gradle tooling, and the Rust coordinator.
+    let desired = (MIN_HEAP_MB + file_count.div_ceil(3)).clamp(MIN_HEAP_MB, MAX_HEAP_MB);
+    let safe_cap = memory_budget_mb
+        .map(|budget| budget.saturating_mul(3) / 4)
+        .unwrap_or(2_048)
+        .max(LOW_MEMORY_HEAP_MB);
+    desired.min(safe_cap).max(LOW_MEMORY_HEAP_MB)
 }
 
 fn java_home_is_usable(path: &Path) -> bool {

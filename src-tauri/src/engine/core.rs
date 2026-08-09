@@ -18,7 +18,7 @@ use std::{
 static ENGINE_OPERATION_CANCELLATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
     OnceLock::new();
 
-pub(crate) struct EngineOperationGuard {
+pub struct EngineOperationGuard {
     operation_id: String,
 }
 
@@ -32,7 +32,7 @@ impl Drop for EngineOperationGuard {
     }
 }
 
-pub(crate) fn begin_engine_operation(operation_id: &str) -> Result<EngineOperationGuard, String> {
+pub fn begin_engine_operation(operation_id: &str) -> Result<EngineOperationGuard, String> {
     validate_operation_id(operation_id)?;
     let registry = ENGINE_OPERATION_CANCELLATIONS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut registry = registry
@@ -47,7 +47,7 @@ pub(crate) fn begin_engine_operation(operation_id: &str) -> Result<EngineOperati
     })
 }
 
-pub(crate) fn cancel_engine_operation(operation_id: &str) -> bool {
+pub fn cancel_engine_operation(operation_id: &str) -> bool {
     let Some(registry) = ENGINE_OPERATION_CANCELLATIONS.get() else {
         return false;
     };
@@ -84,14 +84,14 @@ const MAX_ENGINE_STREAM_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum EngineRuntimeMode {
+pub enum EngineRuntimeMode {
     Dev,
     Internal,
     Production,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EngineSpec {
+pub struct EngineSpec {
     pub id: &'static str,
     pub label: &'static str,
     pub role: &'static str,
@@ -100,14 +100,14 @@ pub(crate) struct EngineSpec {
     pub expected_contract_version: &'static str,
 }
 
-pub(crate) const CODEBASE_MEMORY_VERSION: &str = "0.1.0";
-pub(crate) const CODEBASE_MEMORY_CONTRACT_VERSION: &str = "1";
-pub(crate) const DATABASE_MEMORY_VERSION: &str = "0.2.0";
-pub(crate) const DATABASE_MEMORY_CONTRACT_VERSION: &str = "2";
+pub const CODEBASE_MEMORY_VERSION: &str = "0.1.0";
+pub const CODEBASE_MEMORY_CONTRACT_VERSION: &str = "2";
+pub const DATABASE_MEMORY_VERSION: &str = "0.2.0";
+pub const DATABASE_MEMORY_CONTRACT_VERSION: &str = "3";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct EngineRegistry {
+pub struct EngineRegistry {
     pub mode: EngineRuntimeMode,
     pub engine_dir: String,
     pub engines: Vec<EngineAvailability>,
@@ -115,7 +115,7 @@ pub(crate) struct EngineRegistry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct EngineAvailability {
+pub struct EngineAvailability {
     pub id: String,
     pub label: String,
     pub role: String,
@@ -165,7 +165,7 @@ struct DevelopmentArtifact {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct EngineRunResult {
+pub struct EngineRunResult {
     pub ok: bool,
     pub stdout: String,
     pub stderr: String,
@@ -175,13 +175,13 @@ pub(crate) struct EngineRunResult {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct EngineRunPolicy {
+pub struct EngineRunPolicy {
     pub hard_timeout: Duration,
     pub idle_timeout: Duration,
 }
 
 impl EngineRunPolicy {
-    pub(crate) fn fixed(timeout: Duration) -> Self {
+    pub fn fixed(timeout: Duration) -> Self {
         Self {
             hard_timeout: timeout,
             idle_timeout: timeout,
@@ -190,14 +190,14 @@ impl EngineRunPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EngineProcessEvent {
+pub struct EngineProcessEvent {
     pub stream: &'static str,
     pub line: String,
 }
 
-pub(crate) type EngineObserver = Arc<dyn Fn(EngineProcessEvent) + Send + Sync>;
+pub type EngineObserver = Arc<dyn Fn(EngineProcessEvent) + Send + Sync>;
 
-pub(crate) const ENGINE_SPECS: &[EngineSpec] = &[
+pub const ENGINE_SPECS: &[EngineSpec] = &[
     EngineSpec {
         id: "codebase-memory",
         label: "codebase-memory",
@@ -216,7 +216,7 @@ pub(crate) const ENGINE_SPECS: &[EngineSpec] = &[
     },
 ];
 
-pub(crate) fn resolve_engine_dir(
+pub fn resolve_engine_dir(
     mode: EngineRuntimeMode,
     app_data_dir: impl AsRef<Path>,
     resource_dir: Option<&Path>,
@@ -244,7 +244,7 @@ pub(crate) fn resolve_engine_dir(
     }
 }
 
-pub(crate) fn engine_registry(
+pub fn engine_registry(
     mode: EngineRuntimeMode,
     app_data_dir: impl AsRef<Path>,
     resource_dir: Option<&Path>,

@@ -1,3 +1,4 @@
+use codebase_fact_model::analysis::ProviderExecutionContext;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -34,6 +35,13 @@ struct SourceManifest {
 }
 
 #[derive(Serialize, Deserialize)]
+struct ProviderRunInputManifest {
+    schema: String,
+    dependency_context_digest: u64,
+    files: HashMap<String, u64>,
+}
+
+#[derive(Serialize, Deserialize)]
 struct CacheGenerationManifest {
     schema: String,
     files: Vec<String>,
@@ -64,6 +72,7 @@ pub(crate) struct CachedLanguageResult {
     pub(crate) key: String,
     pub(crate) documents: Vec<DocumentOutput>,
     pub(crate) relations: Vec<RelationOutput>,
+    pub(crate) execution_context: ProviderExecutionContext,
     #[serde(default)]
     pub(crate) diagnostics: Vec<CachedDiagnostic>,
 }
@@ -90,10 +99,9 @@ pub(crate) fn architecture_cache_key(
 ) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     // Bump this whenever architecture projection behavior changes. The
-    // serialized language index can stay identical while the Visual Map
+    // Serialized language index can stay identical while the desktop
     // projection changes (for example, preserving an unresolved route node).
-    checksum_update(&mut hash, b"code-memory-architecture-cache.v20");
-    hash_current_executable(&mut hash, b"architecture-executable");
+    checksum_update(&mut hash, b"code-memory-architecture-cache.v23");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, pack_root.to_string_lossy().as_bytes());
     for document in &output.documents {
@@ -144,6 +152,19 @@ pub(crate) fn architecture_cache_key(
             if let Some(symbol) = &fact.symbol {
                 checksum_update(&mut hash, symbol.as_bytes());
             }
+            if let Some(method) = &fact.method {
+                checksum_update(&mut hash, method.as_bytes());
+            }
+            if let Some(path) = &fact.path {
+                checksum_update(&mut hash, path.as_bytes());
+            }
+            for evidence in &fact.evidence {
+                checksum_update(&mut hash, evidence.as_bytes());
+            }
+            for (key, value) in &fact.properties {
+                checksum_update(&mut hash, key.as_bytes());
+                checksum_update(&mut hash, value.as_bytes());
+            }
         }
     }
     for coverage in &output.coverage {
@@ -180,8 +201,11 @@ pub(crate) fn framework_cache_key(
     project_config_digest: u64,
 ) -> String {
     let mut hash = 0xcbf29ce484222325u64;
-    checksum_update(&mut hash, b"code-memory-framework-cache.v24");
-    hash_current_executable(&mut hash, b"framework-executable");
+    // v27: JavaScript middleware/route facts are owned by their actual
+    // framework syntax; call-expression clients such as
+    // `request(server).get(...)` cannot masquerade as server registrations;
+    // and anonymous Fastify hooks do not invent callback-parameter targets.
+    checksum_update(&mut hash, b"code-memory-framework-cache.v27");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     for document in documents {
         checksum_update(&mut hash, document.path.as_bytes());
@@ -231,12 +255,25 @@ fn hash_pack_files(root: &Path, hash: &mut u64) {
         }
     }
 }
-pub(crate) fn cache_root(root: &Path) -> PathBuf {
+pub(crate) fn cache_root(_root: &Path) -> PathBuf {
     let base = env::var_os("CODE_MEMORY_CACHE_ROOT")
         .or_else(|| env::var_os("LOCALAPPDATA"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| root.join(".code_memory"));
-    base.join("VisualMap").join("cache").join("code-memory")
+        .or_else(|| env::var_os("XDG_CACHE_HOME").map(PathBuf::from))
+        .or_else(|| {
+            env::var_os("HOME").map(|home| {
+                let home = PathBuf::from(home);
+                if cfg!(target_os = "macos") {
+                    home.join("Library").join("Caches")
+                } else {
+                    home.join(".cache")
+                }
+            })
+        })
+        .unwrap_or_else(env::temp_dir);
+    base.join("CodebaseWorkspace")
+        .join("cache")
+        .join("code-memory")
 }
 pub(crate) fn project_cache_root(root: &Path) -> PathBuf {
     let mut hash = 0xcbf29ce484222325u64;
@@ -254,14 +291,22 @@ pub(crate) fn cache_impact(
         force_all: true,
         affected_paths: snapshot.file_hashes.keys().cloned().collect(),
     };
-    let Some(manifest) = fs::read(&manifest_path)
+    let manifest = fs::read(&manifest_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<SourceManifest>(&bytes).ok())
         .filter(|manifest| {
             manifest.schema == "code-memory.source-manifest.v2"
                 && manifest.dependency_context_digest == dependency_context_digest
-        })
-    else {
+        });
+    let Some(manifest) = manifest else {
+        // A provider may have completed minutes of work before a later
+        // canonical validation failed. The provider caches are still valid if
+        // and only if the entire source/config input is byte-for-byte the same
+        // on retry. This provisional receipt deliberately has no reverse-import
+        // graph, so it can authorize only an exact unchanged retry.
+        if provider_run_input_matches(root, snapshot, dependency_context_digest) {
+            return CacheImpact::default();
+        }
         return force_all();
     };
     let mut changed = HashSet::new();
@@ -297,6 +342,48 @@ pub(crate) fn cache_impact(
         force_all: false,
         affected_paths,
     }
+}
+
+pub(crate) fn write_provider_run_input_manifest(
+    root: &Path,
+    snapshot: &SourceSnapshot,
+    dependency_context_digest: u64,
+) -> Result<(), String> {
+    let cache_root = project_cache_root(root);
+    fs::create_dir_all(&cache_root)
+        .map_err(|error| format!("cannot create provider-run input cache: {error}"))?;
+    let path = cache_root.join("provider-run-input-v1.json");
+    let manifest = ProviderRunInputManifest {
+        schema: "code-memory.provider-run-input.v1".to_string(),
+        dependency_context_digest,
+        files: snapshot.file_hashes.clone(),
+    };
+    let bytes = serde_json::to_vec(&manifest)
+        .map_err(|error| format!("cannot serialize provider-run input: {error}"))?;
+    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    write_cache_file(&temporary, &bytes)?;
+    let _ = fs::remove_file(&path);
+    if let Err(error) = fs::rename(&temporary, &path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("cannot promote provider-run input: {error}"));
+    }
+    Ok(())
+}
+
+fn provider_run_input_matches(
+    root: &Path,
+    snapshot: &SourceSnapshot,
+    dependency_context_digest: u64,
+) -> bool {
+    let path = project_cache_root(root).join("provider-run-input-v1.json");
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<ProviderRunInputManifest>(&bytes).ok())
+        .is_some_and(|manifest| {
+            manifest.schema == "code-memory.provider-run-input.v1"
+                && manifest.dependency_context_digest == dependency_context_digest
+                && manifest.files == snapshot.file_hashes
+        })
 }
 
 pub(crate) fn write_source_manifest(
@@ -698,6 +785,26 @@ pub(crate) fn project_config_digest(root: &Path) -> u64 {
         "CODE_MEMORY_LSP_MAX_SECONDS",
         "CODE_MEMORY_PROVIDER_TIMEOUT_SECONDS",
         "CODE_MEMORY_LSP_REFERENCES",
+        // Provider-inherited semantic axes. Only their bounded hash reaches
+        // the cache key; raw values are not published in product output.
+        "GOOS",
+        "GOARCH",
+        "GOFLAGS",
+        "GOWORK",
+        "CGO_ENABLED",
+        "CARGO_BUILD_TARGET",
+        "RUSTFLAGS",
+        "RUSTUP_TOOLCHAIN",
+        "JAVA_HOME",
+        "CODE_MEMORY_JAVA_TOOLCHAIN_PATHS",
+        "JAVA_TOOL_OPTIONS",
+        "GRADLE_OPTS",
+        "MAVEN_OPTS",
+        "DOTNET_ROOT",
+        "VIRTUAL_ENV",
+        "PYTHONPATH",
+        "PUB_CACHE",
+        "FLUTTER_ROOT",
     ] {
         checksum_update(&mut hash, name.as_bytes());
         match env::var_os(name) {
@@ -713,9 +820,13 @@ pub(crate) fn source_dependency_context_digest(
     project_config_digest: u64,
 ) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
-    checksum_update(&mut hash, b"code-memory.source-dependency-context.v1");
+    // Source census/planning compatibility is an explicit contract. Hashing
+    // the whole executable here made any unrelated engine or UI-adjacent Rust
+    // rebuild mark every source file as affected, which in turn bypassed the
+    // otherwise stable per-language caches. Bump this marker whenever census,
+    // dependency closure, or AnalysisPlan semantics change.
+    checksum_update(&mut hash, b"code-memory.source-dependency-context.v2");
     checksum_update(&mut hash, &project_config_digest.to_le_bytes());
-    hash_current_executable(&mut hash, b"normalizer-executable");
     if let Some(providers_root) = providers_root {
         if let Some(manifest_hash) = cached_file_checksum(&providers_root.join("manifest.json")) {
             checksum_update(&mut hash, b"provider-manifest");
@@ -772,6 +883,9 @@ fn is_project_config_name(name: &str) -> bool {
             | "Pipfile.lock"
             | "setup.py"
             | "setup.cfg"
+            | "global.json"
+            | "NuGet.config"
+            | "nuget.config"
             | "Cargo.toml"
             | "Cargo.lock"
             | "go.mod"
@@ -785,12 +899,6 @@ fn is_project_config_name(name: &str) -> bool {
             | "settings.gradle.kts"
             | "gradle.properties"
             | "libs.versions.toml"
-            | "composer.json"
-            | "composer.lock"
-            | "Gemfile"
-            | "Gemfile.lock"
-            | ".ruby-version"
-            | ".ruby-gemset"
             | "pubspec.yaml"
             | "pubspec.lock"
             | "pubspec_overrides.yaml"
@@ -809,6 +917,7 @@ fn is_project_config_name(name: &str) -> bool {
         || lower.ends_with(".vcxproj.filters")
         || lower.ends_with(".props")
         || lower.ends_with(".targets")
+        || lower.ends_with(".ruleset")
 }
 fn hash_project_config_files(root: &Path, hash: &mut u64) {
     for path in project_config_files(root) {
@@ -884,24 +993,108 @@ pub(crate) fn typescript_project_model_cache_key(
     format!("{hash:016x}")
 }
 
-pub(crate) fn javascript_workspace(root: &Path, language: &str) -> PathBuf {
-    project_cache_root(root).join("workspaces").join(language)
+pub(crate) struct LanguageCacheKeyInput<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) lang: &'a LanguageSpec,
+    pub(crate) files: &'a [PathBuf],
+    pub(crate) providers_root: Option<&'a Path>,
+    pub(crate) config_digest: u64,
+    pub(crate) source_snapshot: &'a SourceSnapshot,
+    pub(crate) execution_scope_id: &'a str,
+    pub(crate) provider_config: Option<&'a Path>,
 }
-pub(crate) fn language_cache_key(
-    root: &Path,
-    lang: &LanguageSpec,
-    files: &[PathBuf],
-    providers_root: Option<&Path>,
-    config_digest: u64,
-    source_snapshot: &SourceSnapshot,
-) -> String {
+
+pub(crate) fn language_cache_key(input: LanguageCacheKeyInput<'_>) -> String {
+    let LanguageCacheKeyInput {
+        root,
+        lang,
+        files,
+        providers_root,
+        config_digest,
+        source_snapshot,
+        execution_scope_id,
+        provider_config,
+    } = input;
     let mut hash = 0xcbf29ce484222325u64;
-    // Provider output is normalized by this executable, so a new build must
-    // not reuse semantic data produced by an older normalization contract.
-    checksum_update(&mut hash, b"code-memory-language-cache.v149");
-    hash_current_executable(&mut hash, b"normalizer-executable");
+    // This explicit contract version owns provider-output normalization.
+    // Bump it whenever SCIP/LSP decoding or provider-side normalization can
+    // change the cached documents/relations/context. Hashing the whole engine
+    // executable here would invalidate minutes of provider work for unrelated
+    // UI, canonical-linker, storage, or validation changes.
+    checksum_update(&mut hash, b"code-memory-language-cache.v154");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, lang.id.as_bytes());
+    if matches!(lang.id, "typescript" | "javascript") {
+        // Configless shards use an isolated generated project.  This marker
+        // invalidates only TS/JS caches created by the old --infer-tsconfig
+        // path, which could write tsconfig.json into the selected repository.
+        checksum_update(&mut hash, b"tsjs-isolated-source-only.v1");
+    }
+    if lang.id == "rust" {
+        // Large Rust workspaces used to omit public impl methods from call
+        // enrichment. Keep old provider results from surviving the corrected
+        // visibility boundary without invalidating unrelated languages.
+        checksum_update(&mut hash, b"rust-public-impl-boundary.v1");
+    }
+    if lang.id == "csharp" {
+        // scip-dotnet commonly omits occurrence enclosing ranges. Calls in an
+        // expression-bodied method were therefore attached to the class by
+        // the old brace fallback, destroying executable flow paths. Invalidate
+        // only C# provider-normalization caches after exact syntax-owner repair.
+        checksum_update(&mut hash, b"csharp-exact-call-owner.v2");
+    }
+    if lang.id == "java" {
+        // Source-only JDTLS must open every scheduled file because there is no
+        // imported build project to index unopened documents. Invalidate the
+        // former 256-document fallback shards, which reported file coverage
+        // while omitting most Java definitions.
+        checksum_update(&mut hash, b"java-source-only-all-documents.v2");
+        // Java/C# providers run in a writable manifest-backed copy. The old
+        // copy omitted unsupported-but-required build support files such as
+        // Gradle wrapper JARs and Checkstyle XML, so a valid build project
+        // could silently fall back to source-only semantics. Invalidate those
+        // provider results after the execution-fidelity repair.
+        checksum_update(&mut hash, b"java-provider-support-files.v1");
+        // Large JDTLS sessions now use workload/memory-aware heap sizing and
+        // suppress editor-only source diagnostics. Do not retain an empty or
+        // partial result produced by the former fixed 1 GiB process.
+        checksum_update(&mut hash, b"java-jdtls-large-workspace.v8");
+        // Large Java call flow now resolves exact syntax call sites directly
+        // and schedules them fairly across source modules. The former
+        // call-hierarchy prefix could fill the entire budget with
+        // alphabetically early modules and omit valid web/API flows.
+        checksum_update(&mut hash, b"java-direct-call-sites.v1");
+        // JDTLS display labels can include complete parameter lists or report
+        // a malformed 0:0 selection. Definition evidence now uses the exact
+        // source name token and repairs an invalid selection only from a
+        // unique match inside the provider declaration range.
+        checksum_update(&mut hash, b"java-definition-name-evidence.v2");
+    }
+    if matches!(
+        lang.id,
+        "c" | "cpp" | "dart" | "go" | "java" | "python" | "rust"
+    ) {
+        // Large LSP workspaces now complete call-hierarchy chunks end-to-end
+        // and reserve request budget across hierarchy, call, and type-use
+        // capabilities. Old shards may contain prepare-only starvation.
+        checksum_update(&mut hash, b"lsp-capability-budget-scheduler.v2");
+    }
+    // The same files under the same repository-wide config digest can be
+    // interpreted by a different project config after ownership planning
+    // changes.  NestJS exposed the collision: packages/platform-ws cached a
+    // result executed with integration/websockets/tsconfig.json and reused it
+    // for packages/platform-ws/tsconfig.build.json.  Bind provider output to
+    // the stable planned scope plus the exact generated/explicit config bytes.
+    checksum_update(&mut hash, b"execution-scope");
+    checksum_update(&mut hash, execution_scope_id.as_bytes());
+    if let Some(provider_config) = provider_config {
+        checksum_update(&mut hash, b"provider-config");
+        if let Ok(bytes) = fs::read(provider_config) {
+            checksum_update(&mut hash, &bytes);
+        } else {
+            checksum_update(&mut hash, b"unreadable-provider-config");
+        }
+    }
     let provider_program = find_tool(lang.tool, providers_root).or_else(|| {
         matches!(lang.id, "c" | "cpp")
             .then(|| find_tool("clangd", providers_root))
@@ -940,14 +1133,6 @@ pub(crate) fn language_cache_key(
     format!("{hash:016x}")
 }
 
-fn hash_current_executable(hash: &mut u64, marker: &[u8]) {
-    if let Ok(executable) = env::current_exe() {
-        if let Some(executable_hash) = cached_file_checksum(&executable) {
-            checksum_update(hash, marker);
-            checksum_update(hash, &executable_hash.to_le_bytes());
-        }
-    }
-}
 fn cached_file_checksum(path: &Path) -> Option<u64> {
     let metadata = fs::metadata(path).ok()?;
     let length = metadata.len();
@@ -1016,9 +1201,19 @@ pub(crate) fn load_language_cache(
     let cached = serde_json::from_slice::<CachedLanguageResult>(&value).ok();
     let deserialize_ms = deserialize_started.elapsed().as_millis();
     let value = cached.filter(|cached| {
-        cached.schema == "code-memory.language-cache.v3"
+        cached.schema == "code-memory.language-cache.v4"
             && cached.key == key
-            && !cached.documents.is_empty()
+            // A provider can successfully prove that a scoped source file has
+            // no semantic symbols. `write_language_cache` records that honest
+            // result with EmptySemantic; rejecting it here made the same Dart
+            // fixture shards launch a language server on every warm run.
+            // Do not cache generic empty failures/timeouts: only the explicit
+            // completed-empty receipt is reusable.
+            && (!cached.documents.is_empty()
+                || cached
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == DiagnosticCode::EmptySemantic))
     });
     if legacy {
         if let Some(cached) = value.as_ref() {
@@ -1040,16 +1235,18 @@ pub(crate) fn write_language_cache(
     documents: &[DocumentOutput],
     relations: &[RelationOutput],
     diagnostics: &[Diagnostic],
+    execution_context: &ProviderExecutionContext,
 ) {
     let directory = project_cache_root(root);
     if fs::create_dir_all(&directory).is_err() {
         return;
     }
     let cached = CachedLanguageResult {
-        schema: "code-memory.language-cache.v3".to_string(),
+        schema: "code-memory.language-cache.v4".to_string(),
         key: key.to_string(),
         documents: documents.to_vec(),
         relations: relations.to_vec(),
+        execution_context: execution_context.clone(),
         diagnostics: diagnostics
             .iter()
             .map(|diagnostic| CachedDiagnostic {
@@ -1077,6 +1274,70 @@ impl Drop for ProviderWorkGuard {
 #[cfg(test)]
 mod generation_tests {
     use super::*;
+
+    #[test]
+    fn language_cache_identity_includes_planned_scope_and_provider_config() {
+        let root = std::env::temp_dir().join(format!(
+            "code-memory-language-cache-context-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("src")).unwrap();
+        let source = root.join("src/main.ts");
+        let first_config = root.join("tsconfig.first.json");
+        let second_config = root.join("tsconfig.second.json");
+        fs::write(&source, b"export const value = 1;\n").unwrap();
+        fs::write(&first_config, br#"{"compilerOptions":{"strict":true}}"#).unwrap();
+        fs::write(&second_config, br#"{"compilerOptions":{"strict":false}}"#).unwrap();
+        let snapshot = SourceSnapshot {
+            files: vec![(
+                "src/main.ts".to_string(),
+                "export const value = 1;\n".to_string(),
+            )],
+            file_hashes: HashMap::from([("src/main.ts".to_string(), 7)]),
+            source_paths: vec![source.clone()],
+        };
+        let language = crate::LANGUAGES
+            .iter()
+            .find(|language| language.id == "typescript")
+            .unwrap();
+        let first = language_cache_key(LanguageCacheKeyInput {
+            root: &root,
+            lang: language,
+            files: std::slice::from_ref(&source),
+            providers_root: None,
+            config_digest: 11,
+            source_snapshot: &snapshot,
+            execution_scope_id: "tsjs:first",
+            provider_config: Some(&first_config),
+        });
+        let different_scope = language_cache_key(LanguageCacheKeyInput {
+            root: &root,
+            lang: language,
+            files: std::slice::from_ref(&source),
+            providers_root: None,
+            config_digest: 11,
+            source_snapshot: &snapshot,
+            execution_scope_id: "tsjs:second",
+            provider_config: Some(&first_config),
+        });
+        let different_config = language_cache_key(LanguageCacheKeyInput {
+            root: &root,
+            lang: language,
+            files: std::slice::from_ref(&source),
+            providers_root: None,
+            config_digest: 11,
+            source_snapshot: &snapshot,
+            execution_scope_id: "tsjs:first",
+            provider_config: Some(&second_config),
+        });
+        assert_ne!(first, different_scope);
+        assert_ne!(first, different_config);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn cache_gc_keeps_current_and_previous_complete_generations() {

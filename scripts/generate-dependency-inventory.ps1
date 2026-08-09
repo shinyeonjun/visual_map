@@ -275,7 +275,7 @@ $inventory = [pscustomobject][ordered]@{
         [pscustomobject][ordered]@{
             id = "application-license"
             status = $ownerGateStatus
-            reason = "The Backend Visual Map application license is an owner decision and does not block dependency inventory generation."
+            reason = "The Codebase Workspace application license is an owner decision and does not block dependency inventory generation."
             packages = $ownerPackages
         }
     )

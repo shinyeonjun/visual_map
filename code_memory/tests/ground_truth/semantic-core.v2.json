@@ -1,0 +1,173 @@
+{
+  "schema": "codebase-workspace.semantic-ground-truth.v2",
+  "review": {
+    "reviewedAt": "2026-08-07",
+    "reviewer": "Codex manual source review",
+    "scope": "Exhaustive project-local CALLS and CONSTRUCTS occurrences in the listed source files",
+    "countingRule": "One source executable occurrence must match exactly one emitted relation of the reviewed kind with a source range covering the reviewed callee token",
+    "excludedFromScore": [
+      "standard-library and dependency calls",
+      "dynamic runtime targets that cannot be resolved statically",
+      "relation kinds other than CALLS and CONSTRUCTS"
+    ]
+  },
+  "releaseGate": {
+    "minimumPrecision": 1.0,
+    "minimumRecall": 1.0,
+    "minimumSourceCoverage": 1.0,
+    "minimumEvidenceValidity": 1.0,
+    "requireDeterminism": true
+  },
+  "cases": [
+    {
+      "id": "typescript",
+      "fixture": "scip-typescript",
+      "projectTargetPattern": "code_memory/tests/fixtures/scip-typescript/",
+      "sourceFiles": [
+        { "path": "src/main.ts", "sha256": "1756fb3f7e27bdae6f8698ab019472e122aac29a636a3172052e000a8bfcbce3" },
+        { "path": "src/types.ts", "sha256": "eb206a09966be67f553792b0def4d4922a70c1bb81e9956a9731686b7fcc9b32" }
+      ],
+      "expectedRelations": [
+        { "id": "ts-run-box-constructor", "kind": "CONSTRUCTS", "path": "src/main.ts", "snippet": "const box = new Box(new User(\"user-1\"));", "token": "Box", "targetPattern": "types\\.ts.*Box#.*constructor" },
+        { "id": "ts-run-user-constructor", "kind": "CONSTRUCTS", "path": "src/main.ts", "snippet": "const box = new Box(new User(\"user-1\"));", "token": "User", "targetPattern": "types\\.ts.*User#.*constructor" },
+        { "id": "ts-run-add", "kind": "CALLS", "path": "src/main.ts", "snippet": "return add(1, 2) + box.get().id.length;", "token": "add", "targetPattern": "main\\.ts.*add\\(\\)" },
+        { "id": "ts-run-box-get", "kind": "CALLS", "path": "src/main.ts", "snippet": "return add(1, 2) + box.get().id.length;", "token": "get", "targetPattern": "types\\.ts.*Box#get\\(\\)" }
+      ]
+    },
+    {
+      "id": "javascript",
+      "fixture": "scip-javascript",
+      "projectTargetPattern": "code_memory/tests/fixtures/scip-javascript/",
+      "sourceFiles": [
+        { "path": "main.js", "sha256": "57dc82ef41329ef223845e051a5a0043ab2bd7e3686897e0b071c643ad0c88a5" },
+        { "path": "types.js", "sha256": "c15d9a1ddc75c0fa0a3aae67db4c8be99300dc5c04bedca11e9934ac671a11fd" }
+      ],
+      "expectedRelations": [
+        { "id": "js-run-box", "kind": "CALLS", "path": "main.js", "snippet": "const user = box(new User(\"user-1\"));", "token": "box", "targetPattern": "types\\.js.*box\\(\\)" },
+        { "id": "js-run-user-constructor", "kind": "CONSTRUCTS", "path": "main.js", "snippet": "const user = box(new User(\"user-1\"));", "token": "User", "targetPattern": "types\\.js.*User#" },
+        { "id": "js-run-add", "kind": "CALLS", "path": "main.js", "snippet": "return add(1, 2) + user.id.length;", "token": "add", "targetPattern": "main\\.js.*add\\(\\)" }
+      ]
+    },
+    {
+      "id": "python",
+      "fixture": "scip-python",
+      "projectTargetPattern": "lsp \\. \\. \\. (main|models)\\.py#",
+      "sourceFiles": [
+        { "path": "main.py", "sha256": "cefab7e2ade000bbab6406d9f670dbd6bcf05f0fa560aec1075fa2bb8f9aa354" },
+        { "path": "models.py", "sha256": "4883d79bc55dd70a3612ef3b1b982126f5e3c3ecadbbece191acc51e5b86bca1" }
+      ],
+      "expectedRelations": [
+        { "id": "py-main-box-constructor", "kind": "CONSTRUCTS", "path": "main.py", "snippet": "user = Box(User(\"user-1\")).get()", "token": "Box", "targetPattern": "models\\.py#Box@" },
+        { "id": "py-main-user-constructor", "kind": "CONSTRUCTS", "path": "main.py", "snippet": "user = Box(User(\"user-1\")).get()", "token": "User", "targetPattern": "models\\.py#User@" },
+        { "id": "py-main-box-get", "kind": "CALLS", "path": "main.py", "snippet": "user = Box(User(\"user-1\")).get()", "token": "get", "targetPattern": "models\\.py#get@" },
+        { "id": "py-main-add", "kind": "CALLS", "path": "main.py", "snippet": "return add(1, 2) + len(user.user_id)", "token": "add", "targetPattern": "main\\.py#add@" }
+      ]
+    },
+    {
+      "id": "java",
+      "fixture": "scip-java",
+      "projectTargetPattern": "lsp \\. \\. \\. src\\.main\\.java\\.demo\\.",
+      "sourceFiles": [
+        { "path": "src/main/java/demo/Base.java", "sha256": "fc6d54a45ad7211294a569d3e74a4354fdeed3b4992aad8d52babb46dc26d3e0" },
+        { "path": "src/main/java/demo/Box.java", "sha256": "6e675ed188326bd678c78210ee40683b356e43c46c66d335ba9c05df1e69e355" },
+        { "path": "src/main/java/demo/Main.java", "sha256": "df1e192530a758dc16413fccc494e9b6fe7759bc071582e11e70ed2ab46ca8fa" },
+        { "path": "src/main/java/demo/Runner.java", "sha256": "0c109c08140688f49a9e42244822f2847ecb27a6f9f5061ec0d88b081fcfc497" }
+      ],
+      "expectedRelations": [
+        { "id": "java-main-box-constructor", "kind": "CONSTRUCTS", "path": "src/main/java/demo/Main.java", "snippet": "Box<String> box = new Box<>(\"user-1\");", "token": "Box", "tokenOccurrence": 2, "targetPattern": "Box\\.java#Box\\(" },
+        { "id": "java-main-add", "kind": "CALLS", "path": "src/main/java/demo/Main.java", "snippet": "add(1, 2 + box.get().length());", "token": "add", "targetPattern": "Main\\.java#add\\(" },
+        { "id": "java-main-box-get", "kind": "CALLS", "path": "src/main/java/demo/Main.java", "snippet": "add(1, 2 + box.get().length());", "token": "get", "targetPattern": "Box\\.java#get\\(" },
+        { "id": "java-run-base-value", "kind": "CALLS", "path": "src/main/java/demo/Main.java", "snippet": "return baseValue();", "token": "baseValue", "targetPattern": "Base\\.java#baseValue\\(" }
+      ]
+    },
+    {
+      "id": "csharp",
+      "fixture": "scip-dotnet",
+      "projectTargetPattern": "scip-dotnet nuget \\. \\. VisualMapFixture/",
+      "sourceFiles": [
+        { "path": "BaseProgram.cs", "sha256": "abdded709b18424ac63ce21e851d0688f4fce9af9acae4ec33de96ea1019f717" },
+        { "path": "Box.cs", "sha256": "398f42c175f59e31e72148c826d3d803d98543720789b8c8db10f3c78f6f6fae" },
+        { "path": "IRunner.cs", "sha256": "dd79892835dd357864ed9e9e4ac12ba219119d414cc3386e3b51c319a6b79b15" },
+        { "path": "Program.cs", "sha256": "ee04b6e8a795c75484f7704c359ebd7fded982809cdc43be0b3ad8202d0d4e03" }
+      ],
+      "expectedRelations": [
+        { "id": "csharp-main-box-constructor", "kind": "CONSTRUCTS", "path": "Program.cs", "snippet": "var box = new Box<string>(\"user-1\");", "token": "Box", "targetPattern": "VisualMapFixture/Box#" },
+        { "id": "csharp-main-add", "kind": "CALLS", "path": "Program.cs", "snippet": "Add(1, 2 + box.Get().Length);", "token": "Add", "targetPattern": "Program#Add\\(\\)" },
+        { "id": "csharp-main-box-get", "kind": "CALLS", "path": "Program.cs", "snippet": "Add(1, 2 + box.Get().Length);", "token": "Get", "targetPattern": "Box#Get\\(\\)" },
+        { "id": "csharp-run-base-value", "kind": "CALLS", "path": "Program.cs", "snippet": "return BaseValue();", "token": "BaseValue", "targetPattern": "BaseProgram#BaseValue\\(\\)" }
+      ]
+    },
+    {
+      "id": "c",
+      "fixture": "native-lsp-c",
+      "projectTargetPattern": "lsp \\. \\. \\. (declarations\\.hpp|implementations\\.cpp|main\\.c|main\\.cpp|types\\.h)#",
+      "sourceFiles": [
+        { "path": "main.c", "sha256": "e1fbc3bac36d5a031a33f6362e12570bbbccfd65522af280fdf322b4d5f67f2d" },
+        { "path": "types.h", "sha256": "f5182b761343a9f3bc9911aa6ba95b525c9cc5f2ce3b821639b2715d7dc338d4" }
+      ],
+      "expectedRelations": [
+        { "id": "c-main-add", "kind": "CALLS", "path": "main.c", "snippet": "return add(1, 2) + (int)box_id(&box)[0];", "token": "add", "targetPattern": "main\\.c#add@" },
+        { "id": "c-main-box-id", "kind": "CALLS", "path": "main.c", "snippet": "return add(1, 2) + (int)box_id(&box)[0];", "token": "box_id", "targetPattern": "types\\.h#box_id@" }
+      ]
+    },
+    {
+      "id": "cpp",
+      "fixture": "native-lsp-c",
+      "projectTargetPattern": "lsp \\. \\. \\. (declarations\\.hpp|implementations\\.cpp|main\\.c|main\\.cpp|types\\.h)#",
+      "sourceFiles": [
+        { "path": "declarations.hpp", "sha256": "30d0837020b8d098dc02f9f2e17e6bdf4c0f3a5a3889704207daed2bd997367d" },
+        { "path": "implementations.cpp", "sha256": "68d9aabec7d0090f47a0e46b2b3fecc5f444cc4863cd1760043879caff8ac1c8" },
+        { "path": "main.cpp", "sha256": "5c805b1b0ffcf20d86a375d11d98db0cbb1e8033a48c0dba116ba604e3904b14" },
+        { "path": "types.h", "sha256": "f5182b761343a9f3bc9911aa6ba95b525c9cc5f2ce3b821639b2715d7dc338d4" }
+      ],
+      "expectedRelations": [
+        { "id": "cpp-run-declared-value", "kind": "CALLS", "path": "implementations.cpp", "snippet": "int run() const override { return declared_value(1); }", "token": "declared_value", "targetPattern": "implementations\\.cpp#declared_value@" },
+        { "id": "cpp-main-box-constructor", "kind": "CONSTRUCTS", "path": "main.cpp", "snippet": "BoxValue<int> box(2);", "token": "BoxValue", "targetPattern": "main\\.cpp#BoxValue" },
+        { "id": "cpp-main-multiply", "kind": "CALLS", "path": "main.cpp", "snippet": "return multiply(box.get(), 3);", "token": "multiply", "targetPattern": "main\\.cpp#multiply@" },
+        { "id": "cpp-main-box-get", "kind": "CALLS", "path": "main.cpp", "snippet": "return multiply(box.get(), 3);", "token": "get", "targetPattern": "main\\.cpp#get@" }
+      ]
+    },
+    {
+      "id": "go",
+      "fixture": "native-lsp-go",
+      "projectTargetPattern": "lsp \\. \\. \\. main\\.go#",
+      "sourceFiles": [
+        { "path": "main.go", "sha256": "93bb9cc2aeef80c4e192e3e1582ac336acf76bc093db9034312917a66e7eec31" }
+      ],
+      "expectedRelations": [
+        { "id": "go-main-add", "kind": "CALLS", "path": "main.go", "snippet": "_ = Add(1, len(box.Get().ID()))", "token": "Add", "targetPattern": "main\\.go#Add@" },
+        { "id": "go-main-box-get", "kind": "CALLS", "path": "main.go", "snippet": "_ = Add(1, len(box.Get().ID()))", "token": "Get", "targetPattern": "main\\.go#\\(Box\\[T\\]\\)\\.Get@" },
+        { "id": "go-main-user-id", "kind": "CALLS", "path": "main.go", "snippet": "_ = Add(1, len(box.Get().ID()))", "token": "ID", "targetPattern": "main\\.go#\\(User\\)\\.ID@" }
+      ]
+    },
+    {
+      "id": "rust",
+      "fixture": "native-lsp-rust",
+      "projectTargetPattern": "lsp \\. \\. \\. src\\.(main|types)\\.rs#",
+      "sourceFiles": [
+        { "path": "src/main.rs", "sha256": "8aca5db75f2a19f1a31e8221f45d1578f4efbb33a98c6fc6889321664f864fe7" },
+        { "path": "src/types.rs", "sha256": "41f0e54afc5e69a49045aef7119001dbfb44437a4d9a5254df03a146d1aa1a7a" }
+      ],
+      "expectedRelations": [
+        { "id": "rust-main-add", "kind": "CALLS", "path": "src/main.rs", "snippet": "let _ = add(1, box_value.get().id().len() as i32);", "token": "add", "targetPattern": "main\\.rs#add@" },
+        { "id": "rust-main-box-get", "kind": "CALLS", "path": "src/main.rs", "snippet": "let _ = add(1, box_value.get().id().len() as i32);", "token": "get", "targetPattern": "types\\.rs#get@" },
+        { "id": "rust-main-user-id", "kind": "CALLS", "path": "src/main.rs", "snippet": "let _ = add(1, box_value.get().id().len() as i32);", "token": "id", "targetPattern": "types\\.rs#id@" }
+      ]
+    },
+    {
+      "id": "dart",
+      "fixture": "native-lsp-dart",
+      "projectTargetPattern": "lsp \\. \\. \\. lib\\.(main|types)\\.dart#",
+      "sourceFiles": [
+        { "path": "lib/main.dart", "sha256": "c238ffeb820c15d945c43201dae70a82a52ad0e5c57129284ad85ec89173cfff" },
+        { "path": "lib/types.dart", "sha256": "c9199d0f99b24e424ba2f9cb72f5188ccfe3d9cc842c75336be15f7a4547c546" }
+      ],
+      "expectedRelations": [
+        { "id": "dart-main-user-constructor", "kind": "CONSTRUCTS", "path": "lib/main.dart", "snippet": "final user = User('user-1');", "token": "User", "targetPattern": "types\\.dart#User@" },
+        { "id": "dart-main-add", "kind": "CALLS", "path": "lib/main.dart", "snippet": "add(1, user.id.length);", "token": "add", "targetPattern": "main\\.dart#add@" },
+        { "id": "dart-main-box-constructor", "kind": "CONSTRUCTS", "path": "lib/main.dart", "snippet": "Box<User>(user).get();", "token": "Box", "targetPattern": "types\\.dart#Box@" },
+        { "id": "dart-main-box-get", "kind": "CALLS", "path": "lib/main.dart", "snippet": "Box<User>(user).get();", "token": "get", "targetPattern": "types\\.dart#get@" }
+      ]
+    }
+  ]
+}

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    backend_visual_map_lib::run()
+    codebase_workspace_lib::run()
 }

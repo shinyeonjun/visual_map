@@ -50,24 +50,56 @@ pub(crate) fn index_project(
     let mut jobs = Vec::new();
     let mut discovered_files = Vec::new();
     let mut cached_analyses = Vec::new();
-    let mut planned_units = Vec::new();
     let mut unit_runs = HashMap::new();
     let mut language_files = HashMap::new();
     let mut active_cache_files = HashSet::new();
-    let mut all_extensions: HashSet<&str> = LANGUAGES
-        .iter()
-        .flat_map(|language| language.extensions.iter().copied())
-        .collect();
-    // Vue SFCs are structural TypeScript/JavaScript sources. They are read by
-    // the project model, not sent to SCIP as a standalone language document.
-    all_extensions.insert("vue");
+    let mut writable_workspaces: HashMap<&'static str, Arc<ProviderWorkspace>> = HashMap::new();
+    let mut writable_workspace_turns: HashMap<&'static str, u64> = HashMap::new();
     let file_walk_started = Instant::now();
-    let all_source_files =
-        collect_files(&root, &all_extensions.iter().copied().collect::<Vec<_>>());
+    let source_census = static_pipeline::source_census::SourceCensus::scan(&root)?;
+    let max_project_source_file_bytes = source_census
+        .manifest
+        .files
+        .iter()
+        .filter(|file| {
+            file.state == codebase_fact_model::source_manifest::SourceEntryState::Included
+                && !file.languages.is_empty()
+        })
+        .map(|file| file.byte_size)
+        .max()
+        .unwrap_or(1);
+    let all_source_files = source_census.included_language_files();
     emit_progress("manifest", 10, 100, "파일 목록과 변경 범위 계산 중");
     let file_walk_elapsed = file_walk_started.elapsed();
+    let static_plan_started = Instant::now();
+    let static_plan = static_pipeline::analysis_unit_planner::plan_analysis_units(
+        &root,
+        &source_census.manifest,
+    )?;
+    let static_plan_elapsed = static_plan_started.elapsed();
+    let included_count = source_census
+        .manifest
+        .files
+        .iter()
+        .filter(|file| {
+            file.state
+                == codebase_fact_model::source_manifest::SourceEntryState::Included
+        })
+        .count();
+    eprintln!(
+        "@codebase-workspace-source-manifest {}",
+        serde_json::json!({
+            "schema": source_census.manifest.schema.as_str(),
+            "manifestDigest": source_census.manifest.manifest_digest,
+            "fileCount": source_census.manifest.files.len(),
+            "includedFileCount": included_count,
+            "nonEnumeratedScopeCount": source_census.manifest.scopes.len(),
+            "analysisPlanDigest": static_plan.plan_digest,
+            "analysisUnitCount": static_plan.units.len(),
+        })
+    );
     let source_hash_started = Instant::now();
-    let mut source_snapshot = load_source_snapshot_metadata_from_files(&root, &all_source_files);
+    let mut source_snapshot = source_census.source_snapshot_metadata();
     let source_hash_elapsed = source_hash_started.elapsed();
     let cache_invalidation_started = Instant::now();
     let cache_impact_state = cache_impact(
@@ -83,6 +115,13 @@ pub(crate) fn index_project(
             "language cache invalidation: {} affected source files",
             cache_impact_state.affected_paths.len()
         );
+    }
+    if let Err(error) = write_provider_run_input_manifest(
+        &root,
+        &source_snapshot,
+        dependency_context_digest,
+    ) {
+        eprintln!("provider-run input cache unavailable: {error}");
     }
     for lang in LANGUAGES {
         let files: Vec<PathBuf> = all_source_files
@@ -192,68 +231,25 @@ pub(crate) fn index_project(
     let mut cache_key_elapsed = Duration::ZERO;
     let mut cache_io_elapsed = Duration::ZERO;
     let mut cache_deserialize_elapsed = Duration::ZERO;
-    for lang in LANGUAGES {
-        let Some(files) = language_files.get(lang.id) else {
-            continue;
-        };
-        let modules =
-            if matches!(lang.id, "typescript" | "javascript") && !typescript_units.is_empty() {
-                plan_typescript_modules(&root, *lang, files, &typescript_units)
-            } else {
-                plan_language_modules(&root, *lang, files)
-            };
-        for mut module in modules {
-            let has_cpp_translation_unit =
-                module.files.iter().any(|file| {
-                    matches!(
-                        file.extension()
-                            .and_then(|extension| extension.to_str())
-                            .map(|extension| extension.to_ascii_lowercase())
-                            .as_deref(),
-                        Some("cc" | "cp" | "cpp" | "cxx")
-                    )
-                }) || compile_database_files_for_scope(&module.root, &module.files).is_some_and(
-                    |files| {
-                        files.iter().any(|file| {
-                            matches!(
-                                file.extension()
-                                    .and_then(|extension| extension.to_str())
-                                    .map(|extension| extension.to_ascii_lowercase())
-                                    .as_deref(),
-                                Some("cc" | "cp" | "cpp" | "cxx")
-                            )
-                        })
-                    },
-                );
-            // A shared `.h` belongs to the C++ context when the module also
-            // contains C++ translation units. In a pure C module C owns the
-            // headers; in a mixed module C++ owns them.
-            if lang.id == "c" && has_cpp_translation_unit {
-                module
-                    .files
-                    .retain(|file| !is_cpp_header(file) && !is_cpp_header_fragment(file));
-                if module.files.is_empty() {
-                    continue;
-                }
-            } else if lang.id == "cpp" && !has_cpp_translation_unit {
-                module
-                    .files
-                    .retain(|file| !is_cpp_header(file) && !is_cpp_header_fragment(file));
-                if module.files.is_empty() {
-                    continue;
-                }
-            }
-            if !module.files.is_empty() {
-                planned_units.push((
-                    module.id.clone(),
-                    lang.id.to_string(),
-                    module.root.clone(),
-                    module.files.clone(),
-                    module.project_excluded_files,
-                ));
-            }
-            let unit_key = (lang.id.to_string(), module.id.clone());
-            let provider = if matches!(lang.id, "c" | "cpp")
+    let provider_schedule =
+        static_pipeline::provider_schedule::schedule_provider_units(
+            &root,
+            &static_plan,
+            &typescript_units,
+        )?;
+    eprintln!(
+        "@codebase-workspace-provider-schedule {}",
+        serde_json::to_string(&provider_schedule.receipt)
+            .map_err(|error| format!("cannot serialize provider schedule receipt: {error}"))?
+    );
+    for scheduled in provider_schedule.units {
+        let lang = scheduled.lang;
+        let analysis_unit_id = scheduled.analysis_unit_id;
+        let execution_scope_id = scheduled.execution_scope_id;
+        let unit_language_file_count = language_files
+            .get(lang.id)
+            .map_or(scheduled.files.len(), Vec::len);
+        let provider = if matches!(lang.id, "c" | "cpp")
                 && find_tool(lang.tool, providers_root.as_deref()).is_none()
             {
                 "native-lsp"
@@ -262,98 +258,112 @@ pub(crate) fn index_project(
                     ProviderKind::Scip => "scip",
                     ProviderKind::Lsp => "native-lsp",
                 }
-            };
-            if lang.id == "rust" && files.len() > rust_semantic_file_limit() {
-                unit_runs.insert(
-                    unit_key,
+        };
+        if lang.id == "rust" && unit_language_file_count > rust_semantic_file_limit() {
+                record_analysis_unit_run(
+                    &mut unit_runs,
+                    lang.id,
+                    &analysis_unit_id,
                     AnalysisUnitRun {
                         provider,
                         execution: "skipped",
                         elapsed_ms: 0,
                     },
                 );
-                cached_analyses.push(language_excluded(
-                    *lang,
+                let mut batch = language_excluded(
+                    lang,
                     "native-lsp",
-                    &module.files,
+                    &scheduled.files,
                     DiagnosticCode::LargeWorkspacePartial,
                     &format!(
                         "Rust semantic analysis deferred for this {}-file workspace (limit {}); structural map remains available",
-                        files.len(),
+                        unit_language_file_count,
                         rust_semantic_file_limit()
                     ),
-                ));
+                );
+                batch.project_excluded_files = scheduled.project_excluded_files;
+                assign_provider_batch_scope(&mut batch, &root, &scheduled.files);
+                cached_analyses.push(batch);
                 continue;
-            }
-            if !provider_ready(lang, providers_root.as_deref()) {
-                unit_runs.insert(
-                    unit_key,
+        }
+        if !provider_ready(&lang, providers_root.as_deref()) {
+                record_analysis_unit_run(
+                    &mut unit_runs,
+                    lang.id,
+                    &analysis_unit_id,
                     AnalysisUnitRun {
                         provider,
                         execution: "unavailable",
                         elapsed_ms: 0,
                     },
                 );
-                cached_analyses.push(LanguageAnalysis {
+                let mut batch = ProviderUnitBatch {
                     language: LanguageOutput {
                         id: lang.id.to_string(),
                         name: lang.name.to_string(),
                         provider,
-                        files_found: module.files.len(),
+                        files_found: scheduled.files.len(),
                         files_indexed: 0,
                         files_excluded: 0,
-                        files_missing: module.files.len(),
+                        files_missing: scheduled.files.len(),
                         status: "missing-tool",
                     },
+                    source_files: Vec::new(),
+                    execution_context: not_executed_provider_context(&lang),
                     documents: Vec::new(),
                     relations: Vec::new(),
                     diagnostics: vec![Diagnostic {
                         language: lang.id.to_string(),
                         level: "error",
                         code: DiagnosticCode::ProviderMissing,
-                        message: missing_tool_message(lang),
+                        message: missing_tool_message(&lang),
                         detail: None,
                         path: None,
                         line: None,
                     }],
-                    project_excluded_files: 0,
-                });
+                    project_excluded_files: scheduled.project_excluded_files,
+                };
+                assign_provider_batch_scope(&mut batch, &root, &scheduled.files);
+                cached_analyses.push(batch);
                 continue;
-            }
+        }
 
-            let cache_key_started = Instant::now();
-            let cache_key = language_cache_key(
-                &module.root,
-                lang,
-                &module.files,
-                providers_root.as_deref(),
-                project_config_digest,
-                &source_snapshot,
-            );
-            active_cache_files.insert(language_cache_path(&module.root, lang, &cache_key));
-            cache_key_elapsed += cache_key_started.elapsed();
-            let module_affected = cache_impact_state.force_all
-                || module.files.iter().any(|file| {
+        let cache_key_started = Instant::now();
+        let cache_key = language_cache_key(LanguageCacheKeyInput {
+            root: &scheduled.root,
+            lang: &lang,
+            files: &scheduled.files,
+            providers_root: providers_root.as_deref(),
+            config_digest: project_config_digest,
+            source_snapshot: &source_snapshot,
+            execution_scope_id: &execution_scope_id,
+            provider_config: scheduled.provider_config.as_deref(),
+        });
+        active_cache_files.insert(language_cache_path(&scheduled.root, &lang, &cache_key));
+        cache_key_elapsed += cache_key_started.elapsed();
+        let unit_affected = cache_impact_state.force_all
+            || scheduled.files.iter().any(|file| {
                     let relative = file
                         .strip_prefix(&root)
                         .unwrap_or(file)
                         .to_string_lossy()
                         .replace('\\', "/");
                     cache_impact_state.affected_paths.contains(&relative)
-                });
-            if module_affected {
+            });
+        if unit_affected {
                 println!(
-                    "invalidated {} module={} (affected source range)",
-                    lang.name, module.id
+                    "invalidated {} unit={} scope={} (affected source range)",
+                    lang.name, analysis_unit_id, execution_scope_id
                 );
-            } else {
-                let cache_read = load_language_cache(&module.root, lang, &cache_key);
-                cache_io_elapsed += Duration::from_millis(cache_read.io_ms as u64);
-                cache_deserialize_elapsed +=
-                    Duration::from_millis(cache_read.deserialize_ms as u64);
-                if let Some(cached) = cache_read.value {
-                unit_runs.insert(
-                    unit_key.clone(),
+        } else {
+            let cache_read = load_language_cache(&scheduled.root, &lang, &cache_key);
+            cache_io_elapsed += Duration::from_millis(cache_read.io_ms as u64);
+            cache_deserialize_elapsed += Duration::from_millis(cache_read.deserialize_ms as u64);
+            if let Some(cached) = cache_read.value {
+                record_analysis_unit_run(
+                    &mut unit_runs,
+                    lang.id,
+                    &analysis_unit_id,
                     AnalysisUnitRun {
                         provider,
                         execution: "cache",
@@ -361,15 +371,15 @@ pub(crate) fn index_project(
                     },
                 );
                 let coverage = language_document_coverage(
-                    &module.root,
-                    *lang,
-                    &module.files,
+                    &scheduled.root,
+                    lang,
+                    &scheduled.files,
                     &cached.documents,
                 );
                 let (status, mut diagnostics) = classify_language_documents(
-                    &module.root,
-                    lang,
-                    &module.files,
+                    &scheduled.root,
+                    &lang,
+                    &scheduled.files,
                     &cached.documents,
                 );
                 let cached_partial = cached.diagnostics.iter().any(|diagnostic| {
@@ -399,57 +409,87 @@ pub(crate) fn index_project(
                     path: diagnostic.path,
                     line: diagnostic.line,
                 }));
-                let mut analysis = LanguageAnalysis {
+                let mut analysis = ProviderUnitBatch {
                     language: LanguageOutput {
                         id: lang.id.to_string(),
                         name: lang.name.to_string(),
                         provider,
-                        files_found: module.files.len(),
+                        files_found: scheduled.files.len(),
                         files_indexed: coverage.indexed,
                         files_excluded: coverage.excluded,
                         files_missing: coverage.missing,
                         status,
                     },
+                    source_files: Vec::new(),
+                    execution_context: cached.execution_context,
                     documents: cached.documents,
                     relations: cached.relations,
                     diagnostics,
-                    project_excluded_files: module.project_excluded_files,
+                    project_excluded_files: scheduled.project_excluded_files,
                 };
-                rebase_language_analysis(&mut analysis, &module.root, &root);
+                rebase_provider_batch(&mut analysis, &scheduled.root, &root);
+                assign_provider_batch_scope(&mut analysis, &root, &scheduled.files);
                 cached_analyses.push(analysis);
                 println!(
-                    "cached {} module={} ({} files)",
+                    "cached {} unit={} scope={} ({} files)",
                     lang.name,
-                    module.id,
-                    module.files.len()
+                    analysis_unit_id,
+                    execution_scope_id,
+                    scheduled.files.len()
                 );
                 continue;
-                }
             }
-
-            jobs.push(LanguageJob {
-                lang: *lang,
-                project_root: root.clone(),
-                files: module.files,
-                cache_key,
-                root: module.root,
-                work: provider_work.clone(),
-                providers_root: providers_root.clone(),
-                module_id: module.id,
-                provider_config: module.provider_config,
-                project_excluded_files: module.project_excluded_files,
-                project_config_digest,
-                call_ranges: if matches!(lang.id, "typescript" | "javascript") {
-                    typescript_call_ranges.clone()
-                } else {
-                    Arc::new(HashMap::new())
-                },
-            });
         }
+
+        let writable_workspace = if matches!(lang.id, "java" | "csharp") {
+            let workspace = if let Some(workspace) = writable_workspaces.get(lang.id) {
+                workspace.clone()
+            } else {
+                let workspace = Arc::new(ProviderWorkspace::from_manifest(
+                    &root,
+                    provider_work
+                        .join("writable-workspaces")
+                        .join(lang.id),
+                    &source_census.manifest,
+                )?);
+                writable_workspaces.insert(lang.id, workspace.clone());
+                workspace
+            };
+            let ordinal = writable_workspace_turns.entry(lang.id).or_default();
+            let binding = ProviderWorkspaceBinding::new(workspace, *ordinal);
+            *ordinal += 1;
+            Some(binding)
+        } else {
+            None
+        };
+        jobs.push(LanguageJob {
+            lang,
+            project_root: root.clone(),
+            files: scheduled.files,
+            cache_key,
+            root: scheduled.root,
+            work: provider_work.clone(),
+            providers_root: providers_root.clone(),
+            analysis_unit_id,
+            execution_scope_id,
+            provider_config: scheduled.provider_config,
+            project_excluded_files: scheduled.project_excluded_files,
+            max_project_source_file_bytes,
+            writable_workspace,
+            call_ranges: if matches!(lang.id, "typescript" | "javascript") {
+                typescript_call_ranges.clone()
+            } else {
+                Arc::new(HashMap::new())
+            },
+        });
     }
     output.timings.push(StageTiming {
         stage: "file_walk",
         elapsed_ms: file_walk_elapsed.as_millis(),
+    });
+    output.timings.push(StageTiming {
+        stage: "analysis_unit_planning",
+        elapsed_ms: static_plan_elapsed.as_millis(),
     });
     output.timings.push(StageTiming {
         stage: "source_hashing",
@@ -497,8 +537,10 @@ pub(crate) fn index_project(
         );
     })? {
         for unit in result.units {
-            unit_runs.insert(
-                (unit.language, unit.id),
+            record_analysis_unit_run(
+                &mut unit_runs,
+                &unit.language,
+                &unit.id,
                 AnalysisUnitRun {
                     provider: unit.provider,
                     execution: "provider",
@@ -506,36 +548,103 @@ pub(crate) fn index_project(
                 },
             );
         }
-        analyses.extend(result.analyses);
+        analyses.extend(result.batches);
     }
-    let (languages, documents, relations, diagnostics) = merge_language_analyses(analyses);
-    output.languages = languages;
-    output.documents = documents;
-    output.relations = relations;
-    output.diagnostics.extend(diagnostics);
-    output.coverage = build_file_coverage(
-        &root,
-        &discovered_files,
-        &output.documents,
-        &output.languages,
-        &output.project_model_files,
-    );
-    output.analysis_units =
-        build_analysis_units(&root, &planned_units, &output.coverage, &unit_runs);
+    let provider_elapsed = provider_started.elapsed();
     eprintln!(
-        "timing stage=provider_merge elapsed_ms={} documents={} relations={} diagnostics={}",
-        provider_started.elapsed().as_millis(),
-        output.documents.len(),
-        output.relations.len(),
-        output.diagnostics.len()
+        "timing stage=provider_and_scip_conversion elapsed_ms={} batches={}",
+        provider_elapsed.as_millis(),
+        analyses.len()
     );
     output.timings.push(StageTiming {
         stage: "provider_and_scip_conversion",
-        elapsed_ms: provider_started.elapsed().as_millis(),
+        elapsed_ms: provider_elapsed.as_millis(),
+    });
+
+    let source_stability_started = Instant::now();
+    let final_source_census = static_pipeline::source_census::SourceCensus::scan(&root)?;
+    if final_source_census.manifest.manifest_digest != source_census.manifest.manifest_digest {
+        return Err(format!(
+            "selected repository changed during semantic provider execution; refusing to publish a mixed snapshot (before={}, after={})",
+            source_census.manifest.manifest_digest,
+            final_source_census.manifest.manifest_digest
+        ));
+    }
+    eprintln!(
+        "@codebase-workspace-source-stability {}",
+        serde_json::json!({
+            "schema": "codebase-workspace.source-stability.v1",
+            "manifestDigest": source_census.manifest.manifest_digest,
+            "unchanged": true,
+        })
+    );
+    output.timings.push(StageTiming {
+        stage: "source_stability_verification",
+        elapsed_ms: source_stability_started.elapsed().as_millis(),
+    });
+
+    let language_ir_started = Instant::now();
+    // Scheduler-owned provider batches are the sole Language IR authority.
+    // The compatibility projection is returned from the same merge and is
+    // never converted back into a second IR stream.
+    let execution_context_started = Instant::now();
+    let provider_execution_context_receipt =
+        static_pipeline::language_ir::reconcile_provider_execution_contexts(
+            &analyses,
+            &static_plan,
+        )?;
+    output.timings.push(StageTiming {
+        stage: "provider_execution_context_reconciliation",
+        elapsed_ms: execution_context_started.elapsed().as_millis(),
+    });
+
+    let direct_language_ir_started = Instant::now();
+    let language_ir_artifact_root = provider_work.join("language-ir");
+    let framework_analyzer_set_digest =
+        static_pipeline::framework_ir::framework_analyzer_set_digest(&pack_root)?;
+    let static_analyzer_set_digest = static_pipeline::test_ir::combine_static_analyzer_digests(
+        framework_analyzer_set_digest,
+        static_pipeline::test_ir::test_analyzer_digest(),
+    );
+    let direct_language_ir = static_pipeline::language_ir::emit_direct_language_ir(
+        static_pipeline::language_ir::DirectLanguageIrInput {
+            project_root: &root,
+            manifest: &source_census.manifest,
+            plan: &static_plan,
+            providers_root: providers_root.as_deref(),
+            batches: analyses,
+            discovered_files: &discovered_files,
+            file_relations: &output.file_relations,
+            project_model_files: &output.project_model_files,
+            coordinator_diagnostics: &output.diagnostics,
+            static_analyzer_set_digest,
+            artifact_root: &language_ir_artifact_root,
+        },
+    )?;
+    output.timings.push(StageTiming {
+        stage: "direct_language_ir_stream_emission",
+        elapsed_ms: direct_language_ir_started.elapsed().as_millis(),
+    });
+
+    let direct_language_ir_receipt = direct_language_ir.receipt;
+    let language_ir_artifact = direct_language_ir.artifact;
+    let compatibility_projection_started = Instant::now();
+    let compatibility_projection = direct_language_ir.compatibility_projection;
+    output.languages = compatibility_projection.languages;
+    output.coverage = compatibility_projection.coverage;
+    output.documents = compatibility_projection.documents;
+    output.relations = compatibility_projection.relations;
+    output
+        .diagnostics
+        .extend(compatibility_projection.diagnostics);
+    output.analysis_units = build_analysis_units(&static_plan, &output.coverage, &unit_runs);
+    output.timings.push(StageTiming {
+        stage: "compatibility_projection_commit",
+        elapsed_ms: compatibility_projection_started.elapsed().as_millis(),
     });
 
     let framework_started = Instant::now();
-    emit_progress("frameworks", 74, 100, "프레임워크 의미 분석 중");
+    emit_progress("frameworks", 70, 100, "API와 handler 경계 분석 중");
     let framework_key = framework_cache_key(
         &root,
         &pack_root,
@@ -546,41 +655,108 @@ pub(crate) fn index_project(
     let framework_cache =
         project_cache_root(&root).join(format!("framework-{framework_key}.json.gz"));
     active_cache_files.insert(framework_cache.clone());
-    match load_framework_cache(&framework_cache) {
+    let framework_analysis = match load_framework_cache(&framework_cache) {
         Some(analysis) => {
-            output.frameworks = analysis.frameworks;
-            output.framework_relations = analysis.relations;
             eprintln!("cached framework analysis");
+            analysis
         }
         None => {
             load_source_contents(&root, &mut source_snapshot);
-            match frameworks::analyze_with_sources(
+            let analysis = frameworks::analyze_with_sources(
                 &root,
                 &output.documents,
                 &pack_root,
                 &source_snapshot,
-            ) {
-                Ok(analysis) => {
-                    let _ = write_framework_cache(&framework_cache, &analysis);
-                    output.frameworks = analysis.frameworks;
-                    output.framework_relations = analysis.relations;
-                }
-                Err(error) => output.diagnostics.push(Diagnostic {
-                    language: "framework".to_string(),
-                    level: "error",
-                    code: DiagnosticCode::Internal,
-                    message: error,
-                    detail: None,
-                    path: None,
-                    line: None,
-                }),
-            }
+            )?;
+            let _ = write_framework_cache(&framework_cache, &analysis);
+            analysis
         }
-    }
+    };
+    let framework_ir = static_pipeline::framework_ir::adapt_framework_routes(
+        &root,
+        &source_census.manifest,
+        &static_plan,
+        &language_ir_artifact.snapshot_id,
+        &framework_analysis,
+    )?;
+    eprintln!(
+        "@codebase-workspace-framework-ir {}",
+        serde_json::to_string(&framework_ir.receipt)
+            .map_err(|error| format!("cannot serialize Framework IR receipt: {error}"))?
+    );
     output.timings.push(StageTiming {
-        stage: "framework_analysis",
+        stage: "framework_route_ir",
         elapsed_ms: framework_started.elapsed().as_millis(),
     });
+
+    let test_ir_started = Instant::now();
+    emit_progress("test-relations", 71, 100, "테스트와 실제 코드 관계 분석 중");
+    let test_ir = static_pipeline::test_ir::adapt_test_relations(
+        &root,
+        &source_census.manifest,
+        &static_plan,
+        &language_ir_artifact.snapshot_id,
+        &language_ir_artifact.path,
+        &output.relations,
+    )?;
+    eprintln!(
+        "@codebase-workspace-test-ir {}",
+        serde_json::to_string(&test_ir.receipt)
+            .map_err(|error| format!("cannot serialize Test IR receipt: {error}"))?
+    );
+    output.timings.push(StageTiming {
+        stage: "test_relation_ir",
+        elapsed_ms: test_ir_started.elapsed().as_millis(),
+    });
+
+    let canonical_linker_started = Instant::now();
+    emit_progress("canonical-linker", 72, 100, "정확한 코드 사실 그래프 조립 중");
+    let canonical_bundle_root = project_cache_root(&root).join("canonical-bundles");
+    let repository_display_name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Repository");
+    let canonical_language = static_pipeline::canonical::normalize_language_ir(
+        static_pipeline::canonical::CanonicalLanguageInput {
+            project_root: &root,
+            repository_display_name,
+            manifest: &source_census.manifest,
+            plan: &static_plan,
+            ir_path: &language_ir_artifact.path,
+            ir_snapshot_id: &language_ir_artifact.snapshot_id,
+            ir_content_digest: language_ir_artifact.content_digest,
+            ir_record_count: language_ir_artifact.record_count,
+            provider_set_digest: direct_language_ir_receipt.provider_set_digest,
+            execution_context_set_digest: direct_language_ir_receipt
+                .execution_context_set_digest,
+            framework_ir: Some(&framework_ir),
+            test_ir: Some(&test_ir),
+            output_root: &canonical_bundle_root,
+        },
+    )?;
+    eprintln!(
+        "@codebase-workspace-canonical-linker {}",
+        serde_json::to_string(&canonical_language.receipt)
+            .map_err(|error| format!("cannot serialize canonical linker receipt: {error}"))?
+    );
+    eprintln!(
+        "@codebase-workspace-canonical-fact-manifest {}",
+        serde_json::to_string(&canonical_language.manifest)
+            .map_err(|error| format!("cannot serialize canonical Fact manifest: {error}"))?
+    );
+    eprintln!(
+        "@codebase-workspace-canonical-fact-bundle {}",
+        serde_json::to_string(&canonical_language.artifact)
+            .map_err(|error| format!("cannot serialize canonical Fact artifact: {error}"))?
+    );
+    output.timings.push(StageTiming {
+        stage: "canonical_normalizer_linker",
+        elapsed_ms: canonical_linker_started.elapsed().as_millis(),
+    });
+
+    output.frameworks = framework_analysis.frameworks;
+    output.framework_relations = framework_analysis.relations;
     eprintln!(
         "timing stage=framework_analysis elapsed_ms={} frameworks={} framework_relations={} diagnostics={}",
         framework_started.elapsed().as_millis(),
@@ -588,6 +764,28 @@ pub(crate) fn index_project(
         output.framework_relations.len(),
         output.diagnostics.len()
     );
+    eprintln!(
+        "@codebase-workspace-language-ir {}",
+        serde_json::to_string(&direct_language_ir_receipt)
+            .map_err(|error| format!("cannot serialize Language IR migration receipt: {error}"))?
+    );
+    eprintln!(
+        "@codebase-workspace-language-ir-stream-authority {}",
+        serde_json::to_string(&language_ir_artifact).map_err(|error| format!(
+            "cannot serialize Language IR stream authority receipt: {error}"
+        ))?
+    );
+    eprintln!(
+        "@codebase-workspace-provider-execution-context {}",
+        serde_json::to_string(&provider_execution_context_receipt).map_err(|error| format!(
+            "cannot serialize provider execution context receipt: {error}"
+        ))?
+    );
+    output.timings.push(StageTiming {
+        stage: "language_ir_adapter_validation",
+        elapsed_ms: language_ir_started.elapsed().as_millis(),
+    });
+
     canonicalize_index_output(&mut output);
 
     emit_progress("architecture", 78, 100, "계층과 호출 구조 통합 중");

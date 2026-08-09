@@ -23,8 +23,6 @@ $expected = @{
     cpp = @('qt','mfc','boost-asio','poco','unreal-engine','drogon','crow','grpc')
     go = @('net-http','gin','echo','fiber','chi','beego','grpc')
     rust = @('axum','actix-web','rocket','warp','poem','tokio','tonic','tauri')
-    php = @('laravel','symfony','codeigniter','laminas','slim','cakephp','api-platform')
-    ruby = @('rails','sinatra','hanami','rack','grape','roda')
     dart = @('flutter','shelf','serverpod','dart-frog')
 }
 
@@ -35,7 +33,7 @@ $metadataNames = @{
     typescript = @('package.json'); javascript = @('package.json')
     python = @('pyproject.toml'); java = @('pom.xml'); csharp = @('*.csproj')
     c = @('CMakeLists.txt'); cpp = @('CMakeLists.txt'); go = @('go.mod')
-    rust = @('Cargo.toml'); php = @('composer.json'); ruby = @('Gemfile'); dart = @('pubspec.yaml')
+    rust = @('Cargo.toml'); dart = @('pubspec.yaml')
 }
 $total = 0
 foreach ($language in $catalog.languages) {
@@ -108,6 +106,6 @@ foreach ($language in $catalog.languages) {
     Write-Host "PASS $($language.id): $(@($document.packs).Count) packs"
 }
 
-if ($total -ne 85) { throw "expected 85 packs, found $total" }
-if (@($adapterCatalog.adapters.psobject.Properties).Count -ne 85) { throw "expected 85 adapters" }
-Write-Host "framework pack gate: passed=$total total=85"
+if ($total -ne 72) { throw "expected 72 packs, found $total" }
+if (@($adapterCatalog.adapters.psobject.Properties).Count -ne 72) { throw "expected 72 adapters" }
+Write-Host "framework pack gate: passed=$total total=72"

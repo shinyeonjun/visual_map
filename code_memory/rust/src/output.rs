@@ -160,39 +160,3 @@ fn optional_path(args: &[String], flag: &str) -> Option<PathBuf> {
     }
     None
 }
-
-fn required_value(args: &[String], flag: &str) -> Result<String, String> {
-    optional_value(args, flag).ok_or_else(|| format!("missing {flag} <value>"))
-}
-
-fn optional_value(args: &[String], flag: &str) -> Option<String> {
-    for (index, value) in args.iter().enumerate() {
-        if value == flag {
-            return args.get(index + 1).cloned();
-        }
-        if let Some(value) = value.strip_prefix(&format!("{flag}=")) {
-            return Some(value.to_string());
-        }
-    }
-    None
-}
-
-fn repeated_values(args: &[String], flag: &str) -> Result<Vec<String>, String> {
-    let mut values = Vec::new();
-    let mut index = 0usize;
-    while index < args.len() {
-        if args[index] == flag {
-            let value = args
-                .get(index + 1)
-                .ok_or_else(|| format!("missing value after {flag}"))?;
-            values.push(value.clone());
-            index += 2;
-        } else {
-            if let Some(value) = args[index].strip_prefix(&format!("{flag}=")) {
-                values.push(value.to_string());
-            }
-            index += 1;
-        }
-    }
-    Ok(values)
-}

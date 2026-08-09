@@ -18,7 +18,7 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_DB: backend_map_smoke
+          POSTGRES_DB: codebase_workspace_smoke
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
@@ -30,7 +30,7 @@ jobs:
       mysql:
         image: mysql:8.4
         env:
-          MYSQL_DATABASE: backend_map_smoke
+          MYSQL_DATABASE: codebase_workspace_smoke
           MYSQL_ROOT_PASSWORD: mysql
         ports:
           - 3306:3306
@@ -60,21 +60,21 @@ jobs:
           CREATE TABLE users (id BIGSERIAL PRIMARY KEY, email VARCHAR(255) NOT NULL UNIQUE);
           CREATE TABLE orders (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id), status VARCHAR(32) NOT NULL);
           CREATE INDEX idx_orders_status ON orders(status);
-          '@ | docker exec -i $env:POSTGRES_CONTAINER psql -U postgres -d backend_map_smoke -v ON_ERROR_STOP=1
+          '@ | docker exec -i $env:POSTGRES_CONTAINER psql -U postgres -d codebase_workspace_smoke -v ON_ERROR_STOP=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           @'
           CREATE TABLE users (id BIGINT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(255) NOT NULL UNIQUE);
           CREATE TABLE orders (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, status VARCHAR(32) NOT NULL, CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES users(id));
           CREATE INDEX idx_orders_status ON orders(status);
-          '@ | docker exec -i $env:MYSQL_CONTAINER mysql -uroot -pmysql backend_map_smoke
+          '@ | docker exec -i $env:MYSQL_CONTAINER mysql -uroot -pmysql codebase_workspace_smoke
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Required PostgreSQL and MySQL matrix
         shell: pwsh
         env:
-          BACKEND_MAP_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/backend_map_smoke
-          BACKEND_MAP_TEST_MYSQL_URL: mysql://root:mysql@127.0.0.1:3306/backend_map_smoke
+          CODEBASE_WORKSPACE_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/codebase_workspace_smoke
+          CODEBASE_WORKSPACE_TEST_MYSQL_URL: mysql://root:mysql@127.0.0.1:3306/codebase_workspace_smoke
         run: ./scripts/smoke-rdb-productization.ps1 -DatabaseMemory ./db_memory/target/release/database-memory -RequireReleaseMatrix
 
   windows:
@@ -102,9 +102,9 @@ jobs:
         shell: pwsh
         run: .\scripts\prepare-engines.ps1 -Release
 
-      - name: Multi-language code field matrix
+      - name: Raw static extraction determinism
         shell: pwsh
-        run: .\scripts\smoke-code-field-matrix.ps1
+        run: .\scripts\smoke-code-determinism.ps1
 
       - name: Exact Windows database engine contract
         shell: pwsh

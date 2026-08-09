@@ -16,7 +16,7 @@ $bundleRoot = Join-Path $repoRoot "src-tauri\engines\provider-bundles"
 $catalogPath = Join-Path $bundleRoot "providers-manifest.json"
 $signaturePath = Join-Path $bundleRoot "providers-manifest.sig"
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-$gateRoot = Join-Path $tempBase ("visual-map-provider-gate-" + [guid]::NewGuid().ToString("N"))
+$gateRoot = Join-Path $tempBase ("codebase-workspace-provider-gate-" + [guid]::NewGuid().ToString("N"))
 $providersRoot = Join-Path $gateRoot "providers"
 $cacheRoot = Join-Path $gateRoot "cache"
 
@@ -40,10 +40,10 @@ if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf) -or
 }
 
 $publicKey = if ($Release) {
-    if ([string]::IsNullOrWhiteSpace($env:VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY)) {
-        throw "Release provider gates require VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY."
+    if ([string]::IsNullOrWhiteSpace($env:CODEBASE_WORKSPACE_PROVIDER_CATALOG_PUBLIC_KEY)) {
+        throw "Release provider gates require CODEBASE_WORKSPACE_PROVIDER_CATALOG_PUBLIC_KEY."
     }
-    $env:VISUAL_MAP_PROVIDER_CATALOG_PUBLIC_KEY.Trim()
+    $env:CODEBASE_WORKSPACE_PROVIDER_CATALOG_PUBLIC_KEY.Trim()
 } else {
     "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
 }
@@ -60,7 +60,7 @@ try {
     New-Item -ItemType Directory -Path $providersRoot,$cacheRoot -Force | Out-Null
     $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
     $expectedLanguages = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($language in "typescript", "javascript", "python", "java", "csharp", "c", "cpp", "go", "rust", "php", "ruby", "dart") {
+    foreach ($language in "typescript", "javascript", "python", "java", "csharp", "c", "cpp", "go", "rust", "dart") {
         [void]$expectedLanguages.Add($language)
     }
     $actualLanguages = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -95,7 +95,7 @@ try {
 
     $languageDiff = @(Compare-Object -ReferenceObject @($expectedLanguages | Sort-Object) -DifferenceObject @($actualLanguages | Sort-Object))
     if ($languageDiff.Count -gt 0) {
-        throw "Provider bundle language coverage does not match the 12-language contract."
+        throw "Provider bundle language coverage does not match the 10-language contract."
     }
     $providerManifest = Get-Content -LiteralPath (Join-Path $providersRoot "manifest.json") -Raw | ConvertFrom-Json
     foreach ($provider in @($providerManifest.providers)) {
@@ -116,7 +116,47 @@ try {
         -Bridge $Bridge `
         -ProvidersRoot $providersRoot
     if ($LASTEXITCODE -ne 0) {
-        throw "12-language provider quality gate failed with exit code $LASTEXITCODE."
+        throw "10-language provider quality gate failed with exit code $LASTEXITCODE."
+    }
+    & (Join-Path $repoRoot "code_memory\tests\gates\run-execution-context-ground-truth-gate.ps1") `
+        -Bridge $Bridge `
+        -ProvidersRoot $providersRoot `
+        -Runs 2 `
+        -OutputRoot (Join-Path $gateRoot "execution-context-ground-truth")
+    if ($LASTEXITCODE -ne 0) {
+        throw "10-language execution-context ground-truth gate failed with exit code $LASTEXITCODE."
+    }
+    & (Join-Path $repoRoot "code_memory\tests\gates\run-definition-ground-truth-gate.ps1") `
+        -Bridge $Bridge `
+        -ProvidersRoot $providersRoot `
+        -Runs 2 `
+        -OutputRoot (Join-Path $gateRoot "definition-ground-truth")
+    if ($LASTEXITCODE -ne 0) {
+        throw "10-language definition ground-truth gate failed with exit code $LASTEXITCODE."
+    }
+    & (Join-Path $repoRoot "code_memory\tests\gates\run-semantic-ground-truth-gate.ps1") `
+        -Bridge $Bridge `
+        -ProvidersRoot $providersRoot `
+        -Runs 2 `
+        -OutputRoot (Join-Path $gateRoot "semantic-ground-truth")
+    if ($LASTEXITCODE -ne 0) {
+        throw "10-language CALLS/CONSTRUCTS ground-truth gate failed with exit code $LASTEXITCODE."
+    }
+    & (Join-Path $repoRoot "code_memory\tests\gates\run-import-ground-truth-gate.ps1") `
+        -Bridge $Bridge `
+        -ProvidersRoot $providersRoot `
+        -Runs 2 `
+        -OutputRoot (Join-Path $gateRoot "import-ground-truth")
+    if ($LASTEXITCODE -ne 0) {
+        throw "10-language import ground-truth gate failed with exit code $LASTEXITCODE."
+    }
+    & (Join-Path $repoRoot "code_memory\tests\gates\run-type-relation-ground-truth-gate.ps1") `
+        -Bridge $Bridge `
+        -ProvidersRoot $providersRoot `
+        -Runs 2 `
+        -OutputRoot (Join-Path $gateRoot "type-relation-ground-truth")
+    if ($LASTEXITCODE -ne 0) {
+        throw "10-language type-relation ground-truth gate failed with exit code $LASTEXITCODE."
     }
     Write-Host "Provider bundle gate passed: packs=$(@($catalog.packs).Count) languages=$($actualLanguages.Count)"
 } finally {

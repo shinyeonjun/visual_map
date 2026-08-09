@@ -150,8 +150,6 @@ fn is_primary_manifest(path: &Path) -> bool {
             | "pom.xml"
             | "settings.gradle"
             | "settings.gradle.kts"
-            | "composer.json"
-            | "Gemfile"
             | "pubspec.yaml"
             | "CMakeLists.txt"
             | "meson.build"
@@ -179,7 +177,6 @@ fn parse_unit(root: &Path, path: &Path) -> Result<BuildUnit, String> {
         .unwrap_or("");
     let (ecosystem, name, version, dependencies) = match file_name {
         "package.json" => parse_json_package(&source, "npm", &fallback_name)?,
-        "composer.json" => parse_json_package(&source, "composer", &fallback_name)?,
         "Cargo.toml" => (
             "cargo",
             toml_scalar(&source, "package", "name").unwrap_or(fallback_name),
@@ -221,7 +218,6 @@ fn parse_unit(root: &Path, path: &Path) -> Result<BuildUnit, String> {
             yaml_scalar(&source, "version"),
             yaml_dependencies(&source),
         ),
-        "Gemfile" => ("bundler", fallback_name, None, ruby_dependencies(&source)),
         "CMakeLists.txt" => (
             "cmake",
             cmake_project_name(&source).unwrap_or(fallback_name),
@@ -276,16 +272,12 @@ fn parse_json_package(
         .get("version")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let sections: &[(&str, &'static str)] = if ecosystem == "composer" {
-        &[("require", "runtime"), ("require-dev", "development")]
-    } else {
-        &[
-            ("dependencies", "runtime"),
-            ("optionalDependencies", "optional"),
-            ("peerDependencies", "peer"),
-            ("devDependencies", "development"),
-        ]
-    };
+    let sections: &[(&str, &'static str)] = &[
+        ("dependencies", "runtime"),
+        ("optionalDependencies", "optional"),
+        ("peerDependencies", "peer"),
+        ("devDependencies", "development"),
+    ];
     let mut dependencies = Vec::new();
     for (section, scope) in sections {
         dependencies.extend(
@@ -407,19 +399,6 @@ fn yaml_dependencies(source: &str) -> Vec<Dependency> {
         }
     }
     result
-}
-
-fn ruby_dependencies(source: &str) -> Vec<Dependency> {
-    source
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("gem "))
-        .filter_map(|value| value.split(',').next())
-        .filter_map(quoted_scalar)
-        .map(|name| Dependency {
-            name,
-            scope: "runtime",
-        })
-        .collect()
 }
 
 fn quoted_scalar(value: &str) -> Option<String> {

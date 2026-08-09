@@ -14,31 +14,14 @@ fn parse_format(value: &str) -> Result<OutputFormat, String> {
     }
 }
 
-fn parse_direction(value: &str) -> Result<Direction, String> {
-    match value {
-        "inbound" => Ok(Direction::Inbound),
-        "outbound" => Ok(Direction::Outbound),
-        "both" => Ok(Direction::Both),
-        _ => Err(format!(
-            "unknown direction '{value}'; expected inbound, outbound, or both"
-        )),
+fn positive_usize(label: &str, value: &str) -> Result<usize, String> {
+    let value = value
+        .parse::<usize>()
+        .map_err(|_| format!("invalid {label} '{value}'"))?;
+    if value == 0 {
+        return Err(format!("{label} must be at least 1"));
     }
-}
-
-fn traversal_usage(command: &str) -> &'static str {
-    match command {
-        "impact-analysis" => "usage: database-memory impact-analysis <alias> [<table-name> | --table <name> [--column <name>] | --object-key <key>] [--direction inbound|outbound|both] [--max-depth <n>] [--limit <n>] [--cache-path <path>] [--config-path <path>]",
-        "trace-relationships" => "usage: database-memory trace-relationships <alias> <object-key> [--direction inbound|outbound|both] [--max-depth <n>] [--limit <n>] [--cache-path <path>] [--config-path <path>]",
-        _ => unreachable!(),
-    }
-}
-
-fn describe_table_usage() -> &'static str {
-    "usage: database-memory describe-table <alias> [<table-name> | --object-key <stable-key>] [--format text|json] [--cache-path <path>] [--config-path <path>]"
-}
-
-fn inventory_usage() -> &'static str {
-    "usage: database-memory inventory <alias> [--offset <n>] [--limit <n>] [--format json] [--cache-path <path>] [--config-path <path>]"
+    Ok(value)
 }
 
 fn usage() -> &'static str {
@@ -47,13 +30,7 @@ fn usage() -> &'static str {
        database-memory describe-snapshot <alias-or-snapshot-key> [--format text|json] [--cache-path <path>]
        database-memory list-objects <alias-or-snapshot-key> [--kind <object-kind>] [--offset <n>] [--limit <n>] [--format text|json] [--cache-path <path>]
        database-memory find-objects <alias-or-snapshot-key> <query> [--kind <object-kind>] [--offset <n>] [--limit <n>] [--format text|json] [--cache-path <path>]
-       database-memory describe-object <alias-or-snapshot-key> <object-key> [--relationship-limit <n>] [--format text|json] [--cache-path <path>]
-       database-memory describe-table <alias> [<table-name> | --object-key <stable-key>] [--format text|json] [--cache-path <path>] [--config-path <path>]
-       database-memory inventory <alias> [--offset <n>] [--limit <n>] [--format json] [--cache-path <path>] [--config-path <path>]
-       database-memory find-table <alias> <query> [--format text|json] [--cache-path <path>] [--config-path <path>]
-       database-memory find-column <alias> <query> [--format text|json] [--cache-path <path>] [--config-path <path>]
-       database-memory impact-analysis <alias> [<table-name> | --table <name> [--column <name>] | --object-key <key>] [--direction inbound|outbound|both] [--max-depth <n>] [--limit <n>] [--cache-path <path>] [--config-path <path>]
-       database-memory trace-relationships <alias> <object-key> [--direction inbound|outbound|both] [--max-depth <n>] [--limit <n>] [--cache-path <path>] [--config-path <path>]"
+       database-memory describe-object <alias-or-snapshot-key> <object-key> [--relationship-limit <n>] [--format text|json] [--cache-path <path>]"
 }
 
 fn default_cache_path() -> PathBuf {

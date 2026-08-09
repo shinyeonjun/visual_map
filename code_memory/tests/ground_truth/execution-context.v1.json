@@ -1,0 +1,238 @@
+{
+  "schema": "codebase-workspace.execution-context-ground-truth.v1",
+  "receiptSchema": "codebase-workspace.provider-execution-context-reconciliation.v3",
+  "languageIrReceiptSchema": "codebase-workspace.language-ir-migration-receipt.v6",
+  "controlledEnvironment": {
+    "GOOS": "linux",
+    "GOARCH": "amd64",
+    "GOFLAGS": "-tags=contextgate"
+  },
+  "positiveProjects": [
+    {
+      "id": "typescript",
+      "fixture": "scip-typescript",
+      "executions": [
+        {
+          "language": "typescript",
+          "mode": "project",
+          "dimensions": ["module_mode=esnext", "target=es2022"],
+          "missingDimensions": [],
+          "configArtifacts": [
+            "tsconfig.json|explicit_argument|379f71cf2584b0a984cf82c718b3d3503e306421b783d6eaf16bcac7713b588b",
+            "tsconfig.json|workspace_discovery|379f71cf2584b0a984cf82c718b3d3503e306421b783d6eaf16bcac7713b588b"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "javascript",
+      "fixture": "scip-javascript",
+      "executions": [
+        {
+          "language": "javascript",
+          "mode": "project",
+          "dimensions": ["module_mode=commonjs", "target=es2020"],
+          "missingDimensions": [],
+          "configArtifacts": [
+            "tsconfig.json|explicit_argument|0f0668f88cb95fb4120a0c10a09537c864466454e3e08dbf21f5905b9b3fbbaf",
+            "tsconfig.json|workspace_discovery|0f0668f88cb95fb4120a0c10a09537c864466454e3e08dbf21f5905b9b3fbbaf"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "python",
+      "fixture": "scip-python",
+      "executions": [
+        {
+          "language": "python",
+          "mode": "project",
+          "dimensions": ["language_version=3.11", "platform=all"],
+          "missingDimensions": [],
+          "configArtifacts": [
+            "pyrightconfig.json|workspace_discovery|6afea37f27f4193c2a9672060a4bd1d22b727248545101db333fa364ffeb3e6f"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "java",
+      "fixture": "scip-java",
+      "executions": [
+        {
+          "language": "java",
+          "mode": "project",
+          "dimensions": ["language_version=21", "source_set=main"],
+          "missingDimensions": [],
+          "configArtifacts": [
+            "pom.xml|workspace_discovery|96e97e3e00636c3977db481cd50af24f9516435de783db22bebd53f160453cbc"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "csharp",
+      "fixture": "scip-dotnet",
+      "executions": [
+        {
+          "language": "csharp",
+          "mode": "project",
+          "dimensions": ["platform=anycpu", "profile=debug", "target_framework=net8.0"],
+          "missingDimensions": [],
+          "configArtifacts": [
+            "scip-dotnet-fixture.csproj|workspace_discovery|bae26ef9e1dc94be15b0937625f6a6457a80abfac9ab3aa3291ebe16d8e831cc",
+            "scip-dotnet-fixture.sln|explicit_argument|31bd8b3a15b82d9c8ed03f5119518f10fbeab7be95e4ed45cda637f1340b19f9",
+            "scip-dotnet-fixture.sln|workspace_discovery|31bd8b3a15b82d9c8ed03f5119518f10fbeab7be95e4ed45cda637f1340b19f9"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "native",
+      "fixture": "native-lsp-c",
+      "executions": [
+        {
+          "language": "c",
+          "mode": "project",
+          "dimensions": ["language_version=c17", "target=x86_64-pc-windows-msvc"],
+          "missingDimensions": [],
+          "configArtifacts": [
+            "compile_commands.json|workspace_discovery|e050a53167756a87b51d158d6ea1c01c23199830f15b2729e59bd04dd701274a"
+          ]
+        },
+        {
+          "language": "cpp",
+          "mode": "project",
+          "dimensions": ["language_version=c++17", "target=x86_64-pc-windows-msvc"],
+          "missingDimensions": [],
+          "configArtifacts": [
+            "compile_commands.json|workspace_discovery|e050a53167756a87b51d158d6ea1c01c23199830f15b2729e59bd04dd701274a"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "go",
+      "fixture": "native-lsp-go",
+      "executions": [
+        {
+          "language": "go",
+          "mode": "project",
+          "dimensions": ["architecture=amd64", "build_tag=contextgate", "language_version=1.23", "platform=linux"],
+          "missingDimensions": [],
+          "configArtifacts": [
+            "go.mod|workspace_discovery|844ee710304d5f06e85e8dcee6b3d0b9bf475aa6060a5aa076cba578d63eb210",
+            "go.work|workspace_discovery|b26ec58cdee4f5a613a9805e12a0abb8c0ef51c45dbba1597c883b3fa037b6c7"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "rust",
+      "fixture": "native-lsp-rust",
+      "executions": [
+        {
+          "language": "rust",
+          "mode": "project",
+          "dimensions": ["feature=default", "language_version=edition-2021", "target=host"],
+          "missingDimensions": [],
+          "configArtifacts": [
+            "Cargo.toml|workspace_discovery|b7a8e3bdaeca428a0186c32501d6408220924802dba320ed363557e26d8e710b"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dart",
+      "fixture": "native-lsp-dart",
+      "executions": [
+        {
+          "language": "dart",
+          "mode": "project",
+          "dimensions": ["language_version=>=3.0.0 <4.0.0"],
+          "missingDimensions": [],
+          "configArtifacts": [
+            ".dart_tool/package_config.json|explicit_argument|c8c3c8ca9f27c630c242e4dc351a37ac574ea4f85c3805eb88a5b00b7fb74745",
+            ".dart_tool/package_config.json|workspace_discovery|c8c3c8ca9f27c630c242e4dc351a37ac574ea4f85c3805eb88a5b00b7fb74745",
+            "pubspec.yaml|workspace_discovery|6540e3c56d1076f50a13807096ea0b3bbabae44d08968ccc14a50577346ca51e"
+          ]
+        }
+      ]
+    }
+  ],
+  "partialProjects": [
+    {
+      "id": "typescript-no-config",
+      "fixture": "scip-typescript",
+      "removeFiles": ["tsconfig.json"],
+      "executions": [
+        { "language": "typescript", "mode": "generated_project", "dimensions": [], "missingDimensions": ["module_mode", "target"] }
+      ]
+    },
+    {
+      "id": "javascript-no-config",
+      "fixture": "scip-javascript",
+      "removeFiles": ["tsconfig.json"],
+      "executions": [
+        { "language": "javascript", "mode": "generated_project", "dimensions": [], "missingDimensions": ["module_mode", "target"] }
+      ]
+    },
+    {
+      "id": "python-no-config",
+      "fixture": "scip-python",
+      "removeFiles": ["pyrightconfig.json"],
+      "executions": [
+        { "language": "python", "mode": "inferred_workspace", "dimensions": [], "missingDimensions": ["language_version", "platform"] }
+      ]
+    },
+    {
+      "id": "java-no-build",
+      "fixture": "scip-java",
+      "removeFiles": ["pom.xml"],
+      "executions": [
+        { "language": "java", "mode": "inferred_workspace", "dimensions": ["source_set=main"], "missingDimensions": ["language_version"] }
+      ]
+    },
+    {
+      "id": "csharp-no-project",
+      "fixture": "scip-dotnet",
+      "removeFiles": ["scip-dotnet-fixture.csproj", "scip-dotnet-fixture.sln"],
+      "executions": [
+        { "language": "csharp", "mode": "not_executed", "dimensions": [], "missingDimensions": ["platform", "profile", "target_framework"] }
+      ]
+    },
+    {
+      "id": "native-no-compdb",
+      "fixture": "native-lsp-c",
+      "removeFiles": ["compile_commands.json"],
+      "executions": [
+        { "language": "c", "mode": "not_executed", "dimensions": [], "missingDimensions": ["language_version", "target"] },
+        { "language": "cpp", "mode": "not_executed", "dimensions": [], "missingDimensions": ["language_version", "target"] }
+      ]
+    },
+    {
+      "id": "go-no-module",
+      "fixture": "native-lsp-go",
+      "removeFiles": ["go.mod", "go.work"],
+      "executions": [
+        { "language": "go", "mode": "inferred_workspace", "dimensions": ["architecture=amd64", "build_tag=contextgate", "platform=linux"], "missingDimensions": ["language_version"] }
+      ]
+    },
+    {
+      "id": "rust-no-cargo",
+      "fixture": "native-lsp-rust",
+      "removeFiles": ["Cargo.toml", "Cargo.lock"],
+      "executions": [
+        { "language": "rust", "mode": "inferred_workspace", "dimensions": ["feature=default", "target=host"], "missingDimensions": ["language_version"] }
+      ]
+    },
+    {
+      "id": "dart-no-package",
+      "fixture": "native-lsp-dart",
+      "removeFiles": ["pubspec.yaml", ".dart_tool/package_config.json"],
+      "executions": [
+        { "language": "dart", "mode": "not_executed", "dimensions": [], "missingDimensions": ["language_version"] }
+      ]
+    }
+  ]
+}

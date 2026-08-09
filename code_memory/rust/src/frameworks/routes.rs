@@ -69,6 +69,24 @@ fn extract_routes_with_index(
                 chain.push('\n');
                 chain.push_str(next_line);
             }
+            // `.route()` is also used by HTTP test/client libraries.  A
+            // framework pack may only claim the chain after the receiver is
+            // proven to be an instance (or an explicitly imported surface)
+            // of that framework.
+            let ownership_chain = if code_line.trim_start().starts_with(".route(") {
+                code_lines[..index]
+                    .iter()
+                    .rev()
+                    .map(|line| line.trim())
+                    .find(|line| !line.is_empty())
+                    .map(|receiver| format!("{receiver}{chain}"))
+                    .unwrap_or_else(|| chain.clone())
+            } else {
+                chain.clone()
+            };
+            if !pack_owns_route_registration(pack, source, &ownership_chain) {
+                continue;
+            }
             let chain_calls = javascript_chained_route_calls(&chain);
             if !chain_calls.is_empty() {
                 let consumed = chain.lines().count();
@@ -164,14 +182,7 @@ fn extract_routes_with_index(
             continue;
         }
         if pack.id == "aspnet-mvc" && route_code.contains("MapControllerRoute(") {
-            extract_aspnet_controller_route(
-                pack,
-                path,
-                index,
-                &route_line,
-                symbol_index,
-                facts,
-            );
+            extract_aspnet_controller_route(pack, path, index, &route_line, symbol_index, facts);
             pending_prefix = None;
             continue;
         }
@@ -306,22 +317,21 @@ fn extract_routes_with_index(
                 route_path
             };
             for route_method in &route_methods {
-                let handler = if matches!(pack.id.as_str(), "django" | "drf")
-                    && route_method != "ANY"
-                {
-                    base_handler
-                        .as_deref()
-                        .and_then(|owner| {
-                            resolve_nested_definition_indexed(
-                                symbol_index,
-                                owner,
-                                &route_method.to_ascii_lowercase(),
-                            )
-                        })
-                        .or_else(|| base_handler.clone())
-                } else {
-                    base_handler.clone()
-                };
+                let handler =
+                    if matches!(pack.id.as_str(), "django" | "drf") && route_method != "ANY" {
+                        base_handler
+                            .as_deref()
+                            .and_then(|owner| {
+                                resolve_nested_definition_indexed(
+                                    symbol_index,
+                                    owner,
+                                    &route_method.to_ascii_lowercase(),
+                                )
+                            })
+                            .or_else(|| base_handler.clone())
+                    } else {
+                        base_handler.clone()
+                    };
                 let id = if multiple_methods {
                     format!(
                         "route:{}:{}:{}:{}:{}",
@@ -335,7 +345,7 @@ fn extract_routes_with_index(
                     kind: "HTTP_ROUTE".to_string(),
                     framework: pack.id.clone(),
                     symbol: handler,
-                        method: Some(route_method.to_string()),
+                    method: Some(route_method.to_string()),
                     path: Some(route_path.clone()),
                     source_file: path.to_string(),
                     source_line,
@@ -371,7 +381,10 @@ fn python_http_methods(
             .unwrap_or_default(),
     )
     .chunks(2)
-    .filter_map(|pair| pair.first().and_then(|method| normalize_python_method(method)))
+    .filter_map(|pair| {
+        pair.first()
+            .and_then(|method| normalize_python_method(method))
+    })
     .collect::<Vec<_>>();
     if !as_view_methods.is_empty() {
         return dedupe_strings(as_view_methods);
@@ -387,10 +400,9 @@ fn python_http_methods(
         }
     }
     if let Some(name) = handler_name {
-        let class_line = source.lines().find(|line| {
-            line.trim_start()
-                .starts_with(&format!("class {name}"))
-        });
+        let class_line = source
+            .lines()
+            .find(|line| line.trim_start().starts_with(&format!("class {name}")));
         if let Some(class_line) = class_line {
             methods.extend(inherited_python_methods(class_line));
         }
@@ -494,11 +506,8 @@ fn extract_drf_router_routes(
     for (methods, detail, action, url_path) in drf_custom_actions(source, &viewset_name) {
         for method in methods {
             let action_path = if detail {
-                format!(
-                    "{}/{{pk}}/{url_path}/",
-                    route_prefix.trim_end_matches('/')
-                )
-                .replace("//", "/")
+                format!("{}/{{pk}}/{url_path}/", route_prefix.trim_end_matches('/'))
+                    .replace("//", "/")
             } else {
                 format!("{}/{url_path}/", route_prefix.trim_end_matches('/')).replace("//", "/")
             };
@@ -527,7 +536,17 @@ fn inherited_viewset_actions(line: &str) -> HashSet<String> {
     let lower = line.to_ascii_lowercase();
     let mut actions = HashSet::new();
     if lower.contains("modelviewset") {
-        actions.extend(["list", "create", "retrieve", "update", "partial_update", "destroy"].map(str::to_string));
+        actions.extend(
+            [
+                "list",
+                "create",
+                "retrieve",
+                "update",
+                "partial_update",
+                "destroy",
+            ]
+            .map(str::to_string),
+        );
     } else if lower.contains("readonlymodelviewset") {
         actions.extend(["list", "retrieve"].map(str::to_string));
     }
@@ -564,7 +583,12 @@ fn drf_custom_actions(source: &str, owner: &str) -> Vec<(Vec<String>, bool, Stri
         let url_path = quoted_values(line)
             .into_iter()
             .last()
-            .filter(|value| !matches!(value.to_ascii_uppercase().as_str(), "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"))
+            .filter(|value| {
+                !matches!(
+                    value.to_ascii_uppercase().as_str(),
+                    "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+                )
+            })
             .unwrap_or_else(|| {
                 lines
                     .iter()
@@ -613,7 +637,10 @@ fn push_drf_route_fact(
     } else {
         format!("/{route_path}/")
     };
-    let id = format!("route:{}:{}:{}:{}:{}", pack.id, path, source_line, method, route_path);
+    let id = format!(
+        "route:{}:{}:{}:{}:{}",
+        pack.id, path, source_line, method, route_path
+    );
     if facts.iter().any(|fact| fact.id == id) {
         return;
     }
@@ -628,7 +655,10 @@ fn push_drf_route_fact(
         source_line,
         source_end_line: source_line + route_line.lines().count().saturating_sub(1),
         source_range: source_range_for_text(source_line - 1, route_line),
-        evidence: vec![evidence.to_string(), "router_registration_expansion".to_string()],
+        evidence: vec![
+            evidence.to_string(),
+            "router_registration_expansion".to_string(),
+        ],
         properties: BTreeMap::new(),
     });
 }
@@ -640,7 +670,8 @@ fn extract_file_system_route(
     symbol_index: &FrameworkSymbolIndex,
     facts: &mut Vec<FrameworkFact>,
 ) {
-    if let Some((route_path, method, handler_name, source_line)) = file_system_route(pack, path, source)
+    if let Some((route_path, method, handler_name, source_line)) =
+        file_system_route(pack, path, source)
     {
         let handler = handler_name
             .and_then(|name| {
@@ -743,7 +774,10 @@ fn csharp_static_string(value: &str) -> Option<String> {
     let value = value.trim();
     let quote = value.find('"')?;
     let prefix = &value[..quote];
-    if !prefix.chars().all(|character| matches!(character, '$' | '@')) {
+    if !prefix
+        .chars()
+        .all(|character| matches!(character, '$' | '@'))
+    {
         return None;
     }
     let end = value[quote + 1..].find('"')? + quote + 1;
@@ -806,9 +840,7 @@ fn framework_route_paths(
                 return Some((vec![prefix], end));
             }
             "drf" => return annotation_route_paths(route_line, &["re_path", "path"]),
-            "starlette" => {
-                return annotation_route_paths(route_line, &["WebSocketRoute", "Route"])
-            }
+            "starlette" => return annotation_route_paths(route_line, &["WebSocketRoute", "Route"]),
             "fastapi" if !python_route_registration(route_code, "add_api_route") => return None,
             "flask" if !python_route_registration(route_code, "add_url_rule") => return None,
             "sanic" if !python_route_registration(route_code, "add_route") => return None,
@@ -925,9 +957,11 @@ fn pack_owns_route_registration(pack: &FrameworkPack, source: &str, line: &str) 
         }
         ("java", "jakarta-ee" | "quarkus") => {
             line.contains("@Path")
-                || ["@GET", "@POST", "@PUT", "@PATCH", "@DELETE", "@HEAD", "@OPTIONS"]
-                    .iter()
-                    .any(|marker| line.contains(marker))
+                || [
+                    "@GET", "@POST", "@PUT", "@PATCH", "@DELETE", "@HEAD", "@OPTIONS",
+                ]
+                .iter()
+                .any(|marker| line.contains(marker))
         }
         ("java", "micronaut") => [
             "@Get", "@Post", "@Put", "@Patch", "@Delete", "@Head", "@Options",
@@ -937,18 +971,20 @@ fn pack_owns_route_registration(pack: &FrameworkPack, source: &str, line: &str) 
         ("java", "play") => starts_with_http_verb(trimmed),
 
         ("csharp", "minimal-api") => minimal_api_route_call(line).is_some(),
-        ("csharp", "aspnet-mvc" | "aspnet-web-api") => [
-            "[HttpGet",
-            "[HttpPost",
-            "[HttpPut",
-            "[HttpPatch",
-            "[HttpDelete",
-            "[HttpHead",
-            "[HttpOptions",
-        ]
-        .iter()
-        .any(|marker| line.contains(marker))
-            || pack.id == "aspnet-mvc" && line.contains("MapControllerRoute("),
+        ("csharp", "aspnet-mvc" | "aspnet-web-api") => {
+            [
+                "[HttpGet",
+                "[HttpPost",
+                "[HttpPut",
+                "[HttpPatch",
+                "[HttpDelete",
+                "[HttpHead",
+                "[HttpOptions",
+            ]
+            .iter()
+            .any(|marker| line.contains(marker))
+                || pack.id == "aspnet-mvc" && line.contains("MapControllerRoute(")
+        }
 
         ("javascript" | "typescript", "nestjs") => [
             "@Get", "@Post", "@Put", "@Patch", "@Delete", "@Head", "@Options",
@@ -962,27 +998,45 @@ fn pack_owns_route_registration(pack: &FrameworkPack, source: &str, line: &str) 
         ("javascript" | "typescript", "nextjs" | "nuxt" | "sveltekit") => false,
 
         ("cpp", "crow") => line.contains("CROW_ROUTE("),
-        ("cpp", "drogon") => {
-            line.contains("ADD_METHOD_TO(") || line.contains("METHOD_ADD(")
-        }
+        ("cpp", "drogon") => line.contains("ADD_METHOD_TO(") || line.contains("METHOD_ADD("),
         ("cpp", "poco") => line.contains("Route("),
 
         ("go", "beego") => line.contains("beego.Router("),
         ("go", "echo" | "gin") => registration_with_handler(
             line,
-            &[".GET(", ".POST(", ".PUT(", ".PATCH(", ".DELETE(", ".HEAD(", ".OPTIONS("],
+            &[
+                ".GET(",
+                ".POST(",
+                ".PUT(",
+                ".PATCH(",
+                ".DELETE(",
+                ".HEAD(",
+                ".OPTIONS(",
+            ],
         ),
         ("go", "chi" | "fiber") => registration_with_handler(
             line,
-            &[".Get(", ".Post(", ".Put(", ".Patch(", ".Delete(", ".Head(", ".Options("],
+            &[
+                ".Get(",
+                ".Post(",
+                ".Put(",
+                ".Patch(",
+                ".Delete(",
+                ".Head(",
+                ".Options(",
+            ],
         ),
-        ("go", "net-http") => {
-            line.contains("http.HandleFunc(") || line.contains("http.Handle(")
-        }
+        ("go", "net-http") => line.contains("http.HandleFunc(") || line.contains("http.Handle("),
 
         ("rust", "rocket") => [
-            "#[get(", "#[post(", "#[put(", "#[patch(", "#[delete(", "#[head(",
-            "#[options(", "#[route(",
+            "#[get(",
+            "#[post(",
+            "#[put(",
+            "#[patch(",
+            "#[delete(",
+            "#[head(",
+            "#[options(",
+            "#[route(",
         ]
         .iter()
         .any(|marker| line.contains(marker)),
@@ -996,23 +1050,17 @@ fn pack_owns_route_registration(pack: &FrameworkPack, source: &str, line: &str) 
         ("rust", "poem") => line.contains(".at(") || line.contains("Route::new"),
         ("rust", "warp") => line.contains("warp::path"),
 
-        ("php", "api-platform") => line.contains("#[Get(") || line.contains("#[ApiResource"),
-        ("php", "symfony") => line.contains("#[Route"),
-        ("php", "laravel") => line.contains("Route::"),
-        ("php", "cakephp") => line.contains("Router::"),
-        ("php", "codeigniter") => line.contains("$routes->"),
-        ("php", "laminas") => line.contains("->addRoute("),
-        ("php", "slim") => line.contains("$app->") || line.contains("$group->"),
-
-        ("ruby", "rack") => trimmed.starts_with("map "),
-        ("ruby", "roda") => trimmed.starts_with("r.on ") || trimmed.starts_with("r.get "),
-        ("ruby", "grape" | "hanami" | "rails" | "sinatra") => {
-            starts_with_http_verb(trimmed)
-        }
-
         ("dart", "shelf") => registration_with_handler(
             line,
-            &[".get(", ".post(", ".put(", ".patch(", ".delete(", ".head(", ".options("],
+            &[
+                ".get(",
+                ".post(",
+                ".put(",
+                ".patch(",
+                ".delete(",
+                ".head(",
+                ".options(",
+            ],
         ),
         ("dart", "dart-frog") => false,
         _ => false,
@@ -1021,21 +1069,20 @@ fn pack_owns_route_registration(pack: &FrameworkPack, source: &str, line: &str) 
 
 fn contains_call(line: &str, names: &[&str]) -> bool {
     names.iter().any(|name| {
-        line.match_indices(&format!("{name}("))
-            .any(|(start, _)| {
-                start == 0
-                    || line[..start]
-                        .chars()
-                        .next_back()
-                        .is_none_or(|value| !value.is_ascii_alphanumeric() && value != '_')
-            })
+        line.match_indices(&format!("{name}(")).any(|(start, _)| {
+            start == 0
+                || line[..start]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|value| !value.is_ascii_alphanumeric() && value != '_')
+        })
     })
 }
 
 fn starts_with_http_verb(line: &str) -> bool {
     [
-        "GET ", "POST ", "PUT ", "PATCH ", "DELETE ", "HEAD ", "OPTIONS ", "get ",
-        "post ", "put ", "patch ", "delete ", "head ", "options ",
+        "GET ", "POST ", "PUT ", "PATCH ", "DELETE ", "HEAD ", "OPTIONS ", "get ", "post ", "put ",
+        "patch ", "delete ", "head ", "options ",
     ]
     .iter()
     .any(|method| line.starts_with(method))
@@ -1055,15 +1102,36 @@ fn registration_with_handler(line: &str, markers: &[&str]) -> bool {
 
 fn javascript_server_route_receiver(pack: &str, source: &str, line: &str) -> bool {
     let markers = [
-        ".get(", ".GET(", ".post(", ".POST(", ".put(", ".PUT(", ".patch(",
-        ".PATCH(", ".delete(", ".DELETE(", ".head(", ".HEAD(", ".options(",
-        ".OPTIONS(", ".route(",
+        ".get(",
+        ".GET(",
+        ".post(",
+        ".POST(",
+        ".put(",
+        ".PUT(",
+        ".patch(",
+        ".PATCH(",
+        ".delete(",
+        ".DELETE(",
+        ".head(",
+        ".HEAD(",
+        ".options(",
+        ".OPTIONS(",
+        ".route(",
     ];
     markers.iter().any(|marker| {
         let Some(start) = line.find(marker) else {
             return false;
         };
-        let receiver = line[..start]
+        let receiver_expression = line[..start].trim_end();
+        // `request(server).get('/users')`, `supertest(app).post(...)`, and
+        // similar client/test calls end in a call expression.  Looking only
+        // for the last identifier incorrectly turns the argument (`server`
+        // or `app`) into the route receiver.  Chained server declarations
+        // such as `router.route(...).get(...)` are handled separately above.
+        if receiver_expression.ends_with([')', ']', '}']) {
+            return false;
+        }
+        let receiver = receiver_expression
             .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
             .find(|value| !value.is_empty())
             .unwrap_or_default();
@@ -1074,7 +1142,8 @@ fn javascript_server_route_receiver(pack: &str, source: &str, line: &str) -> boo
         let conventional = matches!(lower.as_str(), "app" | "router" | "server" | "fastify")
             || lower.ends_with("router")
             || lower.ends_with("server");
-        conventional || javascript_receiver_is_framework_instance(pack, source, receiver)
+        javascript_receiver_is_framework_instance(pack, source, receiver)
+            || (conventional && javascript_source_has_framework_identity(pack, source))
     })
 }
 
@@ -1099,6 +1168,26 @@ fn javascript_receiver_is_framework_instance(pack: &str, source: &str, receiver:
             "koa" => right.contains("new Router(") || right.contains("Router("),
             _ => false,
         }
+    })
+}
+
+fn javascript_source_has_framework_identity(pack: &str, source: &str) -> bool {
+    let packages: &[&str] = match pack {
+        "express" => &["express"],
+        "fastify" => &["fastify"],
+        "koa" => &["koa", "@koa/router", "koa-router"],
+        _ => return false,
+    };
+    source.lines().any(|line| {
+        let line = line.trim_start();
+        let module_loading = line.starts_with("import ")
+            || line.starts_with("export ")
+            || line.contains("require(")
+            || line.contains("import(");
+        module_loading
+            && packages.iter().any(|package| {
+                line.contains(&format!("'{package}'")) || line.contains(&format!("\"{package}\""))
+            })
     })
 }
 

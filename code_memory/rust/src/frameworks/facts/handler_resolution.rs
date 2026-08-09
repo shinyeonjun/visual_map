@@ -234,55 +234,47 @@ pub(crate) fn annotation_handler_name(line: &str) -> Option<String> {
 }
 
 pub(crate) fn nearby_handler(lines: &[&str], index: usize) -> Option<String> {
-    // Java annotations must bind to the first declaration below them. Scanning
-    // broad keywords first can otherwise skip that method and bind to a later
-    // `void` method in the same window.
+    // Decorators and annotations bind to the first declaration below them.
+    // Keep the scan source-ordered: a former three-pass implementation could
+    // skip `export class CatsController` and select its later
+    // `constructor(private ...)` merely because the parameter contained an
+    // access modifier. That attached framework facts to a constructor (and,
+    // after a global fallback, sometimes to another project entirely).
     for line in lines.iter().skip(index).take(24) {
         let trimmed = line.trim_start();
-        if trimmed.starts_with('@')
+        if trimmed.is_empty()
+            || trimmed.starts_with('@')
             || trimmed.starts_with('[')
             || trimmed.starts_with("#[")
-            || !(trimmed.contains("public ")
-                || trimmed.contains("protected ")
-                || trimmed.contains("private "))
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with('*')
         {
             continue;
         }
-        if let Some(open) = line.find('(') {
-            let before = line[..open].trim_end();
-            let name = before
-                .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
-                .next()
-                .unwrap_or_default();
-            if !name.is_empty() {
-                return Some(name.to_string());
-            }
-        }
-    }
-    for line in lines.iter().skip(index).take(24) {
         for keyword in [
+            "class ",
+            "struct ",
+            "interface ",
+            "object ",
+            "record ",
+            "enum ",
+            "trait ",
             "function ",
             "fn ",
             "func ",
             "def ",
             "void ",
-            "class ",
-            "struct ",
-            "interface ",
-            "object ",
         ] {
             if let Some(name) = identifier_after(line, keyword) {
                 return Some(name);
             }
         }
-    }
-    for line in lines.iter().skip(index).take(24) {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('@') || trimmed.starts_with('[') || trimmed.starts_with("#[") {
-            continue;
-        }
         if let Some(open) = line.find('(') {
             let before = line[..open].trim_end();
+            if before.contains('=') {
+                continue;
+            }
             let name = before
                 .rsplit(|value: char| !value.is_ascii_alphanumeric() && value != '_')
                 .next()
@@ -291,7 +283,17 @@ pub(crate) fn nearby_handler(lines: &[&str], index: usize) -> Option<String> {
             if !name.is_empty()
                 && !matches!(
                     lower.as_str(),
-                    "if" | "for" | "while" | "get" | "post" | "route"
+                    "if"
+                        | "for"
+                        | "while"
+                        | "switch"
+                        | "catch"
+                        | "get"
+                        | "post"
+                        | "put"
+                        | "patch"
+                        | "delete"
+                        | "route"
                 )
             {
                 return Some(name.to_string());

@@ -1,0 +1,16 @@
+{
+  "id": "edge-2d82b60b108ff17dc414eeeef892ab0bdc1ef23cd79c4f35630c3a55a71bd9fb",
+  "snapshotId": "snapshot-1f913a7dc2b1e3c573d1a5063729bf0dcc306d900a980a9db2b97a2037dbfb0b",
+  "sourceId": "node-5e21875b77053faa5d145d8a92a771a5e792ce7051bc153aa3ccb0869f52b0ac",
+  "targetId": "node-c97fe6f4752309d4c0595f63016593808bd2df13b1f9fa295b0469003dc5ca93",
+  "family": "code",
+  "kind": "calls",
+  "truth": "confirmed",
+  "resolution": "provider",
+  "dispatch": "direct",
+  "semanticContextId": "context-78a0a4bb90f64e54ed6b7e4bd9703c1c707a58d2e148d52877444cb3991e42ab",
+  "qualifier": null,
+  "evidenceIds": [
+    "evidence-eaf99385fa00857056487dd71a72fb40824abf63f0821fdb92a598fbbe92bc59"
+  ]
+}

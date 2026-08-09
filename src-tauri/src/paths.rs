@@ -56,7 +56,7 @@ mod tests {
 
     #[test]
     fn base_paths_are_derived_from_app_data_dir() {
-        let root = PathBuf::from(r"C:\Users\dev\AppData\Local\BackendVisualMap");
+        let root = PathBuf::from(r"C:\Users\dev\AppData\Local\CodebaseWorkspace");
         let paths = base_paths(&root);
 
         assert_eq!(paths.app_data_dir, root);
@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn ensure_base_dirs_creates_required_directories() {
         let root = std::env::temp_dir().join(format!(
-            "backend-visual-map-paths-test-{}",
+            "codebase-workspace-paths-test-{}",
             std::process::id()
         ));
         let paths = base_paths(&root);

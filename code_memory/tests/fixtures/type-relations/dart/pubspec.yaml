@@ -1,0 +1,3 @@
+name: type_relations_fixture
+environment:
+  sdk: '>=3.0.0 <4.0.0'

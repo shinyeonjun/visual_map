@@ -1,3 +1,5 @@
+pub use codebase_fact_model as fact_model_contract;
+
 pub mod adapters;
 pub mod analysis_outcome;
 #[cfg(any(test, feature = "bench-support"))]
@@ -8,7 +10,6 @@ pub mod certification;
 pub mod config;
 pub mod ddl;
 pub mod graph_builder;
-pub mod graph_query;
 pub mod graph_store;
 pub mod impact_analysis;
 pub mod interface_contract;
@@ -627,13 +628,6 @@ mod tests {
                 );
             }
         }
-
-        assert!(
-            !include_str!("graph_query.rs")
-                .to_ascii_lowercase()
-                .contains("select "),
-            "graph_query must stay a JSON metadata filter, not SQL"
-        );
     }
 
     #[test]

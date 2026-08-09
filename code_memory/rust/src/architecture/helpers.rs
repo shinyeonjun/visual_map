@@ -1,9 +1,9 @@
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-use super::{ImportUse, PackageInfo, PhpNamespaceIndex, SourcePathIndex};
+use super::{ImportUse, PackageInfo, SourcePathIndex};
 use crate::source::is_managed_provider_root;
 use crate::LANGUAGES;
 
@@ -91,8 +91,6 @@ pub(crate) fn is_metadata_file(name: &str) -> bool {
             | "requirements.txt"
             | "Cargo.toml"
             | "go.mod"
-            | "composer.json"
-            | "Gemfile"
             | "pubspec.yaml"
             | "pom.xml"
             | "build.gradle"
@@ -105,15 +103,10 @@ pub(crate) fn parse_package_metadata(
     source: &str,
 ) -> (String, Option<String>, Option<String>) {
     match file {
-        "package.json" | "composer.json" => {
+        "package.json" => {
             let value: Value = serde_json::from_str(source).unwrap_or(Value::Null);
-            let ecosystem = if file == "package.json" {
-                "npm"
-            } else {
-                "composer"
-            };
             (
-                ecosystem.to_string(),
+                "npm".to_string(),
                 value
                     .get("name")
                     .and_then(Value::as_str)
@@ -157,7 +150,6 @@ pub(crate) fn parse_package_metadata(
             yaml_value(source, "name"),
             yaml_value(source, "version"),
         ),
-        "Gemfile" => ("gems".to_string(), Some("ruby-project".to_string()), None),
         "pom.xml" => (
             "maven".to_string(),
             xml_value(source, "artifactId").or_else(|| Some("java-project".to_string())),
@@ -359,17 +351,6 @@ pub(crate) fn parse_imports(path: &str, language: &str, source: &str) -> Vec<Imp
                     }
                 }
             }
-            "php" => {
-                package = trimmed.strip_prefix("use ").map(|value| {
-                    value
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or(value)
-                        .trim_end_matches(';')
-                        .to_string()
-                });
-            }
-            "ruby" => package = quoted_after(trimmed, "require"),
             "dart" => {
                 package = first_quoted(trimmed);
             }
@@ -456,8 +437,6 @@ pub(crate) fn dynamic_call_marker(language: &str, line: &str) -> Option<&'static
         "go" => &["plugin.Open("],
         "rust" => &["libloading", "Library::new("],
         "c" | "cpp" => &["dlsym(", "GetProcAddress("],
-        "php" => &["call_user_func(", "call_user_func_array("],
-        "ruby" => &["send(", "public_send(", "const_get("],
         "dart" => &["dart:mirrors", "MirrorSystem"],
         _ => &[],
     };
@@ -502,6 +481,13 @@ pub(crate) fn framework_fact_label(
         _ => "FLOW_NODE",
     };
     Some((node_kind, label))
+}
+
+pub(crate) fn is_execution_entrypoint_fact(framework_kind: &str, fact_kind: &str) -> bool {
+    matches!(
+        fact_kind,
+        "HTTP_ROUTE" | "RPC_ENDPOINT" | "SCHEDULED_JOB" | "SERVER_ACTION"
+    ) || (fact_kind == "EVENT_HANDLER" && framework_kind == "async")
 }
 
 pub(crate) fn short_symbol(symbol: &str) -> String {
@@ -554,7 +540,7 @@ pub(crate) fn is_local_or_standard(
             return true;
         }
     }
-    if (import.language == "java" || import.language == "csharp" || import.language == "php")
+    if (import.language == "java" || import.language == "csharp")
         && local_prefixes
             .iter()
             .any(|prefix| !prefix.is_empty() && package.starts_with(prefix))
@@ -577,7 +563,6 @@ pub(crate) fn resolve_project_import(
     import: &ImportUse,
     sources: &HashMap<String, String>,
     packages: &[PackageInfo],
-    php_namespace_index: &PhpNamespaceIndex,
     source_index: &SourcePathIndex,
 ) -> Option<String> {
     if matches!(import.language.as_str(), "c" | "cpp")
@@ -600,75 +585,10 @@ pub(crate) fn resolve_project_import(
         "python" => resolve_python_import(import, sources, source_index),
         "go" => resolve_go_import(import, sources, packages, source_index),
         "rust" => resolve_rust_import(import, sources, source_index),
-        "php" => resolve_php_namespace_import(import, php_namespace_index)
-            .or_else(|| resolve_namespace_import(import, sources, packages, source_index)),
         "java" | "csharp" => resolve_namespace_import(import, sources, packages, source_index),
-        "ruby" => resolve_relative_import(import, sources, &["rb"], source_index),
         "dart" => resolve_dart_import(import, sources, packages, source_index),
         _ => None,
     }
-}
-
-fn resolve_php_namespace_import(import: &ImportUse, index: &PhpNamespaceIndex) -> Option<String> {
-    let value = import.package.trim_matches(['\\', '/']);
-    index.get(value).cloned()
-}
-
-pub(crate) fn build_php_namespace_index(sources: &HashMap<String, String>) -> PhpNamespaceIndex {
-    let mut index = HashMap::new();
-    let mut ambiguous = HashSet::new();
-    for (path, source) in sources {
-        if !path.ends_with(".php") {
-            continue;
-        }
-        let namespace = source.lines().find_map(|line| {
-            line.trim()
-                .strip_prefix("namespace ")
-                .and_then(|value| value.trim_end_matches(';').split_whitespace().next())
-                .map(str::to_string)
-        });
-        let namespace = namespace.unwrap_or_default();
-        for line in source.lines() {
-            let trimmed = line.trim();
-            let trimmed = trimmed
-                .strip_prefix("abstract ")
-                .or_else(|| trimmed.strip_prefix("final "))
-                .or_else(|| trimmed.strip_prefix("readonly "))
-                .unwrap_or(trimmed);
-            let Some((kind, rest)) =
-                ["class", "interface", "trait", "enum"]
-                    .iter()
-                    .find_map(|kind| {
-                        trimmed
-                            .strip_prefix(&format!("{kind} "))
-                            .map(|rest| (*kind, rest))
-                    })
-            else {
-                continue;
-            };
-            let _ = kind;
-            let Some(name) = rest
-                .split([' ', '{', ':'])
-                .next()
-                .filter(|name| !name.is_empty())
-            else {
-                continue;
-            };
-            let key = if namespace.is_empty() {
-                name.to_string()
-            } else {
-                format!("{namespace}\\{name}")
-            };
-            if ambiguous.contains(&key) {
-                continue;
-            }
-            if index.insert(key.clone(), path.clone()).is_some() {
-                index.remove(&key);
-                ambiguous.insert(key);
-            }
-        }
-    }
-    index
 }
 
 fn resolve_python_import(
@@ -805,7 +725,6 @@ fn resolve_namespace_import(
     let extensions = match import.language.as_str() {
         "java" => ["java", "", ""],
         "csharp" => ["cs", "", ""],
-        "php" => ["php", "", ""],
         _ => ["", "", ""],
     };
     let candidates = extensions
@@ -952,11 +871,6 @@ pub(crate) fn normalize_external_package(package: &str, language: &str) -> Strin
             .next()
             .unwrap_or(package)
             .to_string(),
-        "php" => package
-            .split(['\\', '/'])
-            .take(2)
-            .collect::<Vec<_>>()
-            .join("\\"),
         _ => package.to_string(),
     }
 }
@@ -969,8 +883,6 @@ pub(crate) fn ecosystem_for_language(language: &str) -> &'static str {
         "csharp" => "nuget",
         "rust" => "cargo",
         "go" => "go",
-        "php" => "composer",
-        "ruby" => "gems",
         "dart" => "pub",
         _ => "system",
     }
@@ -1029,6 +941,320 @@ pub(crate) fn contains_any_ascii_case_insensitive(value: &str, markers: &[&str])
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct StaticDatabaseAccess {
+    pub(crate) operation: &'static str,
+    pub(crate) table: String,
+}
+
+pub(crate) fn static_database_accesses(line: &str) -> Vec<StaticDatabaseAccess> {
+    let Some(operation) = static_database_operation(line) else {
+        return Vec::new();
+    };
+    if operation == "DB_CALL" {
+        return Vec::new();
+    }
+
+    let Some(start) = ["select", "insert", "update", "delete", "upsert", "merge"]
+        .into_iter()
+        .filter_map(|keyword| ascii_word_position(line, keyword))
+        .min()
+    else {
+        return Vec::new();
+    };
+    let prefix = line[..start].trim_end().to_ascii_lowercase();
+    if ["f\"", "f'", "$\"", "$'", "$@\"", "@$\""]
+        .iter()
+        .any(|marker| prefix.ends_with(marker))
+        || ascii_word_position(&line[..start], "with").is_some()
+    {
+        return Vec::new();
+    }
+    let tokens = static_sql_tokens(&line[start..]);
+    if static_sql_statement_count(&tokens) != 1 || has_legacy_sql_table_list(&tokens) {
+        return Vec::new();
+    }
+    let Some((operation_index, statement)) =
+        tokens.iter().enumerate().find_map(|(index, token)| {
+            matches!(
+                token.as_str(),
+                "select" | "insert" | "update" | "delete" | "upsert" | "merge"
+            )
+            .then_some((index, token.as_str()))
+        })
+    else {
+        return Vec::new();
+    };
+
+    let mut accesses = BTreeSet::new();
+    match statement {
+        "select" => push_sql_marker_accesses(
+            &tokens,
+            operation_index,
+            &["from", "join"],
+            "READ",
+            &mut accesses,
+        ),
+        "insert" | "upsert" => {
+            push_first_sql_marker_access(&tokens, operation_index, "into", "WRITE", &mut accesses);
+            push_sql_marker_accesses(
+                &tokens,
+                operation_index,
+                &["from", "join"],
+                "READ",
+                &mut accesses,
+            );
+        }
+        "update" => {
+            push_sql_access_after(&tokens, operation_index + 1, "WRITE", &mut accesses);
+            push_sql_marker_accesses(
+                &tokens,
+                operation_index + 1,
+                &["from", "join"],
+                "READ",
+                &mut accesses,
+            );
+        }
+        "delete" => {
+            push_first_sql_marker_access(&tokens, operation_index, "from", "WRITE", &mut accesses);
+            push_sql_marker_accesses(
+                &tokens,
+                operation_index,
+                &["using", "join"],
+                "READ",
+                &mut accesses,
+            );
+        }
+        "merge" => {
+            push_first_sql_marker_access(&tokens, operation_index, "into", "WRITE", &mut accesses);
+            push_first_sql_marker_access(&tokens, operation_index, "using", "READ", &mut accesses);
+        }
+        _ => {}
+    }
+    accesses.into_iter().collect()
+}
+
+fn static_sql_statement_count(tokens: &[String]) -> usize {
+    tokens
+        .split(|token| token == ";")
+        .filter(|statement| {
+            statement.iter().any(|token| {
+                matches!(
+                    token.as_str(),
+                    "select" | "insert" | "update" | "delete" | "upsert" | "merge"
+                )
+            })
+        })
+        .count()
+}
+
+fn has_legacy_sql_table_list(tokens: &[String]) -> bool {
+    tokens.iter().enumerate().any(|(index, token)| {
+        if !matches!(token.as_str(), "from" | "using") {
+            return false;
+        }
+        tokens
+            .iter()
+            .skip(index + 1)
+            .take_while(|candidate| {
+                !matches!(
+                    candidate.as_str(),
+                    ";" | "group"
+                        | "having"
+                        | "join"
+                        | "limit"
+                        | "offset"
+                        | "on"
+                        | "order"
+                        | "returning"
+                        | "set"
+                        | "union"
+                        | "values"
+                        | "when"
+                        | "where"
+                )
+            })
+            .any(|candidate| candidate == ",")
+    })
+}
+
+fn ascii_word_position(value: &str, word: &str) -> Option<usize> {
+    let bytes = value.as_bytes();
+    let word = word.as_bytes();
+    bytes
+        .windows(word.len())
+        .enumerate()
+        .find_map(|(index, candidate)| {
+            if !candidate.eq_ignore_ascii_case(word) {
+                return None;
+            }
+            let is_identifier = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+            let bounded_left = index == 0 || !is_identifier(bytes[index - 1]);
+            let bounded_right = bytes
+                .get(index + word.len())
+                .is_none_or(|byte| !is_identifier(*byte));
+            (bounded_left && bounded_right).then_some(index)
+        })
+}
+
+fn push_sql_marker_accesses(
+    tokens: &[String],
+    start: usize,
+    markers: &[&str],
+    operation: &'static str,
+    accesses: &mut BTreeSet<StaticDatabaseAccess>,
+) {
+    for (index, _) in tokens
+        .iter()
+        .enumerate()
+        .skip(start)
+        .filter(|(_, token)| markers.contains(&token.as_str()))
+    {
+        push_sql_access_after(tokens, index + 1, operation, accesses);
+    }
+}
+
+fn push_first_sql_marker_access(
+    tokens: &[String],
+    start: usize,
+    marker: &str,
+    operation: &'static str,
+    accesses: &mut BTreeSet<StaticDatabaseAccess>,
+) {
+    if let Some(index) = tokens
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find_map(|(index, token)| (token == marker).then_some(index))
+    {
+        push_sql_access_after(tokens, index + 1, operation, accesses);
+    }
+}
+
+fn push_sql_access_after(
+    tokens: &[String],
+    index: usize,
+    operation: &'static str,
+    accesses: &mut BTreeSet<StaticDatabaseAccess>,
+) {
+    let Some(table) = tokens.get(index) else {
+        return;
+    };
+    if table == "("
+        || tokens.get(index + 1).is_some_and(|token| token == "(")
+        || is_sql_boundary_keyword(table)
+    {
+        return;
+    }
+    accesses.insert(StaticDatabaseAccess {
+        operation,
+        table: table.clone(),
+    });
+}
+
+fn is_sql_boundary_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "as" | "from"
+            | "group"
+            | "having"
+            | "into"
+            | "join"
+            | "lateral"
+            | "limit"
+            | "offset"
+            | "on"
+            | "only"
+            | "order"
+            | "returning"
+            | "select"
+            | "set"
+            | "union"
+            | "using"
+            | "values"
+            | "when"
+            | "where"
+    )
+}
+
+fn static_sql_tokens(line: &str) -> Vec<String> {
+    let bytes = line.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            byte if byte.is_ascii_alphanumeric()
+                || matches!(byte, b'_' | b'$' | b'"' | b'`' | b'[') =>
+            {
+                let (identifier, next) = static_sql_identifier(bytes, index);
+                if !identifier.is_empty() {
+                    tokens.push(identifier.to_ascii_lowercase());
+                }
+                index = next;
+            }
+            b'(' | b')' | b',' | b';' => {
+                tokens.push((bytes[index] as char).to_string());
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    tokens
+}
+
+fn static_sql_identifier(bytes: &[u8], start: usize) -> (String, usize) {
+    let mut parts = Vec::new();
+    let mut index = start;
+    while let Some(&opening) = bytes.get(index) {
+        let mut part = Vec::new();
+        if matches!(opening, b'"' | b'`' | b'[') {
+            let closing = if opening == b'[' { b']' } else { opening };
+            index += 1;
+            while index < bytes.len() && bytes[index] != closing {
+                part.push(bytes[index]);
+                index += 1;
+            }
+            index = (index + 1).min(bytes.len());
+            if !part
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
+            {
+                return (String::new(), index);
+            }
+        } else if opening.is_ascii_alphanumeric() || matches!(opening, b'_' | b'$') {
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || matches!(bytes[index], b'_' | b'$'))
+            {
+                part.push(bytes[index]);
+                index += 1;
+            }
+        } else {
+            break;
+        }
+        parts.push(String::from_utf8_lossy(&part).into_owned());
+
+        let mut next = index;
+        while bytes.get(next).is_some_and(u8::is_ascii_whitespace) {
+            next += 1;
+        }
+        if bytes.get(next) != Some(&b'.') {
+            index = next;
+            break;
+        }
+        next += 1;
+        while bytes.get(next).is_some_and(u8::is_ascii_whitespace) {
+            next += 1;
+        }
+        if !bytes.get(next).is_some_and(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b'"' | b'`' | b'[')
+        }) {
+            break;
+        }
+        index = next;
+    }
+    (parts.join("."), index)
+}
+
 pub(crate) fn static_database_operation(line: &str) -> Option<&'static str> {
     let trimmed = line.trim_start();
     if trimmed.is_empty()
@@ -1037,6 +1263,9 @@ pub(crate) fn static_database_operation(line: &str) -> Option<&'static str> {
         || trimmed.starts_with("--")
         || trimmed.contains('+')
         || trimmed.contains("${")
+        || trimmed.contains("#{")
+        || trimmed.contains(".format(")
+        || trimmed.contains("format!(")
     {
         return None;
     }
@@ -1062,7 +1291,7 @@ pub(crate) fn static_database_operation(line: &str) -> Option<&'static str> {
         Some("READ")
     } else if contains_any_ascii_case_insensitive(
         trimmed,
-        &["INSERT ", "UPDATE ", "DELETE ", "UPSERT "],
+        &["INSERT ", "UPDATE ", "DELETE ", "UPSERT ", "MERGE "],
     ) {
         Some("WRITE")
     } else if database_call {

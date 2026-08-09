@@ -233,9 +233,9 @@ mod tests {
 
     use super::*;
     use crate::graph_builder::insert_schema_snapshot_graph;
-    use crate::graph_query::{query_graph, GraphQuery};
     use crate::graph_store::GraphStore;
     use crate::impact_analysis::{impact_analysis, Direction};
+    use crate::interface_contract::list_objects;
     use crate::schema_diff::schema_diff;
 
     const SNAPSHOT: &str = "perf-snapshot";
@@ -277,21 +277,16 @@ mod tests {
         let store = indexed_store(&config, SNAPSHOT, &synthetic_schema_snapshot(&config));
 
         let elapsed = timed(|| {
-            let result = query_graph(
+            let result = list_objects(
                 &store,
-                &GraphQuery {
-                    snapshot_key: SNAPSHOT.to_owned(),
-                    node_label: Some("Table".to_owned()),
-                    node_key_contains: None,
-                    name_contains: Some("table_0099".to_owned()),
-                    edge_type: None,
-                    payload_array_min_len: None,
-                    traversal: None,
-                    limit: 10,
-                },
+                SNAPSHOT,
+                Some(ObjectKind::Table),
+                Some("table_0099"),
+                0,
+                Some(10),
             )
             .unwrap();
-            assert_eq!(result.nodes.len(), 1);
+            assert_eq!(result.objects.len(), 1);
         });
 
         assert_under(

@@ -337,7 +337,7 @@ mod tests {
 
     fn temp_root(label: &str) -> PathBuf {
         env::temp_dir().join(format!(
-            "backend-visual-map-{label}-{}-{}",
+            "codebase-workspace-{label}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)

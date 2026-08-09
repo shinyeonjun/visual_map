@@ -168,6 +168,8 @@ fn route_parser_ignores_comments_and_string_examples() {
         fixture: FrameworkFixture::default(),
     };
     let source = r#"
+import express from "express";
+const app = express();
 const example = "app.get('/string-only', handler)";
 // app.post("/commented", handler);
 /*
@@ -183,8 +185,8 @@ app.get(
     extract_routes(&pack, "src/app.ts", source, &[], None, &mut facts);
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].path.as_deref(), Some("/real"));
-    assert_eq!(facts[0].source_line, 7);
-    assert_eq!(facts[0].source_end_line, 10);
+    assert_eq!(facts[0].source_line, 9);
+    assert_eq!(facts[0].source_end_line, 12);
 }
 
 #[test]
@@ -201,6 +203,7 @@ fn javascript_router_get_path_is_preserved_after_string_filtering() {
         fixture: FrameworkFixture::default(),
     };
     let source = r#"
+import { Router } from "express";
 const example = "router.get('/string-only', handler)";
 const router = Router();
 router.get("/users/:id", handler);
@@ -925,7 +928,7 @@ fn symbol_short_name_handles_lsp_location_suffix() {
         "health"
     );
     assert_eq!(
-        symbol_short_name("scip-php composer visualmap/test-php 1.0.0.0 App/Handler#index()."),
+        symbol_short_name("scip-dotnet nuget sample 1.0.0 App/Handler#index()."),
         "index"
     );
     assert_eq!(
@@ -936,12 +939,18 @@ fn symbol_short_name_handles_lsp_location_suffix() {
         symbol_short_name("scip-typescript npm app 1.0.0 src/controllers/`auth.js`/register0:"),
         "register"
     );
+    assert_eq!(
+        symbol_short_name(
+            "scip-typescript npm @nestjs/core 11.1.26 src/cats/`cats.controller.ts`/CatsController#create()."
+        ),
+        "create"
+    );
     let documents = vec![DocumentOutput {
-        language: "php".to_string(),
-        path: "src/Fixture.php".to_string(),
+        language: "csharp".to_string(),
+        path: "src/Fixture.cs".to_string(),
         symbols: Vec::new(),
         occurrences: vec![OccurrenceOutput {
-            symbol: "scip-php composer visualmap/test-php 1.0.0.0 App/Handler#index().".to_string(),
+            symbol: "scip-dotnet nuget sample 1.0.0 App/Handler#index().".to_string(),
             range: vec![2, 32, 2, 37],
             enclosing_range: Vec::new(),
             definition: true,
@@ -950,7 +959,7 @@ fn symbol_short_name_handles_lsp_location_suffix() {
             write: false,
         }],
     }];
-    assert!(resolve_symbol(&documents, "app/Config/Routes.php", "Handler::index").is_some());
+    assert!(resolve_symbol(&documents, "app/Routes.cs", "Handler::index").is_some());
 }
 
 #[test]
@@ -1220,91 +1229,6 @@ fn python_service_class_emits_service_fact() {
         &mut facts,
     );
     assert!(facts.iter().any(|fact| fact.kind == "SERVICE"));
-}
-
-#[test]
-fn php_class_method_route_resolves_project_definition() {
-    let documents = vec![DocumentOutput {
-        language: "php".to_string(),
-        path: "src/Fixture.php".to_string(),
-        symbols: Vec::new(),
-        occurrences: vec![OccurrenceOutput {
-            symbol: "scip-php composer visualmap/test-php 1.0.0.0 App/Handler#index().".to_string(),
-            range: vec![2, 32, 2, 37],
-            enclosing_range: Vec::new(),
-            definition: true,
-            import: false,
-            read: false,
-            write: false,
-        }],
-    }];
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let pack = load_packs(root)
-        .expect("framework packs should load")
-        .into_iter()
-        .find(|pack| pack.id == "codeigniter")
-        .expect("codeigniter pack");
-    let mut facts = Vec::new();
-    assert_eq!(
-        registration_handler(", \"Handler::index\");"),
-        Some("index".to_string())
-    );
-    assert!(resolve_symbol_at(&documents, "app/Config/Routes.php", "index", 1).is_some());
-    extract_routes(
-            &pack,
-            "app/Config/Routes.php",
-            "<?php\nfunction register_routes($routes) { $routes->get(\"/fixture\", \"Handler::index\"); }",
-            &documents,
-            None,
-            &mut facts,
-        );
-    assert_eq!(facts.len(), 1);
-    assert!(facts[0].symbol.is_some());
-}
-
-#[test]
-fn php_attribute_class_route_resolves_project_definition() {
-    let documents = vec![DocumentOutput {
-        language: "php".to_string(),
-        path: "src/Fixture.php".to_string(),
-        symbols: Vec::new(),
-        occurrences: vec![OccurrenceOutput {
-            symbol: "scip-php composer visualmap/test-php 1.0.0.0 UserEndpoint#".to_string(),
-            range: vec![5, 6, 5, 18],
-            enclosing_range: Vec::new(),
-            definition: true,
-            import: false,
-            read: false,
-            write: false,
-        }],
-    }];
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let pack = load_packs(root)
-        .expect("framework packs should load")
-        .into_iter()
-        .find(|pack| pack.id == "api-platform")
-        .expect("api platform pack");
-    let mut facts = Vec::new();
-    assert_eq!(route_method("#[Get(\"/fixture\")]"), Some("GET"));
-    assert_eq!(
-        annotation_handler_name("#[Get(\"/fixture\")] class UserEndpoint {}"),
-        Some("UserEndpoint".to_string())
-    );
-    assert_eq!(
-        nearby_handler(&["#[Get(\"/fixture\")]", "class UserEndpoint {}"], 0),
-        Some("UserEndpoint".to_string())
-    );
-    assert!(resolve_symbol_at(&documents, "src/Fixture.php", "UserEndpoint", 0).is_some());
-    extract_routes(
-        &pack,
-        "src/Fixture.php",
-        "#[Get(\"/fixture\")]\nclass UserEndpoint {}",
-        &documents,
-        None,
-        &mut facts,
-    );
-    assert_eq!(facts.len(), 1);
-    assert!(facts[0].symbol.is_some());
 }
 
 #[test]
@@ -1590,6 +1514,59 @@ module.exports = router;
 }
 
 #[test]
+fn javascript_server_routes_reject_call_expression_clients() {
+    let route_pack = |id: &str| FrameworkPack {
+        id: id.to_string(),
+        language: "typescript".to_string(),
+        name: id.to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["HTTP_ROUTE".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "registration-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+
+    let client_source = "import request from 'supertest';\nreturn request(server).get('/users');\nreturn supertest(app).post('/orders');\n";
+    for framework in ["express", "fastify", "koa"] {
+        let mut facts = Vec::new();
+        extract_routes(
+            &route_pack(framework),
+            "test/routes.spec.ts",
+            client_source,
+            &[],
+            None,
+            &mut facts,
+        );
+        assert!(facts.is_empty(), "{framework} claimed an HTTP client call");
+    }
+
+    let mut express = Vec::new();
+    extract_routes(
+        &route_pack("express"),
+        "src/routes.ts",
+        "import express from 'express';\nconst app = express();\napp.get('/users', listUsers);\n",
+        &[],
+        None,
+        &mut express,
+    );
+    assert_eq!(express.len(), 1);
+    assert_eq!(express[0].path.as_deref(), Some("/users"));
+
+    let mut fastify = Vec::new();
+    extract_routes(
+        &route_pack("fastify"),
+        "src/server.ts",
+        "import Fastify from 'fastify';\nconst server = Fastify();\nserver.get('/health', health);\n",
+        &[],
+        None,
+        &mut fastify,
+    );
+    assert_eq!(fastify.len(), 1);
+    assert_eq!(fastify[0].path.as_deref(), Some("/health"));
+}
+
+#[test]
 fn framework_facts_mark_test_scope_without_hiding_it() {
     let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let root = std::env::temp_dir().join(format!(
@@ -1648,61 +1625,6 @@ fn framework_facts_mark_test_scope_without_hiding_it() {
 }
 
 #[test]
-fn rack_does_not_claim_rails_route_files() {
-    let pack = FrameworkPack {
-        id: "rack".to_string(),
-        language: "ruby".to_string(),
-        name: "Rack".to_string(),
-        kind: "web".to_string(),
-        signals: vec![],
-        outputs: vec!["HTTP_ROUTE".to_string()],
-        rules: vec!["HTTP_ROUTE".to_string()],
-        adapter: "registration-routing".to_string(),
-        fixture: FrameworkFixture::default(),
-    };
-    let empty = HashSet::new();
-    assert!(!pack_owns_routes(
-        &pack,
-        "config/routes.rb",
-        "get '/users', to: 'users#index'",
-        &empty,
-        &empty,
-        &empty,
-    ));
-    assert!(pack_owns_routes(
-        &pack,
-        "config.ru",
-        "require 'rack'\nrun App",
-        &empty,
-        &empty,
-        &empty,
-    ));
-    assert!(!pack_owns_routes(
-        &pack,
-        "app/controller.rb",
-        "map = DEFAULT_PAGES\ndef run\n  work\nend",
-        &empty,
-        &empty,
-        &empty,
-    ));
-
-    let source = "require 'rack'\nmap '/users' do\n  run UsersApp\nend\n";
-    assert!(pack_owns_routes(
-        &pack,
-        "config.ru",
-        source,
-        &empty,
-        &empty,
-        &empty,
-    ));
-    let mut facts = Vec::new();
-    extract_routes(&pack, "config.ru", source, &[], None, &mut facts);
-    assert!(facts
-        .iter()
-        .any(|fact| fact.kind == "HTTP_ROUTE" && fact.path.as_deref() == Some("/users")));
-}
-
-#[test]
 fn framework_signals_inside_comments_do_not_activate_a_pack() {
     let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let temp = std::env::temp_dir().join(format!(
@@ -1732,8 +1654,8 @@ fn framework_signals_inside_comments_do_not_activate_a_pack() {
 fn metadata_signals_are_limited_to_the_pack_language() {
     assert!(metadata_matches_language("package.json", "javascript"));
     assert!(!metadata_matches_language("CMakeLists.txt", "javascript"));
-    assert!(metadata_matches_language("Gemfile", "ruby"));
-    assert!(!metadata_matches_language("CMakeLists.txt", "ruby"));
+    assert!(metadata_matches_language("pubspec.yaml", "dart"));
+    assert!(!metadata_matches_language("CMakeLists.txt", "dart"));
 }
 
 #[test]
@@ -1847,7 +1769,7 @@ fn prefixed_source_signals_do_not_match_only_a_path_name() {
 }
 
 #[test]
-fn c_project_metadata_does_not_activate_web_or_ruby_packs() {
+fn c_project_metadata_does_not_activate_web_packs() {
     let pack_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let root = std::env::temp_dir().join(format!(
         "code-memory-framework-language-gate-{}",
@@ -1857,7 +1779,7 @@ fn c_project_metadata_does_not_activate_web_or_ruby_packs() {
     fs::create_dir_all(root.join("src")).expect("create language gate fixture");
     fs::write(
         root.join("CMakeLists.txt"),
-        "set(NEXT_TARGET pages)\nset(RACK_MODE run)\n",
+        "set(NEXT_TARGET pages)\nset(SPRING_MODE run)\n",
     )
     .expect("write metadata fixture");
     fs::write(root.join("src/main.c"), "int main(void) { return 0; }\n").expect("write C fixture");
@@ -1865,7 +1787,7 @@ fn c_project_metadata_does_not_activate_web_or_ruby_packs() {
     assert!(analysis
         .frameworks
         .iter()
-        .all(|framework| !matches!(framework.id.as_str(), "nextjs" | "rack")));
+        .all(|framework| !matches!(framework.id.as_str(), "nextjs" | "spring")));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2031,8 +1953,7 @@ fn aspnet_conventional_routes_follow_the_controller_project_scope() {
     ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("Libraries/Core")).expect("create library fixture");
-    fs::create_dir_all(root.join("Presentation/Web/Controllers"))
-        .expect("create web fixture");
+    fs::create_dir_all(root.join("Presentation/Web/Controllers")).expect("create web fixture");
     fs::write(
         root.join("Libraries/Core/Core.csproj"),
         r#"<Project><ItemGroup><PackageReference Include="Microsoft.AspNetCore.Mvc" /></ItemGroup></Project>"#,
@@ -2143,7 +2064,7 @@ fn go_grpc_rpc_endpoint_requires_registration_shape() {
 fn every_declared_pack_has_an_executable_shared_rule() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let packs = load_packs(root).expect("framework packs should load");
-    assert_eq!(packs.len(), 85);
+    assert_eq!(packs.len(), 72);
     for pack in &packs {
         for rule in &pack.rules {
             if matches!(rule.as_str(), "HTTP_ROUTE" | "HANDLES") {
@@ -2156,8 +2077,16 @@ fn every_declared_pack_has_an_executable_shared_rule() {
                     "#[tauri::command]"
                 } else if pack.id == "grpc" && pack.language == "go" && rule == "RPC_ENDPOINT" {
                     "server_builder.RegisterService(&service)"
-                } else if pack.id == "api-platform" && rule == "SCHEMA" {
-                    "#[ApiResource] class UserResource {}"
+                } else if pack.id == "fastify"
+                    && matches!(pack.language.as_str(), "javascript" | "typescript")
+                    && rule == "MIDDLEWARE"
+                {
+                    "fastify.addHook('onRequest', authMiddleware)"
+                } else if pack.id == "nestjs"
+                    && matches!(pack.language.as_str(), "javascript" | "typescript")
+                    && rule == "MIDDLEWARE"
+                {
+                    "@UseGuards(AuthGuard)"
                 } else {
                     representative_line(rule)
                 };
@@ -2559,7 +2488,152 @@ fn nestjs_route_handler_binds_to_the_next_controller_method() {
 }
 
 #[test]
-fn django_and_rails_routes_accept_framework_native_relative_paths() {
+fn decorated_type_precedes_a_constructor_with_parameter_modifiers() {
+    assert_eq!(
+        nearby_handler(
+            &[
+                "@Controller('cats')",
+                "export class CatsController {",
+                "  constructor(private readonly service: CatsService) {}",
+                "}",
+            ],
+            0,
+        ),
+        Some("CatsController".to_string())
+    );
+}
+
+#[test]
+fn nestjs_scoped_package_binds_service_and_route_to_the_exact_file() {
+    let path = "integration/inspector/src/cats/cats.controller.ts";
+    let class_symbol = "scip-typescript npm @nestjs/core 11.1.26 integration/inspector/src/cats/`cats.controller.ts`/CatsController#";
+    let method_symbol = "scip-typescript npm @nestjs/core 11.1.26 integration/inspector/src/cats/`cats.controller.ts`/CatsController#create().";
+    let documents = vec![DocumentOutput {
+        language: "typescript".to_string(),
+        path: path.to_string(),
+        symbols: Vec::new(),
+        occurrences: vec![
+            OccurrenceOutput {
+                symbol: class_symbol.to_string(),
+                range: vec![1, 13, 27],
+                enclosing_range: vec![0, 0, 5, 1],
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            },
+            OccurrenceOutput {
+                symbol: method_symbol.to_string(),
+                range: vec![4, 8, 14],
+                enclosing_range: vec![3, 2, 4, 19],
+                definition: true,
+                import: false,
+                read: false,
+                write: false,
+            },
+        ],
+    }];
+    let pack = FrameworkPack {
+        id: "nestjs".to_string(),
+        language: "typescript".to_string(),
+        name: "NestJS".to_string(),
+        kind: "web".to_string(),
+        signals: vec!["@Controller".to_string()],
+        outputs: vec![
+            "HTTP_ROUTE".to_string(),
+            "HANDLES".to_string(),
+            "SERVICE".to_string(),
+        ],
+        rules: vec!["HTTP_ROUTE".to_string(), "SERVICE".to_string()],
+        adapter: "registration-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = "@Controller('cats')\nexport class CatsController {\n  constructor(private readonly service: CatsService) {}\n  @Post()\n  async create() {}\n}\n";
+    let mut facts = Vec::new();
+    extract_routes(&pack, path, source, &documents, None, &mut facts);
+    extract_generic_facts(&pack, path, source, &documents, &mut facts);
+
+    assert!(facts
+        .iter()
+        .any(|fact| fact.kind == "HTTP_ROUTE" && fact.symbol.as_deref() == Some(method_symbol)));
+    assert!(facts
+        .iter()
+        .any(|fact| fact.kind == "SERVICE" && fact.symbol.as_deref() == Some(class_symbol)));
+}
+
+#[test]
+fn javascript_middleware_is_owned_by_its_actual_framework_syntax() {
+    let middleware_pack = |id: &str| FrameworkPack {
+        id: id.to_string(),
+        language: "typescript".to_string(),
+        name: id.to_string(),
+        kind: "web".to_string(),
+        signals: Vec::new(),
+        outputs: vec!["MIDDLEWARE".to_string()],
+        rules: vec!["MIDDLEWARE".to_string()],
+        adapter: "registration-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let nest_source = "import { UseGuards } from '@nestjs/common';\n@UseGuards(RolesGuard)\n@Controller('cats')\nexport class CatsController {}\n";
+
+    for id in ["express", "fastify", "koa"] {
+        let mut facts = Vec::new();
+        extract_generic_facts(
+            &middleware_pack(id),
+            "src/cats.controller.ts",
+            nest_source,
+            &[],
+            &mut facts,
+        );
+        assert!(facts.is_empty(), "{id} claimed Nest middleware syntax");
+    }
+    let mut nest = Vec::new();
+    extract_generic_facts(
+        &middleware_pack("nestjs"),
+        "src/cats.controller.ts",
+        nest_source,
+        &[],
+        &mut nest,
+    );
+    assert_eq!(nest.len(), 1);
+    assert_eq!(nest[0].evidence, vec!["@UseGuards(".to_string()]);
+    assert_eq!(
+        nest[0].properties.get("target").map(String::as_str),
+        Some("RolesGuard")
+    );
+
+    let mut express = Vec::new();
+    extract_generic_facts(
+        &middleware_pack("express"),
+        "src/app.ts",
+        "import express from 'express';\nconst app = express();\napp.use(authMiddleware);\npassport.use(jwtStrategy);\n",
+        &[],
+        &mut express,
+    );
+    assert_eq!(express.len(), 1);
+    assert_eq!(
+        express[0].properties.get("target").map(String::as_str),
+        Some("authMiddleware")
+    );
+
+    let mut fastify = Vec::new();
+    extract_generic_facts(
+        &middleware_pack("fastify"),
+        "src/server.ts",
+        "import Fastify from 'fastify';\nconst server = Fastify();\nserver.addHook('onRequest', authenticate);\nserver.addHook('onResponse', (request, reply, done) => { done(); });\n",
+        &[],
+        &mut fastify,
+    );
+    assert_eq!(fastify.len(), 2);
+    assert_eq!(
+        fastify[0].properties.get("target").map(String::as_str),
+        Some("authenticate")
+    );
+    assert!(!fastify[1].properties.contains_key("target"));
+}
+
+#[test]
+fn django_routes_accept_framework_native_relative_paths() {
     let route_pack = |id: &str, language: &str| FrameworkPack {
         id: id.to_string(),
         language: language.to_string(),
@@ -2603,18 +2677,6 @@ fn django_and_rails_routes_accept_framework_native_relative_paths() {
         route_registration_handler("starlette", "Route(\"/fixture\", handler)"),
         Some("handler".to_string())
     );
-
-    let mut rails = Vec::new();
-    extract_routes(
-        &route_pack("rails", "ruby"),
-        "config/routes.rb",
-        "get \"photos/:photo_id\", to: \"photos#show\"",
-        &[],
-        None,
-        &mut rails,
-    );
-    assert_eq!(rails.len(), 1);
-    assert_eq!(rails[0].path.as_deref(), Some("/photos/:photo_id"));
 }
 
 #[test]
@@ -2686,8 +2748,6 @@ fn server_route_packs_do_not_promote_outbound_client_calls() {
         ("drogon", "cpp", "client->get(\"/remote\");"),
         ("gin", "go", "http.Get(\"/remote\")"),
         ("axum", "rust", "client.get(\"/remote\").send().await;"),
-        ("laravel", "php", "$client->get('/remote');"),
-        ("rails", "ruby", "client.get(\"/remote\")"),
         ("shelf", "dart", "client.get('/remote');"),
     ];
 

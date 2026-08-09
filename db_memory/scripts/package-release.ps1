@@ -46,7 +46,7 @@ function Invoke-Contract([string]$CliPath) {
   $contract = $json | ConvertFrom-Json
   $outcomes = @($contract.authoritative_outcomes)
   if (
-    $contract.contract_version -ne 2 -or
+    $contract.contract_version -ne 3 -or
     $contract.complete_snapshot_contract_version -ne 2 -or
     $contract.metadata_only -ne $true -or
     $contract.row_data_access -ne $false -or
@@ -93,20 +93,18 @@ Assert-PathInsideRepository $OutputDirectory "Release output"
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $binaryExtension = if ($runningOnWindows) { ".exe" } else { "" }
 $cliName = "database-memory$binaryExtension"
-$mcpName = "database-memory-mcp$binaryExtension"
 $cli = Join-Path $root "target/release/$cliName"
-$mcp = Join-Path $root "target/release/$mcpName"
 $readme = Join-Path $root "README.md"
 $license = Join-Path $root "LICENSE"
 $install = Join-Path $root "docs/install.md"
-foreach ($path in @($cli, $mcp, $readme, $license, $install)) {
+foreach ($path in @($cli, $readme, $license, $install)) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
     throw "Release input is missing: $path"
   }
 }
 
 $contract = Invoke-Contract $cli
-$packageName = "rdb-memory-mcp-$Platform"
+$packageName = "database-memory-$Platform"
 $stage = [IO.Path]::GetFullPath((Join-Path $OutputDirectory $packageName))
 $verify = [IO.Path]::GetFullPath((Join-Path $OutputDirectory "$packageName-verify"))
 $archiveName = if ($runningOnWindows) { "$packageName.zip" } else { "$packageName.tar.gz" }
@@ -128,7 +126,7 @@ foreach ($file in @($archive, $checksums)) {
 }
 
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
-Copy-Item -LiteralPath @($cli, $mcp, $readme, $license, $install) -Destination $stage
+Copy-Item -LiteralPath @($cli, $readme, $license, $install) -Destination $stage
 $supportLedger = Join-Path $stage "support-ledger.json"
 [IO.File]::WriteAllText($supportLedger, "$($contract.Json)$([Environment]::NewLine)", [Text.UTF8Encoding]::new($false))
 $manifest = [ordered]@{
@@ -141,7 +139,6 @@ $manifest = [ordered]@{
   row_data_access = $false
   files = @(
     [ordered]@{ name = $cliName; sha256 = (Get-Sha256 (Join-Path $stage $cliName)) },
-    [ordered]@{ name = $mcpName; sha256 = (Get-Sha256 (Join-Path $stage $mcpName)) },
     [ordered]@{ name = "support-ledger.json"; sha256 = (Get-Sha256 $supportLedger) }
   )
 }

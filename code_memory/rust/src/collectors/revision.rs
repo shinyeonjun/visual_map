@@ -4,14 +4,13 @@ use std::time::Duration;
 
 use crate::{resolve_tool, run_bounded_command, tool_command};
 
-use super::discovery::stable_segment;
 use super::model::{
-    properties, CollectedEvidence, CollectedFact, CollectedRelation, CollectionDiagnostic,
-    CollectionMode, CollectionStatus, CollectorResult, TruthClass,
+    properties, CollectedFact, CollectedRelation, CollectionDiagnostic, CollectionMode,
+    CollectionStatus, CollectorResult, TruthClass,
 };
 
 const ID: &str = "git-revision";
-const MAX_GIT_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_GIT_OUTPUT_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn collect(root: &Path, providers_root: Option<&Path>) -> CollectorResult {
     let mut result = CollectorResult::new(ID, "source-revision", CollectionMode::ToolAssisted);
@@ -100,113 +99,12 @@ pub(crate) fn collect(root: &Path, providers_root: Option<&Path>) -> CollectorRe
         });
     }
 
-    let working_tree_key = "git:working-tree".to_string();
-    result.facts.push(CollectedFact {
-        stable_key: working_tree_key.clone(),
-        kind: "working-tree".to_string(),
-        name: branch.clone().unwrap_or_else(|| "working tree".to_string()),
-        path: Some(top_level.clone()),
-        properties: properties(&[("base_revision", head.as_deref())]),
-    });
-    result.relations.push(CollectedRelation {
-        from: repository_key,
-        to: working_tree_key.clone(),
-        kind: "HAS_WORKING_TREE".to_string(),
-        truth_class: TruthClass::Confirmed,
-        evidence_type: "GIT_METADATA".to_string(),
-        evidence: Vec::new(),
-        properties: BTreeMap::new(),
-    });
-
-    match git_bytes(
-        root,
-        providers_root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-    ) {
-        Ok(bytes) => {
-            for changed in parse_porcelain_status(&bytes) {
-                let path = changed.path.replace('\\', "/");
-                let key = format!("file:{}", stable_segment(&path));
-                result.facts.push(CollectedFact {
-                    stable_key: key.clone(),
-                    kind: "changed-file".to_string(),
-                    name: Path::new(&path)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or(&path)
-                        .to_string(),
-                    path: Some(path.clone()),
-                    properties: properties(&[
-                        ("status", Some(&changed.status)),
-                        ("previous_path", changed.previous_path.as_deref()),
-                    ]),
-                });
-                result.relations.push(CollectedRelation {
-                    from: working_tree_key.clone(),
-                    to: key,
-                    kind: "CHANGED".to_string(),
-                    truth_class: TruthClass::Confirmed,
-                    evidence_type: "GIT_STATUS".to_string(),
-                    evidence: vec![CollectedEvidence {
-                        path,
-                        line: None,
-                        note: Some(changed.status),
-                    }],
-                    properties: BTreeMap::new(),
-                });
-            }
-        }
-        Err(error) => result.diagnostics.push(CollectionDiagnostic {
-            collector: ID,
-            level: "warning",
-            code: "git-status-failed",
-            message: error,
-            path: None,
-        }),
-    }
-
     result.summary.status = if result.diagnostics.is_empty() {
         CollectionStatus::Collected
     } else {
         CollectionStatus::Partial
     };
     result
-}
-
-struct ChangedPath {
-    status: String,
-    path: String,
-    previous_path: Option<String>,
-}
-
-fn parse_porcelain_status(bytes: &[u8]) -> Vec<ChangedPath> {
-    let records: Vec<&[u8]> = bytes
-        .split(|byte| *byte == 0)
-        .filter(|record| !record.is_empty())
-        .collect();
-    let mut changed = Vec::new();
-    let mut index = 0usize;
-    while index < records.len() {
-        let record = records[index];
-        if record.len() < 4 {
-            index += 1;
-            continue;
-        }
-        let status = String::from_utf8_lossy(&record[..2]).to_string();
-        let path = String::from_utf8_lossy(&record[3..]).to_string();
-        let renamed = status.contains('R') || status.contains('C');
-        let previous_path = renamed
-            .then(|| records.get(index + 1))
-            .flatten()
-            .map(|record| String::from_utf8_lossy(record).to_string());
-        changed.push(ChangedPath {
-            status,
-            path,
-            previous_path,
-        });
-        index += if renamed { 2 } else { 1 };
-    }
-    changed
 }
 
 fn git_text(root: &Path, providers_root: Option<&Path>, args: &[&str]) -> Result<String, String> {
@@ -239,18 +137,4 @@ fn git_bytes(root: &Path, providers_root: Option<&Path>, args: &[&str]) -> Resul
         output.status,
         detail.trim()
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_porcelain_status;
-
-    #[test]
-    fn porcelain_status_keeps_renames_and_untracked_files() {
-        let changed = parse_porcelain_status(b"R  new.rs\0old.rs\0?? notes.txt\0");
-        assert_eq!(changed.len(), 2);
-        assert_eq!(changed[0].path, "new.rs");
-        assert_eq!(changed[0].previous_path.as_deref(), Some("old.rs"));
-        assert_eq!(changed[1].status, "??");
-    }
 }

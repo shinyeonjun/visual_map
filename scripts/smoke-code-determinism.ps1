@@ -23,6 +23,11 @@ if ([string]::IsNullOrWhiteSpace($ProvidersRoot)) {
     $candidate = Join-Path $engineRoot "providers"
     if (Test-Path -LiteralPath $candidate -PathType Container) {
         $ProvidersRoot = $candidate
+    } else {
+        $candidate = Join-Path $repoRoot "code_memory\providers"
+        if (Test-Path -LiteralPath $candidate -PathType Container) {
+            $ProvidersRoot = $candidate
+        }
     }
 }
 if ([string]::IsNullOrWhiteSpace($PacksRoot)) {
@@ -32,11 +37,11 @@ if ([string]::IsNullOrWhiteSpace($PacksRoot)) {
         # itself. This keeps --packs-root consistent with the other gates.
         $PacksRoot = $engineRoot
     } else {
-        $PacksRoot = Join-Path $repoRoot "src-tauri\engines"
+        $PacksRoot = Join-Path $repoRoot "code_memory"
     }
 }
 
-$fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ("backend-visual-map-determinism-" + [guid]::NewGuid().ToString("N"))
+$fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ("codebase-workspace-determinism-" + [guid]::NewGuid().ToString("N"))
 $cacheOne = Join-Path $fixtureRoot "cache-one"
 $cacheTwo = Join-Path $fixtureRoot "cache-two"
 $outOne = Join-Path $fixtureRoot "index-one.json"
@@ -76,9 +81,16 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($ProvidersRoot)) {
             $arguments += @("--providers-root", ([IO.Path]::GetFullPath($ProvidersRoot)))
         }
-        & $EnginePath @arguments 2>&1 | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            throw "Determinism index run failed with exit code $LASTEXITCODE"
+        $previousPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & $EnginePath @arguments 2>&1 | ForEach-Object { Write-Host ([string]$_) }
+            $engineExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
+        if ($engineExitCode -ne 0) {
+            throw "Determinism index run failed with exit code $engineExitCode"
         }
         if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
             throw "Determinism index run did not write $OutputPath"
@@ -99,6 +111,12 @@ try {
 
     $first.timings = @()
     $second.timings = @()
+    foreach ($unit in @($first.analysis_units)) {
+        $unit.elapsed_ms = 0
+    }
+    foreach ($unit in @($second.analysis_units)) {
+        $unit.elapsed_ms = 0
+    }
     $firstCanonical = $first | ConvertTo-Json -Compress -Depth 100
     $secondCanonical = $second | ConvertTo-Json -Compress -Depth 100
     if ($firstCanonical -ne $secondCanonical) {
@@ -107,6 +125,12 @@ try {
 
     $firstArchitecture = Get-Content -LiteralPath $architectureOne -Raw | ConvertFrom-Json
     $secondArchitecture = Get-Content -LiteralPath $architectureTwo -Raw | ConvertFrom-Json
+    foreach ($unit in @($firstArchitecture.analysis_units)) {
+        $unit.elapsed_ms = 0
+    }
+    foreach ($unit in @($secondArchitecture.analysis_units)) {
+        $unit.elapsed_ms = 0
+    }
     $firstArchitectureCanonical = $firstArchitecture | ConvertTo-Json -Compress -Depth 100
     $secondArchitectureCanonical = $secondArchitecture | ConvertTo-Json -Compress -Depth 100
     if ($firstArchitectureCanonical -ne $secondArchitectureCanonical) {

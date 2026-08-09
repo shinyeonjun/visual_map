@@ -1,507 +1,890 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import "./styles/index.css";
-import type { AppPaths } from "./components/common/DevDiagnostics";
-import { DevDiagnostics } from "./components/common/DevDiagnostics";
-import { currentOperationStatus, repoPathErrorFor } from "./app/appState";
-import { toUserError } from "./app/operationStatus";
 import {
-  validateInventoryBootstrap,
-  validateStringArray,
-  validateWorkspace,
-  validateWorkspaceAnalysisResult,
-} from "./app/runtimeContracts";
-import { buildDbProfileControls, buildVisualMapControls, buildWorkspaceControls } from "./app/controlBuilders";
-import { hasTauriRuntime } from "./app/tauriRuntime";
-import { useCodeInventory } from "./hooks/useCodeInventory";
-import { useDbProfiles } from "./hooks/useDbProfiles";
-import { useEngineRegistry } from "./hooks/useEngineRegistry";
-import { useVisualMap } from "./hooks/useVisualMap";
-import { useWorkspaces } from "./hooks/useWorkspaces";
-import { codeInventoryFromSnapshot, dbInventoryFromSnapshot } from "./inventory/snapshotRestore";
-import { dbProfileSourceUsesPath, codeInventoryItemCount } from "./types/workspace";
-import type { InitializeWorkspaceAnalysisRequest, SaveDbProfileRequest } from "./types/workspace";
-import { scheduleSearchIndex } from "./visual/search";
-import type { AnalysisProgress, AnalysisSetupChoice } from "./features/map/AnalysisSetupDialog";
+  AddRegular as Plus,
+  ArrowSyncRegular as LoaderCircle,
+  BracesRegular as Braces,
+  ChatRegular as MessageSquareText,
+  ChevronDownRegular as ChevronDown,
+  DatabaseRegular as Database,
+  ErrorCircleRegular as CircleAlert,
+  FolderOpenRegular as FolderOpen,
+  FolderRegular as FolderCode,
+  OrganizationRegular as Network,
+  SearchRegular as Search,
+  SettingsRegular as Settings2,
+  WarningRegular as TriangleAlert,
+  WindowConsoleRegular as TerminalSquare,
+} from "@fluentui/react-icons";
+import { listen } from "@tauri-apps/api/event";
+import {
+  Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Field,
+  Input,
+  Textarea,
+  Tooltip,
+} from "@fluentui/react-components";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Inspector } from "./map/Inspector";
+import { MapCanvas } from "./map/MapCanvas";
+import { PREVIEW_MAP, PREVIEW_SELECTION } from "./map/previewMap";
+import type { MapView, Selection } from "./map/types";
+import {
+  defaultEffortFor,
+  defaultModelFor,
+  effortLabel,
+  effortOptionsFor,
+  modelFor,
+  modelsFor,
+} from "./providerModels";
+import type {
+  AiProviderAvailability,
+  AnalysisProgressEvent,
+  CommandError,
+  EngineRegistry,
+  FactGraphStatus,
+  ProviderKind,
+  ReasoningEffort,
+  Workspace,
+} from "./contracts";
+import {
+  analyzeWorkspace,
+  chooseRepositoryFolder,
+  createWorkspace,
+  getEngineRegistry,
+  getFactGraphStatus,
+  getMapSelection,
+  getMapView,
+  hasDesktopRuntime,
+  listProviders,
+  listWorkspaces,
+  setWorkspaceProvider,
+} from "./desktop";
 
-import { MapWorkspace } from "./features/map/MapWorkspace";
+type LoadState = "loading" | "ready" | "error";
 
-interface AnalysisProgressEvent {
-  workspaceId: string;
-  stage: string;
-  completed: number;
-  total: number;
-  percent: number;
-  label: string;
-  determinate: boolean;
-}
+export default function App() {
+  const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [providers, setProviders] = useState<AiProviderAvailability[]>([]);
+  const [engineRegistry, setEngineRegistry] = useState<EngineRegistry | null>(null);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [factStatus, setFactStatus] = useState<FactGraphStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [providerOpen, setProviderOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [mapView, setMapView] = useState<MapView | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [analyzingWorkspaceId, setAnalyzingWorkspaceId] = useState<string | null>(null);
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressEvent | null>(null);
+  const activeWorkspaceIdRef = useRef<string | null>(null);
 
-function App() {
-  const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
-  const [appPaths, setAppPaths] = useState<AppPaths | null>(null);
-  const [appPathError, setAppPathError] = useState<string | null>(null);
-  const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [busyNotice, setBusyNotice] = useState<string | null>(null);
-  const [latestOperationAction, setLatestOperationAction] = useState<string | null>(null);
-  const [snapshotRestoring, setSnapshotRestoring] = useState(false);
-  const [snapshotRecoveryNotice, setSnapshotRecoveryNotice] = useState<string | null>(null);
-  const [analysisSetupWorkspace, setAnalysisSetupWorkspace] = useState<import("./types/workspace").Workspace | null>(
-    null,
+  const activeWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
+    [activeWorkspaceId, workspaces],
   );
-  const [analysisInitializing, setAnalysisInitializing] = useState(false);
-  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ percent: 0, label: "분석 준비 중" });
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [dbConnectionError, setDbConnectionError] = useState<string | null>(null);
-  const [snapshotBootstrappedWorkspaceId, setSnapshotBootstrappedWorkspaceId] = useState<string | null>(null);
-  const busyActionRef = useRef<string | null>(null);
-  const busyNoticeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!import.meta.env.DEV || !hasTauriRuntime()) {
-      return;
-    }
+    activeWorkspaceIdRef.current = activeWorkspaceId;
+  }, [activeWorkspaceId]);
 
-    invoke<AppPaths>("get_app_paths")
-      .then(setAppPaths)
-      .catch((error: unknown) => setAppPathError(String(error)));
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([listWorkspaces(), listProviders(), getEngineRegistry()])
+      .then(([workspaceRows, providerRows, registry]) => {
+        if (cancelled) return;
+        setWorkspaces(workspaceRows);
+        setProviders(providerRows);
+        setEngineRegistry(registry);
+        const firstWorkspaceId = workspaceRows[0]?.id ?? null;
+        // Keep the stale-request guard in sync in the same turn as the state
+        // update. Updating it in a later effect leaves a real window where the
+        // newly visible workspace can start an analysis whose result is then
+        // mistaken for a result from an inactive workspace.
+        activeWorkspaceIdRef.current = firstWorkspaceId;
+        setActiveWorkspaceId(firstWorkspaceId);
+        setLoadState("ready");
+      })
+      .catch((reason: unknown) => {
+        if (cancelled) return;
+        setError(errorMessage(reason));
+        setLoadState("error");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  useEffect(
-    () => () => {
-      if (busyNoticeTimerRef.current !== null) {
-        window.clearTimeout(busyNoticeTimerRef.current);
-      }
-    },
-    [],
-  );
-
-  async function withBusy(action: string, task: () => Promise<void>) {
-    if (busyActionRef.current) {
-      setBusyNotice(`현재 ${busyActionLabel(busyActionRef.current)} 작업이 진행 중입니다. 완료 후 다시 시도하세요.`);
-      if (busyNoticeTimerRef.current !== null) {
-        window.clearTimeout(busyNoticeTimerRef.current);
-      }
-      busyNoticeTimerRef.current = window.setTimeout(() => {
-        setBusyNotice(null);
-        busyNoticeTimerRef.current = null;
-      }, 2600);
+  useEffect(() => {
+    setSelectedId(null);
+    setSelection(null);
+    setMapView(null);
+    setAnalysisProgress(null);
+    if (!activeWorkspaceId || !hasDesktopRuntime()) {
+      setFactStatus(null);
       return;
     }
-
-    busyActionRef.current = action;
-    setBusyNotice(null);
-    setLatestOperationAction(action);
-    setBusyAction(action);
-    if (action === "code-index") {
-      setAnalysisProgress({ percent: 0, label: "코드 분석 준비 중", determinate: false });
-    } else if (action === "db-index") {
-      setAnalysisProgress({ percent: 0, label: "DB 분석 준비 중", determinate: false });
-    }
-    try {
-      await task();
-    } finally {
-      if (busyActionRef.current === action) {
-        busyActionRef.current = null;
-        setLatestOperationAction(action);
-        setBusyAction(null);
-      }
-    }
-  }
-
-  const workspaces = useWorkspaces({ withBusy });
-  const { engineRegistry, engineError } = useEngineRegistry();
-  const visual = useVisualMap({
-    currentWorkspaceId: workspaces.currentWorkspace?.id ?? null,
-    bootstrapReady: snapshotBootstrappedWorkspaceId === (workspaces.currentWorkspace?.id ?? null),
-    onOperation: setLatestOperationAction,
-  });
-  async function refreshInventorySnapshot(workspaceId: string) {
-    if (await visual.refreshInventorySnapshot(workspaceId)) {
-      setSnapshotBootstrappedWorkspaceId(workspaceId);
-      setSnapshotRecoveryNotice(null);
-    }
-  }
-  const code = useCodeInventory({
-    currentWorkspace: workspaces.currentWorkspace,
-    withBusy,
-    setCurrentWorkspace: workspaces.setCurrentWorkspace,
-    refreshWorkspaces: workspaces.refreshWorkspaces,
-    refreshInventorySnapshot,
-  });
-  const db = useDbProfiles({
-    currentWorkspace: workspaces.currentWorkspace,
-    withBusy,
-    setCurrentWorkspace: workspaces.setCurrentWorkspace,
-    refreshWorkspaces: workspaces.refreshWorkspaces,
-    clearVisualMap: visual.clearVisualMap,
-    refreshInventorySnapshot,
-  });
+    let cancelled = false;
+    setFactStatus(null);
+    Promise.all([getFactGraphStatus(activeWorkspaceId), getMapView(activeWorkspaceId)])
+      .then(([status, view]) => {
+        if (cancelled) return;
+        setFactStatus(status);
+        setMapView(view);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(errorMessage(reason));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
-    if (!hasTauriRuntime()) {
-      return;
-    }
+    if (!hasDesktopRuntime()) return;
     let disposed = false;
-    let unsubscribe: (() => void) | undefined;
+    let stop: (() => void) | null = null;
     void listen<AnalysisProgressEvent>("analysis-progress", ({ payload }) => {
-      const activeWorkspaceId = analysisSetupWorkspace?.id ?? workspaces.currentWorkspace?.id;
-      if (!activeWorkspaceId || payload.workspaceId !== activeWorkspaceId) {
-        return;
+      if (!disposed && payload.workspaceId === activeWorkspaceIdRef.current) {
+        setAnalysisProgress(payload);
       }
-      setAnalysisProgress((current) => ({
-        percent: Math.max(current.percent, Math.min(100, payload.percent)),
-        label: payload.label,
-        determinate: payload.determinate,
-      }));
-    }).then((stop) => {
-      if (disposed) {
-        stop();
-      } else {
-        unsubscribe = stop;
-      }
-    });
+    })
+      .then((unlisten) => {
+        if (disposed) unlisten();
+        else stop = unlisten;
+      })
+      .catch((reason: unknown) => {
+        if (!disposed) setError(errorMessage(reason));
+      });
     return () => {
       disposed = true;
-      unsubscribe?.();
+      stop?.();
     };
-  }, [analysisSetupWorkspace?.id, workspaces.currentWorkspace?.id]);
+  }, []);
+
+  /*
+    Nothing is drawn until the engine publishes a snapshot. The preview map
+    stands in during development so the canvas can be worked on, and it says
+    so on screen — a map that cannot be told apart from an analysed one is
+    exactly the failure this product must not have.
+  */
+  const previewing = import.meta.env.DEV && !hasDesktopRuntime() && Boolean(activeWorkspace) && !factStatus?.snapshotId;
+  const displayedMap: MapView | null = previewing ? PREVIEW_MAP : mapView;
 
   useEffect(() => {
-    if (!code.codeInventory && !db.dbInventory) {
+    if (previewing) {
+      setSelection(selectedId === PREVIEW_SELECTION.id ? PREVIEW_SELECTION : null);
       return;
     }
-    return scheduleSearchIndex(code.codeInventory, db.dbInventory);
-  }, [code.codeInventory, db.dbInventory]);
-
-  useLayoutEffect(() => {
-    const workspace = workspaces.currentWorkspace;
-    if (!workspace) {
-      setSnapshotBootstrappedWorkspaceId(null);
-      setSnapshotRestoring(false);
-      setAnalysisSetupWorkspace(null);
+    if (!activeWorkspaceId || !selectedId || !mapView || !hasDesktopRuntime()) {
+      setSelection(null);
       return;
     }
-
-    setSnapshotRecoveryNotice(null);
-    setAnalysisError(null);
-    setAnalysisSetupWorkspace(null);
-    setSnapshotBootstrappedWorkspaceId(null);
-    setSnapshotRestoring(true);
     let cancelled = false;
-    let needsAnalysisSetup = false;
-    void invoke<unknown>("load_inventory_bootstrap", { workspaceId: workspace.id })
-      .then((value) => {
-        const bootstrap = validateInventoryBootstrap(value);
-        if (cancelled) {
-          return;
-        }
-        if (!bootstrap) {
-          needsAnalysisSetup = true;
-          return;
-        }
-        const { snapshot, summary } = bootstrap;
-        visual.noteSnapshotLoaded(snapshot);
-
-        const restoredCode = codeInventoryFromSnapshot(snapshot, workspace.codeProject ?? workspace.name, summary);
-        const restoredDb = dbInventoryFromSnapshot(
-          snapshot,
-          db.activeProfile?.id ?? workspace.activeDbProfileId ?? "snapshot",
-          summary,
-        );
-        if (codeInventoryItemCount(restoredCode) > 0) {
-          code.restoreCodeInventory(restoredCode);
-        }
-        if (restoredDb.tables.length) {
-          db.restoreDbInventory(restoredDb, null);
-        }
-        setSnapshotBootstrappedWorkspaceId(workspace.id);
+    getMapSelection(activeWorkspaceId, selectedId)
+      .then((detail) => {
+        if (!cancelled) setSelection(detail);
       })
-      .catch(() => {
-        if (!cancelled) {
-          setSnapshotRecoveryNotice("저장된 읽기 결과를 확인할 수 없습니다. 코드와 DB를 다시 읽어 주세요.");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setSnapshotRestoring(false);
-          if (needsAnalysisSetup) {
-            setAnalysisSetupWorkspace(workspace);
-          }
-        }
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(errorMessage(reason));
       });
-
     return () => {
       cancelled = true;
     };
-    // The workspace id is the lifecycle boundary. Control objects are recreated by their hooks
-    // and adding them here would re-run snapshot restoration on every inventory/state update.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaces.currentWorkspace?.id]);
+  }, [activeWorkspaceId, mapView, previewing, selectedId]);
 
-  useEffect(() => {
-    const workspaceId = workspaces.currentWorkspace?.id;
-    if (!workspaceId || snapshotBootstrappedWorkspaceId !== workspaceId || !hasTauriRuntime()) {
+  async function runAnalysis() {
+    const workspace = activeWorkspace;
+    if (!workspace || analyzingWorkspaceId) return;
+    if (!workspace.provider) {
+      setError("코드 의미 지도를 만들 Codex 또는 Claude 모델을 먼저 설정하세요.");
+      setProviderOpen(true);
       return;
     }
-    let cancelled = false;
-
-    const refreshFreshness = () => {
-      void invoke<unknown>("refresh_snapshot_freshness", { workspaceId })
-        .then((value) => validateStringArray(value, "스냅샷 최신성 결과"))
-        .then((reasons) => {
-          if (cancelled) {
-            return;
-          }
-          visual.noteSnapshotFreshness(reasons);
-          setSnapshotRecoveryNotice(null);
-        })
-        .catch(() => {
-          // A workspace without a saved snapshot has nothing to refresh yet.
-        });
-    };
-
-    window.addEventListener("focus", refreshFreshness);
-    // The app is normally already focused when a workspace is restored. Do
-    // not wait for a later focus transition to reveal changes made while it
-    // was closed.
-    refreshFreshness();
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", refreshFreshness);
-    };
-    // visual is a hook result object; the workspace/bootstrap ids intentionally gate this refresh.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshotBootstrappedWorkspaceId, workspaces.currentWorkspace?.id]);
-
-  const activeBusyAction =
-    busyAction ?? (analysisInitializing ? "workspace-initialize" : snapshotRestoring ? "snapshot-restore" : null);
-  const busy = Boolean(activeBusyAction);
-  const repoPathError = repoPathErrorFor(workspaces.repoPath, workspaces.repoSourceMode);
-  const currentStatus = currentOperationStatus({
-    busyAction: activeBusyAction,
-    latestAction: latestOperationAction,
-    workspaceStatus: workspaces.workspaceStatus,
-    workspaceError: workspaces.workspaceError,
-    codeStatus: code.codeStatus,
-    codeError: code.codeError,
-    codeErrorDetail: code.codeErrorDetail,
-    dbStatus: db.dbStatus,
-    dbError: db.dbError,
-    dbErrorDetail: db.dbErrorDetail,
-    mapStatus: visual.visualMapStatus,
-    mapLoading: visual.visualMapLoading,
-    mapError: visual.visualMapError,
-    mapErrorDetail: visual.visualMapErrorDetail,
-  });
-  const operationStatus =
-    snapshotRecoveryNotice && currentStatus.phase !== "running" && currentStatus.phase !== "error"
-      ? { phase: "error" as const, label: "저장 결과", message: snapshotRecoveryNotice }
-      : currentStatus;
-  async function refreshGithubWorkspace() {
-    if (await workspaces.refreshGithubWorkspace()) {
-      await code.indexCodeRepository();
-    }
-  }
-  async function startWorkspaceAnalysis(choice: AnalysisSetupChoice) {
-    const setupWorkspace = analysisSetupWorkspace;
-    if (!setupWorkspace) {
-      return;
-    }
-
-    const connectDb = choice !== "code-only";
-    const sourceUsesPath = dbProfileSourceUsesPath(dbProfileControls.profileSource);
-    if (connectDb) {
-      if (!dbProfileControls.profileName.trim()) {
-        setAnalysisError("DB 연결 이름을 입력하세요");
-        return;
-      }
-      if (sourceUsesPath && !dbProfileControls.profilePath.trim()) {
-        setAnalysisError("DB 파일 또는 DDL 경로를 입력하세요");
-        return;
-      }
-      if (!sourceUsesPath && !dbProfileControls.connectionString.trim()) {
-        setAnalysisError("이번 분석에 사용할 DB 연결 문자열을 입력하세요");
-        return;
-      }
-    }
-
-    setAnalysisError(null);
-    setAnalysisProgress({ percent: 5, label: "분석 준비 중" });
-    setAnalysisInitializing(true);
-    setSourceManagerOpen(false);
-    await withBusy("workspace-initialize", async () => {
-      try {
-        let configuredWorkspace = setupWorkspace;
-        if (connectDb) {
-          const saveRequest: SaveDbProfileRequest = {
-            workspaceId: setupWorkspace.id,
-            name: dbProfileControls.profileName.trim(),
-            source: dbProfileControls.profileSource,
-            path: sourceUsesPath ? dbProfileControls.profilePath.trim() : null,
-          };
-          configuredWorkspace = validateWorkspace(await invoke<unknown>("save_db_profile", { request: saveRequest }));
-          workspaces.setCurrentWorkspace(configuredWorkspace);
-          await workspaces.refreshWorkspaces(configuredWorkspace.id);
-          setAnalysisProgress({ percent: 20, label: "DB 연결 준비 완료" });
-        }
-
-        setAnalysisProgress({
-          percent: connectDb ? 20 : 10,
-          label: "엔진 진행 신호 기다리는 중",
-          determinate: false,
-        });
-
-        const request: InitializeWorkspaceAnalysisRequest = {
-          workspaceId: configuredWorkspace.id,
-          analysisMode: choice,
-          dbProfileId: connectDb ? configuredWorkspace.activeDbProfileId : null,
-          connectionString: connectDb && !sourceUsesPath ? dbProfileControls.connectionString.trim() : null,
-        };
-        const result = validateWorkspaceAnalysisResult(
-          await invoke<unknown>("initialize_workspace_analysis", { request }),
-        );
-        setAnalysisProgress({ percent: 86, label: "분석 결과 정리 중", determinate: true });
-        workspaces.setCurrentWorkspace(result.workspace);
-        if (result.code?.inventory) {
-          code.restoreCodeInventory(result.code.inventory, result.workspace.id);
-        } else {
-          code.clearCodeInventory();
-        }
-        if (result.db?.inventory) {
-          db.restoreDbInventory(result.db.inventory, null, result.workspace.id);
-        } else {
-          db.clearDbInventory();
-        }
-        await workspaces.refreshWorkspaces(result.workspace.id);
-
-        const partialErrors = [
-          choice !== "db-only" ? result.codeError : null,
-          connectDb ? result.dbError : null,
-        ].filter(Boolean);
-        if (!result.snapshotSaved || partialErrors.length > 0) {
-          setAnalysisError(partialErrors.join("\n") || "통합 스냅샷을 저장하지 못했습니다");
-          return;
-        }
-
-        setAnalysisProgress({ percent: 94, label: "시각화 준비 중" });
-        setAnalysisSetupWorkspace(null);
-        await refreshInventorySnapshot(result.workspace.id);
-        setAnalysisProgress({ percent: 100, label: "시각화 준비 완료" });
-      } catch (error) {
-        const uiError = toUserError(error, "프로젝트 분석을 시작하지 못했습니다");
-        setAnalysisError(uiError.message);
-      } finally {
-        setAnalysisInitializing(false);
-      }
+    setError(null);
+    setAnalysisProgress({
+      workspaceId: workspace.id,
+      stage: "starting",
+      completed: 0,
+      total: 1,
+      label: "코드 분석을 시작합니다",
     });
-    setAnalysisInitializing(false);
-  }
-
-  async function saveDbConnection(): Promise<boolean> {
-    const workspace = workspaces.currentWorkspace;
-    if (!workspace) {
-      setDbConnectionError("프로젝트를 먼저 여세요");
-      return false;
-    }
-
-    const sourceUsesPath = dbProfileSourceUsesPath(dbProfileControls.profileSource);
-    if (!dbProfileControls.profileName.trim()) {
-      setDbConnectionError("DB 연결 이름을 입력하세요");
-      return false;
-    }
-    if (sourceUsesPath && !dbProfileControls.profilePath.trim()) {
-      setDbConnectionError("DB 파일 또는 DDL 경로를 입력하세요");
-      return false;
-    }
-
-    let saved = false;
-    setDbConnectionError(null);
-    await withBusy("db-save", async () => {
-      try {
-        const request: SaveDbProfileRequest = {
-          workspaceId: workspace.id,
-          name: dbProfileControls.profileName.trim(),
-          source: dbProfileControls.profileSource,
-          path: sourceUsesPath ? dbProfileControls.profilePath.trim() : null,
-        };
-        const updated = validateWorkspace(await invoke<unknown>("save_db_profile", { request }));
-        workspaces.setCurrentWorkspace(updated);
-        db.clearDbInventory();
-        visual.clearVisualMap();
-        await workspaces.refreshWorkspaces(updated.id);
-        saved = true;
-      } catch (error) {
-        setDbConnectionError(toUserError(error, "DB 연결을 저장하지 못했습니다").message);
+    setAnalyzingWorkspaceId(workspace.id);
+    try {
+      const result = await analyzeWorkspace(workspace.id);
+      if (activeWorkspaceIdRef.current !== workspace.id) return;
+      setFactStatus(result.factGraph);
+      const view = await getMapView(workspace.id);
+      if (activeWorkspaceIdRef.current !== workspace.id) return;
+      setMapView(view);
+      setSelectedId(null);
+      setSelection(null);
+      if (result.semanticError) {
+        setError(`코드 사실은 저장됐지만 의미 지도를 만들지 못했습니다: ${result.semanticError}`);
+      } else if (!view) {
+        setError("분석은 끝났지만 현재 snapshot과 일치하는 의미 지도가 없습니다.");
       }
-    });
-    return saved;
+    } catch (reason: unknown) {
+      if (activeWorkspaceIdRef.current === workspace.id) setError(errorMessage(reason));
+    } finally {
+      setAnalyzingWorkspaceId((current) => (current === workspace.id ? null : current));
+    }
   }
-  const workspaceControls = buildWorkspaceControls({
-    operationStatus,
-    repoPathError,
-    workspaces,
-    code,
-    engineRegistry,
-    engineError,
-    busy,
-    busyAction: activeBusyAction,
-    refreshGithubWorkspace: () => void refreshGithubWorkspace(),
-  });
-  const dbProfileControls = buildDbProfileControls({
-    hasWorkspace: Boolean(workspaces.currentWorkspace),
-    db,
-    engineRegistry,
-    engineError,
-    code,
-    visual,
-    busy,
-    busyAction: activeBusyAction,
-  });
-  const visualMapControls = buildVisualMapControls({ visual, code, db });
-  const devSlot =
-    import.meta.env.DEV && hasTauriRuntime() ? <DevDiagnostics paths={appPaths} error={appPathError} /> : null;
+
+  function upsertWorkspace(workspace: Workspace) {
+    setWorkspaces((current) => {
+      const without = current.filter((item) => item.id !== workspace.id);
+      return [workspace, ...without];
+    });
+    activeWorkspaceIdRef.current = workspace.id;
+    setActiveWorkspaceId(workspace.id);
+  }
+
+  function selectWorkspace(workspaceId: string) {
+    activeWorkspaceIdRef.current = workspaceId;
+    setActiveWorkspaceId(workspaceId);
+  }
 
   return (
-    <MapWorkspace
-      sourceManagerOpen={sourceManagerOpen}
-      setSourceManagerOpen={setSourceManagerOpen}
-      workspaceControls={workspaceControls}
-      dbProfileControls={dbProfileControls}
-      visualMapControls={visualMapControls}
-      engineRegistry={engineRegistry}
-      engineError={engineError}
-      devSlot={devSlot}
-      busyNotice={busyNotice}
-      analysisSetupWorkspace={analysisSetupWorkspace}
-      analysisInitializing={analysisInitializing}
-      analysisProgress={analysisProgress}
-      analysisError={analysisError}
-      onStartAnalysis={startWorkspaceAnalysis}
-      onCancelAnalysis={() => setAnalysisSetupWorkspace(null)}
-      onSaveDbConnection={saveDbConnection}
-      dbConnectionError={dbConnectionError}
-      onOpenDbConnection={() => setDbConnectionError(null)}
-    />
+    <div className="app-shell">
+      <Header
+        workspace={activeWorkspace}
+        engineRegistry={engineRegistry}
+        onOpenProvider={() => setProviderOpen(true)}
+        onAnalyze={() => void runAnalysis()}
+        analyzing={Boolean(activeWorkspaceId) && analyzingWorkspaceId === activeWorkspaceId}
+        analysisProgress={analysisProgress}
+      />
+      <div className="workbench">
+        <ToolRail onCreate={() => setCreateOpen(true)} />
+        <ProjectRail
+          workspaces={workspaces}
+          activeWorkspaceId={activeWorkspaceId}
+          onSelect={selectWorkspace}
+          onCreate={() => setCreateOpen(true)}
+        />
+        <main className="canvas-stage" aria-label="코드베이스 구조 지도">
+          {loadState === "loading" ? (
+            <CenteredState icon={<LoaderCircle className="spin" />} title="작업공간을 불러오는 중" />
+          ) : loadState === "error" ? (
+            <CenteredState icon={<CircleAlert />} title="작업공간을 열지 못했습니다" detail={error ?? undefined} />
+          ) : displayedMap ? (
+            <>
+              {previewing ? <PreviewBanner /> : null}
+              <MapCanvas view={displayedMap} selectedId={selectedId} onSelect={setSelectedId} />
+            </>
+          ) : !activeWorkspace ? (
+            <EmptyCanvas onCreate={() => setCreateOpen(true)} />
+          ) : (
+            <WorkspaceCanvas
+              workspace={activeWorkspace}
+              status={factStatus}
+              analyzing={analyzingWorkspaceId === activeWorkspace.id}
+              progress={analysisProgress}
+              onAnalyze={() => void runAnalysis()}
+            />
+          )}
+        </main>
+        <aside className="detail-column">
+          <div className="detail-head">
+            <strong>{selection?.title ?? "선택 없음"}</strong>
+          </div>
+          <Inspector selection={selection} />
+          <ChatPanel workspace={activeWorkspace} status={factStatus} selection={selection} />
+        </aside>
+      </div>
+      {error && loadState !== "error" ? (
+        <div className="error-toast" role="alert">
+          <CircleAlert fontSize={16} />
+          <span>{error}</span>
+          <button type="button" onClick={() => setError(null)} aria-label="오류 닫기">
+            닫기
+          </button>
+        </div>
+      ) : null}
+      {createOpen ? (
+        <CreateWorkspaceDialog
+          onClose={() => setCreateOpen(false)}
+          onCreated={(workspace) => {
+            upsertWorkspace(workspace);
+            setCreateOpen(false);
+          }}
+          onError={setError}
+        />
+      ) : null}
+      {providerOpen && activeWorkspace ? (
+        <ProviderDialog
+          workspace={activeWorkspace}
+          providers={providers}
+          onClose={() => setProviderOpen(false)}
+          onSaved={(workspace) => {
+            upsertWorkspace(workspace);
+            setProviderOpen(false);
+          }}
+          onError={setError}
+        />
+      ) : null}
+    </div>
   );
 }
 
-function busyActionLabel(action: string): string {
-  const labels: Record<string, string> = {
-    "workspace-create": "프로젝트 생성",
-    "workspace-open": "프로젝트 열기",
-    "workspace-refresh": "프로젝트 새로 읽기",
-    "workspace-repair": "프로젝트 복구",
-    "workspace-delete": "프로젝트 삭제",
-    "workspace-clone": "저장소 복제",
-    "code-index": "코드 분석",
-    "db-save": "DB 연결 저장",
-    "db-index": "DB 분석",
-    "db-delete": "DB 연결 삭제",
-    "workspace-initialize": "프로젝트 분석",
-    "snapshot-restore": "저장 결과 복원",
-  };
-  return labels[action] ?? "이전 작업";
+function Header({
+  workspace,
+  engineRegistry,
+  onOpenProvider,
+  onAnalyze,
+  analyzing,
+  analysisProgress,
+}: {
+  workspace: Workspace | null;
+  engineRegistry: EngineRegistry | null;
+  onOpenProvider: () => void;
+  onAnalyze: () => void;
+  analyzing: boolean;
+  analysisProgress: AnalysisProgressEvent | null;
+}) {
+  const engineCount = engineRegistry?.engines.filter((engine) => engine.available).length ?? 0;
+  const engineTotal = engineRegistry?.engines.length ?? 2;
+  const activeModel = workspace?.provider ? modelFor(workspace.provider.kind, workspace.provider.model) : null;
+  return (
+    <header className="app-header">
+      <div className="brand-block">
+        <span className="brand-mark" aria-hidden="true">
+          CW
+        </span>
+        <div>
+          <strong>Codebase workspace</strong>
+          <span>검증된 코드 구조 지도</span>
+        </div>
+      </div>
+      <div className="header-context">
+        <span className="context-label">프로젝트</span>
+        <span className="context-value">{workspace?.name ?? "연결되지 않음"}</span>
+        {workspace ? <span className="context-path">{workspace.repoPath}</span> : null}
+      </div>
+      <div className="header-actions">
+        <span className={`engine-pill ${engineCount === engineTotal ? "ok" : "warn"}`}>
+          <TerminalSquare fontSize={14} /> 엔진 {engineCount}/{engineTotal}
+        </span>
+        <Button
+          className="analysis-button"
+          appearance="primary"
+          icon={analyzing ? <LoaderCircle className="spin" fontSize={15} /> : <Network fontSize={15} />}
+          onClick={onAnalyze}
+          disabled={!workspace || analyzing}
+          title={analyzing ? analysisProgress?.label : "현재 코드로 새 지도를 만듭니다"}
+        >
+          {analyzing ? progressLabel(analysisProgress) : "분석"}
+        </Button>
+        <Button className="provider-button" appearance="secondary" onClick={onOpenProvider} disabled={!workspace}>
+          <span>
+            <small>AI 모델</small>
+            <strong>{activeModel?.label ?? workspace?.provider?.model ?? "모델 설정"}</strong>
+            {workspace?.provider ? <em>{effortLabel(workspace.provider.effort ?? "high")}</em> : null}
+          </span>
+          <ChevronDown fontSize={15} />
+        </Button>
+      </div>
+    </header>
+  );
 }
 
-export default App;
+function ToolRail({ onCreate }: { onCreate: () => void }) {
+  return (
+    <nav className="tool-rail" aria-label="주요 도구">
+      <ToolButton label="구조 지도" active icon={<Network />} />
+      <ToolButton label="검색 · 준비 중" disabled icon={<Search />} />
+      <ToolButton label="데이터베이스 · 준비 중" disabled icon={<Database />} />
+      <span className="tool-spacer" />
+      <ToolButton label="프로젝트 추가" onClick={onCreate} icon={<Plus />} />
+      <ToolButton label="설정 · 준비 중" disabled icon={<Settings2 />} />
+    </nav>
+  );
+}
+
+function ToolButton({
+  label,
+  icon,
+  active = false,
+  disabled = false,
+  onClick,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  active?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <Tooltip content={label} relationship="label">
+      <button
+        type="button"
+        className={active ? "tool active" : "tool"}
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+      >
+        {icon}
+      </button>
+    </Tooltip>
+  );
+}
+
+function ProjectRail({
+  workspaces,
+  activeWorkspaceId,
+  onSelect,
+  onCreate,
+}: {
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
+  onSelect: (workspaceId: string) => void;
+  onCreate: () => void;
+}) {
+  return (
+    <aside className="project-rail">
+      <div className="rail-heading">
+        <span>프로젝트</span>
+        <button type="button" onClick={onCreate} aria-label="작업공간 추가">
+          <Plus fontSize={14} />
+        </button>
+      </div>
+      <div className="workspace-list">
+        {workspaces.map((workspace) => (
+          <button
+            type="button"
+            className={workspace.id === activeWorkspaceId ? "workspace-row active" : "workspace-row"}
+            key={workspace.id}
+            onClick={() => onSelect(workspace.id)}
+          >
+            <FolderCode fontSize={16} />
+            <span>
+              <strong>{workspace.name}</strong>
+              <small>{lastPathSegment(workspace.repoPath)}</small>
+            </span>
+          </button>
+        ))}
+      </div>
+      {workspaces.length === 0 ? <p className="rail-empty">연결된 프로젝트가 없습니다.</p> : null}
+    </aside>
+  );
+}
+
+/** Says out loud that the canvas is not showing analysed code. */
+function PreviewBanner() {
+  return (
+    <div className="preview-banner" role="status">
+      <TriangleAlert fontSize={14} aria-hidden="true" />
+      미리보기 데이터 · 실제 코드 분석 결과가 아닙니다.
+    </div>
+  );
+}
+
+function EmptyCanvas({ onCreate }: { onCreate: () => void }) {
+  return (
+    <section className="empty-canvas">
+      <div className="empty-coordinate">프로젝트 없음</div>
+      <div className="empty-copy">
+        <span className="empty-symbol" aria-hidden="true">
+          <FolderOpen fontSize={28} />
+        </span>
+        <p className="eyebrow">시작하기</p>
+        <h1>
+          코드를 읽기 전에
+          <br />
+          구조부터 봅니다.
+        </h1>
+        <p>로컬 프로젝트를 연결하면 코드 구조와 확인된 실행 경로를 하나의 캔버스에서 볼 수 있습니다.</p>
+        <Button appearance="primary" icon={<FolderOpen fontSize={17} />} onClick={onCreate}>
+          프로젝트 폴더 연결
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function WorkspaceCanvas({
+  workspace,
+  status,
+  analyzing,
+  progress,
+  onAnalyze,
+}: {
+  workspace: Workspace;
+  status: FactGraphStatus | null;
+  analyzing: boolean;
+  progress: AnalysisProgressEvent | null;
+  onAnalyze: () => void;
+}) {
+  const hasSnapshot = Boolean(status?.snapshotId);
+  return (
+    <section className="workspace-canvas">
+      <div className="canvas-coordinate">{workspace.name}</div>
+      <div className="ledger-strip" aria-label="분석 원장">
+        <LedgerMetric label="노드" value={status?.nodeCount ?? 0} />
+        <LedgerMetric label="관계" value={status?.edgeCount ?? 0} />
+        <LedgerMetric label="근거" value={status?.evidenceCount ?? 0} />
+        <LedgerMetric label="파일" value={status?.coverageCount ?? 0} />
+      </div>
+      <div className="canvas-message">
+        <Network fontSize={30} />
+        <p className="eyebrow">{hasSnapshot ? "분석 준비 완료" : "분석 결과 없음"}</p>
+        <h2>{hasSnapshot ? "검증된 구조를 불러왔습니다." : "아직 분석 결과가 없습니다."}</h2>
+        <p>
+          {analyzing
+            ? (progress?.label ?? "코드 구조를 분석하고 있습니다.")
+            : hasSnapshot
+              ? `snapshot ${status?.snapshotId ?? ""}`
+              : "새 canonical Fact Graph에 저장된 결과만 이 캔버스에 표시됩니다."}
+        </p>
+        <Button
+          appearance="primary"
+          icon={analyzing ? <LoaderCircle className="spin" fontSize={17} /> : <Network fontSize={17} />}
+          onClick={onAnalyze}
+          disabled={analyzing}
+        >
+          {analyzing ? progressLabel(progress) : hasSnapshot ? "의미 지도 다시 만들기" : "코드 분석 시작"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function LedgerMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value.toLocaleString()}</strong>
+    </div>
+  );
+}
+
+function ChatPanel({
+  workspace,
+  status,
+  selection,
+}: {
+  workspace: Workspace | null;
+  status: FactGraphStatus | null;
+  selection: Selection | null;
+}) {
+  const reason = !workspace
+    ? "프로젝트를 연결하면 대화 문맥이 만들어집니다."
+    : !workspace.provider
+      ? "Codex 또는 Claude 모델을 먼저 설정하세요."
+      : !status?.snapshotId
+        ? "검증된 분석 snapshot이 있어야 질문할 수 있습니다."
+        : null;
+  return (
+    <section className="chat-panel">
+      <div className="chat-heading">
+        <div>
+          <span>대화</span>
+          <strong>지도에 질문</strong>
+        </div>
+        <MessageSquareText fontSize={18} />
+      </div>
+      {/* What the question is about, so the reader never has to guess. */}
+      <div className="chat-context">
+        <span>문맥</span>
+        <p>{selection ? selection.title : (workspace?.name ?? "선택된 지도 없음")}</p>
+      </div>
+      <div className="chat-empty">
+        <Braces fontSize={22} />
+        <p>{reason ?? "영역이나 관계를 선택한 뒤 질문하세요."}</p>
+      </div>
+      <div className="chat-composer">
+        <Textarea aria-label="지도에 질문" placeholder="선택한 구조에 대해 질문" disabled={Boolean(reason)} />
+        <Button appearance="primary" type="button" disabled={Boolean(reason)}>
+          보내기
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function CreateWorkspaceDialog({
+  onClose,
+  onCreated,
+  onError,
+}: {
+  onClose: () => void;
+  onCreated: (workspace: Workspace) => void;
+  onError: (error: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [repoPath, setRepoPath] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function pickFolder() {
+    const selected = await chooseRepositoryFolder();
+    if (!selected) return;
+    setRepoPath(selected);
+    if (!name) setName(lastPathSegment(selected));
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!name.trim() || !repoPath.trim()) return;
+    setSaving(true);
+    try {
+      onCreated(await createWorkspace(name.trim(), repoPath.trim()));
+    } catch (reason) {
+      onError(errorMessage(reason));
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(_, data) => (!data.open ? onClose() : undefined)}>
+      <DialogSurface className="dialog-surface" aria-label="프로젝트 연결">
+        <form onSubmit={submit}>
+          <DialogBody>
+            <DialogTitle>프로젝트 폴더 연결</DialogTitle>
+            <DialogContent className="dialog-content">
+              <p className="dialog-lead">분석할 로컬 코드베이스를 작업공간에 추가합니다.</p>
+              <Field label="표시 이름" required>
+                <Input
+                  value={name}
+                  onChange={(_, data) => setName(data.value)}
+                  autoFocus
+                  maxLength={120}
+                  placeholder="예: commerce-platform"
+                />
+              </Field>
+              <Field label="로컬 폴더" required>
+                <span className="path-input">
+                  <Input value={repoPath} onChange={(_, data) => setRepoPath(data.value)} placeholder="D:\\project" />
+                  <Button type="button" onClick={() => void pickFolder()}>
+                    찾기
+                  </Button>
+                </span>
+              </Field>
+              {!hasDesktopRuntime() ? (
+                <p className="dialog-note">폴더 선택과 저장은 데스크톱 앱에서 동작합니다.</p>
+              ) : null}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" type="button" onClick={onClose}>
+                취소
+              </Button>
+              <Button appearance="primary" type="submit" disabled={saving || !name.trim() || !repoPath.trim()}>
+                {saving ? "연결 중" : "연결"}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </form>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function ProviderDialog({
+  workspace,
+  providers,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  workspace: Workspace;
+  providers: AiProviderAvailability[];
+  onClose: () => void;
+  onSaved: (workspace: Workspace) => void;
+  onError: (error: string) => void;
+}) {
+  const [kind, setKind] = useState<ProviderKind>(workspace.provider?.kind ?? "codex");
+  const [model, setModel] = useState(() =>
+    defaultModelFor(workspace.provider?.kind ?? "codex", workspace.provider?.model),
+  );
+  const [effort, setEffort] = useState<ReasoningEffort>(() => {
+    const initialKind = workspace.provider?.kind ?? "codex";
+    const initialModel = defaultModelFor(initialKind, workspace.provider?.model);
+    return defaultEffortFor(initialKind, initialModel, workspace.provider?.effort ?? "high");
+  });
+  const [saving, setSaving] = useState(false);
+  const models = modelsFor(kind);
+  const efforts = effortOptionsFor(kind, model);
+  const activeProvider = providers.find((provider) => provider.kind === kind);
+  const canSave = activeProvider?.installed === true;
+
+  /* Each provider runs its own models, so switching kind moves the choice with it. */
+  function chooseKind(next: ProviderKind) {
+    const nextModel = defaultModelFor(next, workspace.provider?.kind === next ? workspace.provider.model : null);
+    setKind(next);
+    setModel(nextModel);
+    setEffort(
+      defaultEffortFor(
+        next,
+        nextModel,
+        workspace.provider?.kind === next ? (workspace.provider.effort ?? "high") : "high",
+      ),
+    );
+  }
+
+  function chooseModel(nextModel: string) {
+    setModel(nextModel);
+    setEffort(defaultEffortFor(kind, nextModel, effort));
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!model.trim()) return;
+    setSaving(true);
+    try {
+      onSaved(await setWorkspaceProvider(workspace.id, kind, model.trim(), effort));
+    } catch (reason) {
+      onError(errorMessage(reason));
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(_, data) => (!data.open ? onClose() : undefined)}>
+      <DialogSurface className="dialog-surface provider-dialog" aria-label="AI 모델 설정">
+        <form onSubmit={submit}>
+          <DialogBody>
+            <DialogTitle>AI 모델 설정</DialogTitle>
+            <DialogContent className="dialog-content provider-dialog-content">
+              <p className="dialog-lead">지도 의미 분석과 이후 대화가 같은 CLI 설정을 사용합니다.</p>
+
+              <section className="settings-section" aria-labelledby="provider-setting-title">
+                <div className="settings-label" id="provider-setting-title">
+                  CLI 연결
+                </div>
+                <div className="provider-options">
+                  {providers.map((provider) => (
+                    <button
+                      type="button"
+                      key={provider.kind}
+                      className={provider.kind === kind ? "provider-option active" : "provider-option"}
+                      aria-pressed={provider.kind === kind}
+                      disabled={!provider.installed}
+                      onClick={() => chooseKind(provider.kind)}
+                    >
+                      <span className="provider-icon" aria-hidden="true">
+                        <TerminalSquare fontSize={18} />
+                      </span>
+                      <span>
+                        <strong>{provider.label} CLI</strong>
+                        <small>
+                          {provider.installed ? (provider.version ?? "연결됨") : "현재 기기에서 찾을 수 없음"}
+                        </small>
+                      </span>
+                      <i
+                        className={provider.installed ? "provider-status connected" : "provider-status"}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="settings-section" aria-labelledby="model-setting-title">
+                <div className="settings-label" id="model-setting-title">
+                  모델
+                </div>
+                <div className="model-grid" role="radiogroup" aria-label="AI 모델">
+                  {models.map((entry) => (
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={entry.id === model}
+                      className={entry.id === model ? "model-card active" : "model-card"}
+                      key={entry.id}
+                      onClick={() => chooseModel(entry.id)}
+                    >
+                      <span className="model-card-topline">
+                        <strong>{entry.label}</strong>
+                        <small>{entry.family}</small>
+                      </span>
+                      <span>{entry.note}</span>
+                      <code>{entry.id}</code>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="settings-section" aria-labelledby="effort-setting-title">
+                <div className="settings-label-row">
+                  <div className="settings-label" id="effort-setting-title">
+                    추론 강도
+                  </div>
+                  <span>기본값: 높음</span>
+                </div>
+                <div className="effort-control" role="radiogroup" aria-label="추론 강도">
+                  {efforts.map((option) => (
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={option.id === effort}
+                      className={option.id === effort ? "effort-option active" : "effort-option"}
+                      key={option.id}
+                      onClick={() => setEffort(option.id)}
+                    >
+                      <strong>{option.label}</strong>
+                      <small>{option.id}</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <div className="cli-receipt" aria-label="CLI 실행 설정">
+                <span>실제 실행값</span>
+                <code>
+                  {kind === "codex"
+                    ? `codex --model ${model} --config model_reasoning_effort="${effort}"`
+                    : `claude --model ${model} --effort ${effort}`}
+                </code>
+              </div>
+              {!canSave ? <p className="dialog-note">선택한 CLI가 설치되어 있어야 설정을 저장할 수 있습니다.</p> : null}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" type="button" onClick={onClose}>
+                취소
+              </Button>
+              <Button appearance="primary" type="submit" disabled={saving || !model.trim() || !canSave}>
+                {saving ? "저장 중" : "설정 저장"}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </form>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function CenteredState({ icon, title, detail }: { icon: React.ReactNode; title: string; detail?: string }) {
+  return (
+    <section className="centered-state">
+      {icon}
+      <h2>{title}</h2>
+      {detail ? <p>{detail}</p> : null}
+    </section>
+  );
+}
+
+function lastPathSegment(path: string): string {
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? path;
+}
+
+function progressLabel(progress: AnalysisProgressEvent | null): string {
+  if (!progress) return "분석 중";
+  const total = Math.max(1, progress.total);
+  const percent = Math.min(100, Math.round((progress.completed / total) * 100));
+  return percent > 0 ? `분석 ${percent}%` : "분석 중";
+}
+
+function errorMessage(reason: unknown): string {
+  if (typeof reason === "string") return reason;
+  if (reason && typeof reason === "object") {
+    const value = reason as CommandError;
+    return value.detail || value.message || "작업을 완료하지 못했습니다.";
+  }
+  return "작업을 완료하지 못했습니다.";
+}

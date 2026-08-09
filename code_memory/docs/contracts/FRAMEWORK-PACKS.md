@@ -1,8 +1,9 @@
 # Framework pack contract
 
-`packs/framework` is the fixed framework boundary for the 12-language
-code-memory contract. It currently contains 85 declared packs (the original
-82-pack baseline plus JavaScript and Rust Tauri desktop bridge packs).
+`packs/framework` is the fixed framework boundary for the 10-language
+code-memory contract. It currently contains 72 declared packs. PHP and Ruby
+packs are not packaged or tested because those languages are outside the
+active product contract.
 
 Each language manifest contains:
 
@@ -54,6 +55,47 @@ relations when their handler symbol resolves uniquely.
 Framework facts without a uniquely resolved symbol are retained as facts, but
   no `HANDLES` edge is created for them.
 
+## Canonical migration boundary
+
+The arrays above remain transitional donor output. Backend static HTTP
+registrations now also pass through a separate typed Framework IR and the
+canonical Fact Bundle:
+
+```text
+pack signal + provider fact
+  -> typed route candidate
+  -> current source digest/range validation
+  -> HttpRoute + Exposes
+  -> exact provider handler identity -> Handles
+```
+
+The boundaries are intentionally separate:
+
+- framework detection says which analyzer may run;
+- a route fact requires a static method, static path, and exact source
+  evidence;
+- a handler binding additionally requires an exact existing provider symbol.
+
+Failure at a later boundary never upgrades an earlier signal. A detected pack
+with a dynamic route creates a typed gap, not a route. A valid route with an
+unresolved handler stays visible, but has no `Handles` edge. Name similarity,
+suffix matching, and same-file guessing are forbidden.
+
+Canonical route identity is typed. `HttpRoute` stores normalized uppercase
+`method` and absolute `path` details, and its qualified identity is exactly
+`{METHOD} {path}`. Consumers must not parse a display label to recover them.
+
+Receipts distinguish raw donor candidates from planned records after exact
+duplicate removal, and require `planned = emitted + rejected`. This prevents a
+repeated donor fact from lowering apparent coverage. `FrameworkBindings` is
+owned once by the canonical framework adapter rather than being independently
+reported by both language and framework layers.
+
+Pack JSON bytes and the typed adapter version participate in the analyzer-set
+digest and therefore the snapshot identity. A semantic rule change must either
+bump the adapter version or change the pack bytes; unchanged source cannot keep
+a stale route snapshot.
+
 The catalog gate checks the exact supported list:
 
 ```powershell
@@ -74,11 +116,25 @@ cargo run --manifest-path rust\Cargo.toml -- framework-packs --root .
 ```
 
 The pack boundary and shared adapter families are implemented. The catalog,
-semantic, and provider-backed gates all pass for all 85 packs. The provider
+semantic, and provider-backed gates all pass for all 72 packs. The provider
 gate validates each pack through its configured language provider, source range,
 fact, and relation contract. This does not claim that every version-specific or
 framework-specific DSL in every real project is understood; those remain
 compatibility coverage work, not a license to fabricate relations.
 
-The supported stack boundary is defined in
-`../../../docs/contracts/visual-map-supported-stack-contract.md`.
+The canonical flow gate executes one reviewed flow for each supported language
+and validates final bundle output for every HTTP case:
+
+```powershell
+.\tests\gates\run-framework-flow-gate.ps1
+```
+
+It currently passes 10/10 flows: JavaScript/TypeScript Express, Go Gin, Rust
+Axum, C++ Crow, C# ASP.NET Core, Dart Shelf, Python FastAPI, Java Spring MVC,
+and C GTK/GLib. The nine HTTP cases require Framework IR plus canonical
+`HttpRoute`/`Exposes`/`Handles`; C validates the event donor flow only until a
+typed canonical event adapter exists.
+
+The supported stack boundary is defined by the language and database support
+contracts in
+`../../../../doc_gpt/ai-visual-codebase-workspace-product-requirements-2026-08-07.md`.

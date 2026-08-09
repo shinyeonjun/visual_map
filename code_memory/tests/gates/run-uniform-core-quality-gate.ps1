@@ -31,8 +31,6 @@ $cases = @(
     @{ Id = 'c'; Path = 'native-lsp-c'; Target = '#add@' },
     @{ Id = 'cpp'; Path = 'native-lsp-c'; Target = '#multiply@' },
     @{ Id = 'go'; Path = 'native-lsp-go'; Target = '#Add@' },
-    @{ Id = 'php'; Path = 'scip-php'; Target = 'add\(\)' },
-    @{ Id = 'ruby'; Path = 'native-lsp-ruby'; Target = '#add@' },
     @{ Id = 'dart'; Path = 'native-lsp-dart'; Target = '#add@' }
 )
 
@@ -121,9 +119,11 @@ foreach ($case in $cases) {
         throw "$($case.Id): error-level provider diagnostic was emitted"
     }
 
-    $duplicateDocuments = @($documents | Group-Object path | Where-Object Count -gt 1)
+    # A physical header can be a separate semantic document in both C and C++.
+    # Only the same language/path identity is a duplicate.
+    $duplicateDocuments = @($documents | Group-Object -Property language, path | Where-Object Count -gt 1)
     if ($duplicateDocuments.Count -gt 0) {
-        throw "$($case.Id): duplicate document path $($duplicateDocuments[0].Name)"
+        throw "$($case.Id): duplicate semantic document $($duplicateDocuments[0].Name)"
     }
 
     $logicalRelations = @{}

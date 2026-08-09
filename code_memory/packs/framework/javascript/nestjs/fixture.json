@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "src/fixture.js",
-      "source": "@Controller(\"fixture\")\nclass FixtureController {\n  @Get()\n  handler() {}\n}\n@Service class UserService {}\napp.use(authMiddleware);"
+      "source": "@UseGuards(AuthGuard)\n@Controller(\"fixture\")\nclass FixtureController {\n  @Get()\n  handler() {}\n}\n@Service class UserService {}"
     },
     {
       "path": "package.json",

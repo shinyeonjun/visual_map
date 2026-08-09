@@ -11,4 +11,8 @@ function box(value) {
   return value;
 }
 
-module.exports = { User, box };
+class Handler {
+  execute = (value) => value;
+}
+
+module.exports = { Handler, User, box };

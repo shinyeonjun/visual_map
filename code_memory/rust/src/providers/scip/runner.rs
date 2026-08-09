@@ -1,40 +1,65 @@
 pub(crate) fn run_scip_indexer(
     lang: &LanguageSpec,
-    root: &Path,
+    roots: ProviderRoots<'_>,
     out: &Path,
     providers_root: Option<&Path>,
     provider_config: Option<&Path>,
     source_files: &[PathBuf],
-    project_config_digest: u64,
-) -> Result<Vec<Diagnostic>, String> {
-    let php_source_only = lang.id == "php" && php_dependency_metadata_gap(root);
-    let php_workspace = if php_source_only {
-        let provider_autoload = scip_php_provider_autoload(providers_root).ok_or_else(|| {
-            "managed scip-php runtime is missing its bundled Composer autoloader".to_string()
-        })?;
-        Some(prepare_php_source_only_workspace(
-            root,
-            out,
-            source_files,
-            &provider_autoload,
-        )?)
-    } else {
-        None
-    };
-    let command_root = php_workspace
-        .as_ref()
-        .map(|workspace| workspace.root.as_path())
-        .unwrap_or(root);
-    let command_source_files = php_workspace
-        .as_ref()
-        .map(|workspace| workspace.files.as_slice())
-        .unwrap_or(source_files);
+    max_project_source_file_bytes: u64,
+) -> Result<ProviderRunOutcome, String> {
+    let provider_configs = provider_config
+        .into_iter()
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    run_scip_indexer_with_configs(
+        lang,
+        roots,
+        out,
+        providers_root,
+        &provider_configs,
+        source_files,
+        max_project_source_file_bytes,
+    )
+}
+
+pub(crate) fn run_scip_indexer_with_configs(
+    lang: &LanguageSpec,
+    roots: ProviderRoots<'_>,
+    out: &Path,
+    providers_root: Option<&Path>,
+    provider_configs: &[PathBuf],
+    source_files: &[PathBuf],
+    max_project_source_file_bytes: u64,
+) -> Result<ProviderRunOutcome, String> {
+    let project_root = roots.project;
+    let root = roots.analysis;
+    let canonical_project_root = project_root.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve selected project root {}: {error}",
+            project_root.display()
+        )
+    })?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve {} root {}: {error}", lang.name, root.display()))?;
+    if !canonical_root.starts_with(&canonical_project_root) {
+        return Err(format!(
+            "{} semantic root escaped the selected project root: {}",
+            lang.name,
+            root.display()
+        ));
+    }
+    let mut mode = ProviderExecutionMode::Project;
+    let mut explicit_context_files = Vec::new();
+    let mut lineage_context_files = Vec::new();
+    let mut generated_context_parts = Vec::<Vec<u8>>::new();
+    let mut execution_dimensions = Vec::new();
+    let mut direct_typescript_source_only = false;
     let mut command = tool_command(lang.tool, providers_root)?;
     let mut generated_solution = None;
-    let mut dotnet_restore_state = None;
-    let mut php_include_file = None;
+    let mut mixed_dotnet_solution_filtered = false;
     command
-        .current_dir(command_root)
+        .current_dir(root)
         .stdout(Stdio::inherit())
         .stderr(Stdio::piped());
     if lang.tool == "scip-clang" {
@@ -43,104 +68,171 @@ pub(crate) fn run_scip_indexer(
             return Err(format!("{} requires compile_commands.json", lang.name));
         }
         command.arg(format!("--compdb-path={}", compdb.display()));
+        explicit_context_files.push(compdb);
     } else {
         command.arg("index");
         if lang.tool == "scip-dotnet" {
-            let solution = if let Some(solution) = select_dotnet_solution(root, source_files) {
+            let _resolved_sdk = probe_dotnet_sdk(root, providers_root)?;
+            let selected_solution = select_dotnet_solution(root, source_files);
+            let solution = if selected_solution
+                .as_ref()
+                .is_some_and(|solution| !solution_has_non_csharp_projects(solution))
+            {
+                let solution = selected_solution.expect("checked selected solution");
+                explicit_context_files.push(solution.clone());
                 solution
             } else {
+                mixed_dotnet_solution_filtered = selected_solution.is_some();
                 let solution = generated_dotnet_solution(root, out)?;
+                if let Ok(bytes) = fs::read(&solution) {
+                    generated_context_parts.push(bytes);
+                }
+                mode = ProviderExecutionMode::GeneratedProject;
                 generated_solution = Some(solution.clone());
                 solution
             };
-            let skip_restore = dotnet_restore_is_current(root, &solution, project_config_digest);
-            if skip_restore {
-                command.arg("--skip-dotnet-restore");
-            }
-            dotnet_restore_state = Some((solution.clone(), project_config_digest));
+            // scip-dotnet 0.2.14 can emit a semantically incomplete index
+            // under --skip-dotnet-restore even when the project digest is
+            // unchanged (a confirmed local call disappeared in the shadow
+            // corpus). Restore is therefore part of the correctness boundary,
+            // not an optional performance cache.
             command.arg(solution);
         }
         command.arg(format!("--output={}", out.display()));
-        if lang.id == "php" {
-            let php_files: Vec<_> = command_source_files
-                .iter()
-                .filter(|file| {
-                    file.extension()
-                        .and_then(|extension| extension.to_str())
-                        .is_some_and(|extension| extension.eq_ignore_ascii_case("php"))
-                })
-                .collect();
-            if !php_files.is_empty() {
-                let include_file = out.with_extension("php-files.txt");
-                let content = php_files
-                    .iter()
-                    .map(|file| file.to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                fs::write(&include_file, content)
-                    .map_err(|error| format!("cannot write PHP include list: {error}"))?;
-                command.arg(format!("--include-file={}", include_file.display()));
-                php_include_file = Some(include_file);
-            }
-        }
         if matches!(lang.id, "javascript" | "typescript") {
-            if let Some(config) = provider_config {
+            if !provider_configs.is_empty() {
                 command.arg("--cwd").arg(root);
                 command.arg("--workspace-root").arg(root);
-                command.arg(config);
-            } else {
-                let configs = typescript_config_files(root);
-                if configs.is_empty() {
-                    let workspace = javascript_workspace(root, lang.id);
-                    fs::create_dir_all(&workspace)
-                        .map_err(|e| format!("cannot create JavaScript workspace: {e}"))?;
-                    command.arg("--cwd").arg(&workspace);
-                    command.args(["--infer-tsconfig", "--no-progress-bar"]);
-                    command.arg(root);
-                } else {
-                    // Keep project resolution inside scip-typescript. It handles
-                    // projectReferences and package/module resolution from each
-                    // config better than a Rust-side file partition can.
-                    for config in configs {
-                        command.arg(config);
+                for config in provider_configs {
+                    command.arg(config);
+                    if config
+                        .canonicalize()
+                        .is_ok_and(|path| path.starts_with(&canonical_project_root))
+                    {
+                        explicit_context_files.push(config.to_path_buf());
+                    } else {
+                        if let Ok(bytes) = fs::read(config) {
+                            generated_context_parts.push(bytes);
+                        }
+                        let lineage =
+                            typescript_generated_config_lineage(config, &canonical_project_root);
+                        lineage_context_files.extend(lineage);
+                        mode = ProviderExecutionMode::GeneratedProject;
                     }
                 }
+            } else {
+                // Never point scip-typescript --infer-tsconfig at the selected
+                // source directory.  The provider writes tsconfig.json into the
+                // target root; Prometheus proved this mutates the repository and
+                // correctly trips source-stability after several minutes of Go
+                // analysis.  Configless shards and files left outside modeled
+                // projects both use one generated config beside the provider
+                // output, with an exact `files` list and no source-tree writes.
+                direct_typescript_source_only = true;
+                mode = ProviderExecutionMode::SourceOnlyFallback;
+                if let Some(value) = context_dimension(ContextDimensionKind::ModuleMode, "esnext") {
+                    execution_dimensions.push(value);
+                }
+                if let Some(value) = context_dimension(ContextDimensionKind::Target, "es2022") {
+                    execution_dimensions.push(value);
+                }
             }
-            if source_files.len() >= 2_000 {
-                // ponytail: disable the provider's cross-project source cache
-                // for large inputs; this trades repeated parsing for bounded RAM.
+            // scip-typescript defaults to a 1 MB per-file ceiling. The Source
+            // Census has already measured and admitted these exact files, so
+            // derive the provider ceiling from the scheduled source set rather
+            // than silently dropping a legitimate large source.
+            command
+                .arg("--max-file-byte-size")
+                .arg(typescript_max_file_byte_size(
+                    source_files,
+                    max_project_source_file_bytes,
+                )?);
+            if source_files.len() >= 2_000 || provider_configs.len() > 1 {
+                // scip-typescript's process-global source cache is safe for one
+                // project, but a multi-project invocation can otherwise reuse a
+                // source result across different config programs.  A real ESLint
+                // shadow run lost CustomParserServices.program (and its two
+                // relations) only in the batched form.  Keep process batching,
+                // but isolate every config's compiler program so batching cannot
+                // change the canonical facts.  Large single projects also use
+                // the flag to keep memory bounded.
                 command.arg("--no-global-caches");
             }
         }
     }
     let mut diagnostics = Vec::new();
-    if php_source_only {
+    if mixed_dotnet_solution_filtered {
         diagnostics.push(Diagnostic {
             language: lang.id.to_string(),
-            level: "warning",
-            code: DiagnosticCode::DependencyMetadataGap,
-            message: "Composer dependency metadata is unavailable; a temporary exact-file workspace retained project declarations and local relationships while leaving unavailable packages external".to_string(),
+            level: "info",
+            code: DiagnosticCode::ProviderDiagnostic,
+            message: "Mixed-language .NET solution was projected to its C# projects before semantic indexing".to_string(),
             detail: None,
-            path: Some("composer.json".to_string()),
+            path: None,
             line: None,
         });
     }
-    let mut result = run_command(command, lang.name, lang.tool)
-        .and_then(|_| ensure_default_scip_output(command_root, out));
-    if result.is_err()
-        && matches!(lang.id, "javascript" | "typescript")
-        && provider_config.is_some()
-    {
-        let original_error = result.expect_err("checked above");
-        let _ = fs::remove_file(out);
-        result = run_typescript_source_only_fallback(
+    let mut result = if direct_typescript_source_only {
+        let fallback = run_typescript_source_only_fallback(
             lang,
             root,
             out,
             providers_root,
             source_files,
+            max_project_source_file_bytes,
         );
-        if result.is_ok() {
+        if let Ok(digest) = fallback.as_ref() {
+            generated_context_parts.push(digest.as_bytes().to_vec());
+            diagnostics.push(Diagnostic {
+                language: lang.id.to_string(),
+                level: "warning",
+                code: DiagnosticCode::TypescriptSourceFallback,
+                message: "Sources without an owning modeled TypeScript/JavaScript project were analyzed in an isolated source-only project".to_string(),
+                detail: None,
+                path: None,
+                line: None,
+            });
+        }
+        fallback.map(|_| ())
+    } else {
+        run_command_with_timeout(
+            command,
+            lang.name,
+            lang.tool,
+            scip_index_timeout(lang.tool, source_files.len()),
+        )
+            .and_then(|_| ensure_default_scip_output(root, out))
+    };
+    if result.is_err()
+        && matches!(lang.id, "javascript" | "typescript")
+        && provider_configs.len() == 1
+    {
+        let original_error = result.expect_err("checked above");
+        let _ = fs::remove_file(out);
+        let fallback_result = run_typescript_source_only_fallback(
+            lang,
+            root,
+            out,
+            providers_root,
+            source_files,
+            max_project_source_file_bytes,
+        );
+        if let Ok(digest) = fallback_result.as_ref() {
+            mode = ProviderExecutionMode::SourceOnlyFallback;
+            // The successful retry did not execute the failed configured
+            // project. Keep those files visible only as workspace context,
+            // never as explicit arguments of the accepted result.
+            explicit_context_files.clear();
+            lineage_context_files.clear();
+            generated_context_parts.clear();
+            generated_context_parts.push(digest.as_bytes().to_vec());
+            execution_dimensions.clear();
+            if let Some(value) = context_dimension(ContextDimensionKind::ModuleMode, "esnext") {
+                execution_dimensions.push(value);
+            }
+            if let Some(value) = context_dimension(ContextDimensionKind::Target, "es2022") {
+                execution_dimensions.push(value);
+            }
             diagnostics.push(Diagnostic {
                 language: lang.id.to_string(),
                 level: "warning",
@@ -151,175 +243,166 @@ pub(crate) fn run_scip_indexer(
                 line: None,
             });
         }
-    }
-    if result.is_ok() {
-        if let Some(workspace) = php_workspace.as_ref() {
-            result = rewrite_php_source_only_paths(out, &workspace.root);
-        }
-        if let Some((solution, digest)) = dotnet_restore_state {
-            let _ = write_dotnet_restore_state(root, &solution, digest);
-        }
+        result = fallback_result.map(|_| ());
     }
     if let Some(solution) = generated_solution {
         if env::var("CODE_MEMORY_KEEP_GENERATED_SOLUTION").as_deref() != Ok("1") {
             let _ = fs::remove_file(solution);
         }
     }
-    if let Some(include_file) = php_include_file {
-        let _ = fs::remove_file(include_file);
-    }
-    if let Some(workspace) = php_workspace {
-        let _ = fs::remove_dir_all(workspace.root);
-    }
-    result.map(|()| diagnostics)
-}
-
-fn rewrite_php_source_only_paths(out: &Path, workspace: &Path) -> Result<(), String> {
-    let bytes = fs::read(out)
-        .map_err(|error| format!("cannot read PHP source-only SCIP output: {error}"))?;
-    let mut index = scip::types::Index::parse_from_bytes(&bytes)
-        .map_err(|error| format!("cannot parse PHP source-only SCIP output: {error}"))?;
-    for document in &mut index.documents {
-        document.relative_path = normalize_scip_path(&document.relative_path, workspace);
-    }
-    scip::write_message_to_file(out, index)
-        .map_err(|error| format!("cannot rewrite PHP source-only SCIP paths: {error}"))
-}
-
-struct PhpSourceOnlyWorkspace {
-    root: PathBuf,
-    files: Vec<PathBuf>,
-}
-
-pub(crate) fn php_dependency_metadata_gap(root: &Path) -> bool {
-    root.join("composer.json").is_file()
-        && (!root.join("vendor").join("autoload.php").is_file()
-            || !root
-                .join("vendor")
-                .join("composer")
-                .join("installed.php")
-                .is_file())
-}
-
-fn scip_php_provider_autoload(providers_root: Option<&Path>) -> Option<PathBuf> {
-    let tool = find_tool("scip-php", providers_root)?;
-    let parent = tool.parent()?;
-    [
-        parent.join("scip-php").join("vendor").join("autoload.php"),
-        parent.join("vendor").join("autoload.php"),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
-}
-
-fn prepare_php_source_only_workspace(
-    root: &Path,
-    out: &Path,
-    source_files: &[PathBuf],
-    provider_autoload: &Path,
-) -> Result<PhpSourceOnlyWorkspace, String> {
-    let workspace = out.with_extension("php-source-only");
-    if workspace.exists() {
-        fs::remove_dir_all(&workspace).map_err(|error| {
-            format!(
-                "cannot reset PHP source-only workspace {}: {error}",
-                workspace.display()
-            )
-        })?;
-    }
-    fs::create_dir_all(workspace.join("vendor").join("composer"))
-        .map_err(|error| format!("cannot create PHP source-only workspace: {error}"))?;
-
-    let mut copied = Vec::with_capacity(source_files.len());
-    let mut relative_files = Vec::with_capacity(source_files.len());
-    for source in source_files {
-        let relative = source.strip_prefix(root).map_err(|_| {
-            format!(
-                "PHP source file is outside the analysis root: {}",
-                source.display()
-            )
-        })?;
-        let destination = workspace.join(relative);
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("cannot create PHP source directory: {error}"))?;
-        }
-        fs::copy(source, &destination).map_err(|error| {
-            format!(
-                "cannot copy PHP source {} into the isolated workspace: {error}",
-                source.display()
-            )
-        })?;
-        copied.push(destination);
-        relative_files.push(relative.to_string_lossy().replace('\\', "/"));
-    }
-
-    let (package_name, package_version) = fs::read(root.join("composer.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .map(|value| {
-            (
-                value
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or("code-memory/source-only")
-                    .to_string(),
-                value
-                    .get("version")
-                    .and_then(Value::as_str)
-                    .filter(|version| !version.is_empty())
-                    .unwrap_or("0.0.0+source-only")
-                    .to_string(),
-            )
-        })
-        .unwrap_or_else(|| {
-            (
-                "code-memory/source-only".to_string(),
-                "0.0.0+source-only".to_string(),
-            )
-        });
-    let composer = serde_json::json!({
-        "name": package_name,
-        "version": package_version,
-        "autoload": { "files": relative_files }
-    });
-    fs::write(
-        workspace.join("composer.json"),
-        serde_json::to_vec(&composer)
-            .map_err(|error| format!("cannot serialize PHP source-only manifest: {error}"))?,
-    )
-    .map_err(|error| format!("cannot write PHP source-only manifest: {error}"))?;
-    fs::write(workspace.join("composer.lock"), b"{\"packages\":[]}")
-        .map_err(|error| format!("cannot write PHP source-only lockfile: {error}"))?;
-
-    let autoload_path = provider_autoload.to_string_lossy().replace('\\', "/");
-    let autoload_path = autoload_path.replace('\'', "\\'");
-    fs::write(
-        workspace.join("vendor").join("autoload.php"),
-        format!("<?php return require '{autoload_path}';\n"),
-    )
-    .map_err(|error| format!("cannot write PHP source-only autoloader: {error}"))?;
-    let installed = format!(
-        "<?php return ['root' => ['name' => {name}, 'version' => {version}, 'reference' => null], 'versions' => []];\n",
-        name = serde_json::to_string(&package_name)
-            .map_err(|error| format!("cannot encode PHP package name: {error}"))?,
-        version = serde_json::to_string(&package_version)
-            .map_err(|error| format!("cannot encode PHP package version: {error}"))?,
-    );
-    fs::write(
-        workspace
-            .join("vendor")
-            .join("composer")
-            .join("installed.php"),
-        installed,
-    )
-    .map_err(|error| format!("cannot write PHP source-only package metadata: {error}"))?;
-
-    Ok(PhpSourceOnlyWorkspace {
-        root: workspace,
-        files: copied,
+    result?;
+    let execution_context = scip_execution_context(ScipExecutionContextInput {
+        project_root,
+        lang,
+        analysis_root: root,
+        source_files,
+        mode,
+        explicit_context_files,
+        lineage_context_files,
+        generated_context_parts,
+        execution_dimensions,
+    })?;
+    Ok(ProviderRunOutcome {
+        diagnostics,
+        execution_context,
     })
+}
+
+pub(crate) fn configured_scip_execution_context(
+    lang: &LanguageSpec,
+    roots: ProviderRoots<'_>,
+    config: &Path,
+    source_files: &[PathBuf],
+) -> Result<codebase_fact_model::analysis::ProviderExecutionContext, String> {
+    let canonical_project_root = roots.project.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve selected project root {}: {error}",
+            roots.project.display()
+        )
+    })?;
+    let mut mode = ProviderExecutionMode::Project;
+    let mut explicit_context_files = Vec::new();
+    let mut lineage_context_files = Vec::new();
+    let mut generated_context_parts = Vec::new();
+    if config
+        .canonicalize()
+        .is_ok_and(|path| path.starts_with(&canonical_project_root))
+    {
+        explicit_context_files.push(config.to_path_buf());
+    } else {
+        let bytes = fs::read(config)
+            .map_err(|error| format!("cannot read generated provider config: {error}"))?;
+        generated_context_parts.push(bytes);
+        lineage_context_files.extend(typescript_generated_config_lineage(
+            config,
+            &canonical_project_root,
+        ));
+        mode = ProviderExecutionMode::GeneratedProject;
+    }
+    scip_execution_context(ScipExecutionContextInput {
+        project_root: roots.project,
+        lang,
+        analysis_root: roots.analysis,
+        source_files,
+        mode,
+        explicit_context_files,
+        lineage_context_files,
+        generated_context_parts,
+        execution_dimensions: Vec::new(),
+    })
+}
+
+struct ScipExecutionContextInput<'a> {
+    project_root: &'a Path,
+    lang: &'a LanguageSpec,
+    analysis_root: &'a Path,
+    source_files: &'a [PathBuf],
+    mode: ProviderExecutionMode,
+    explicit_context_files: Vec<PathBuf>,
+    lineage_context_files: Vec<PathBuf>,
+    generated_context_parts: Vec<Vec<u8>>,
+    execution_dimensions: Vec<codebase_fact_model::analysis::ContextDimension>,
+}
+
+fn scip_execution_context(
+    input: ScipExecutionContextInput<'_>,
+) -> Result<codebase_fact_model::analysis::ProviderExecutionContext, String> {
+    let ScipExecutionContextInput {
+        project_root,
+        lang,
+        analysis_root,
+        source_files,
+        mut mode,
+        explicit_context_files,
+        lineage_context_files,
+        generated_context_parts,
+        execution_dimensions,
+    } = input;
+    // A config can legitimately live above a planned package (for example a
+    // monorepo tsconfig used by legacy/frontend). It is execution evidence,
+    // not the execution boundary. The provider is launched with
+    // `analysis_root` as cwd/workspace-root, so its receipt must keep that
+    // AnalysisPlan-owned root instead of replacing it with config.parent().
+    let mut config_files = if mode == ProviderExecutionMode::SourceOnlyFallback {
+        // A source-only run deliberately does not execute adjacent repository
+        // configs. Recording them as workspace discovery would overstate the
+        // provider context and can attach another AnalysisPlan unit's config to
+        // this shard.
+        Vec::new()
+    } else {
+        workspace_context_files(
+            lang.contract_language,
+            project_root,
+            analysis_root,
+            source_files,
+        )
+        .into_iter()
+        .map(|path| (path, ProviderConfigUse::WorkspaceDiscovery))
+        .collect::<Vec<_>>()
+    };
+    config_files.extend(
+        explicit_context_files
+            .into_iter()
+            .map(|path| (path, ProviderConfigUse::ExplicitArgument)),
+    );
+    config_files.extend(
+        lineage_context_files
+            .into_iter()
+            .map(|path| (path, ProviderConfigUse::GeneratedLineage)),
+    );
+    let generated_context_digest = (!generated_context_parts.is_empty())
+        .then(|| generated_context_digest(&generated_context_parts));
+    if mode == ProviderExecutionMode::Project && config_files.is_empty() {
+        mode = ProviderExecutionMode::InferredWorkspace;
+    }
+    executed_provider_context(ExecutedProviderContextInput {
+        project_root,
+        language: lang,
+        mode,
+        analysis_root,
+        source_files,
+        config_files,
+        generated_context_digest,
+        dimensions: execution_dimensions,
+    })
+}
+
+fn typescript_generated_config_lineage(config: &Path, project_root: &Path) -> Vec<PathBuf> {
+    let Ok(bytes) = fs::read(config) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        return Vec::new();
+    };
+    let Some(extends) = value.get("extends").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let path = PathBuf::from(extends);
+    path.canonicalize()
+        .ok()
+        .filter(|path| path.starts_with(project_root) && path.is_file())
+        .into_iter()
+        .collect()
 }
 
 fn run_typescript_source_only_fallback(
@@ -328,14 +411,14 @@ fn run_typescript_source_only_fallback(
     out: &Path,
     providers_root: Option<&Path>,
     source_files: &[PathBuf],
-) -> Result<(), String> {
+    max_project_source_file_bytes: u64,
+) -> Result<codebase_fact_model::identity::Sha256Digest, String> {
     let config_path = out.with_extension("source-only.tsconfig.json");
     let config = typescript_source_only_config(lang.id == "javascript", source_files);
-    fs::write(
-        &config_path,
-        serde_json::to_vec(&config)
-            .map_err(|error| format!("cannot serialize TypeScript fallback config: {error}"))?,
-    )
+    let config_bytes = serde_json::to_vec(&config)
+        .map_err(|error| format!("cannot serialize TypeScript fallback config: {error}"))?;
+    let config_digest = generated_context_digest(std::slice::from_ref(&config_bytes));
+    fs::write(&config_path, &config_bytes)
     .map_err(|error| format!("cannot write {}: {error}", config_path.display()))?;
 
     let result = (|| {
@@ -350,6 +433,11 @@ fn run_typescript_source_only_fallback(
             .arg(root)
             .arg("--workspace-root")
             .arg(root)
+            .arg("--max-file-byte-size")
+            .arg(typescript_max_file_byte_size(
+                source_files,
+                max_project_source_file_bytes,
+            )?)
             .arg(&config_path);
         if source_files.len() >= 2_000 {
             command.arg("--no-global-caches");
@@ -358,7 +446,45 @@ fn run_typescript_source_only_fallback(
             .and_then(|_| ensure_default_scip_output(root, out))
     })();
     let _ = fs::remove_file(config_path);
-    result
+    result.map(|()| config_digest)
+}
+
+fn typescript_max_file_byte_size(
+    source_files: &[PathBuf],
+    max_project_source_file_bytes: u64,
+) -> Result<String, String> {
+    let mut maximum = max_project_source_file_bytes.max(1);
+    for file in source_files {
+        let metadata = fs::metadata(file)
+            .map_err(|error| format!("cannot measure scheduled source {}: {error}", file.display()))?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "scheduled TypeScript/JavaScript source is not a file: {}",
+                file.display()
+            ));
+        }
+        maximum = maximum.max(metadata.len());
+    }
+    Ok(maximum.to_string())
+}
+
+fn scip_index_timeout(tool: &str, source_file_count: usize) -> Duration {
+    if env::var_os("CODE_MEMORY_PROVIDER_TIMEOUT_SECONDS").is_some() {
+        return provider_timeout();
+    }
+    default_scip_index_timeout(tool, source_file_count)
+}
+
+fn default_scip_index_timeout(tool: &str, source_file_count: usize) -> Duration {
+    if tool == "scip-dotnet" && source_file_count >= 1_000 {
+        // scip-dotnet performs a correctness-critical restore before Roslyn
+        // indexing.  A large solution can legitimately exceed the generic
+        // three-minute process ceiling even on a warm package cache.  LSP
+        // providers already receive the same large-workspace ceiling.
+        Duration::from_secs(900)
+    } else {
+        provider_timeout()
+    }
 }
 
 fn typescript_source_only_config(allow_js: bool, source_files: &[PathBuf]) -> serde_json::Value {
@@ -384,6 +510,23 @@ fn typescript_source_only_config(allow_js: bool, source_files: &[PathBuf]) -> se
 #[cfg(test)]
 mod runner_tests {
     use super::*;
+    use crate::LANGUAGES;
+
+    #[test]
+    fn large_dotnet_solution_uses_the_large_workspace_timeout() {
+        assert_eq!(
+            default_scip_index_timeout("scip-dotnet", 1_000),
+            Duration::from_secs(900)
+        );
+        assert_eq!(
+            default_scip_index_timeout("scip-dotnet", 999),
+            Duration::from_secs(180)
+        );
+        assert_eq!(
+            default_scip_index_timeout("scip-typescript", 10_000),
+            Duration::from_secs(180)
+        );
+    }
 
     #[test]
     fn typescript_source_only_config_has_exact_files_and_no_extends() {
@@ -404,44 +547,110 @@ mod runner_tests {
     }
 
     #[test]
-    fn php_source_only_workspace_copies_only_requested_project_files() {
+    fn typescript_provider_limit_covers_scheduled_and_project_wide_sources() {
         let root = std::env::temp_dir().join(format!(
-            "code-memory-php-source-only-{}",
+            "code-memory-typescript-large-source-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(
-            root.join("composer.json"),
-            br#"{"name":"visualmap/source-only","require":{"vendor/pkg":"*"}}"#,
-        )
-        .unwrap();
-        let source = root.join("src").join("Handler.php");
-        fs::write(&source, "<?php final class Handler {}\n").unwrap();
-        let provider_autoload = root.join("provider-autoload.php");
-        fs::write(&provider_autoload, "<?php return null;\n").unwrap();
-        let out = root.join("result.scip");
+        fs::create_dir_all(&root).expect("create TypeScript limit fixture");
+        let small = root.join("small.ts");
+        let large = root.join("large.ts");
+        fs::write(&small, b"small").expect("write small TypeScript fixture");
+        fs::write(&large, vec![b'x'; 1_100_123]).expect("write large TypeScript fixture");
 
-        let workspace = prepare_php_source_only_workspace(
-            &root,
-            &out,
-            std::slice::from_ref(&source),
-            &provider_autoload,
-        )
-        .unwrap();
-        let manifest: Value = serde_json::from_slice(
-            &fs::read(workspace.root.join("composer.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(manifest["name"], "visualmap/source-only");
-        assert_eq!(manifest["autoload"]["files"][0], "src/Handler.php");
-        assert!(workspace.root.join("src").join("Handler.php").is_file());
-        assert!(workspace
-            .root
-            .join("vendor")
-            .join("composer")
-            .join("installed.php")
-            .is_file());
+        assert_eq!(
+            typescript_max_file_byte_size(&[small.clone(), large.clone()], 1).unwrap(),
+            "1100123"
+        );
+        assert_eq!(
+            typescript_max_file_byte_size(&[small, large], 2_000_000).unwrap(),
+            "2000000"
+        );
+
         let _ = fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn parent_typescript_config_does_not_replace_the_planned_analysis_root() {
+        let project_root = std::env::temp_dir().join(format!(
+            "code-memory-typescript-context-root-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&project_root);
+        let analysis_root = project_root.join("legacy").join("frontend");
+        let source = analysis_root.join("src").join("app.ts");
+        fs::create_dir_all(source.parent().unwrap()).expect("create nested TypeScript fixture");
+        let config = project_root.join("tsconfig.json");
+        fs::write(&config, b"{\"compilerOptions\":{\"allowJs\":true}}")
+            .expect("write parent TypeScript config");
+        fs::write(&source, b"export const app = 1;\n").expect("write TypeScript source");
+        let lang = LANGUAGES
+            .iter()
+            .find(|candidate| candidate.id == "typescript")
+            .expect("TypeScript provider");
+
+        let context = scip_execution_context(ScipExecutionContextInput {
+            project_root: &project_root,
+            lang,
+            analysis_root: &analysis_root,
+            source_files: std::slice::from_ref(&source),
+            mode: ProviderExecutionMode::Project,
+            explicit_context_files: vec![config],
+            lineage_context_files: Vec::new(),
+            generated_context_parts: Vec::new(),
+            execution_dimensions: Vec::new(),
+        })
+        .expect("build exact nested execution context");
+
+        assert_eq!(
+            context.analysis_root.as_ref().map(|path| path.as_str()),
+            Some("legacy/frontend")
+        );
+        assert!(context
+            .config_artifacts
+            .iter()
+            .any(|artifact| artifact.path.as_str() == "tsconfig.json"));
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn source_only_typescript_context_does_not_claim_adjacent_project_configs() {
+        let project_root = std::env::temp_dir().join(format!(
+            "code-memory-typescript-source-only-context-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&project_root);
+        let source = project_root.join("fixtures").join("loose.js");
+        fs::create_dir_all(source.parent().unwrap()).expect("create source-only fixture");
+        fs::write(&source, b"export const loose = true;\n").expect("write source-only source");
+        fs::write(
+            project_root.join("fixtures").join("tsconfig.json"),
+            b"{\"include\":[\"owned-by-another-unit.ts\"]}",
+        )
+        .expect("write adjacent project config");
+        let lang = LANGUAGES
+            .iter()
+            .find(|candidate| candidate.id == "javascript")
+            .expect("JavaScript provider");
+
+        let context = scip_execution_context(ScipExecutionContextInput {
+            project_root: &project_root,
+            lang,
+            analysis_root: &project_root,
+            source_files: std::slice::from_ref(&source),
+            mode: ProviderExecutionMode::SourceOnlyFallback,
+            explicit_context_files: Vec::new(),
+            lineage_context_files: Vec::new(),
+            generated_context_parts: vec![b"source-only-config".to_vec()],
+            execution_dimensions: Vec::new(),
+        })
+        .expect("build source-only execution context");
+
+        assert_eq!(context.mode, ProviderExecutionMode::SourceOnlyFallback);
+        assert!(context.config_artifacts.is_empty());
+        assert!(context.generated_context_digest.is_some());
+        let _ = fs::remove_dir_all(project_root);
+    }
+
 }

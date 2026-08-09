@@ -1,0 +1,12 @@
+[
+  {
+    "directory": ".",
+    "command": "clang -std=c17 -c types.c",
+    "file": "types.c"
+  },
+  {
+    "directory": ".",
+    "command": "clang++ -std=c++17 -c types.cpp",
+    "file": "types.cpp"
+  }
+]

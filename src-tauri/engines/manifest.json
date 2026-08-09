@@ -5,7 +5,7 @@
       "id": "codebase-memory",
       "version": "0.1.0",
       "sourceRepository": "https://github.com/shinyeonjun/visual_map/tree/main/code_memory",
-      "sourceCommit": "visual-map-code-memory",
+      "sourceCommit": "uncommitted-hard-cut-2026-08-07",
       "releaseUrl": "",
       "archive": {
         "fileName": "code-memory-language-windows-amd64.zip",
@@ -18,19 +18,19 @@
         "sha256": "0478C15480BEA0E572F4A340B4600DDB664FE6D69B69F2A54D00970869356A3F"
       },
       "licenseId": "Apache-2.0",
-      "contractVersion": "1",
+      "contractVersion": "2",
       "releaseReady": false,
       "developmentArtifacts": [
         {
-          "sha256": "FABB5ACBFB0D55BA60FA6F1162EBD52FDE503B741B877BC4F10AB5F9B22D7803"
+          "sha256": "7703941589FE841C22AC649C3DDF1318C1F07CC71F51B853C6CA85A11295EFA0"
         }
       ]
     },
     {
       "id": "database-memory",
       "version": "0.2.0",
-      "sourceRepository": "https://github.com/shinyeonjun/rdb-memory-mcp",
-      "sourceCommit": "35ed83de33e51eef74a5276c625cb03b24e020c4",
+      "sourceRepository": "https://github.com/shinyeonjun/visual_map/tree/main/db_memory",
+      "sourceCommit": "uncommitted-hard-cut-2026-08-07",
       "releaseUrl": "https://github.com/shinyeonjun/rdb-memory-mcp/releases/tag/v0.2.0",
       "archive": {
         "fileName": "rdb-memory-mcp-windows-amd64.zip",
@@ -43,11 +43,11 @@
         "sha256": "F79F2473B4D9325744876A0F6FF6ED9692CC667483B5408384477CBEE0D84009"
       },
       "licenseId": "MIT",
-      "contractVersion": "2",
+      "contractVersion": "3",
       "releaseReady": false,
       "developmentArtifacts": [
         {
-          "sha256": "1CA99BCF80849522468BFF3C33C01F1139E7123A0EAD69EFD2CA6FCD2784BB12"
+          "sha256": "21D8B90C7EA90C72CF637CA34FD814107C83398D7D5AF19E458A83A963F3E692"
         }
       ]
     }

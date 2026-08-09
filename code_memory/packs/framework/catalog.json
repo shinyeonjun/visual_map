@@ -38,19 +38,9 @@
       "file": "javascript/catalog.json"
     },
     {
-      "id": "php",
-      "name": "Php",
-      "file": "php/catalog.json"
-    },
-    {
       "id": "python",
       "name": "Python",
       "file": "python/catalog.json"
-    },
-    {
-      "id": "ruby",
-      "name": "Ruby",
-      "file": "ruby/catalog.json"
     },
     {
       "id": "rust",

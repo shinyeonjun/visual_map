@@ -1,0 +1,12 @@
+[
+  {
+    "directory": ".",
+    "command": "clang++ -std=c++20 -Isrc -Iinclude -c src/calculate.cpp",
+    "file": "src/calculate.cpp"
+  },
+  {
+    "directory": ".",
+    "command": "clang++ -std=c++20 -Isrc -Iinclude -c tests/calculate_test.cpp",
+    "file": "tests/calculate_test.cpp"
+  }
+]

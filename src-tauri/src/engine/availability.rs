@@ -254,7 +254,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(hash)
 }
 
-pub(crate) fn sidecar_args<const N: usize>(args: [&str; N]) -> Result<Vec<String>, String> {
+pub fn sidecar_args<const N: usize>(args: [&str; N]) -> Result<Vec<String>, String> {
     let args = args
         .iter()
         .map(|value| value.to_string())
@@ -263,7 +263,7 @@ pub(crate) fn sidecar_args<const N: usize>(args: [&str; N]) -> Result<Vec<String
     Ok(args)
 }
 
-pub(crate) fn run_engine_command(
+pub fn run_engine_command(
     engine: &EngineAvailability,
     args: &[String],
     timeout: Duration,
@@ -278,23 +278,7 @@ pub(crate) fn run_engine_command(
     run_command(Path::new(&engine.path), &arg_refs, timeout)
 }
 
-pub(crate) fn run_engine_command_with_env(
-    engine: &EngineAvailability,
-    args: &[String],
-    timeout: Duration,
-    envs: &[(&str, &str)],
-) -> Result<EngineRunResult, String> {
-    if !engine.available {
-        return Err(format!("읽기 도구가 없습니다: {}", engine.executable));
-    }
-
-    validate_sidecar_args(args)?;
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-
-    run_command_with_env(Path::new(&engine.path), &arg_refs, timeout, envs)
-}
-
-pub(crate) fn run_engine_command_with_env_observer(
+pub fn run_engine_command_with_env_observer(
     engine: &EngineAvailability,
     args: &[String],
     policy: EngineRunPolicy,
@@ -304,8 +288,13 @@ pub(crate) fn run_engine_command_with_env_observer(
     if !engine.available {
         return Err(format!("읽기 도구가 없습니다: {}", engine.executable));
     }
-
     validate_sidecar_args(args)?;
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_command_with_env_observer(Path::new(&engine.path), &arg_refs, policy, envs, observer)
+    run_command_with_env_observer(
+        Path::new(&engine.path),
+        &arg_refs,
+        policy,
+        envs,
+        observer,
+    )
 }

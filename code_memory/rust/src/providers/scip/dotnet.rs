@@ -27,6 +27,169 @@ pub(crate) fn dotnet_project_roots_for_files(
         .collect()
 }
 
+/// Returns the exact C# source set admitted by statically declared MSBuild
+/// `<Compile Remove="...">` items. These files are repository artifacts (for
+/// example generated-code baselines), but they are not compiler inputs and
+/// must not be reported as semantic-provider failures.
+///
+/// Only literal, unconditional remove globs are consumed. Property/item
+/// expressions and conditioned items are deliberately left unresolved rather
+/// than guessed; the semantic provider's ordinary partial-coverage contract
+/// remains responsible for those cases.
+pub(crate) fn active_csharp_files(
+    root: &Path,
+    source_files: &[PathBuf],
+) -> (Vec<PathBuf>, usize) {
+    let mut excluded = HashSet::<PathBuf>::new();
+    for project in collect_files(root, &["csproj"]) {
+        let Ok(source) = fs::read_to_string(&project) else {
+            continue;
+        };
+        let matchers = unconditional_compile_remove_matchers(&source);
+        if matchers.is_empty() {
+            continue;
+        }
+        let Some(project_root) = project.parent() else {
+            continue;
+        };
+        let project_root = project_root
+            .canonicalize()
+            .unwrap_or_else(|_| project_root.to_path_buf());
+        for file in source_files {
+            let canonical = file.canonicalize().unwrap_or_else(|_| file.clone());
+            let Ok(relative) = canonical.strip_prefix(&project_root) else {
+                continue;
+            };
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if matchers.iter().any(|matcher| matcher.is_match(&relative)) {
+                excluded.insert(canonical);
+            }
+        }
+    }
+    let active = source_files
+        .iter()
+        .filter(|file| {
+            let canonical = file.canonicalize().unwrap_or_else(|_| (*file).clone());
+            !excluded.contains(&canonical)
+        })
+        .cloned()
+        .collect();
+    (active, excluded.len())
+}
+
+fn unconditional_compile_remove_matchers(source: &str) -> Vec<globset::GlobMatcher> {
+    let mut matchers = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = source[cursor..].find("<Compile") {
+        let start = cursor + relative_start;
+        let after_name = start + "<Compile".len();
+        if source
+            .as_bytes()
+            .get(after_name)
+            .is_some_and(|byte| !byte.is_ascii_whitespace() && *byte != b'/' && *byte != b'>')
+        {
+            cursor = after_name;
+            continue;
+        }
+        let Some(relative_end) = source[after_name..].find('>') else {
+            break;
+        };
+        let end = after_name + relative_end + 1;
+        let tag = &source[start..end];
+        cursor = end;
+        if xml_attribute(tag, "Condition").is_some()
+            || enclosing_item_group_is_conditional(source, start)
+        {
+            continue;
+        }
+        let Some(remove) = xml_attribute(tag, "Remove") else {
+            continue;
+        };
+        for pattern in remove.split(';').map(str::trim).filter(|item| !item.is_empty()) {
+            if pattern.contains("$(") || pattern.contains("@(") || pattern.contains("%(") {
+                continue;
+            }
+            let pattern = pattern
+                .replace('\\', "/")
+                .trim_start_matches("./")
+                .to_string();
+            let Ok(glob) = globset::GlobBuilder::new(&pattern)
+                .literal_separator(true)
+                .backslash_escape(false)
+                .build()
+            else {
+                continue;
+            };
+            matchers.push(glob.compile_matcher());
+        }
+    }
+    matchers
+}
+
+fn enclosing_item_group_is_conditional(source: &str, position: usize) -> bool {
+    let prefix = &source[..position];
+    let Some(open) = prefix.rfind("<ItemGroup") else {
+        return false;
+    };
+    if prefix.rfind("</ItemGroup>").is_some_and(|close| close > open) {
+        return false;
+    }
+    let Some(relative_end) = source[open..].find('>') else {
+        return false;
+    };
+    xml_attribute(&source[open..open + relative_end + 1], "Condition").is_some()
+}
+
+fn xml_attribute(tag: &str, expected: &str) -> Option<String> {
+    let bytes = tag.as_bytes();
+    let mut cursor = 1usize;
+    while cursor < bytes.len() {
+        while cursor < bytes.len()
+            && (bytes[cursor].is_ascii_whitespace()
+                || matches!(bytes[cursor], b'<' | b'/' | b'>'))
+        {
+            cursor += 1;
+        }
+        let name_start = cursor;
+        while cursor < bytes.len()
+            && (bytes[cursor].is_ascii_alphanumeric()
+                || matches!(bytes[cursor], b'_' | b':' | b'-' | b'.'))
+        {
+            cursor += 1;
+        }
+        if cursor == name_start {
+            cursor += 1;
+            continue;
+        }
+        let name = &tag[name_start..cursor];
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b'=') {
+            continue;
+        }
+        cursor += 1;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let quote = *bytes.get(cursor)?;
+        if !matches!(quote, b'\'' | b'"') {
+            continue;
+        }
+        cursor += 1;
+        let value_start = cursor;
+        while cursor < bytes.len() && bytes[cursor] != quote {
+            cursor += 1;
+        }
+        let value = tag.get(value_start..cursor)?;
+        cursor += usize::from(cursor < bytes.len());
+        if name.eq_ignore_ascii_case(expected) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 pub(crate) fn dotnet_requires_unavailable_legacy_sdk(
     root: &Path,
     source_files: &[PathBuf],
@@ -65,34 +228,6 @@ pub(crate) fn dotnet_requires_unavailable_legacy_sdk(
     matched == source_files.len() && legacy == matched
 }
 
-fn dotnet_restore_state_path(root: &Path) -> PathBuf {
-    project_cache_root(root).join("dotnet-restore-state")
-}
-
-fn dotnet_solution_key(solution: &Path) -> String {
-    solution
-        .canonicalize()
-        .unwrap_or_else(|_| solution.to_path_buf())
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
-fn dotnet_restore_is_current(root: &Path, solution: &Path, digest: u64) -> bool {
-    let expected = format!("{digest}\n{}", dotnet_solution_key(solution));
-    fs::read_to_string(dotnet_restore_state_path(root))
-        .is_ok_and(|state| state.trim_end() == expected)
-}
-
-fn write_dotnet_restore_state(root: &Path, solution: &Path, digest: u64) -> Result<(), String> {
-    let path = dotnet_restore_state_path(root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("cannot create .NET restore cache: {error}"))?;
-    }
-    fs::write(path, format!("{digest}\n{}", dotnet_solution_key(solution)))
-        .map_err(|error| format!("cannot write .NET restore cache: {error}"))
-}
-
 fn dotnet_solution_score(solution: &Path, source_files: &[PathBuf]) -> (usize, bool, bool, usize) {
     let project_roots = solution_project_roots(solution);
     let matched = if project_roots.is_empty() {
@@ -121,14 +256,38 @@ fn solution_project_roots(solution: &Path) -> Vec<PathBuf> {
         return Vec::new();
     };
     let parent = solution.parent().unwrap_or_else(|| Path::new("."));
+    solution_project_references(&source)
+        .into_iter()
+        .filter(|value| value.to_ascii_lowercase().ends_with(".csproj"))
+        .map(|value| parent.join(value.replace('\\', "/")))
+        .map(|path| path.parent().unwrap_or(&path).to_path_buf())
+        .collect()
+}
+
+fn solution_has_non_csharp_projects(solution: &Path) -> bool {
+    fs::read_to_string(solution).is_ok_and(|source| {
+        solution_project_references(&source)
+            .into_iter()
+            .any(|value| !value.to_ascii_lowercase().ends_with(".csproj"))
+    })
+}
+
+fn solution_project_references(source: &str) -> Vec<&str> {
     source
         .split('"')
         .filter(|value| {
             let lower = value.to_ascii_lowercase();
-            lower.ends_with(".csproj")
+            [
+                ".csproj",
+                ".fsproj",
+                ".vbproj",
+                ".vcxproj",
+                ".shproj",
+                ".proj",
+            ]
+            .iter()
+            .any(|extension| lower.ends_with(extension))
         })
-        .map(|value| parent.join(value.replace('\\', "/")))
-        .map(|path| path.parent().unwrap_or(&path).to_path_buf())
         .collect()
 }
 
@@ -210,3 +369,44 @@ fn stable_solution_guid(value: &str) -> String {
     )
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn solution_reference_inventory_handles_sln_and_slnx_forms() {
+        let source = r#"
+          Project("{type}") = "App", "src\App\App.csproj", "{id}"
+          <Project Path="src/Worker/Worker.fsproj" />
+          <Project Path="src/Legacy/Legacy.vbproj" />
+        "#;
+        assert_eq!(
+            solution_project_references(source),
+            vec![
+                "src\\App\\App.csproj",
+                "src/Worker/Worker.fsproj",
+                "src/Legacy/Legacy.vbproj"
+            ]
+        );
+    }
+
+    #[test]
+    fn literal_unconditional_compile_remove_is_exactly_matchable() {
+        let source = r#"
+          <Project>
+            <ItemGroup>
+              <Compile Remove="Scaffolding\Baselines\**\*" />
+              <Compile Remove="Internal\**" Condition="'$(Mode)' == 'test'" />
+            </ItemGroup>
+            <ItemGroup Condition="'$(Mode)' == 'legacy'">
+              <Compile Remove="Legacy\**" />
+            </ItemGroup>
+          </Project>
+        "#;
+        let matchers = unconditional_compile_remove_matchers(source);
+        assert_eq!(matchers.len(), 1);
+        assert!(matchers[0].is_match("Scaffolding/Baselines/BigModel/DbContextModel.cs"));
+        assert!(!matchers[0].is_match("Scaffolding/ScaffoldingTest.cs"));
+        assert!(!matchers[0].is_match("Internal/StateManager.cs"));
+    }
+}

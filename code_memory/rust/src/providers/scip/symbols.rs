@@ -130,14 +130,34 @@ fn type_script_call_occurrence(
     call_ranges: &Option<CallRangesByPath>,
     path: &str,
     occurrence: &[i32],
+    source: Option<&str>,
 ) -> bool {
     let Some(range) = range_parts(occurrence) else {
         return false;
     };
-    call_ranges
-        .as_ref()
-        .and_then(|ranges| ranges.get(path))
-        .is_some_and(|ranges| ranges.contains(&range))
+    match call_ranges.as_ref().and_then(|ranges| ranges.get(path)) {
+        Some(ranges) => ranges.contains(&range),
+        None => is_call_occurrence(source, occurrence),
+    }
+}
+
+#[cfg(test)]
+mod call_detection_tests {
+    use super::*;
+
+    #[test]
+    fn typescript_falls_back_when_project_model_omits_a_file() {
+        let ranges = Some(HashMap::from([(
+            "modeled.ts".to_string(),
+            HashSet::from([(0, 0, 0, 3)]),
+        )]));
+        assert!(type_script_call_occurrence(
+            &ranges,
+            "fallback.ts",
+            &[0, 0, 3],
+            Some("run()")
+        ));
+    }
 }
 
 pub(crate) fn normalize_scip_language(raw: &str, fallback_language: &str) -> String {
@@ -145,9 +165,58 @@ pub(crate) fn normalize_scip_language(raw: &str, fallback_language: &str) -> Str
     // ponytail: some providers serialize SCIP's language enum as a number; use the
     // language worker's authoritative id instead of leaking that internal value.
     if language.is_empty() || language.chars().all(|character| character.is_ascii_digit()) {
-        fallback_language.to_string()
-    } else {
-        language.to_string()
+        return fallback_language.to_string();
+    }
+
+    if language.eq_ignore_ascii_case("c#") {
+        return "csharp".to_string();
+    }
+    if language.eq_ignore_ascii_case("c++") {
+        return "cpp".to_string();
+    }
+
+    // Provider display names are not the product language IDs. In particular,
+    // scip-dotnet has emitted `C#`, while the analysis plan and Language IR use
+    // `csharp`. Keep this normalization closed to the ten-language contract;
+    // an unknown value falls back to the worker that launched the provider
+    // instead of creating a thirteenth, unplanned language partition.
+    let compact = language
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    match compact.as_str() {
+        "typescript" | "ts" => "typescript",
+        "javascript" | "js" => "javascript",
+        "python" | "py" => "python",
+        "java" => "java",
+        "csharp" | "cs" => "csharp",
+        "c" => "c",
+        "cplusplus" | "cpp" | "cxx" => "cpp",
+        "go" | "golang" => "go",
+        "rust" => "rust",
+        "dart" => "dart",
+        _ => fallback_language,
+    }
+    .to_string()
+}
+
+#[cfg(test)]
+mod language_normalization_tests {
+    use super::normalize_scip_language;
+
+    #[test]
+    fn provider_display_names_map_to_closed_product_language_ids() {
+        assert_eq!(normalize_scip_language("C#", "csharp"), "csharp");
+        assert_eq!(normalize_scip_language("C++", "cpp"), "cpp");
+        assert_eq!(normalize_scip_language("TypeScript", "typescript"), "typescript");
+        assert_eq!(normalize_scip_language("Golang", "go"), "go");
+    }
+
+    #[test]
+    fn unknown_or_numeric_provider_language_uses_the_launched_worker() {
+        assert_eq!(normalize_scip_language("17", "java"), "java");
+        assert_eq!(normalize_scip_language("provider-private", "rust"), "rust");
     }
 }
 
@@ -169,6 +238,127 @@ pub(crate) fn normalize_scip_path(raw: &str, project_root: &Path) -> String {
 
 struct DefinitionRangeIndex {
     entries: Vec<(usize, (i32, i32, i32, i32))>,
+}
+
+/// Deterministic interval lookup used while converting large SCIP indexes.
+///
+/// SCIP occurrences are already sorted by the provider, but repeatedly
+/// scanning every source-side syntax site turns conversion into O(n*m).  This
+/// index only prunes ranges that cannot overlap the query.  A match is still
+/// selected by the original source-site index, so replacing the linear scan
+/// cannot change which fact wins when ranges overlap.
+struct SourceRangeIndex {
+    entries: Vec<(usize, SourceRange)>,
+    prefix_max_end: Vec<(i32, i32)>,
+}
+
+impl SourceRangeIndex {
+    fn from_ranges<'a>(ranges: impl IntoIterator<Item = (usize, &'a [i32])>) -> Self {
+        let mut entries = ranges
+            .into_iter()
+            .filter_map(|(index, range)| range_parts(range).map(|range| (index, range)))
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(index, range)| (range.0, range.1, range.2, range.3, *index));
+
+        let mut prefix_max_end = Vec::with_capacity(entries.len());
+        let mut maximum = (i32::MIN, i32::MIN);
+        for (_, range) in &entries {
+            maximum = maximum.max((range.2, range.3));
+            prefix_max_end.push(maximum);
+        }
+        Self {
+            entries,
+            prefix_max_end,
+        }
+    }
+
+    fn first_bidirectional_containment(&self, target: &[i32]) -> Option<usize> {
+        let target = range_parts(target)?;
+        self.overlapping_indices(target)
+            .filter(|(_, candidate)| {
+                range_parts_contains(*candidate, target)
+                    || range_parts_contains(target, *candidate)
+            })
+            .map(|(index, _)| index)
+            .min()
+    }
+
+    fn smallest_container(&self, target: &[i32]) -> Option<usize> {
+        self.smallest_container_by_key(target, |index, range| {
+            (
+                range.2 - range.0,
+                range.3 - range.1,
+                range.0,
+                range.1,
+                index,
+            )
+        })
+    }
+
+    fn smallest_container_by_key<K: Ord>(
+        &self,
+        target: &[i32],
+        mut key: impl FnMut(usize, SourceRange) -> K,
+    ) -> Option<usize> {
+        let target = range_parts(target)?;
+        self.overlapping_indices(target)
+            .filter(|(_, candidate)| range_parts_contains(*candidate, target))
+            .min_by_key(|(index, range)| {
+                key(*index, *range)
+            })
+            .map(|(index, _)| index)
+    }
+
+    fn overlapping_indices(
+        &self,
+        target: SourceRange,
+    ) -> impl Iterator<Item = (usize, SourceRange)> + '_ {
+        let target_start = (target.0, target.1);
+        let target_end = (target.2, target.3);
+        let upper = self
+            .entries
+            .partition_point(|(_, range)| (range.0, range.1) <= target_end);
+        let mut cursor = upper;
+        std::iter::from_fn(move || {
+            while cursor > 0 {
+                cursor -= 1;
+                if self.prefix_max_end[cursor] < target_start {
+                    return None;
+                }
+                let (index, range) = self.entries[cursor];
+                if (range.2, range.3) >= target_start {
+                    return Some((index, range));
+                }
+            }
+            None
+        })
+    }
+}
+
+#[derive(Default)]
+struct ExactSourceRangeIndex {
+    first_by_range: HashMap<SourceRange, usize>,
+}
+
+impl ExactSourceRangeIndex {
+    fn insert(&mut self, index: usize, range: &[i32]) {
+        let Some(range) = range_parts(range) else {
+            return;
+        };
+        self.first_by_range
+            .entry(range)
+            .and_modify(|current| *current = (*current).min(index))
+            .or_insert(index);
+    }
+
+    fn find(&self, range: &[i32]) -> Option<usize> {
+        self.first_by_range.get(&range_parts(range)?).copied()
+    }
+}
+
+fn range_parts_contains(container: SourceRange, nested: SourceRange) -> bool {
+    (container.0, container.1) <= (nested.0, nested.1)
+        && (nested.2, nested.3) <= (container.2, container.3)
 }
 
 impl DefinitionRangeIndex {
@@ -269,38 +459,7 @@ pub(crate) fn is_call_occurrence(source: Option<&str>, range: &[i32]) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn is_ruby_member_call_occurrence(source: Option<&str>, range: &[i32]) -> bool {
-    let Some(source) = source else {
-        return false;
-    };
-    let Some((line_number, start, end_line, end)) = range_parts(range) else {
-        return false;
-    };
-    if end_line != line_number {
-        return false;
-    }
-    let Some(line) = source.lines().nth(line_number.max(0) as usize) else {
-        return false;
-    };
-    let start = start.max(0) as usize;
-    let end = end.max(0) as usize;
-    let Some(prefix) = line.get(..start) else {
-        return false;
-    };
-    let Some(token) = line.get(start..end) else {
-        return false;
-    };
-    if token.is_empty()
-        || !token.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '_' | '!' | '?' | '=')
-        })
-    {
-        return false;
-    }
-    let prefix = prefix.trim_end();
-    prefix.ends_with('.') || prefix.ends_with("&.") || prefix.ends_with("::")
-}
-
+#[cfg(test)]
 pub(crate) fn find_source_owner(
     owner_scopes: Option<&Vec<(String, Vec<i32>)>>,
     occurrence_range: &[i32],
@@ -308,10 +467,117 @@ pub(crate) fn find_source_owner(
     owner_scopes?
         .iter()
         .filter_map(|(symbol, scope)| {
-            range_contains(scope, occurrence_range).then_some((symbol, scope))
+            range_parts(scope)
+                .zip(range_parts(occurrence_range))
+                .is_some_and(|(scope, occurrence)| range_parts_contains(scope, occurrence))
+                .then_some((symbol, scope))
         })
         .min_by_key(|(_, scope)| range_span(scope))
         .map(|(symbol, _)| symbol.clone())
+}
+
+fn find_source_owner_indexed(
+    owner_scopes: Option<&Vec<(String, Vec<i32>)>>,
+    owner_index: Option<&SourceRangeIndex>,
+    occurrence_range: &[i32],
+) -> Option<String> {
+    let scopes = owner_scopes?;
+    owner_index?
+        .smallest_container(occurrence_range)
+        .and_then(|index| scopes.get(index))
+        .map(|(symbol, _)| symbol.clone())
+}
+
+#[cfg(test)]
+mod source_range_index_tests {
+    use super::*;
+
+    #[test]
+    fn indexed_containment_preserves_the_first_linear_match() {
+        let ranges = [
+            vec![4, 2, 4, 18],
+            vec![4, 8, 4, 12],
+            vec![4, 8, 4, 12],
+            vec![8, 0, 9, 4],
+        ];
+        let index = SourceRangeIndex::from_ranges(
+            ranges
+                .iter()
+                .enumerate()
+                .map(|(position, range)| (position, range.as_slice())),
+        );
+
+        assert_eq!(index.first_bidirectional_containment(&[4, 9, 4, 11]), Some(0));
+        assert_eq!(index.first_bidirectional_containment(&[8, 2, 8, 3]), Some(3));
+        assert_eq!(index.first_bidirectional_containment(&[20, 0, 20, 1]), None);
+    }
+
+    #[test]
+    fn indexed_owner_selection_matches_the_smallest_linear_scope() {
+        let scopes = vec![
+            ("outer".to_string(), vec![1, 0, 20, 1]),
+            ("inner".to_string(), vec![5, 2, 9, 3]),
+            ("sibling".to_string(), vec![11, 0, 14, 1]),
+        ];
+        let index = SourceRangeIndex::from_ranges(
+            scopes
+                .iter()
+                .enumerate()
+                .map(|(position, (_, range))| (position, range.as_slice())),
+        );
+
+        let linear = find_source_owner(Some(&scopes), &[6, 1, 6, 2]);
+        let indexed = find_source_owner_indexed(Some(&scopes), Some(&index), &[6, 1, 6, 2]);
+        assert_eq!(linear, Some("inner".to_string()));
+        assert_eq!(indexed, linear);
+    }
+
+    #[test]
+    fn exact_index_keeps_the_earliest_site_across_utf_encodings() {
+        let mut index = ExactSourceRangeIndex::default();
+        index.insert(4, &[2, 3, 2, 7]);
+        index.insert(1, &[2, 3, 2, 7]);
+        index.insert(3, &[9, 0, 9, 2]);
+        assert_eq!(index.find(&[2, 3, 7]), Some(1));
+        assert_eq!(index.find(&[9, 0, 9, 2]), Some(3));
+    }
+
+    #[test]
+    fn interval_index_matches_exhaustive_linear_queries() {
+        let mut ranges = Vec::new();
+        for start_line in 0..4 {
+            for end_line in start_line..4 {
+                ranges.push(vec![start_line, 1, end_line, 6]);
+            }
+        }
+        // Preserve a duplicate to exercise the original `.find()` tie rule.
+        ranges.push(vec![1, 1, 2, 6]);
+        let index = SourceRangeIndex::from_ranges(
+            ranges
+                .iter()
+                .enumerate()
+                .map(|(position, range)| (position, range.as_slice())),
+        );
+
+        for start_line in 0..5 {
+            for end_line in start_line..5 {
+                let query = vec![start_line, 2, end_line, 5];
+                let expected = ranges.iter().position(|candidate| {
+                    range_parts(candidate)
+                        .zip(range_parts(&query))
+                        .is_some_and(|(candidate, query)| {
+                            range_parts_contains(candidate, query)
+                                || range_parts_contains(query, candidate)
+                        })
+                });
+                assert_eq!(
+                    index.first_bidirectional_containment(&query),
+                    expected,
+                    "query={query:?}"
+                );
+            }
+        }
+    }
 }
 
 pub(crate) fn source_scopes(
@@ -387,4 +653,3 @@ pub(crate) fn source_scope_from_lines(
 pub(crate) fn has_role(value: i32, role: SymbolRole) -> bool {
     value & role as i32 != 0
 }
-

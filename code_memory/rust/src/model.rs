@@ -1,19 +1,21 @@
+use codebase_fact_model::analysis::{ProgrammingLanguage, ProviderExecutionContext};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum ProviderKind {
     Scip,
     Lsp,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct LanguageSpec {
     pub(crate) id: &'static str,
     pub(crate) name: &'static str,
     pub(crate) extensions: &'static [&'static str],
     pub(crate) provider: ProviderKind,
     pub(crate) tool: &'static str,
+    pub(crate) contract_language: ProgrammingLanguage,
 }
 
 pub(crate) const LANGUAGES: &[LanguageSpec] = &[
@@ -23,6 +25,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
         extensions: &["ts", "tsx", "mts", "cts"],
         provider: ProviderKind::Scip,
         tool: "scip-typescript",
+        contract_language: ProgrammingLanguage::TypeScript,
     },
     LanguageSpec {
         id: "javascript",
@@ -30,6 +33,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
         extensions: &["js", "jsx", "mjs", "cjs"],
         provider: ProviderKind::Scip,
         tool: "scip-typescript",
+        contract_language: ProgrammingLanguage::JavaScript,
     },
     LanguageSpec {
         id: "python",
@@ -37,6 +41,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
         extensions: &["py", "pyi"],
         provider: ProviderKind::Lsp,
         tool: "pyright-langserver",
+        contract_language: ProgrammingLanguage::Python,
     },
     LanguageSpec {
         id: "java",
@@ -44,6 +49,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
         extensions: &["java"],
         provider: ProviderKind::Lsp,
         tool: "jdtls",
+        contract_language: ProgrammingLanguage::Java,
     },
     LanguageSpec {
         id: "csharp",
@@ -51,6 +57,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
         extensions: &["cs"],
         provider: ProviderKind::Scip,
         tool: "scip-dotnet",
+        contract_language: ProgrammingLanguage::CSharp,
     },
     LanguageSpec {
         id: "c",
@@ -58,6 +65,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
         extensions: &["c", "h", "inc"],
         provider: ProviderKind::Scip,
         tool: "scip-clang",
+        contract_language: ProgrammingLanguage::C,
     },
     LanguageSpec {
         id: "cpp",
@@ -67,6 +75,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
         ],
         provider: ProviderKind::Scip,
         tool: "scip-clang",
+        contract_language: ProgrammingLanguage::Cpp,
     },
     LanguageSpec {
         id: "go",
@@ -74,6 +83,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
         extensions: &["go"],
         provider: ProviderKind::Lsp,
         tool: "gopls",
+        contract_language: ProgrammingLanguage::Go,
     },
     LanguageSpec {
         id: "rust",
@@ -81,20 +91,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
         extensions: &["rs"],
         provider: ProviderKind::Lsp,
         tool: "rust-analyzer",
-    },
-    LanguageSpec {
-        id: "php",
-        name: "PHP",
-        extensions: &["php"],
-        provider: ProviderKind::Scip,
-        tool: "scip-php",
-    },
-    LanguageSpec {
-        id: "ruby",
-        name: "Ruby",
-        extensions: &["rb", "rake", "gemspec"],
-        provider: ProviderKind::Lsp,
-        tool: "ruby-lsp",
+        contract_language: ProgrammingLanguage::Rust,
     },
     LanguageSpec {
         id: "dart",
@@ -102,6 +99,7 @@ pub(crate) const LANGUAGES: &[LanguageSpec] = &[
         extensions: &["dart"],
         provider: ProviderKind::Lsp,
         tool: "dart",
+        contract_language: ProgrammingLanguage::Dart,
     },
 ];
 
@@ -133,7 +131,7 @@ pub(crate) struct ProviderProvenance {
     pub(crate) version: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct AnalysisUnitOutput {
     pub(crate) id: String,
     pub(crate) language: String,
@@ -156,7 +154,7 @@ pub(crate) struct StageTiming {
     pub(crate) elapsed_ms: u128,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct LanguageOutput {
     pub(crate) id: String,
     pub(crate) name: String,
@@ -168,7 +166,7 @@ pub(crate) struct LanguageOutput {
     pub(crate) status: &'static str,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct FileCoverageOutput {
     pub(crate) language: String,
     pub(crate) path: String,
@@ -270,7 +268,6 @@ pub(crate) enum DiagnosticCode {
     JavaSourceFallback,
     JavaSourceFallbackFailed,
     TypescriptSourceFallback,
-    RubyBundleWarning,
     ProviderDiagnostic,
     GeneratedCode,
     TestOnly,
@@ -304,7 +301,6 @@ impl DiagnosticCode {
             Self::JavaSourceFallback => "java-source-fallback",
             Self::JavaSourceFallbackFailed => "java-source-fallback-failed",
             Self::TypescriptSourceFallback => "typescript-source-fallback",
-            Self::RubyBundleWarning => "ruby-bundle-warning",
             Self::ProviderDiagnostic => "provider-diagnostic",
             Self::GeneratedCode => "generated-code",
             Self::TestOnly => "test-only",
@@ -331,8 +327,19 @@ impl DiagnosticCode {
     }
 }
 
-pub(crate) struct LanguageAnalysis {
+/// Provider-decoded, project-relative semantic batch.
+///
+/// This is the primary result of a SCIP/LSP worker. Language IR consumes these
+/// batches exactly once, then exposes `language-index.v2` as a temporary
+/// compatibility projection of that same authoritative merge.
+pub(crate) struct ProviderUnitBatch {
     pub(crate) language: LanguageOutput,
+    /// Canonical project-relative files the provider was asked to analyze.
+    /// The scheduler fills this after rebasing a module-local provider result.
+    pub(crate) source_files: Vec<String>,
+    /// Canonical receipt for the root/config/source scope the provider really
+    /// executed. Cached batches retain the original execution receipt.
+    pub(crate) execution_context: ProviderExecutionContext,
     pub(crate) documents: Vec<DocumentOutput>,
     pub(crate) relations: Vec<RelationOutput>,
     pub(crate) diagnostics: Vec<Diagnostic>,

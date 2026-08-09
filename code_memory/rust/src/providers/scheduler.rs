@@ -5,7 +5,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::{
-    analyze_provider_job, find_tool, language_failure, LanguageAnalysis, LanguageJob, ProviderKind,
+    analyze_provider_job, assign_provider_batch_scope, find_tool, language_failure, LanguageJob,
+    ProviderKind, ProviderUnitBatch,
 };
 
 #[derive(Clone)]
@@ -22,7 +23,7 @@ pub(crate) struct ProviderUnitResult {
 
 pub(crate) struct ProviderJobResult {
     pub(crate) units: Vec<ProviderUnitResult>,
-    pub(crate) analyses: Vec<LanguageAnalysis>,
+    pub(crate) batches: Vec<ProviderUnitBatch>,
     pub(crate) elapsed_ms: u128,
 }
 
@@ -43,7 +44,23 @@ pub(crate) fn merge_provider_jobs(jobs: Vec<LanguageJob>) -> Vec<ProviderJob> {
 }
 
 fn provider_job_key(job: &LanguageJob) -> String {
-    let scope = job.module_id.replace([':', '\\', '/'], "_");
+    let scope = job.execution_scope_id.replace([':', '\\', '/'], "_");
+    if env::var("CODE_MEMORY_EXPERIMENTAL_TS_MULTI_CONFIG_BATCH").as_deref() == Ok("1")
+        && job.lang.tool == "scip-typescript"
+        && job.provider_config.is_some()
+        && find_tool(job.lang.tool, job.providers_root.as_deref()).is_some()
+    {
+        // Experimental only: scip-typescript accepts several tsconfig/jsconfig
+        // inputs in one process.  Do not enable this by default until the
+        // canonical shadow gate is exact.  On ESLint it was 51% faster, but a
+        // cross-root batch omitted CustomParserServices.program plus two
+        // relations.  The established per-scope path remains the correctness
+        // baseline.
+        return format!(
+            "provider:scip-typescript:configured:{}",
+            stable_path_hash(&job.project_root)
+        );
+    }
     if matches!(job.lang.provider, ProviderKind::Scip)
         && matches!(job.lang.tool, "scip-typescript" | "scip-clang")
         && find_tool(job.lang.tool, job.providers_root.as_deref()).is_some()
@@ -53,9 +70,18 @@ fn provider_job_key(job: &LanguageJob) -> String {
     if matches!(job.lang.id, "c" | "cpp")
         && find_tool("clangd", job.providers_root.as_deref()).is_some()
     {
-        return format!("provider:clangd-c-cpp:{scope}");
+        return format!("provider:clangd:{}:{scope}", job.lang.id);
     }
     format!("language:{}:{}", job.lang.id, scope)
+}
+
+fn stable_path_hash(path: &std::path::Path) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in path.to_string_lossy().replace('\\', "/").bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 pub(crate) fn combined_job_files(jobs: &[LanguageJob]) -> Vec<PathBuf> {
@@ -105,7 +131,7 @@ pub(crate) fn provider_job_weight(job: &ProviderJob, max_weight: usize) -> usize
     } else if job.members.iter().any(|member| {
         matches!(
             member.lang.id,
-            "go" | "rust" | "java" | "dart" | "ruby" | "c" | "cpp"
+            "go" | "rust" | "java" | "dart" | "c" | "cpp"
         )
     }) {
         2
@@ -138,38 +164,59 @@ pub(crate) fn run_provider_jobs(
             .unwrap_or_else(|| "unknown".to_string())
     );
     let (sender, receiver) = mpsc::channel();
-    let mut next_job = 0usize;
+    let total = jobs.len();
+    // Keep the original ordinal beside each pending job. Results are sorted by
+    // this ordinal below, so choosing a later light job never changes the
+    // deterministic output order. It only avoids leaving CPU and memory idle
+    // while a heavy head-of-line job waits for enough weight budget.
+    let mut pending = jobs
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, job)| {
+            let weight = provider_job_weight(&job, max_weight);
+            Some((ordinal, job, weight))
+        })
+        .collect::<Vec<_>>();
+    let mut pending_jobs = pending.len();
     let mut active_jobs = 0usize;
     let mut active_weight = 0usize;
-    let total = jobs.len();
     let mut completed = 0usize;
     let mut results = Vec::with_capacity(total);
 
-    while next_job < jobs.len() || active_jobs > 0 {
-        while next_job < jobs.len() && active_jobs < max_parallel {
-            let job = jobs[next_job].clone();
-            let weight = provider_job_weight(&job, max_weight);
-            if !can_start(active_jobs, active_weight, weight, max_parallel, max_weight) {
+    while pending_jobs > 0 || active_jobs > 0 {
+        while active_jobs < max_parallel {
+            let Some(pending_index) = next_startable_job_index(
+                &pending,
+                active_jobs,
+                active_weight,
+                max_parallel,
+                max_weight,
+            ) else {
                 break;
-            }
-            let ordinal = next_job;
-            next_job += 1;
+            };
+            let (ordinal, job, weight) = pending[pending_index]
+                .take()
+                .expect("startable provider job remained pending");
+            pending_jobs -= 1;
             active_jobs += 1;
             active_weight += weight;
             let sender = sender.clone();
             std::thread::spawn(move || {
                 let started = Instant::now();
+                let job_key = job.key.clone();
+                let file_count = combined_job_files(&job.members).len();
+                let unit_count = job.members.len();
                 let units = job
                     .members
                     .iter()
                     .map(|member| ProviderUnitResult {
                         language: member.lang.id.to_string(),
-                        id: member.module_id.clone(),
+                        id: member.analysis_unit_id.clone(),
                         provider: provider_label(member),
                     })
                     .collect();
                 let members = job.members.clone();
-                let analyses = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut batches = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     analyze_provider_job(job)
                 }))
                 .unwrap_or_else(|panic| {
@@ -186,16 +233,51 @@ pub(crate) fn run_provider_jobs(
                         })
                         .collect()
                 });
+                if batches.len() != members.len() {
+                    let returned = batches.len();
+                    batches = members
+                        .iter()
+                        .map(|member| {
+                            language_failure(
+                                member.lang,
+                                provider_label(member),
+                                &member.files,
+                                format!(
+                                    "provider worker returned {returned} unit batches for {} planned units",
+                                    members.len()
+                                ),
+                            )
+                        })
+                        .collect();
+                }
+                for (member, batch) in members.iter().zip(&mut batches) {
+                    assign_provider_batch_scope(batch, &member.project_root, &member.files);
+                }
+                let elapsed_ms = started.elapsed().as_millis();
+                eprintln!(
+                    "@codebase-workspace-provider-performance {}",
+                    serde_json::json!({
+                        "jobKey": job_key,
+                        "weight": weight,
+                        "units": unit_count,
+                        "files": file_count,
+                        "elapsedMs": elapsed_ms,
+                    })
+                );
                 let _ = sender.send((
                     ordinal,
                     weight,
                     ProviderJobResult {
                         units,
-                        analyses,
-                        elapsed_ms: started.elapsed().as_millis(),
+                        batches,
+                        elapsed_ms,
                     },
                 ));
             });
+        }
+
+        if active_jobs == 0 {
+            return Err("provider scheduler could not admit a pending job".to_string());
         }
 
         let (ordinal, weight, result) = loop {
@@ -226,7 +308,7 @@ const PROVIDER_MEMORY_TOKEN_MB: usize = 512;
 const SYSTEM_MEMORY_RESERVE_MB: usize = 1_024;
 const UNKNOWN_MEMORY_WEIGHT: usize = 2;
 
-fn provider_memory_budget_mb() -> Option<usize> {
+pub(crate) fn provider_memory_budget_mb() -> Option<usize> {
     env::var("CODE_MEMORY_MEMORY_BUDGET_MB")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -293,6 +375,26 @@ fn can_start(
     active_jobs < max_parallel && (active_jobs == 0 || active_weight + next_weight <= max_weight)
 }
 
+fn next_startable_job_index(
+    pending: &[Option<(usize, ProviderJob, usize)>],
+    active_jobs: usize,
+    active_weight: usize,
+    max_parallel: usize,
+    max_weight: usize,
+) -> Option<usize> {
+    pending.iter().position(|entry| {
+        entry.as_ref().is_some_and(|(_, _, weight)| {
+            can_start(
+                active_jobs,
+                active_weight,
+                *weight,
+                max_parallel,
+                max_weight,
+            )
+        })
+    })
+}
+
 fn provider_label(job: &LanguageJob) -> &'static str {
     if matches!(job.lang.id, "c" | "cpp")
         && find_tool(job.lang.tool, job.providers_root.as_deref()).is_none()
@@ -317,7 +419,8 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        can_start, default_provider_parallelism, file_pressure_weight, provider_weight_budget,
+        can_start, default_provider_parallelism, file_pressure_weight, next_startable_job_index,
+        provider_weight_budget, ProviderJob,
     };
 
     #[test]
@@ -326,6 +429,31 @@ mod tests {
         assert!(can_start(1, 1, 2, 3, 4));
         assert!(!can_start(1, 3, 2, 3, 4));
         assert!(!can_start(3, 3, 1, 3, 4));
+    }
+
+    #[test]
+    fn weighted_scheduler_skips_a_blocked_heavy_job_to_start_lighter_work() {
+        let pending = vec![
+            Some((
+                0,
+                ProviderJob {
+                    key: "heavy".to_string(),
+                    members: Vec::new(),
+                },
+                4,
+            )),
+            Some((
+                1,
+                ProviderJob {
+                    key: "light".to_string(),
+                    members: Vec::new(),
+                },
+                1,
+            )),
+        ];
+
+        assert_eq!(next_startable_job_index(&pending, 1, 1, 4, 4), Some(1));
+        assert_eq!(next_startable_job_index(&pending, 0, 0, 4, 4), Some(0));
     }
 
     #[test]

@@ -238,18 +238,6 @@ fn pack_owns_routes(
     mvc_modules: &HashSet<String>,
     quarkus_modules: &HashSet<String>,
 ) -> bool {
-    if pack.language == "ruby" && pack.id == "rack" {
-        // Rack is often present in config.ru as the host for Rails/Sinatra.
-        // That activation must not make Rack claim the application's route DSL.
-        return source.contains("Rack::Builder")
-            || source.lines().map(str::trim_start).any(|line| {
-                line.strip_prefix("run ")
-                    .is_some_and(|rest| !rest.trim_start().starts_with('#'))
-                    || line
-                        .strip_prefix("map ")
-                        .is_some_and(|rest| rest.trim_start().starts_with(['"', '\'', '/']))
-            });
-    }
     if pack.language == "csharp" {
         let legacy_web_api = source.contains("System.Web.Http")
             || source.contains("IHttpActionResult")
@@ -520,7 +508,7 @@ fn source_mask(source: &str, language: &str, mask_strings: bool) -> String {
     let mut block_comment = false;
     let mut html_comment = false;
     let mut quote: Option<(char, bool)> = None;
-    let hash_comments = matches!(language, "python" | "ruby" | "php");
+    let hash_comments = language == "python";
 
     while index < chars.len() {
         let current = chars[index];
@@ -609,10 +597,7 @@ fn source_mask(source: &str, language: &str, mask_strings: bool) -> String {
                 masked.push(' ');
                 index += 1;
             }
-        } else if hash_comments
-            && current == '#'
-            && !(language == "php" && chars.get(index + 1) == Some(&'['))
-        {
+        } else if hash_comments && current == '#' {
             while index < chars.len() && !matches!(chars[index], '\r' | '\n') {
                 masked.push(' ');
                 index += 1;
