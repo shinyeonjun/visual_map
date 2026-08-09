@@ -4,6 +4,7 @@ mod broker;
 mod map_view;
 mod read_model;
 mod recovery;
+mod reduce;
 mod store;
 
 use crate::{
@@ -12,8 +13,7 @@ use crate::{
     workspace::Workspace,
 };
 use codebase_semantic_compiler::{
-    compile_reconciliation_prompt, compile_semantic_plan, CompiledSemanticPlan,
-    VerifiedSemanticPartition,
+    compile_semantic_plan, CompiledSemanticPlan, VerifiedSemanticPartition,
 };
 use recovery::{
     compile_recovery_prompt, continue_recovery_prompt, run_provider_with_repair,
@@ -217,22 +217,15 @@ fn analyze_partitioned(
             result.ok_or_else(|| partition_error(plan, index, "검증된 결과가 생성되지 않았습니다"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let reconciliation = compile_reconciliation_prompt(&plan.base, &verified)
-        .map_err(|error| format!("AI 의미 전역 통합 입력을 만들지 못했습니다: {error}"))?;
-    emit_progress(
+    reduce::reconcile_hierarchically(
+        runtime,
+        &plan.base,
+        verified,
+        operation_id,
         progress,
-        "분할 결과를 하나의 전체 지도로 통합하는 중",
         plan.partitions.len() as u64,
         total,
-    );
-    let approved = run_provider_with_repair(
-        runtime,
-        &reconciliation,
-        operation_id,
-        "AI 의미 전역 통합 결과",
-    )?;
-    emit_progress(progress, "전체 의미 지도 검증 완료", total, total);
-    Ok(approved)
+    )
 }
 
 fn accept_verified_partition(

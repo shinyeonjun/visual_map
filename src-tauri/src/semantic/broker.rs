@@ -61,6 +61,25 @@ pub(super) fn run_provider_batch(
     );
 }
 
+pub(super) fn run_provider_reduce_batch(
+    runtime: &provider::ResolvedProvider,
+    prompts: &[CompiledBasePrompt],
+    operation_id: &str,
+    on_completed: impl FnMut(usize, Result<String, String>),
+) {
+    run_provider_batch_with_limit(
+        runtime,
+        prompts,
+        configured_provider_parallelism(
+            "CODEBASE_WORKSPACE_AI_MAX_PARALLEL",
+            DEFAULT_INITIAL_PROVIDER_JOBS,
+        ),
+        "reduce",
+        operation_id,
+        on_completed,
+    );
+}
+
 /// Verifier-guided repairs and execution retries use a lower bound than the
 /// normal path. Conservative recovery avoids turning one invalid response or
 /// transient provider failure into a parallel retry storm.

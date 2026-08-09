@@ -2,13 +2,15 @@ use crate::{
     base_semantic_output_schema, compile_base_prompt, BaseSemanticDraft, CompiledBasePrompt,
     SemanticCompileError, SemanticCompileErrorCode,
 };
+use codebase_fact_model::identity::{EvidenceId, FactNodeId};
 use codebase_fact_model::{
     fact_graph::FactTruth,
     identity::{Sha256Digest, SnapshotId},
 };
 use codebase_semantic_model::{
-    ApprovedSemanticRevision, BaseSemanticInput, BoundaryRelationSummary, RegionId, ScopeReceipt,
-    StaticRegionSummary,
+    ApprovedSemanticArea, ApprovedSemanticRevision, AreaCategory, BaseSemanticInput,
+    BoundaryRelationCount, BoundaryRelationSummary, LabelSource, RegionId, ScopeReceipt,
+    SemanticFallbackReason, StaticRegionSummary, TracePathId,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,8 +23,9 @@ const RECONCILIATION_POLICY: &str = r#"RECONCILIATION
 16. VERIFIED_PARTITIONS contains independently verified local analyses of disjoint region sets. Treat their code IDs and evidence as bounded suggestions, not permission to invent facts.
 17. Produce one complete global L0/L1 map. Account for every region in REGION_DIRECTORY exactly once, merge duplicated responsibilities, and make sibling labels globally distinct.
 18. Use BOUNDARY_RELATIONS only to understand current cross-region cohesion. Relation direction, family, truth, and counts remain static facts and may not be changed.
-19. Representative fact, trace, and evidence IDs in the final result must come from VERIFIED_PARTITIONS or the repository context. Never manufacture an ID.
-20. Local project summaries are partition context, not separate applications. Write one concise repository summary in the final result."#;
+19. Representative fact, trace, and evidence arrays may be empty. When citing one, copy its complete exact ID from VERIFIED_PARTITIONS[].areas; never derive, hash, shorten, or manufacture an ID. Project-level citations follow the same rule.
+20. Each verified local area exposes directMemberRegionIds instead of a duplicate assignment list. localAreaIndex and parentLocalAreaIndex are partition-local hierarchy references only; never emit them as code or region IDs.
+21. Local project summaries are partition context, not separate applications. Write one concise repository summary in the final result."#;
 
 const RECONCILIATION_RELATIONS_PER_DIRECTION: usize = 6;
 const MAX_RECONCILIATION_PROMPT_BYTES: usize = 512 * 1024;
@@ -154,8 +157,15 @@ pub fn compile_reconciliation_prompt(
             total: base.packet.input.boundary_relations.len(),
             truncated: selected_relations.len() < base.packet.input.boundary_relations.len(),
         },
-        boundary_relations: selected_relations,
-        verified_partitions: partitions.iter().map(VerifiedPartitionView::from).collect(),
+        boundary_relations: selected_relations
+            .iter()
+            .map(|relation| CompactBoundaryRelation::from(*relation))
+            .collect(),
+        verified_partitions: partitions
+            .iter()
+            .enumerate()
+            .map(|(ordinal, partition)| CompactVerifiedPartition::new(ordinal, partition))
+            .collect::<Result<Vec<_>, _>>()?,
     };
     let payload_json = serde_json::to_string(&payload).map_err(|error| {
         SemanticCompileError::new(
@@ -191,6 +201,62 @@ pub fn compile_reconciliation_prompt(
         ));
     }
     Ok(compiled)
+}
+
+pub fn compile_reconciliation_partition(
+    base: &CompiledBasePrompt,
+    partitions: &[VerifiedSemanticPartition],
+) -> Result<CompiledSemanticPartition, SemanticCompileError> {
+    if partitions.is_empty() {
+        return Err(SemanticCompileError::new(
+            SemanticCompileErrorCode::InvalidPacket,
+            "verifiedPartitions",
+            "a reconciliation partition requires at least one verified input",
+        ));
+    }
+    let mut region_ids = partitions
+        .iter()
+        .flat_map(|partition| partition.region_ids.iter().cloned())
+        .collect::<Vec<_>>();
+    region_ids.sort();
+    let original_len = region_ids.len();
+    region_ids.dedup();
+    if region_ids.len() != original_len {
+        return Err(SemanticCompileError::new(
+            SemanticCompileErrorCode::DuplicateIdentifier,
+            "verifiedPartitions[].regionIds",
+            "a region occurs in more than one reconciliation input",
+        ));
+    }
+    let scoped_input = subset_input(&base.packet.input, &region_ids);
+    if scoped_input.regions.len() != region_ids.len() {
+        return Err(SemanticCompileError::new(
+            SemanticCompileErrorCode::UnexpectedReference,
+            "verifiedPartitions[].regionIds",
+            "a reconciliation input references a region outside the base packet",
+        ));
+    }
+    let region_count = region_ids.len() as u64;
+    let scoped_base = compile_base_prompt(BaseSemanticDraft {
+        workspace_id: base.packet.workspace_id.clone(),
+        snapshot_id: base.packet.snapshot_id.clone(),
+        provider: base.packet.provider.clone(),
+        output_language: base.packet.output_language,
+        scope_receipt: ScopeReceipt {
+            included: region_count,
+            total: region_count,
+            truncated: false,
+            reason: None,
+        },
+        input: scoped_input,
+    })?;
+    let prompt = compile_reconciliation_prompt(&scoped_base, partitions)?;
+    let partition_key = reduction_partition_key(&base.packet.snapshot_id, partitions);
+    Ok(CompiledSemanticPartition {
+        partition_key,
+        region_ids,
+        prompt,
+    })
 }
 
 fn validate_policy(policy: SemanticPartitionPolicy) -> Result<(), SemanticCompileError> {
@@ -480,6 +546,23 @@ fn partition_key(snapshot_id: &SnapshotId, region_ids: &[RegionId]) -> String {
     format!("partition-{}", Sha256Digest::of_bytes(material.as_bytes()))
 }
 
+fn reduction_partition_key(
+    snapshot_id: &SnapshotId,
+    partitions: &[VerifiedSemanticPartition],
+) -> String {
+    let mut child_keys = partitions
+        .iter()
+        .map(|partition| partition.partition_key.as_str())
+        .collect::<Vec<_>>();
+    child_keys.sort_unstable();
+    let mut material = format!("semantic-reduce-v1\n{snapshot_id}");
+    for child_key in child_keys {
+        material.push('\n');
+        material.push_str(child_key);
+    }
+    format!("reduce-{}", Sha256Digest::of_bytes(material.as_bytes()))
+}
+
 fn verify_partition_coverage(
     input: &BaseSemanticInput,
     partitions: &[CompiledSemanticPartition],
@@ -661,8 +744,8 @@ struct ReconciliationPayload<'a> {
     repository: &'a codebase_semantic_model::ProjectSemanticContext,
     region_directory: Vec<CompactRegion<'a>>,
     boundary_relation_receipt: CollectionReceipt,
-    boundary_relations: Vec<&'a BoundaryRelationSummary>,
-    verified_partitions: Vec<VerifiedPartitionView<'a>>,
+    boundary_relations: Vec<CompactBoundaryRelation<'a>>,
+    verified_partitions: Vec<CompactVerifiedPartition<'a>>,
 }
 
 #[derive(Serialize)]
@@ -703,26 +786,112 @@ struct CollectionReceipt {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct VerifiedPartitionView<'a> {
-    partition_key: &'a str,
-    region_ids: &'a [RegionId],
-    local_project_summary: &'a codebase_semantic_model::ProjectSemanticProposal,
-    areas: &'a [codebase_semantic_model::ApprovedSemanticArea],
-    assignments: &'a [codebase_semantic_model::ApprovedRegionAssignment],
+struct CompactBoundaryRelation<'a> {
+    source_region_id: &'a RegionId,
+    target_region_id: &'a RegionId,
+    families: &'a [BoundaryRelationCount],
+}
+
+impl<'a> From<&'a BoundaryRelationSummary> for CompactBoundaryRelation<'a> {
+    fn from(relation: &'a BoundaryRelationSummary) -> Self {
+        Self {
+            source_region_id: &relation.source_region_id,
+            target_region_id: &relation.target_region_id,
+            families: &relation.families,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompactVerifiedPartition<'a> {
+    partition_ordinal: usize,
+    local_project_summary: &'a str,
+    areas: Vec<CompactVerifiedArea<'a>>,
     unassigned_regions: &'a [codebase_semantic_model::UnassignedRegion],
     warnings: &'a [String],
 }
 
-impl<'a> From<&'a VerifiedSemanticPartition> for VerifiedPartitionView<'a> {
-    fn from(partition: &'a VerifiedSemanticPartition) -> Self {
-        Self {
-            partition_key: &partition.partition_key,
-            region_ids: &partition.region_ids,
-            local_project_summary: &partition.revision.project,
-            areas: &partition.revision.areas,
-            assignments: &partition.revision.assignments,
+impl<'a> CompactVerifiedPartition<'a> {
+    fn new(
+        partition_ordinal: usize,
+        partition: &'a VerifiedSemanticPartition,
+    ) -> Result<Self, SemanticCompileError> {
+        let area_indexes = partition
+            .revision
+            .areas
+            .iter()
+            .enumerate()
+            .map(|(index, area)| (&area.area_id, index))
+            .collect::<BTreeMap<_, _>>();
+        let areas = partition
+            .revision
+            .areas
+            .iter()
+            .enumerate()
+            .map(|(index, area)| CompactVerifiedArea::new(index, area, &area_indexes))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            partition_ordinal,
+            local_project_summary: &partition.revision.project.summary,
+            areas,
             unassigned_regions: &partition.revision.unassigned_regions,
             warnings: &partition.revision.warnings,
-        }
+        })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompactVerifiedArea<'a> {
+    local_area_index: usize,
+    parent_local_area_index: Option<usize>,
+    level: u8,
+    label: &'a str,
+    summary: &'a str,
+    category: AreaCategory,
+    direct_member_region_ids: &'a [RegionId],
+    representative_fact_ids: &'a [FactNodeId],
+    representative_trace_path_ids: &'a [TracePathId],
+    evidence_ids: &'a [EvidenceId],
+    aliases: &'a [String],
+    label_source: LabelSource,
+    fallback_reason: Option<SemanticFallbackReason>,
+}
+
+impl<'a> CompactVerifiedArea<'a> {
+    fn new(
+        local_area_index: usize,
+        area: &'a ApprovedSemanticArea,
+        area_indexes: &BTreeMap<&codebase_semantic_model::SemanticAreaId, usize>,
+    ) -> Result<Self, SemanticCompileError> {
+        let parent_local_area_index = area
+            .parent_area_id
+            .as_ref()
+            .map(|parent| {
+                area_indexes.get(parent).copied().ok_or_else(|| {
+                    SemanticCompileError::new(
+                        SemanticCompileErrorCode::MissingReference,
+                        "verifiedPartitions[].areas[].parentAreaId",
+                        format!("approved local parent area {parent} does not exist"),
+                    )
+                })
+            })
+            .transpose()?;
+        Ok(Self {
+            local_area_index,
+            parent_local_area_index,
+            level: area.level,
+            label: &area.label,
+            summary: &area.summary,
+            category: area.category,
+            direct_member_region_ids: &area.direct_member_region_ids,
+            representative_fact_ids: &area.representative_fact_ids,
+            representative_trace_path_ids: &area.representative_trace_path_ids,
+            evidence_ids: &area.evidence_ids,
+            aliases: &area.aliases,
+            label_source: area.label_source,
+            fallback_reason: area.fallback_reason,
+        })
     }
 }

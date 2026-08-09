@@ -1,8 +1,9 @@
 mod support;
 
 use codebase_semantic_compiler::{
-    compile_base_prompt, compile_base_repair_prompt, parse_and_verify_base_response,
-    verify_base_proposal, CompiledBasePrompt,
+    compile_base_prompt, compile_base_repair_prompt, compile_reconciliation_prompt,
+    compile_semantic_plan_with_policy, parse_and_verify_base_response, verify_base_proposal,
+    CompiledBasePrompt, SemanticPartitionPolicy, VerifiedSemanticPartition,
 };
 use std::{
     fs,
@@ -11,7 +12,7 @@ use std::{
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
-use support::{fixture_draft, valid_proposal};
+use support::{fixture_draft, structural_proposal, valid_proposal};
 
 /// Real-model prompt evaluation. It is ignored in normal CI because it needs
 /// an installed, authenticated Codex CLI and consumes provider capacity.
@@ -129,6 +130,63 @@ fn codex_repairs_all_repeated_missing_parent_references_in_one_pass() {
         assert_eq!(corrected_area.summary, original_area.summary);
     }
     parse_and_verify_base_response(&repair, &raw).unwrap();
+}
+
+#[test]
+#[ignore = "requires an installed and authenticated Codex CLI"]
+fn codex_reconciles_compact_verified_partitions() {
+    let (mut draft, _) = fixture_draft();
+    draft.provider.model = "gpt-5.6-terra".to_string();
+    let plan = compile_semantic_plan_with_policy(
+        draft,
+        SemanticPartitionPolicy {
+            direct_max_regions: 0,
+            direct_max_prompt_bytes: 0,
+            max_regions_per_partition: 1,
+            max_partition_input_bytes: 96 * 1024,
+        },
+    )
+    .unwrap();
+    let verified = plan
+        .partitions
+        .iter()
+        .map(|partition| {
+            let revision = verify_base_proposal(
+                &partition.prompt.packet,
+                structural_proposal(&partition.prompt),
+            )
+            .unwrap();
+            VerifiedSemanticPartition {
+                partition_key: partition.partition_key.clone(),
+                region_ids: partition.region_ids.clone(),
+                packet_digest: partition.prompt.packet.semantic_input_digest,
+                revision,
+            }
+        })
+        .collect::<Vec<_>>();
+    let reconciliation = compile_reconciliation_prompt(&plan.base, &verified).unwrap();
+
+    let approved = run_codex_until_verified(&reconciliation);
+
+    assert_eq!(approved.assignments.len(), 2);
+    assert!(approved.unassigned_regions.is_empty());
+}
+
+fn run_codex_until_verified(
+    original: &CompiledBasePrompt,
+) -> codebase_semantic_model::ApprovedSemanticRevision {
+    let mut prompt = original.clone();
+    for repair_attempt in 0..=2 {
+        let raw = run_codex(&prompt);
+        match parse_and_verify_base_response(&prompt, &raw) {
+            Ok(approved) => return approved,
+            Err(error) if repair_attempt < 2 => {
+                prompt = compile_base_repair_prompt(original, &raw, &error).unwrap();
+            }
+            Err(error) => panic!("Codex output remained invalid after bounded repair: {error}"),
+        }
+    }
+    unreachable!("bounded verification loop always returns or panics")
 }
 
 fn run_codex(compiled: &CompiledBasePrompt) -> String {

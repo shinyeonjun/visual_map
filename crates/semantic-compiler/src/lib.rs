@@ -13,9 +13,9 @@ mod verifier;
 
 pub use error::{SemanticCompileError, SemanticCompileErrorCode};
 pub use partition::{
-    compile_reconciliation_prompt, compile_semantic_plan, compile_semantic_plan_with_policy,
-    CompiledSemanticPartition, CompiledSemanticPlan, SemanticPartitionPolicy,
-    VerifiedSemanticPartition,
+    compile_reconciliation_partition, compile_reconciliation_prompt, compile_semantic_plan,
+    compile_semantic_plan_with_policy, CompiledSemanticPartition, CompiledSemanticPlan,
+    SemanticPartitionPolicy, VerifiedSemanticPartition,
 };
 pub use prompt::{
     compile_base_prompt, compile_base_repair_prompt, BaseSemanticDraft, CompiledBasePrompt,

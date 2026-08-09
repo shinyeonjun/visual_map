@@ -2052,9 +2052,9 @@ partition에만 포함됐다. source evidence 소유권 격리, global prompt so
 
 ### 남은 한계 또는 후속 gate
 
-512KiB global safety ceiling을 넘는 수천 region 저장소는 계층형 다단 reconciliation이 추가로 필요하다.
-현재 구현은 누락 지도를 만들지 않고 명시적으로 실패한다. 또한 기본 96KiB/병렬도 2는 실제 S/M/L 저장소의
-시간·비용·semantic stability 측정 전 보수값이며 출시 수치로 확정하지 않는다.
+이 항목에서 남겼던 512KiB 단일 global reconciliation 한계는 TS-2026-08-09-90의 compact shuffle과
+계층형 다단 Reduce로 해소했다. 192개 static region directory 상한과 실제 S/M/L 저장소의 시간·비용·semantic
+stability 측정은 별도 보수 gate로 남는다.
 
 ---
 
@@ -3893,6 +3893,67 @@ prompt policy version 변경으로 기존 semantic cache는 한 번 무효화된
 모든 verifier 규칙을 다중 오류 수집기로 복제하지 않는다. 현재는 기계적으로 안전하게 열거할 수 있는
 계층·참조 위반만 묶고, 그 밖의 순차 오류는 최대 2차 교정으로 처리한다. 이 한도를 넘으면 비용을 계속
 소비하지 않고 전체 revision 게시를 차단한다.
+
+---
+
+## TS-2026-08-09-90 — 단일 861KiB 전역 통합을 compact 계층 MapReduce로 바꾼다
+
+### 증상
+
+16개 local 의미 분석과 교정이 모두 끝난 뒤 provider 호출 전에
+`InvalidPacket at reconciliationPrompt: global reconciliation prompt is 861420 bytes and exceeds the 524288 byte safety budget`
+으로 종료됐다. 정적 Fact와 local cache는 저장됐지만 의미 지도를 게시하지 못했다.
+
+### 잘못 짚기 쉬운 원인
+
+512KiB 상수를 1MiB로 올리거나 전체 결과를 파일로 전달해도 모델이 읽는 양과 마지막 단일 Reduce 병목은
+그대로다. local AI 호출 수나 정적 분석 속도 문제가 아니라 `Map 16개 → Reduce 1개`의 shuffle payload가
+중복 데이터를 다시 펼친 문제였다.
+
+### 근본 원인
+
+전역 payload가 local approved revision의 `areaId`, `parentAreaId`, direct/effective member 양쪽,
+별도 assignment, 전체 project citation을 함께 보냈다. boundary relation도 의미 결속도에 필요 없는 bundle
+ID, 대표 edge ID, evidence ID까지 다시 실었다. 결과적으로 local 결과 16개의 실제 의미보다 내부 저장 표현과
+긴 SHA-256 ID 중복이 더 큰 비중을 차지했고 Reduce만 단일 호출로 남았다.
+
+### 적용한 수정
+
+- shuffle 계약을 별도 compact read model로 만들었다. local area는 partition-local 정수 index,
+  parent index, label/summary/category, direct member region, exact 대표 fact/trace/evidence만 전달한다.
+- effective member와 assignment는 direct member+부모 관계로 재구성 가능하므로 전송하지 않는다. local
+  approved area ID와 partition key도 모델 입력에서 제거한다.
+- boundary relation은 source/target region과 family·truth·count만 남기고 bundle/대표 edge/evidence 목록을
+  제거한다. source excerpt는 Reduce 어느 단계에도 재전송하지 않는다.
+- 입력이 4개보다 많으면 fan-in 4로 결정적 묶음을 만들고 중간 Reduce를 최대 4개 병렬 실행한다. 각 중간
+  결과는 해당 region scope의 원래 Fact packet verifier를 전부 통과해야 다음 단계 입력이 된다.
+- 어느 중간 prompt든 512KiB를 넘으면 provider 호출 전 결정적으로 반으로 나눈다. 두 입력조차 한도에
+  못 들어오면 조용히 누락하지 않고 실패한다.
+- 중간·최종 Reduce도 동일한 verifier-guided repair와 최대 2차 교정 계약을 사용한다.
+
+### 검증 결과
+
+실제 실패 workspace의 16개 v3 partition cache를 그대로 읽어 측정했다. 기존 전역 prompt `861,420B`는
+compact 계약에서 `335,304B`로 61.1% 감소했다. 계층 Reduce 1단계는 16→4로 계획됐고 prompt 크기는
+각각 `81,506B`, `81,737B`, `70,330B`, `53,093B`로 모두 512KiB보다 충분히 작았다. 작은 독립 fixture의
+compact reconciliation을 최신 Codex CLI `0.147.0-alpha.6.5`, `GPT-5.6 Terra`, high로 실제 실행해 전체
+region assignment와 strict verifier 통과를 확인했다.
+
+### 재발 시 점검 순서
+
+1. 로그의 `phase: reduce`에서 각 중간 prompt `inputBytes`와 worker 수를 확인한다.
+2. compact payload에 `areaId`, `effectiveMemberRegionIds`, `assignments`, `representativeEdgeIds`, source excerpt가
+   다시 들어오지 않았는지 회귀 테스트를 확인한다.
+3. 각 Reduce level의 입력 합집합이 전체 region과 같고 교집합이 비어 있는지 확인한다.
+4. 중간 결과가 scoped verifier를 우회하거나 최종 결과가 원래 full packet digest가 아닌지 확인한다.
+5. 단순 byte 상향이나 임의 truncation으로 오류를 숨기지 않았는지 확인한다.
+
+### 남은 한계 또는 후속 gate
+
+local Map cache는 그대로 재사용하지만 중간 Reduce 결과의 immutable cache는 아직 없다. 최종 통합 실패 뒤
+재실행 비용을 줄이려면 child revision ID까지 포함한 reduce cache key가 필요하다. 또한 현재 192개 static
+region directory ceiling은 계층 Reduce와 별개로 유지되며 S/M/L 실저장소에서 품질·시간·비용을 측정한 뒤
+조정한다.
 
 ---
 

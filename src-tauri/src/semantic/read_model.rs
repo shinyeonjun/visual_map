@@ -25,10 +25,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Current one-shot global reconciliation ceiling. Local provider calls are
-/// partitioned separately; repositories that still exceed this structural
-/// directory need the future hierarchical reconciliation stage rather than a
-/// silently incomplete map.
+/// Current bounded static region-directory ceiling. Provider work is split
+/// into local Map jobs and fan-in-four hierarchical Reduce jobs, but the
+/// canonical read model still rejects a larger structural directory instead
+/// of silently omitting regions.
 const MAX_GLOBAL_REGIONS: usize = 192;
 const MAX_ANCHORS_PER_REGION: usize = 12;
 const MAX_EXCERPTS: usize = 48;

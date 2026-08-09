@@ -103,7 +103,7 @@ canonical clean=incremental, 수백~수천 파일 frozen/OSS holdout이 남았�
 | test case→production relation | **10언어 독립 baseline 인증** | exact runner/annotation/registration으로 TestCase를 만들고, 그 body 안의 provider-resolved direct call이 기존 project-local production definition을 가리킬 때만 confirmed `Tests` edge를 만든다. 언어별 positive 1개와 이름만 비슷한 negative 1개를 고정해 10/10 연결·10/10 거부·2회 결정성·source mutation 0을 통과했다. 미연결 test는 edge 대신 typed gap으로 남긴다. |
 | 정적 TracePath | **desktop query·제품 read model 연결 완료** | published canonical node/edge/receipt/gap에서 confirmed exact 실행 관계만 따르는 bounded ordered path를 계산한다. complete/partial/gap/cycle/depth-limit, stable identity, evidence, representative/selection query를 MapView까지 연결했다. |
 | 경계 관계 수·순환·공유 resource·inbound 없음 | 기반 구현, 집계 미구현 | canonical exact edge는 보존되지만 상위 boundary로 접는 RelationBundle과 고유 상대 영역/종류/순환/공유 resource 집계는 아직 없다. |
-| 앱 지도에서 사용할 snapshot | **code-only vertical slice + AI 분할 경로 연결** | code engine immutable canonical bundle을 Tauri가 검증·원자 publish하고, static region·relation·TracePath·AI Base revision을 거쳐 typed MapView/Selection으로 제공한다. 큰 Base 입력은 결정적 local partition→개별 verifier/cache→source-free global reconciliation→전체 verifier로 연결됐다. 실제 대형 provider 품질·시간 gate와 DB는 남았다. |
+| 앱 지도에서 사용할 snapshot | **code-only vertical slice + AI MapReduce 경로 연결** | code engine immutable canonical bundle을 Tauri가 검증·원자 publish하고, static region·relation·TracePath·AI Base revision을 거쳐 typed MapView/Selection으로 제공한다. 큰 Base 입력은 결정적 local Map partition→개별 verifier/cache→compact shuffle→fan-in 4 병렬 계층 Reduce→전체 verifier로 연결됐다. 실제 대형 provider 품질·시간 gate와 DB는 남았다. |
 
 ## 현재 검증으로 실제 증명된 범위
 
@@ -863,6 +863,11 @@ canonical producer, 대규모 representative omission receipt, clean=incremental
   때만 최신 결과를 최대 한 번 더 교정한다. 결과가 없는 실행 실패만 실패한 exact prompt를 다시 실행한다.
   evidence, verifier, model과 reasoning effort는 그대로다. 각각
   `CODEBASE_WORKSPACE_AI_MAX_PARALLEL`, `CODEBASE_WORKSPACE_AI_RETRY_MAX_PARALLEL`로 1~8 범위 조정이 가능하다.
+- 전역 의미 통합은 local 결과를 한 호출에 직렬화하지 않는다. compact shuffle이 중복 assignment,
+  effective member, 내부 area ID, relation 대표 edge/evidence, source excerpt를 제거하고 direct membership과
+  exact citation·경계 집계만 남긴다. 4개보다 많은 입력은 fan-in 4 병렬 Reduce를 반복하며 각 중간 결과도
+  scoped full verifier를 통과해야 다음 단계 입력이 된다. 모든 Reduce prompt는 512KiB를 넘기기 전에
+  결정적으로 더 작은 묶음으로 나뉜다.
 - `scip-typescript --max-file-byte-size`를 scheduler shard의 최대 파일이 아니라 Source Census가 승인한
   프로젝트 전체 최대 source 크기로 계산한다. indexer가 상위 tsconfig의 더 큰 member를 조용히 건너뛰지
   못한다.

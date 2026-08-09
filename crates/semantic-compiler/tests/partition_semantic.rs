@@ -1,17 +1,12 @@
 mod support;
 
 use codebase_semantic_compiler::{
-    compile_base_repair_prompt, compile_reconciliation_prompt, compile_semantic_plan_with_policy,
-    parse_and_verify_base_response, verify_base_proposal, SemanticCompileErrorCode,
-    SemanticPartitionPolicy, VerifiedSemanticPartition,
-};
-use codebase_semantic_model::{
-    AreaCategory, AreaProposal, LabelSource, ProjectSemanticProposal, ProposalKey,
-    RegionAssignment, SemanticFallbackReason, SemanticRevisionProposal,
-    BASE_SEMANTIC_SCHEMA_VERSION,
+    compile_base_repair_prompt, compile_reconciliation_partition, compile_reconciliation_prompt,
+    compile_semantic_plan_with_policy, parse_and_verify_base_response, verify_base_proposal,
+    SemanticCompileErrorCode, SemanticPartitionPolicy, VerifiedSemanticPartition,
 };
 use std::collections::BTreeSet;
-use support::{fixture_draft, valid_proposal};
+use support::{fixture_draft, structural_proposal, valid_proposal};
 
 fn forced_partition_policy(max_regions: usize) -> SemanticPartitionPolicy {
     SemanticPartitionPolicy {
@@ -139,9 +134,20 @@ fn verified_local_results_reconcile_without_resending_source_excerpts() {
 
     assert!(rendered.contains("RECONCILIATION_PAYLOAD_JSON"));
     assert!(rendered.contains("verifiedPartitions"));
+    assert!(rendered.contains("localAreaIndex"));
+    assert!(rendered.contains("directMemberRegionIds"));
+    assert!(!rendered.contains("\"areaId\""));
+    assert!(!rendered.contains("\"effectiveMemberRegionIds\""));
+    assert!(!rendered.contains("\"assignments\""));
+    assert!(!rendered.contains("\"representativeEdgeIds\""));
     assert!(!rendered.contains(&plan.base.packet.input.excerpts[0].text));
     assert!(!rendered.contains(&plan.base.packet.input.excerpts[1].text));
     assert_eq!(reconciliation.packet, plan.base.packet);
+
+    let reduced_partition = compile_reconciliation_partition(&plan.base, &verified).unwrap();
+    assert!(reduced_partition.partition_key.starts_with("reduce-"));
+    assert_eq!(reduced_partition.region_ids.len(), 2);
+    assert_eq!(reduced_partition.prompt.packet.input.regions.len(), 2);
 
     let rejected = "{}";
     let verifier_error = parse_and_verify_base_response(&reconciliation, rejected).unwrap_err();
@@ -172,56 +178,4 @@ fn one_oversized_region_fails_explicitly_instead_of_silent_truncation() {
     assert_eq!(error.code, SemanticCompileErrorCode::InvalidPacket);
     assert_eq!(error.path, "partitionPlan");
     assert!(error.message.contains("exceeds"));
-}
-
-fn structural_proposal(
-    compiled: &codebase_semantic_compiler::CompiledBasePrompt,
-) -> SemanticRevisionProposal {
-    let areas = compiled
-        .packet
-        .input
-        .regions
-        .iter()
-        .enumerate()
-        .map(|(index, region)| AreaProposal {
-            proposal_key: ProposalKey::parse(format!("local-{index}")).unwrap(),
-            parent_proposal_key: None,
-            level: 0,
-            label: region.structural_label.clone(),
-            summary: format!("{} 구조 단위를 그대로 표시합니다.", region.structural_label),
-            category: AreaCategory::Structural,
-            representative_fact_ids: vec![],
-            representative_trace_path_ids: vec![],
-            evidence_ids: vec![],
-            aliases: vec![],
-            label_source: LabelSource::Structural,
-            fallback_reason: Some(SemanticFallbackReason::InsufficientSemanticSignal),
-        })
-        .collect::<Vec<_>>();
-    let assignments = compiled
-        .packet
-        .input
-        .regions
-        .iter()
-        .enumerate()
-        .map(|(index, region)| RegionAssignment {
-            region_id: region.region_id.clone(),
-            area_proposal_key: ProposalKey::parse(format!("local-{index}")).unwrap(),
-        })
-        .collect();
-    SemanticRevisionProposal {
-        schema_version: BASE_SEMANTIC_SCHEMA_VERSION,
-        snapshot_id: compiled.packet.snapshot_id.clone(),
-        semantic_input_digest: compiled.packet.semantic_input_digest,
-        project: ProjectSemanticProposal {
-            summary: "이 로컬 구조 단위의 현재 책임을 설명합니다.".to_string(),
-            aliases: vec![],
-            representative_fact_ids: vec![],
-            evidence_ids: vec![],
-        },
-        areas,
-        assignments,
-        unassigned_regions: vec![],
-        warnings: vec![],
-    }
 }

@@ -118,11 +118,19 @@ revision is published. A trace can represent an area only when every region
 that owns the trace belongs to that area's direct or descendant membership;
 cross-area traces remain relationship information rather than area evidence.
 
-Large semantic inputs are deterministically partitioned into independent local
-jobs and a source-free global reconciliation job. These calls are ephemeral:
-they do not resume or create the user's Codex/Claude chat session. The semantic
-cache key includes Fact digest, prompt/schema version, provider/model, and
-reasoning effort so identical approved input remains stable. When a provider
+Large semantic inputs use a bounded MapReduce pipeline. Deterministic,
+disjoint local Map jobs are verified independently. The shuffle contract then
+keeps only local meaning, direct region membership, exact citations, and
+aggregated boundary counts; duplicate assignments, effective memberships,
+internal area IDs, relation evidence lists, and source excerpts are removed.
+When more than four verified inputs remain, fan-in-four Reduce jobs execute in
+parallel and their strictly verified outputs become the next level until one
+final full-packet reconciliation remains. Every Reduce prompt retains the
+512-KiB fail-closed budget and recursively splits before provider execution if
+needed. These calls are ephemeral: they do not resume or create the user's
+Codex/Claude chat session. The semantic cache key includes Fact digest,
+prompt/schema version, provider/model, and reasoning effort so identical
+approved input remains stable. When a provider
 returns a schema-valid but unverifiable result, the broker sends that rejected
 JSON and the exact verifier error through a bounded repair prompt. For
 hierarchy/reference failures it also enumerates every safely detectable
@@ -183,8 +191,8 @@ installed compatible CLI runtime for the analysis boundary.
 ## Remaining completion work
 
 - measure and optimize cold analysis on representative large repositories;
-- split large semantic reconciliation hierarchically beyond the current
-  bounded global packet;
+- measure hierarchical Reduce quality, latency, and provider cost on S/M/L
+  repositories and add immutable intermediate-result caching;
 - finish real-repository holdouts for every supported language;
 - integrate DB metadata through its own canonical typed adapter;
 - connect grounded app-owned conversation after map correctness and latency are

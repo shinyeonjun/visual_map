@@ -11,9 +11,9 @@ use codebase_semantic_model::{
     AiProviderDescriptor, AiProviderKind, AnchorFactSummary, AreaCategory, AreaProposal,
     BaseSemanticInput, BoundaryRelationCount, BoundaryRelationSummary, EvidenceExcerpt,
     LabelSource, OutputLanguage, ProjectSemanticContext, ProjectSemanticProposal, ProposalKey,
-    RegionAssignment, RegionId, RelationBundleId, ScopeReceipt, SemanticRevisionProposal,
-    StaticRegionKind, StaticRegionSummary, TracePathId, TracePathState, TracePathSummary,
-    BASE_SEMANTIC_SCHEMA_VERSION,
+    RegionAssignment, RegionId, RelationBundleId, ScopeReceipt, SemanticFallbackReason,
+    SemanticRevisionProposal, StaticRegionKind, StaticRegionSummary, TracePathId, TracePathState,
+    TracePathSummary, BASE_SEMANTIC_SCHEMA_VERSION,
 };
 
 #[derive(Clone)]
@@ -309,6 +309,56 @@ pub fn valid_proposal(compiled: &CompiledBasePrompt, ids: &FixtureIds) -> Semant
                 area_proposal_key: ProposalKey::parse("authentication").unwrap(),
             },
         ],
+        unassigned_regions: vec![],
+        warnings: vec![],
+    }
+}
+
+pub fn structural_proposal(compiled: &CompiledBasePrompt) -> SemanticRevisionProposal {
+    let areas = compiled
+        .packet
+        .input
+        .regions
+        .iter()
+        .enumerate()
+        .map(|(index, region)| AreaProposal {
+            proposal_key: ProposalKey::parse(format!("local-{index}")).unwrap(),
+            parent_proposal_key: None,
+            level: 0,
+            label: region.structural_label.clone(),
+            summary: format!("{} 구조 단위를 그대로 표시합니다.", region.structural_label),
+            category: AreaCategory::Structural,
+            representative_fact_ids: vec![],
+            representative_trace_path_ids: vec![],
+            evidence_ids: vec![],
+            aliases: vec![],
+            label_source: LabelSource::Structural,
+            fallback_reason: Some(SemanticFallbackReason::InsufficientSemanticSignal),
+        })
+        .collect::<Vec<_>>();
+    let assignments = compiled
+        .packet
+        .input
+        .regions
+        .iter()
+        .enumerate()
+        .map(|(index, region)| RegionAssignment {
+            region_id: region.region_id.clone(),
+            area_proposal_key: ProposalKey::parse(format!("local-{index}")).unwrap(),
+        })
+        .collect();
+    SemanticRevisionProposal {
+        schema_version: BASE_SEMANTIC_SCHEMA_VERSION,
+        snapshot_id: compiled.packet.snapshot_id.clone(),
+        semantic_input_digest: compiled.packet.semantic_input_digest,
+        project: ProjectSemanticProposal {
+            summary: "이 로컬 구조 단위의 현재 책임을 설명합니다.".to_string(),
+            aliases: vec![],
+            representative_fact_ids: vec![],
+            evidence_ids: vec![],
+        },
+        areas,
+        assignments,
         unassigned_regions: vec![],
         warnings: vec![],
     }
