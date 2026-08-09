@@ -12,7 +12,7 @@ use std::{
 };
 
 const DEFAULT_INITIAL_PROVIDER_JOBS: usize = 4;
-const DEFAULT_RETRY_PROVIDER_JOBS: usize = 2;
+const DEFAULT_RECOVERY_PROVIDER_JOBS: usize = 2;
 const MAX_CONFIGURED_PROVIDER_JOBS: usize = 8;
 static STAGING_NONCE: AtomicU64 = AtomicU64::new(0);
 
@@ -61,10 +61,10 @@ pub(super) fn run_provider_batch(
     );
 }
 
-/// Retries use a lower bound than the normal path. A failed provider call may
-/// be rate-limited or resource constrained, so conservative recovery prevents
-/// a fast first pass from turning one transient failure into a retry storm.
-pub(super) fn run_provider_retry_batch(
+/// Verifier-guided repairs and execution retries use a lower bound than the
+/// normal path. Conservative recovery avoids turning one invalid response or
+/// transient provider failure into a parallel retry storm.
+pub(super) fn run_provider_repair_batch(
     runtime: &provider::ResolvedProvider,
     prompts: &[CompiledBasePrompt],
     operation_id: &str,
@@ -75,9 +75,9 @@ pub(super) fn run_provider_retry_batch(
         prompts,
         configured_provider_parallelism(
             "CODEBASE_WORKSPACE_AI_RETRY_MAX_PARALLEL",
-            DEFAULT_RETRY_PROVIDER_JOBS,
+            DEFAULT_RECOVERY_PROVIDER_JOBS,
         ),
-        "retry",
+        "repair",
         operation_id,
         on_completed,
     );
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn semantic_batch_parallelism_is_bounded_without_serializing_normal_work() {
         assert_eq!(worker_count(16, DEFAULT_INITIAL_PROVIDER_JOBS), 4);
-        assert_eq!(worker_count(16, DEFAULT_RETRY_PROVIDER_JOBS), 2);
+        assert_eq!(worker_count(16, DEFAULT_RECOVERY_PROVIDER_JOBS), 2);
         assert_eq!(worker_count(1, DEFAULT_INITIAL_PROVIDER_JOBS), 1);
         assert_eq!(worker_count(0, DEFAULT_INITIAL_PROVIDER_JOBS), 0);
         assert_eq!(worker_count(3, 0), 1);

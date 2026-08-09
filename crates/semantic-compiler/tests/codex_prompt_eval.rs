@@ -1,6 +1,9 @@
 mod support;
 
-use codebase_semantic_compiler::{compile_base_prompt, parse_and_verify_base_response};
+use codebase_semantic_compiler::{
+    compile_base_prompt, compile_base_repair_prompt, parse_and_verify_base_response,
+    verify_base_proposal, CompiledBasePrompt,
+};
 use std::{
     fs,
     io::Write,
@@ -8,7 +11,7 @@ use std::{
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
-use support::fixture_draft;
+use support::{fixture_draft, valid_proposal};
 
 /// Real-model prompt evaluation. It is ignored in normal CI because it needs
 /// an installed, authenticated Codex CLI and consumes provider capacity.
@@ -17,6 +20,80 @@ use support::fixture_draft;
 fn codex_groups_the_reviewed_commerce_fixture_without_repository_access() {
     let (draft, ids) = fixture_draft();
     let compiled = compile_base_prompt(draft).unwrap();
+    let raw = run_codex(&compiled);
+    let approved = parse_and_verify_base_response(&compiled, &raw).unwrap();
+    assert!(approved.unassigned_regions.is_empty());
+
+    let order_area_ids = approved
+        .assignments
+        .iter()
+        .filter(|assignment| assignment.region_id == ids.order_region)
+        .map(|assignment| &assignment.area_id)
+        .collect::<Vec<_>>();
+    let auth_area_ids = approved
+        .assignments
+        .iter()
+        .filter(|assignment| assignment.region_id == ids.auth_region)
+        .map(|assignment| &assignment.area_id)
+        .collect::<Vec<_>>();
+    assert_eq!(order_area_ids.len(), 1);
+    assert_eq!(auth_area_ids.len(), 1);
+
+    let order_text = semantic_lineage_text(&approved, order_area_ids[0]);
+    let auth_text = semantic_lineage_text(&approved, auth_area_ids[0]);
+    println!("approved order meaning: {order_text}");
+    println!("approved auth meaning: {auth_text}");
+    assert!(
+        order_text.contains("주문"),
+        "order region did not receive an order meaning: {order_text}"
+    );
+    assert!(
+        auth_text.contains("인증") || auth_text.contains("세션"),
+        "auth region did not receive an auth/session meaning: {auth_text}"
+    );
+}
+
+#[test]
+#[ignore = "requires an installed and authenticated Codex CLI"]
+fn codex_repairs_a_rejected_cross_area_trace_without_redoing_assignments() {
+    let (mut draft, ids) = fixture_draft();
+    draft.input.regions[1]
+        .representative_trace_path_ids
+        .push(ids.order_trace.clone());
+    let compiled = compile_base_prompt(draft).unwrap();
+    let rejected = valid_proposal(&compiled, &ids);
+    let rejected_json = serde_json::to_string(&rejected).unwrap();
+    let verifier_error = verify_base_proposal(&compiled.packet, rejected.clone()).unwrap_err();
+    let repair = compile_base_repair_prompt(&compiled, &rejected_json, &verifier_error).unwrap();
+
+    let raw = run_codex(&repair);
+    let corrected: codebase_semantic_model::SemanticRevisionProposal =
+        serde_json::from_str(&raw).unwrap();
+    assert_eq!(corrected.assignments, rejected.assignments);
+    assert_eq!(corrected.areas.len(), rejected.areas.len());
+    for original_area in &rejected.areas {
+        let corrected_area = corrected
+            .areas
+            .iter()
+            .find(|area| area.proposal_key == original_area.proposal_key)
+            .unwrap();
+        assert_eq!(
+            corrected_area.parent_proposal_key,
+            original_area.parent_proposal_key
+        );
+        assert_eq!(corrected_area.level, original_area.level);
+        assert_eq!(corrected_area.label, original_area.label);
+        assert_eq!(corrected_area.summary, original_area.summary);
+        assert_eq!(
+            corrected_area.representative_fact_ids,
+            original_area.representative_fact_ids
+        );
+        assert_eq!(corrected_area.evidence_ids, original_area.evidence_ids);
+    }
+    parse_and_verify_base_response(&repair, &raw).unwrap();
+}
+
+fn run_codex(compiled: &CompiledBasePrompt) -> String {
     let temp = unique_eval_dir();
     fs::create_dir(&temp).unwrap();
     let _cleanup = TempEvalDir(temp.clone());
@@ -57,38 +134,7 @@ fn codex_groups_the_reviewed_commerce_fixture_without_repository_access() {
         "Codex failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
-    let raw = fs::read_to_string(&output_path).unwrap();
-    let approved = parse_and_verify_base_response(&compiled, &raw).unwrap();
-    assert!(approved.unassigned_regions.is_empty());
-
-    let order_area_ids = approved
-        .assignments
-        .iter()
-        .filter(|assignment| assignment.region_id == ids.order_region)
-        .map(|assignment| &assignment.area_id)
-        .collect::<Vec<_>>();
-    let auth_area_ids = approved
-        .assignments
-        .iter()
-        .filter(|assignment| assignment.region_id == ids.auth_region)
-        .map(|assignment| &assignment.area_id)
-        .collect::<Vec<_>>();
-    assert_eq!(order_area_ids.len(), 1);
-    assert_eq!(auth_area_ids.len(), 1);
-
-    let order_text = semantic_lineage_text(&approved, order_area_ids[0]);
-    let auth_text = semantic_lineage_text(&approved, auth_area_ids[0]);
-    println!("approved order meaning: {order_text}");
-    println!("approved auth meaning: {auth_text}");
-    assert!(
-        order_text.contains("주문"),
-        "order region did not receive an order meaning: {order_text}"
-    );
-    assert!(
-        auth_text.contains("인증") || auth_text.contains("세션"),
-        "auth region did not receive an auth/session meaning: {auth_text}"
-    );
+    fs::read_to_string(output_path).unwrap()
 }
 
 fn semantic_lineage_text(

@@ -2,8 +2,8 @@ mod support;
 
 use codebase_fact_model::identity::{EvidenceId, FactEdgeId, FactNodeId};
 use codebase_semantic_compiler::{
-    compile_base_prompt, parse_and_verify_base_response, verify_base_proposal,
-    SemanticCompileErrorCode,
+    compile_base_prompt, compile_base_repair_prompt, parse_and_verify_base_response,
+    verify_base_proposal, SemanticCompileErrorCode,
 };
 use codebase_semantic_model::{
     AreaCategory, LabelSource, SemanticFallbackReason, TracePathId, TracePathState,
@@ -58,6 +58,50 @@ fn repository_prompt_injection_stays_in_untrusted_payload() {
         .system_policy
         .contains("No Markdown, code fence, preface, explanation, confidence score"));
     assert!(compiled.rendered_prompt().contains("PAYLOAD_JSON"));
+}
+
+#[test]
+fn prompt_explicitly_forbids_cross_area_representative_traces() {
+    let (draft, _) = fixture_draft();
+    let compiled = compile_base_prompt(draft).unwrap();
+
+    assert!(compiled
+        .system_policy
+        .contains("every region that lists that trace is owned by the same proposed area"));
+    assert!(compiled
+        .system_policy
+        .contains("return an empty representativeTracePathIds array"));
+}
+
+#[test]
+fn verifier_error_compiles_a_minimal_full_output_repair_prompt() {
+    let (mut draft, ids) = fixture_draft();
+    draft.input.regions[1]
+        .representative_trace_path_ids
+        .push(ids.order_trace.clone());
+    let compiled = compile_base_prompt(draft).unwrap();
+    let mut rejected = valid_proposal(&compiled, &ids);
+    let rejected_json = serde_json::to_string(&rejected).unwrap();
+    let verifier_error = verify_base_proposal(&compiled.packet, rejected.clone()).unwrap_err();
+
+    let repair = compile_base_repair_prompt(&compiled, &rejected_json, &verifier_error).unwrap();
+
+    assert_eq!(repair.packet, compiled.packet);
+    assert_eq!(repair.output_schema, compiled.output_schema);
+    assert!(repair.system_policy.contains("VERIFIER-GUIDED REPAIR"));
+    assert!(repair
+        .system_policy
+        .contains("Never move regions or reshape areas to legalize a citation"));
+    assert!(repair.task_prompt.contains("REPAIR_PAYLOAD_JSON"));
+    assert!(repair.task_prompt.contains("verifierError"));
+    assert!(repair.task_prompt.contains(&verifier_error.message));
+    assert!(parse_and_verify_base_response(&repair, &rejected_json).is_err());
+
+    for area in &mut rejected.areas {
+        area.representative_trace_path_ids.clear();
+    }
+    let corrected_json = serde_json::to_string(&rejected).unwrap();
+    assert!(parse_and_verify_base_response(&repair, &corrected_json).is_ok());
 }
 
 #[test]

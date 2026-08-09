@@ -3,6 +3,7 @@
 mod broker;
 mod map_view;
 mod read_model;
+mod recovery;
 mod store;
 
 use crate::{
@@ -11,9 +12,10 @@ use crate::{
     workspace::Workspace,
 };
 use codebase_semantic_compiler::{
-    compile_reconciliation_prompt, compile_semantic_plan, parse_and_verify_base_response,
-    CompiledSemanticPlan, VerifiedSemanticPartition,
+    compile_reconciliation_prompt, compile_semantic_plan, CompiledSemanticPlan,
+    VerifiedSemanticPartition,
 };
+use recovery::{compile_recovery_prompt, run_provider_with_repair, verify_provider_result};
 use std::path::Path;
 
 type SemanticProgress<'a> = Option<&'a dyn Fn(&str, u64, u64)>;
@@ -38,14 +40,12 @@ pub(crate) fn analyze_and_publish(
         codebase_semantic_model::AiProviderKind::Codex => RuntimeProviderKind::Codex,
         codebase_semantic_model::AiProviderKind::Claude => RuntimeProviderKind::Claude,
     };
-    // Resolve once at the analysis boundary. Every local partition, retry, and
-    // final reconciliation is pinned to this exact installed CLI snapshot.
+    // Resolve once at the analysis boundary. Every local partition, repair,
+    // execution retry, and reconciliation uses this exact CLI snapshot.
     let runtime = providers.resolve(runtime_kind)?;
     let approved = if plan.is_direct() {
         emit_progress(progress, "AI 의미 지도를 분석하는 중", 0, 1);
-        let raw = broker::run_provider(&runtime, &plan.base, operation_id)?;
-        let result = parse_and_verify_base_response(&plan.base, &raw)
-            .map_err(|error| format!("AI 의미 결과 검증 실패: {error}"))?;
+        let result = run_provider_with_repair(&runtime, &plan.base, operation_id, "AI 의미 결과")?;
         emit_progress(progress, "AI 의미 지도 검증 완료", 1, 1);
         result
     } else {
@@ -99,7 +99,7 @@ fn analyze_partitioned(
         }
     }
 
-    let mut retry_indexes = Vec::new();
+    let mut recovery_requests = Vec::new();
     let mut fatal_errors = Vec::new();
     let mut initial_completed = 0usize;
     broker::run_provider_batch(
@@ -110,7 +110,7 @@ fn analyze_partitioned(
             initial_completed += 1;
             let index = pending_indexes[batch_index];
             let prompt = &pending_prompts[batch_index];
-            match verify_provider_result(prompt, raw, "첫") {
+            match verify_provider_result(prompt, raw) {
                 Ok(revision) => {
                     if let Err(error) = accept_verified_partition(
                         app_data_dir,
@@ -123,7 +123,10 @@ fn analyze_partitioned(
                         fatal_errors.push(error);
                     }
                 }
-                Err(error) => retry_indexes.push((index, error)),
+                Err(failure) => match compile_recovery_prompt(index, prompt, failure) {
+                    Ok(request) => recovery_requests.push(request),
+                    Err(error) => fatal_errors.push(partition_error(plan, index, &error)),
+                },
             }
             let approved_count = verified.iter().flatten().count();
             emit_progress(
@@ -139,51 +142,60 @@ fn analyze_partitioned(
         },
     );
 
-    // Retry only the partitions whose first execution or verification failed.
-    // All first-pass successes have already been verified and cached, so a
-    // later failure cannot discard minutes of completed work.
-    let retry_prompts = retry_indexes
+    // Invalid JSON results are repaired with the original output plus exact
+    // verifier feedback. Only execution failures without a result rerun the
+    // original analysis prompt. First-pass successes stay verified and cached.
+    let recovery_prompts = recovery_requests
         .iter()
-        .map(|(index, _)| plan.partitions[*index].prompt.clone())
+        .map(|request| request.prompt.clone())
         .collect::<Vec<_>>();
-    let mut retry_errors = Vec::new();
-    let mut retry_completed = 0usize;
-    broker::run_provider_retry_batch(runtime, &retry_prompts, operation_id, |retry_index, raw| {
-        retry_completed += 1;
-        let (index, first_error) = &retry_indexes[retry_index];
-        match verify_provider_result(&retry_prompts[retry_index], raw, "1회 재시도") {
-            Ok(revision) => {
-                if let Err(error) = accept_verified_partition(
-                    app_data_dir,
-                    workspace,
-                    plan,
-                    *index,
-                    revision,
-                    &mut verified,
-                ) {
-                    fatal_errors.push(error);
+    let mut recovery_errors = Vec::new();
+    let mut recovery_completed = 0usize;
+    broker::run_provider_repair_batch(
+        runtime,
+        &recovery_prompts,
+        operation_id,
+        |recovery_index, raw| {
+            recovery_completed += 1;
+            let request = &recovery_requests[recovery_index];
+            match verify_provider_result(&recovery_prompts[recovery_index], raw) {
+                Ok(revision) => {
+                    if let Err(error) = accept_verified_partition(
+                        app_data_dir,
+                        workspace,
+                        plan,
+                        request.partition_index,
+                        revision,
+                        &mut verified,
+                    ) {
+                        fatal_errors.push(error);
+                    }
                 }
+                Err(recovery_error) => recovery_errors.push(partition_error(
+                    plan,
+                    request.partition_index,
+                    &format!(
+                        "{}; {}",
+                        request.first_error,
+                        recovery_error.describe(request.attempt_label())
+                    ),
+                )),
             }
-            Err(retry_error) => retry_errors.push(partition_error(
-                plan,
-                *index,
-                &format!("{first_error}; {retry_error}"),
-            )),
-        }
-        let approved_count = verified.iter().flatten().count();
-        emit_progress(
-            progress,
-            &format!(
-                "실패한 분할 재시도 {retry_completed}/{} · 검증 {approved_count}/{}",
-                retry_prompts.len(),
-                plan.partitions.len()
-            ),
-            approved_count as u64,
-            total,
-        );
-    });
+            let approved_count = verified.iter().flatten().count();
+            emit_progress(
+                progress,
+                &format!(
+                    "AI 결과 교정 및 실행 복구 {recovery_completed}/{} · 검증 {approved_count}/{}",
+                    recovery_prompts.len(),
+                    plan.partitions.len()
+                ),
+                approved_count as u64,
+                total,
+            );
+        },
+    );
 
-    fatal_errors.extend(retry_errors);
+    fatal_errors.extend(recovery_errors);
     if !fatal_errors.is_empty() {
         return Err(summarize_partition_errors(&fatal_errors));
     }
@@ -203,22 +215,14 @@ fn analyze_partitioned(
         plan.partitions.len() as u64,
         total,
     );
-    let raw = broker::run_provider(runtime, &reconciliation, operation_id)
-        .map_err(|error| format!("AI 의미 전역 통합 실패: {error}"))?;
-    let approved = parse_and_verify_base_response(&reconciliation, &raw)
-        .map_err(|error| format!("AI 의미 전역 통합 결과 검증 실패: {error}"))?;
+    let approved = run_provider_with_repair(
+        runtime,
+        &reconciliation,
+        operation_id,
+        "AI 의미 전역 통합 결과",
+    )?;
     emit_progress(progress, "전체 의미 지도 검증 완료", total, total);
     Ok(approved)
-}
-
-fn verify_provider_result(
-    prompt: &codebase_semantic_compiler::CompiledBasePrompt,
-    run: Result<String, String>,
-    attempt: &str,
-) -> Result<codebase_semantic_model::ApprovedSemanticRevision, String> {
-    let raw = run.map_err(|error| format!("{attempt} 실행 실패: {error}"))?;
-    parse_and_verify_base_response(prompt, &raw)
-        .map_err(|error| format!("{attempt} 결과 검증 실패: {error}"))
 }
 
 fn accept_verified_partition(

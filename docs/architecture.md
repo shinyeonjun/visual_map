@@ -114,13 +114,20 @@ It may:
 AI may not create static nodes, alter endpoints, reorder an execution path,
 calculate source counts, change truth class, or hide coverage. Output is
 schema-validated and referentially checked before an immutable semantic
-revision is published.
+revision is published. A trace can represent an area only when every region
+that owns the trace belongs to that area's direct or descendant membership;
+cross-area traces remain relationship information rather than area evidence.
 
 Large semantic inputs are deterministically partitioned into independent local
 jobs and a source-free global reconciliation job. These calls are ephemeral:
 they do not resume or create the user's Codex/Claude chat session. The semantic
 cache key includes Fact digest, prompt/schema version, provider/model, and
-reasoning effort so identical approved input remains stable.
+reasoning effort so identical approved input remains stable. When a provider
+returns a schema-valid but unverifiable result, the broker sends that rejected
+JSON and the exact verifier error through one bounded repair prompt. It does
+not rerun semantic analysis or change unrelated decisions; the complete
+corrected object must pass the same verifier. Only an execution failure with
+no result retries the original prompt.
 
 ## UI boundary
 

@@ -3790,6 +3790,61 @@ Knip, production build도 모두 통과했다.
 
 ---
 
+## TS-2026-08-09-88 — 검증 실패는 동일 분석 재실행이 아니라 verifier-guided repair로 교정한다
+
+### 증상
+
+16개 의미 partition 중 하나가 `EvidenceMismatch`로 거부됐다. AI가 area에 배정되지 않은 region까지
+지나는 `representativeTracePathIds`를 그 area의 대표 근거로 선택했고, 동일 prompt 1회 재시도도 다른
+area·trace 조합으로 같은 계약을 위반했다.
+
+### 영향
+
+정적 Fact와 성공한 partition cache는 안전했지만 전체 의미 지도는 게시되지 않았다. 같은 prompt를 다시
+보내는 방식은 일시적 CLI 실패에는 유효해도, 모델이 이해하지 못한 검증 규칙을 스스로 고칠 정보가 없어
+시간과 provider 호출을 한 번 더 소비했다.
+
+### 근본 원인
+
+- prompt는 대표 근거가 area를 직접 뒷받침해야 한다고만 썼고, trace를 소유한 모든 region이 area의
+  direct·descendant member 집합 안에 있어야 한다는 verifier의 정확한 부분집합 규칙을 명시하지 않았다.
+- 검증 실패와 provider 실행 실패를 같은 retry로 취급했다.
+- 두 번째 호출에는 첫 rejected JSON과 `SemanticCompileError { code, path, message }`가 전달되지 않았다.
+
+### 적용한 수정
+
+- prompt policy를 `base-semantic-policy-v3`로 올리고 cross-area trace 금지, 빈 대표 경로 허용, 근거를
+  합법화하기 위한 membership 변경 금지를 명시했다.
+- 검증 실패는 원래 요청, rejected JSON, exact verifier 오류를 받는 bounded repair prompt로 전환했다.
+- repair는 오류와 무관한 assignment·계층·이름·요약·근거를 보존하고 전체 교정 JSON을 반환한다.
+- 실행 결과 자체가 없는 CLI 실패만 원래 prompt를 한 번 다시 실행한다.
+- local partition뿐 아니라 direct 분석과 global reconciliation에도 같은 repair 경계를 적용한다.
+- repair 결과는 별도 우회 없이 기존 strict schema·identity·evidence verifier 전체를 다시 통과해야 저장된다.
+
+### 검증 결과
+
+cross-area trace 규칙, rejected output+오류가 repair prompt에 포함되는 계약, reconciliation 원문 보존,
+검증 실패와 실행 실패의 recovery 분기를 회귀 테스트로 고정했다. semantic compiler 24개와 Tauri 71개가
+통과했고 각각 외부 환경 의존 2개·4개를 기본 suite에서 제외했다. 양쪽 clippy `-D warnings`와 fmt가
+통과했으며, 실제 Codex CLI도 의도적으로 거부한 cross-area trace JSON을 25초 안에 교정하면서 assignment,
+영역 이름·요약, 나머지 근거를 그대로 보존했다.
+
+### 재발 시 점검 순서
+
+1. 로그 phase가 검증 실패에 `repair`, 결과 없는 실행 실패에 original retry를 사용하는지 확인한다.
+2. repair payload에 original request, verifierError, rejectedOutput 세 항목이 있는지 확인한다.
+3. trace ID가 등장하는 모든 `input.regions[].representativeTracePathIds`의 region 집합과 area의 effective
+   member 집합을 비교한다.
+4. repair가 assignment나 hierarchy를 바꿔 근거를 억지로 합법화하지 않았는지 revision diff를 확인한다.
+5. 교정 결과가 기존 verifier를 우회하거나 실패한 전체 revision을 publish하지 않았는지 확인한다.
+
+### 남은 한계 또는 후속 gate
+
+prompt policy version 변경으로 기존 semantic cache는 한 번 무효화된다. 실제 대형 저장소에서 새 분석을
+한 번 실행해 repair 호출 수, 교정 성공률, 추가 wall time을 opt-in E2E 영수증으로 남겨야 한다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text

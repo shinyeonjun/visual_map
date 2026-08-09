@@ -18,8 +18,8 @@ pub use partition::{
     VerifiedSemanticPartition,
 };
 pub use prompt::{
-    compile_base_prompt, BaseSemanticDraft, CompiledBasePrompt, PACKET_COMPILER_VERSION,
-    PROMPT_POLICY_VERSION,
+    compile_base_prompt, compile_base_repair_prompt, BaseSemanticDraft, CompiledBasePrompt,
+    PACKET_COMPILER_VERSION, PROMPT_POLICY_VERSION,
 };
 pub use schema::base_semantic_output_schema;
 pub use verifier::{parse_and_verify_base_response, verify_base_proposal};

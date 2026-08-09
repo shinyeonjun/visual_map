@@ -857,8 +857,9 @@ canonical producer, 대규모 representative omission receipt, clean=incremental
 - definition의 기존 3회 provider-only 조회를 position마다 `250ms`씩 기다리지 않고, 모든 exact source
   position에 대해 세 번의 전역 round로 실행한다. 각 round 뒤 같은 cache를 소비하므로 retry 횟수와
   abstention 계약은 이전과 같다.
-- AI local partition은 최초 batch 기본 4개, 실패 partition 재시도 기본 2개로 분리했다. prompt, evidence,
-  verifier, model과 reasoning effort는 그대로다. 각각
+- AI local partition은 최초 batch 기본 4개, 검증 실패 교정·실행 실패 복구 batch 기본 2개로 분리했다.
+  검증 실패는 거부된 JSON과 exact verifier 오류를 받은 bounded repair prompt가 최소 수정하고, 결과가 없는
+  실행 실패만 원래 prompt를 다시 실행한다. evidence, verifier, model과 reasoning effort는 그대로다. 각각
   `CODEBASE_WORKSPACE_AI_MAX_PARALLEL`, `CODEBASE_WORKSPACE_AI_RETRY_MAX_PARALLEL`로 1~8 범위 조정이 가능하다.
 - `scip-typescript --max-file-byte-size`를 scheduler shard의 최대 파일이 아니라 Source Census가 승인한
   프로젝트 전체 최대 source 크기로 계산한다. indexer가 상위 tsconfig의 더 큰 member를 조용히 건너뛰지

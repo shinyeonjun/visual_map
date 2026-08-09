@@ -1,8 +1,9 @@
 mod support;
 
 use codebase_semantic_compiler::{
-    compile_reconciliation_prompt, compile_semantic_plan_with_policy, verify_base_proposal,
-    SemanticCompileErrorCode, SemanticPartitionPolicy, VerifiedSemanticPartition,
+    compile_base_repair_prompt, compile_reconciliation_prompt, compile_semantic_plan_with_policy,
+    parse_and_verify_base_response, verify_base_proposal, SemanticCompileErrorCode,
+    SemanticPartitionPolicy, VerifiedSemanticPartition,
 };
 use codebase_semantic_model::{
     AreaCategory, AreaProposal, LabelSource, ProjectSemanticProposal, ProposalKey,
@@ -141,6 +142,13 @@ fn verified_local_results_reconcile_without_resending_source_excerpts() {
     assert!(!rendered.contains(&plan.base.packet.input.excerpts[0].text));
     assert!(!rendered.contains(&plan.base.packet.input.excerpts[1].text));
     assert_eq!(reconciliation.packet, plan.base.packet);
+
+    let rejected = "{}";
+    let verifier_error = parse_and_verify_base_response(&reconciliation, rejected).unwrap_err();
+    let repair = compile_base_repair_prompt(&reconciliation, rejected, &verifier_error).unwrap();
+    assert!(repair.task_prompt.contains("verifiedPartitions"));
+    assert!(repair.system_policy.contains("RECONCILIATION"));
+    assert!(repair.system_policy.contains("VERIFIER-GUIDED REPAIR"));
 
     // Final publication still goes through the original full-packet verifier.
     let proposal = valid_proposal(&reconciliation, &ids);
