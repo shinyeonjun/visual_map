@@ -494,7 +494,7 @@ function ToolButton({
   onClick?: () => void;
 }) {
   return (
-    <Tooltip content={label} relationship="label">
+    <Tooltip content={label} relationship="label" positioning="after">
       <button
         type="button"
         className={active ? "tool active" : "tool"}

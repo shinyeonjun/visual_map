@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import App from "./App";
@@ -11,5 +12,11 @@ describe("target product shell", () => {
     expect(screen.getByRole("main", { name: "코드베이스 구조 지도" })).toBeVisible();
     expect(screen.getByRole("textbox", { name: "지도에 질문" })).toBeDisabled();
     expect(screen.queryByText("api-flow")).not.toBeInTheDocument();
+  });
+
+  it("does not apply application sizing to Fluent portal providers", () => {
+    const styles = readFileSync("src/styles.css", "utf8");
+    expect(styles).toMatch(/#root\s*>\s*\.fluent-root\s*{/);
+    expect(styles).not.toMatch(/(^|\n)\.fluent-root\s*{/);
   });
 });

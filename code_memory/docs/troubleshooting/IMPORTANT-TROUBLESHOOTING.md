@@ -3758,6 +3758,38 @@ skip-provider 설정이 `bundle.resources["engines/provider-bundles"] = null`을
 
 ---
 
+## TS-2026-08-09-87 — 앱 루트 CSS를 Fluent portal provider에 전파하지 않는다
+
+### 증상
+
+왼쪽 도구 레일의 구조 지도·검색·데이터베이스·프로젝트 추가·설정 버튼에 포인터를 올리기만 해도
+hover 배경과 툴팁이 반복해서 켜졌다 꺼졌다 했다.
+
+### 근본 원인
+
+앱 최상위 `FluentProvider`에 준 `.fluent-root` 클래스에 `width: 100%`와 `height: 100%`를 전역으로
+적용했다. Fluent UI Tooltip이 portal 안에 만드는 보조 `FluentProvider`도 같은 클래스를 물려받아 전체
+화면 크기의 투명한 레이어가 되었고, 툴팁이 열릴 때마다 원래 버튼의 pointer hover를 가로챘다.
+
+### 적용한 수정
+
+- 앱 크기와 배경 스타일은 `#root > .fluent-root` 직계 자식에만 적용한다.
+- 세로 도구 레일의 툴팁은 `positioning="after"`로 버튼 오른쪽에 표시한다.
+
+### 검증 결과
+
+실제 브라우저 포인터로 도구 5개를 각각 8회 연속 표본 추출했다. 모든 버튼이 8/8 hover를 유지했고,
+portal provider가 포인터를 가로챈 횟수는 0회였다. TypeScript typecheck, ESLint, Vitest 9개, Prettier,
+Knip, production build도 모두 통과했다.
+
+### 재발 시 점검 순서
+
+1. `document.elementsFromPoint()`로 포인터 최상단 요소가 `fui-FluentProvider`인지 확인한다.
+2. 앱 컨테이너용 전역 클래스가 Tooltip·Popover·Menu portal provider에도 적용되는지 확인한다.
+3. 툴팁 위치만 바꿔 증상을 가리지 말고 portal wrapper의 실제 computed size와 pointer hit-test를 확인한다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text
