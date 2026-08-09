@@ -1800,11 +1800,11 @@ frozen OSS holdout에서는 lockfile/toolchain 없이도 재현 가능한 fixtur
 ### 잘못 짚기 쉬운 원인
 
 AnalysisPlan이 nested package를 잘못 나눴거나 `actual_root != planned_root` 검사가 과도한 것이 아니었다.
-계획 root, provider process의 cwd/`--workspace-root`, 참고한 config 파일의 소유 폴더는 서로 다른 값일 수 있다.
+계획 root, provider process의 cwd/`--cwd`, 참고한 config 파일의 소유 폴더는 서로 다른 값일 수 있다.
 
 ### 근본 원인
 
-SCIP TypeScript runner는 process를 계획된 `legacy/frontend`에서 실행하고 `--workspace-root`도 같은 값으로
+SCIP TypeScript runner는 process를 계획된 `legacy/frontend`에서 실행하고 provider `--cwd`도 같은 값으로
 전달했다. 그런데 execution-context 영수증을 만들 때 explicit/generated config의 `parent()`를
 `analysis_root`로 덮어썼다. 상위 `tsconfig.json`은 실행에 사용한 **증거/config**인데 이를 실행 **경계**로
 오인한 것이다.
@@ -3696,6 +3696,39 @@ bundle-byte 결정성 gate로 semantic 결과가 바뀌지 않음을 함께 확�
 
 독립 cache 2회에서 semantic digest와 SQLite bytes가 같았고 fixture cleanup도 정상 완료했다. 기존에 남은
 fixture 하나도 같은 범위 검증 후 삭제했다.
+
+---
+
+## TS-2026-08-09-85 — 고정한 provider의 실제 CLI 계약만 전달한다
+
+### 증상
+
+전체 Rust·frontend·database 검증은 통과했지만, 깨끗한 CI 환경의 canonical 결정성 smoke에서
+`scip-typescript 0.4.0`이 `unknown option '--workspace-root'`로 종료됐다. strict gate는 provider 실패를
+정상적으로 감지해 snapshot 게시를 차단했다.
+
+### 근본 원인
+
+runner가 TypeScript 작업 경계를 설정하며 공식 0.4.0 CLI의 `--cwd`와 존재하지 않는
+`--workspace-root`를 함께 전달했다. 로컬의 이미 준비된 sidecar 또는 다른 wrapper만 실행하면 고정한 npm
+provider와의 계약 불일치를 놓칠 수 있었다.
+
+### 적용한 수정
+
+- configured project와 generated source-only 경로가 공통 helper를 통해 `--cwd <analysis-root>`만 전달한다.
+- 공통 helper의 argument list에 `--workspace-root`가 없음을 회귀 테스트로 고정했다.
+- process cwd, provider `--cwd`, execution-context receipt의 AnalysisPlan root는 계속 같은 경계를 가리킨다.
+
+### 검증 결과
+
+고정한 `@sourcegraph/scip-typescript@0.4.0`과 새 release engine을 직접 조합한 두 독립 cache 실행에서
+semantic digest와 canonical SQLite bytes가 동일했고 strict 결정성 gate가 통과했다.
+
+### 재발 시 점검 순서
+
+1. staged sidecar가 아니라 이번 source로 빌드한 engine을 `-EnginePath`로 명시한다.
+2. CI가 설치하는 정확한 provider version의 `index --help`와 runner argument를 대조한다.
+3. provider 실패를 fallback 성공처럼 취급하지 말고 strict gate의 원래 오류를 먼저 확인한다.
 
 ---
 

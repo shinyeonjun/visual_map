@@ -101,8 +101,7 @@ pub(crate) fn run_scip_indexer_with_configs(
         command.arg(format!("--output={}", out.display()));
         if matches!(lang.id, "javascript" | "typescript") {
             if !provider_configs.is_empty() {
-                command.arg("--cwd").arg(root);
-                command.arg("--workspace-root").arg(root);
+                append_typescript_working_directory(&mut command, root);
                 for config in provider_configs {
                     command.arg(config);
                     if config
@@ -341,8 +340,9 @@ fn scip_execution_context(
     // A config can legitimately live above a planned package (for example a
     // monorepo tsconfig used by legacy/frontend). It is execution evidence,
     // not the execution boundary. The provider is launched with
-    // `analysis_root` as cwd/workspace-root, so its receipt must keep that
-    // AnalysisPlan-owned root instead of replacing it with config.parent().
+    // `analysis_root` as both the process cwd and provider `--cwd`, so its
+    // receipt must keep that AnalysisPlan-owned root instead of replacing it
+    // with config.parent().
     let mut config_files = if mode == ProviderExecutionMode::SourceOnlyFallback {
         // A source-only run deliberately does not execute adjacent repository
         // configs. Recording them as workspace discovery would overstate the
@@ -428,11 +428,9 @@ fn run_typescript_source_only_fallback(
             .stdout(Stdio::inherit())
             .stderr(Stdio::piped())
             .arg("index")
-            .arg(format!("--output={}", out.display()))
-            .arg("--cwd")
-            .arg(root)
-            .arg("--workspace-root")
-            .arg(root)
+            .arg(format!("--output={}", out.display()));
+        append_typescript_working_directory(&mut command, root);
+        command
             .arg("--max-file-byte-size")
             .arg(typescript_max_file_byte_size(
                 source_files,
@@ -447,6 +445,13 @@ fn run_typescript_source_only_fallback(
     })();
     let _ = fs::remove_file(config_path);
     result.map(|()| config_digest)
+}
+
+/// scip-typescript 0.4.0 exposes `--cwd`; it has no `--workspace-root` option.
+/// Keep the provider CLI boundary in one place so configured and generated
+/// project runs cannot silently drift apart.
+fn append_typescript_working_directory(command: &mut Command, root: &Path) {
+    command.arg("--cwd").arg(root);
 }
 
 fn typescript_max_file_byte_size(
@@ -544,6 +549,20 @@ mod runner_tests {
             serde_json::to_string(&DiagnosticCode::TypescriptSourceFallback).unwrap(),
             "\"typescript-source-fallback\""
         );
+    }
+
+    #[test]
+    fn typescript_workspace_argument_matches_the_pinned_provider_cli() {
+        let mut command = Command::new("scip-typescript");
+        let root = Path::new("C:/repo");
+        append_typescript_working_directory(&mut command, root);
+
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(arguments, vec!["--cwd", "C:/repo"]);
+        assert!(!arguments.iter().any(|argument| argument == "--workspace-root"));
     }
 
     #[test]
