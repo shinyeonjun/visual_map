@@ -155,6 +155,7 @@ scripts/                     build, verification, packaging, cleanup scripts
 - desktop map/selection은 전체 snapshot을 `Vec`으로 적재하지 않고 고정된 SQLite query를 사용합니다.
 - 의미 지도 입력도 전체 evidence를 적재하지 않고 선택된 앵커의 근거만 SQLite에서 조회합니다.
 - 최초 Source Census 결과로 실제 언어를 확정해 필요한 서명 provider pack만 활성화하며, 같은 manifest를 본 분석이 재사용합니다.
+- provider pack은 카탈로그 digest별 app-data 루트에 한 번만 원자적으로 추가됩니다. 프로젝트의 언어 조합이 달라도 이미 검증된 `core`·`node`·`java` 등의 파일을 다시 풀거나 복제하지 않습니다.
 - 분석 취소는 정적 sidecar와 같은 분석에 속한 병렬 AI 자식 프로세스를 함께 종료합니다.
 - 앱 workspace 삭제는 앱 데이터만 지우며 선택한 원본 코드 폴더는 건드리지 않습니다.
 

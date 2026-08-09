@@ -49,6 +49,13 @@ remaining measured completion gates.
 - Only core plus intersecting language packs are verified and extracted.
 - The index reuses that manifest instead of performing an additional source
   scan, and the existing final census still rejects mixed source generations.
+- The app-data provider store is keyed by signed catalog digest rather than by
+  the selected language combination. Each non-core pack is extracted into a
+  private staging directory, verified, and atomically appended exactly once;
+  later projects reuse it without duplicating multi-gigabyte runtime trees.
+- Catalog and per-pack receipts are separate. Existing pack directories are
+  never merged or overwritten, and only requested packs have their entrypoints
+  reverified for the current analysis.
 
 ### Canonical publication hot path
 
@@ -88,7 +95,7 @@ remaining measured completion gates.
 - Code Memory: 322 passed, 0 failed.
 - Fact/Semantic contracts: 18 + 3 + 22 passed; one authenticated Codex
   evaluation remains intentionally ignored in local automation.
-- Tauri: 70 passed, 0 failed, 4 external-environment tests ignored.
+- Tauri: 76 passed, 0 failed, 4 external-environment tests ignored.
 - Frontend: 8 passed; typecheck, ESLint, Knip, Prettier, and production build
   passed.
 - Canonical provider gate: 9 project runs, 10 language contracts, 0 skipped.

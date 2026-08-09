@@ -37,6 +37,17 @@ including these resources.
   cache\
     code-memory\
     provider-roots\
+  managed-providers\
+    v3\
+      <catalog-version>-<catalog-digest>\
+        manifest.json
+        .provider-catalog-receipt.json
+        .provider-pack-receipt.json
+        node\
+          .provider-pack-receipt.json
+        java\
+          .provider-pack-receipt.json
+        ...
   logs\
 ```
 
@@ -60,11 +71,23 @@ whose declared language set intersects that receipt. The index process reuses
 the validated preflight Source Manifest and a final fresh census still rejects
 any repository change before publication.
 
-Provider activation receipts include the catalog digest and exact selected
-pack IDs. Different language selections cannot be mistaken for a complete
-activation. The compressed archives still ship with the offline installer;
-splitting them into separately downloadable artifacts requires a signed update
-transport and is not implied by selective local activation.
+The app-data store is addressed by the signed catalog digest, not by a selected
+language combination. `core` creates the catalog root atomically. Every other
+pack is extracted into a private sibling staging directory, checked against the
+signed archive size/digest, safe-path/unpacked-size limits, entrypoint bytes and
+digest, then atomically renamed into its one top-level directory. Catalog and
+per-pack receipts are stored separately. An installed pack is never merged or
+overwritten, and another repository reuses it even when its language selection
+differs. Thus `TypeScript`, `Java`, and `TypeScript + Java` do not create three
+copies of `core`, `node`, or `java`.
+
+The store is append-only within one immutable catalog identity: a later
+analysis may add a previously unused signed pack, but cannot mutate any pack
+already published. Only packs required by the current Source Census have their
+entrypoints reverified and scheduled. The compressed archives still ship with
+the offline installer; splitting them into separately downloadable artifacts
+requires a signed update transport and is not implied by selective local
+activation.
 
 ## Project boundary
 

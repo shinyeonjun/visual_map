@@ -38,7 +38,10 @@ the last verified static snapshot.
    explicit excluded or non-enumerated scopes.
 2. The desktop activates only the signed provider packs needed by that exact
    manifest. The validated preflight manifest is reused by `index`, so provider
-   selection does not add a third source scan.
+   selection does not add a third source scan. Packs are atomically appended
+   once to a catalog-digest-addressed app-data store; different repository
+   language combinations reuse the same verified pack bytes instead of
+   creating selection-specific copies.
 3. Analysis Plan assigns every included language file to compiler/package/TU
    boundaries.
 4. The resource-weighted scheduler runs provider shards without changing plan

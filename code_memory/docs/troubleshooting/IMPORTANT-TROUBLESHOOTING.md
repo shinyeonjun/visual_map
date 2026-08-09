@@ -4071,6 +4071,63 @@ node/edge/gap/issue upsert에는 아직 최초 레코드에서도 merge용 SELEC
 
 ---
 
+## TS-2026-08-09-93 — 언어 조합별 provider 전체 복제 대신 catalog 단위 append-only pack store
+
+### 증상
+
+Source Census 뒤 필요한 pack만 고르는 것은 구현됐지만 app-data 대상 폴더 identity에 선택된 pack ID 전체가
+들어갔다. 따라서 TypeScript 저장소, Java 저장소, TypeScript+Java 저장소를 차례로 열면 `core`, `node`,
+`java`의 서로 다른 조합 루트가 생기고 이미 압축 해제한 대형 runtime bytes가 다시 저장됐다.
+
+### 영향
+
+정확도에는 영향이 없지만 여러 프로젝트를 쓰는 정상 사용에서 provider 준비 시간과 app-data 디스크 사용량이
+언어 조합 수에 따라 증가한다. dotnet/rust/java pack은 수백 MiB이므로 조합별 복제는 최종 제품 구조가 아니다.
+
+### 근본 원인
+
+기존 v2 activation target이 `catalog digest + selection digest`였고, 선택한 모든 ZIP을 하나의 staging root에
+합친 뒤 전체 root를 immutable publication했다. 개별 pack의 서명·경로·entrypoint 계약은 이미 독립적이지만
+저장 identity가 그 독립성을 사용하지 않았다.
+
+### 적용한 수정
+
+- v3 store identity를 `catalog version + catalog digest` 하나로 고정했다.
+- `core`는 catalog root 전체를 staging에서 원자적으로 게시한다.
+- 각 language pack은 자기 ID와 같은 단일 top-level 디렉터리만 가질 수 있으며, 별도 staging에서 archive
+  digest·크기·경로 이탈·symlink·unpacked byte·entrypoint를 검증한 뒤 그 디렉터리만 원자적으로 rename한다.
+- catalog receipt와 pack receipt를 분리했다. 게시된 pack은 merge/overwrite하지 않고 receipt와 entrypoint
+  hash를 확인한 뒤 재사용한다.
+- 현재 분석은 여전히 Source Census와 교차하는 pack만 활성화·스케줄한다. 같은 catalog root에 다른 언어
+  pack이 존재한다는 사실은 분석 범위를 넓히지 않는다.
+- v2 데이터는 자동 삭제하지 않는다. 새 실행은 v3만 사용하며 기존 앱 데이터를 파괴적으로 정리하지 않는다.
+
+### 검증 결과
+
+- synthetic core/node/java pack에서 node만 설치한 뒤 같은 root에 java를 추가하고 node를 다시 요청해도
+  catalog 디렉터리가 하나뿐인 것을 검증했다.
+- 실제 서명된 installer core ZIP을 v3 root에 두 번 활성화해 두 호출이 같은 경로를 재사용하고 catalog/pack
+  receipt와 manifest가 존재하는 것을 검증했다.
+- ZIP 경로 이탈 거부와 detected-language pack 선택 회귀를 포함해 provider asset 테스트 6개가 통과했다.
+- Tauri 전체 80개 중 76개 통과, 외부 환경이 필요한 4개만 의도적으로 제외됐다.
+
+### 재발 시 점검 순서
+
+1. app-data `managed-providers/v3` 아래 같은 catalog digest 디렉터리가 언어 조합별로 늘지 않는지 확인한다.
+2. non-core ZIP이 pack ID와 다른 top-level 또는 여러 top-level을 포함하면 activation이 실패하는지 확인한다.
+3. pack receipt가 staging 안에 기록된 뒤 디렉터리와 함께 rename되는지 확인한다.
+4. 이미 존재하는 pack에 archive를 다시 풀거나 파일을 overwrite하지 않는지 확인한다.
+5. extra installed pack 때문에 Source Census에 없는 언어 job이 schedule되지 않는지 확인한다.
+
+### 남은 한계 또는 후속 gate
+
+프로세스 내 activation은 mutex로 직렬화되고 cross-process rename race도 승자 결과를 재검증하지만, 두 앱
+프로세스가 같은 미설치 대형 pack을 동시에 처음 요청하면 양쪽이 임시 압축 해제를 수행할 수 있다. 최종
+installer 검증에서 이 빈도가 실제 문제로 확인될 때만 app-data file lock을 추가한다. 기존 v2 roots의 자동
+GC도 사용자 데이터 삭제 정책과 복구 경계를 정한 뒤 별도 작업으로 다룬다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text

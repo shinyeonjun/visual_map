@@ -22,7 +22,8 @@ use zip::ZipArchive;
 
 const CATALOG_FILE: &str = "providers-manifest.json";
 const SIGNATURE_FILE: &str = "providers-manifest.sig";
-const RECEIPT_FILE: &str = ".provider-catalog-receipt.json";
+const CATALOG_RECEIPT_FILE: &str = ".provider-catalog-receipt.json";
+const PACK_RECEIPT_FILE: &str = ".provider-pack-receipt.json";
 const EXPECTED_LANGUAGES: [&str; 10] = [
     "c",
     "cpp",
@@ -75,11 +76,20 @@ struct ProviderEntrypoint {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ProviderReceipt {
+struct ProviderCatalogReceipt {
     schema_version: u32,
     catalog_version: String,
     catalog_digest: String,
-    pack_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProviderPackReceipt {
+    schema_version: u32,
+    pack_id: String,
+    pack_version: String,
+    archive_digest: String,
+    unpacked_bytes: u64,
 }
 
 pub(crate) fn resolve_provider_root(
@@ -126,41 +136,11 @@ fn activate_signed_bundles(
         .map_err(|error| format!("provider catalog 형식이 올바르지 않습니다: {error}"))?;
     validate_catalog(&catalog)?;
     let selected_packs = select_packs(&catalog, required_languages)?;
-    let pack_ids = selected_packs
-        .iter()
-        .map(|pack| pack.id.clone())
-        .collect::<Vec<_>>();
     let catalog_digest = lower_sha256_bytes(&catalog_bytes);
-    let selection_digest = lower_sha256_bytes(pack_ids.join("\0").as_bytes());
-    let target_name = format!(
-        "{}-{}-{}",
-        catalog.catalog_version,
-        &catalog_digest[..16],
-        &selection_digest[..16]
-    );
-    let provider_root = app_data_dir.join("managed-providers").join("v2");
-    fs::create_dir_all(&provider_root)
+    let store_root = app_data_dir.join("managed-providers").join("v3");
+    fs::create_dir_all(&store_root)
         .map_err(|error| format!("managed provider 폴더를 만들지 못했습니다: {error}"))?;
-    let target = provider_root.join(target_name);
-    if target.is_dir() {
-        verify_activated_root(
-            &target,
-            &catalog,
-            &catalog_digest,
-            &pack_ids,
-            &selected_packs,
-        )?;
-        return Ok(target);
-    }
-
-    let staging_path =
-        provider_root.join(format!(".staging-{}-{}", std::process::id(), unix_millis()));
-    fs::create_dir(&staging_path)
-        .map_err(|error| format!("provider staging 폴더를 만들지 못했습니다: {error}"))?;
-    let staging = ProviderStaging {
-        path: staging_path,
-        root: provider_root,
-    };
+    let provider_root = ensure_catalog_root(&store_root, bundle_root, &catalog, &catalog_digest)?;
     let total = u64::try_from(selected_packs.len()).unwrap_or(u64::MAX);
     for (index, pack) in selected_packs.iter().enumerate() {
         if let Some(progress) = progress {
@@ -170,35 +150,120 @@ fn activate_signed_bundles(
                 total.max(1),
             );
         }
-        let archive_path = bundle_root.join(&pack.file_name);
-        verify_archive(&archive_path, pack)?;
-        extract_archive(&archive_path, &staging.path, pack)?;
-    }
-    verify_entrypoints(&staging.path, &selected_packs)?;
-    let receipt = ProviderReceipt {
-        schema_version: 2,
-        catalog_version: catalog.catalog_version.clone(),
-        catalog_digest: catalog_digest.clone(),
-        pack_ids: pack_ids.clone(),
-    };
-    write_synced_json(&staging.path.join(RECEIPT_FILE), &receipt)?;
-    if let Err(error) = fs::rename(&staging.path, &target) {
-        if target.is_dir() {
-            verify_activated_root(
-                &target,
-                &catalog,
-                &catalog_digest,
-                &pack_ids,
-                &selected_packs,
-            )?;
-            return Ok(target);
+        if pack.id == "core" {
+            verify_activated_pack(&provider_root, pack)?;
+        } else {
+            ensure_language_pack(&provider_root, bundle_root, pack)?;
         }
-        return Err(format!("managed provider를 게시하지 못했습니다: {error}"));
     }
+    verify_entrypoints(&provider_root, &selected_packs)?;
     if let Some(progress) = progress {
         progress("언어 분석 도구 준비 완료", total, total.max(1));
     }
+    Ok(provider_root)
+}
+
+fn ensure_catalog_root(
+    store_root: &Path,
+    bundle_root: &Path,
+    catalog: &ProviderCatalog,
+    catalog_digest: &str,
+) -> Result<PathBuf, String> {
+    let core = catalog
+        .packs
+        .iter()
+        .find(|pack| pack.id == "core")
+        .ok_or_else(|| "provider core pack을 찾지 못했습니다".to_string())?;
+    let target = store_root.join(format!(
+        "{}-{}",
+        catalog.catalog_version,
+        &catalog_digest[..16]
+    ));
+    if target.is_dir() {
+        verify_activated_catalog_root(&target, catalog, catalog_digest)?;
+        verify_activated_pack(&target, core)?;
+        return Ok(target);
+    }
+
+    let staging_path = store_root.join(format!(
+        ".staging-catalog-{}-{}",
+        std::process::id(),
+        unix_millis()
+    ));
+    fs::create_dir(&staging_path)
+        .map_err(|error| format!("provider catalog staging 폴더를 만들지 못했습니다: {error}"))?;
+    let staging = ProviderStaging {
+        path: staging_path,
+        root: store_root.to_path_buf(),
+    };
+    let archive_path = bundle_root.join(&core.file_name);
+    verify_archive(&archive_path, core)?;
+    extract_archive(&archive_path, &staging.path, core)?;
+    verify_core_layout(&staging.path)?;
+    write_pack_receipt(&staging.path, core)?;
+    write_synced_json(
+        &staging.path.join(CATALOG_RECEIPT_FILE),
+        &ProviderCatalogReceipt {
+            schema_version: 3,
+            catalog_version: catalog.catalog_version.clone(),
+            catalog_digest: catalog_digest.to_string(),
+        },
+    )?;
+    verify_entrypoints(&staging.path, &[core])?;
+
+    if let Err(error) = fs::rename(&staging.path, &target) {
+        if target.is_dir() {
+            verify_activated_catalog_root(&target, catalog, catalog_digest)?;
+            verify_activated_pack(&target, core)?;
+            return Ok(target);
+        }
+        return Err(format!(
+            "managed provider catalog를 게시하지 못했습니다: {error}"
+        ));
+    }
     Ok(target)
+}
+
+fn ensure_language_pack(
+    provider_root: &Path,
+    bundle_root: &Path,
+    pack: &ProviderPack,
+) -> Result<(), String> {
+    let target = provider_root.join(&pack.id);
+    if target.is_dir() {
+        return verify_activated_pack(provider_root, pack);
+    }
+
+    let staging_path = provider_root.join(format!(
+        ".staging-{}-{}-{}",
+        pack.id,
+        std::process::id(),
+        unix_millis()
+    ));
+    fs::create_dir(&staging_path)
+        .map_err(|error| format!("provider pack staging 폴더를 만들지 못했습니다: {error}"))?;
+    let staging = ProviderStaging {
+        path: staging_path,
+        root: provider_root.to_path_buf(),
+    };
+    let archive_path = bundle_root.join(&pack.file_name);
+    verify_archive(&archive_path, pack)?;
+    extract_archive(&archive_path, &staging.path, pack)?;
+    verify_language_pack_layout(&staging.path, pack)?;
+    let staged_pack = staging.path.join(&pack.id);
+    write_pack_receipt(&staged_pack, pack)?;
+    verify_entrypoints(&staging.path, &[pack])?;
+
+    if let Err(error) = fs::rename(&staged_pack, &target) {
+        if target.is_dir() {
+            verify_activated_pack(provider_root, pack)?;
+            return Ok(());
+        }
+        return Err(format!(
+            "managed provider pack을 게시하지 못했습니다: {error}"
+        ));
+    }
+    Ok(())
 }
 
 fn select_packs<'a>(
@@ -407,26 +472,109 @@ fn extract_archive(path: &Path, destination: &Path, pack: &ProviderPack) -> Resu
     Ok(())
 }
 
-fn verify_activated_root(
+fn verify_activated_catalog_root(
     root: &Path,
     catalog: &ProviderCatalog,
     catalog_digest: &str,
-    pack_ids: &[String],
-    selected_packs: &[&ProviderPack],
 ) -> Result<(), String> {
-    let receipt: ProviderReceipt = serde_json::from_slice(
-        &fs::read(root.join(RECEIPT_FILE))
+    let receipt: ProviderCatalogReceipt = serde_json::from_slice(
+        &fs::read(root.join(CATALOG_RECEIPT_FILE))
             .map_err(|error| format!("provider activation receipt를 읽지 못했습니다: {error}"))?,
     )
     .map_err(|error| format!("provider activation receipt 형식 오류: {error}"))?;
-    if receipt.schema_version != 2
+    if receipt.schema_version != 3
         || receipt.catalog_version != catalog.catalog_version
         || receipt.catalog_digest != catalog_digest
-        || receipt.pack_ids != pack_ids
     {
         return Err("기존 managed provider cache가 다른 catalog를 가리킵니다".to_string());
     }
-    verify_entrypoints(root, selected_packs)
+    if !root.join("manifest.json").is_file() {
+        return Err("provider manifest가 추출되지 않았습니다".to_string());
+    }
+    Ok(())
+}
+
+fn write_pack_receipt(root: &Path, pack: &ProviderPack) -> Result<(), String> {
+    write_synced_json(
+        &root.join(PACK_RECEIPT_FILE),
+        &ProviderPackReceipt {
+            schema_version: 1,
+            pack_id: pack.id.clone(),
+            pack_version: pack.version.clone(),
+            archive_digest: pack.sha256.to_ascii_lowercase(),
+            unpacked_bytes: pack.unpacked_bytes,
+        },
+    )
+}
+
+fn verify_activated_pack(root: &Path, pack: &ProviderPack) -> Result<(), String> {
+    let pack_root = if pack.id == "core" {
+        root.to_path_buf()
+    } else {
+        root.join(&pack.id)
+    };
+    let receipt: ProviderPackReceipt = serde_json::from_slice(
+        &fs::read(pack_root.join(PACK_RECEIPT_FILE))
+            .map_err(|error| format!("provider pack receipt를 읽지 못했습니다: {error}"))?,
+    )
+    .map_err(|error| format!("provider pack receipt 형식 오류: {error}"))?;
+    if receipt.schema_version != 1
+        || receipt.pack_id != pack.id
+        || receipt.pack_version != pack.version
+        || receipt.archive_digest != pack.sha256.to_ascii_lowercase()
+        || receipt.unpacked_bytes != pack.unpacked_bytes
+    {
+        return Err(format!(
+            "기존 managed provider pack이 catalog와 다릅니다: {}",
+            pack.id
+        ));
+    }
+    verify_entrypoints(root, &[pack])
+}
+
+fn verify_core_layout(root: &Path) -> Result<(), String> {
+    if !root.join("manifest.json").is_file() {
+        return Err("provider core pack에 manifest.json이 없습니다".to_string());
+    }
+    for entry in fs::read_dir(root)
+        .map_err(|error| format!("provider core pack을 열거하지 못했습니다: {error}"))?
+    {
+        let entry =
+            entry.map_err(|error| format!("provider core 항목을 읽지 못했습니다: {error}"))?;
+        if entry
+            .file_type()
+            .map_err(|error| format!("provider core 항목 형식을 읽지 못했습니다: {error}"))?
+            .is_dir()
+        {
+            return Err(
+                "provider core pack은 language pack 디렉터리를 포함할 수 없습니다".to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn verify_language_pack_layout(root: &Path, pack: &ProviderPack) -> Result<(), String> {
+    let mut entries = fs::read_dir(root)
+        .map_err(|error| format!("provider pack을 열거하지 못했습니다: {error}"))?;
+    let entry = entries
+        .next()
+        .transpose()
+        .map_err(|error| format!("provider pack 항목을 읽지 못했습니다: {error}"))?
+        .ok_or_else(|| format!("provider pack이 비어 있습니다: {}", pack.id))?;
+    if entries.next().is_some()
+        || entry.file_name().to_str() != Some(pack.id.as_str())
+        || !entry
+            .file_type()
+            .map_err(|error| format!("provider pack 항목 형식을 읽지 못했습니다: {error}"))?
+            .is_dir()
+    {
+        return Err(format!(
+            "provider pack은 자신의 단일 root만 포함해야 합니다: {}",
+            pack.id
+        ));
+    }
+    Ok(())
 }
 
 fn verify_entrypoints(root: &Path, packs: &[&ProviderPack]) -> Result<(), String> {
@@ -446,9 +594,6 @@ fn verify_entrypoints(root: &Path, packs: &[&ProviderPack]) -> Result<(), String
                 ));
             }
         }
-    }
-    if !root.join("manifest.json").is_file() {
-        return Err("provider manifest가 추출되지 않았습니다".to_string());
     }
     Ok(())
 }
@@ -552,6 +697,46 @@ mod tests {
     use super::*;
     use zip::{write::SimpleFileOptions, ZipWriter};
 
+    fn write_test_pack(
+        bundle_root: &Path,
+        id: &str,
+        languages: &[&str],
+        files: &[(&str, &[u8])],
+        entrypoint_path: &str,
+    ) -> ProviderPack {
+        let file_name = format!("providers-{id}.zip");
+        let archive_path = bundle_root.join(&file_name);
+        let mut writer = ZipWriter::new(File::create(&archive_path).unwrap());
+        let mut unpacked_bytes = 0_u64;
+        for (path, payload) in files {
+            writer
+                .start_file(*path, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(payload).unwrap();
+            unpacked_bytes += u64::try_from(payload.len()).unwrap();
+        }
+        writer.finish().unwrap();
+        let entrypoint = files
+            .iter()
+            .find(|(path, _)| *path == entrypoint_path)
+            .unwrap()
+            .1;
+        ProviderPack {
+            id: id.to_string(),
+            version: "test-version".to_string(),
+            file_name,
+            sha256: lower_sha256_file(&archive_path).unwrap(),
+            compressed_bytes: fs::metadata(&archive_path).unwrap().len(),
+            unpacked_bytes,
+            languages: languages.iter().map(|value| (*value).to_string()).collect(),
+            entrypoints: vec![ProviderEntrypoint {
+                path: entrypoint_path.to_string(),
+                sha256: lower_sha256_bytes(entrypoint),
+                bytes: u64::try_from(entrypoint.len()).unwrap(),
+            }],
+        }
+    }
+
     #[test]
     fn bundled_development_catalog_signature_and_contract_are_valid() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("engines/provider-bundles");
@@ -560,6 +745,34 @@ mod tests {
         verify_catalog_signature(&catalog_bytes, signature.trim()).unwrap();
         let catalog: ProviderCatalog = serde_json::from_slice(&catalog_bytes).unwrap();
         validate_catalog(&catalog).unwrap();
+    }
+
+    #[test]
+    fn bundled_core_pack_activates_once_into_the_shared_v3_store() {
+        let app_data = std::env::temp_dir().join(format!(
+            "codebase-workspace-provider-core-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        let bundle_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("engines/provider-bundles");
+        fs::create_dir_all(&app_data).unwrap();
+        let required = BTreeSet::new();
+
+        let first = activate_signed_bundles(&app_data, &bundle_root, &required, None).unwrap();
+        let second = activate_signed_bundles(&app_data, &bundle_root, &required, None).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            first
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("v3")
+        );
+        assert!(first.join(CATALOG_RECEIPT_FILE).is_file());
+        assert!(first.join(PACK_RECEIPT_FILE).is_file());
+        assert!(first.join("manifest.json").is_file());
+
+        fs::remove_dir_all(app_data).unwrap();
     }
 
     #[test]
@@ -589,6 +802,72 @@ mod tests {
             checked_relative_path("node/runtime/node.exe").unwrap(),
             PathBuf::from("node/runtime/node.exe")
         );
+    }
+
+    #[test]
+    fn language_combinations_reuse_one_append_only_catalog_store() {
+        let root = std::env::temp_dir().join(format!(
+            "codebase-workspace-provider-store-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        let bundle_root = root.join("bundles");
+        let store_root = root.join("store");
+        fs::create_dir_all(&bundle_root).unwrap();
+        fs::create_dir_all(&store_root).unwrap();
+        let core = write_test_pack(
+            &bundle_root,
+            "core",
+            &[],
+            &[("manifest.json", br#"{"providers":[]}"#)],
+            "manifest.json",
+        );
+        let node = write_test_pack(
+            &bundle_root,
+            "node",
+            &["typescript"],
+            &[("node/tool.exe", b"node-provider")],
+            "node/tool.exe",
+        );
+        let java = write_test_pack(
+            &bundle_root,
+            "java",
+            &["java"],
+            &[("java/tool.exe", b"java-provider")],
+            "java/tool.exe",
+        );
+        let catalog = ProviderCatalog {
+            schema_version: 2,
+            catalog_version: "test-catalog".to_string(),
+            key_id: "0000000000000000".to_string(),
+            platform: "windows-x86_64".to_string(),
+            packs: vec![core, node, java],
+        };
+        let catalog_digest = "a".repeat(64);
+
+        let provider_root =
+            ensure_catalog_root(&store_root, &bundle_root, &catalog, &catalog_digest).unwrap();
+        ensure_language_pack(&provider_root, &bundle_root, &catalog.packs[1]).unwrap();
+        assert!(provider_root.join("node/tool.exe").is_file());
+        assert!(!provider_root.join("java").exists());
+
+        let reused =
+            ensure_catalog_root(&store_root, &bundle_root, &catalog, &catalog_digest).unwrap();
+        assert_eq!(reused, provider_root);
+        ensure_language_pack(&reused, &bundle_root, &catalog.packs[2]).unwrap();
+        ensure_language_pack(&reused, &bundle_root, &catalog.packs[1]).unwrap();
+        assert!(provider_root.join("node/tool.exe").is_file());
+        assert!(provider_root.join("java/tool.exe").is_file());
+        assert_eq!(
+            fs::read_dir(&store_root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                .count(),
+            1
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
