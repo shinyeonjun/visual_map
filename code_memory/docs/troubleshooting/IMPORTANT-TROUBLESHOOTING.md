@@ -3732,6 +3732,32 @@ semantic digest와 canonical SQLite bytes가 동일했고 strict 결정성 gate�
 
 ---
 
+## TS-2026-08-09-86 — Tauri JSON merge에서 뺄 resource는 `null`로 삭제한다
+
+### 증상
+
+canonical engine과 결정성 smoke까지 통과한 깨끗한 CI에서 desktop Clippy만
+`resource path engines\\provider-bundles doesn't exist`로 실패했다. 개발 PC에는 ignored provider bundle이 이미
+있어 같은 오류가 보이지 않았다.
+
+### 근본 원인
+
+debug/lint/test/internal build가 큰 provider bundle을 제외하려고 `TAURI_CONFIG` override에서 해당 key를
+생략했다. 그러나 Tauri는 override를 RFC 7396 JSON Merge Patch로 병합하므로, 생략한 object key는 삭제되지
+않고 base `tauri.conf.json`의 값이 그대로 남는다.
+
+### 적용한 수정
+
+skip-provider 설정이 `bundle.resources["engines/provider-bundles"] = null`을 명시해 base key를 실제로
+삭제한다. 배포 release 경로는 이 override를 사용하지 않으므로 실제 provider bundle 계약은 유지된다.
+
+### 검증 결과
+
+`CODEBASE_WORKSPACE_SKIP_PROVIDER_RESOURCES=1`을 둔 CI와 동일한 desktop `cargo clippy --all-targets --
+-D warnings`가 통과했다. 최종 CI에서 빈 checkout의 존재하지 않는 provider directory 조건을 다시 검증한다.
+
+---
+
 ## 새 중요 항목을 추가할 때 쓰는 형식
 
 ```text

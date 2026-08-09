@@ -29,7 +29,11 @@ fn main() {
     if skip_provider_resources {
         std::env::set_var(
             "TAURI_CONFIG",
-            r#"{"bundle":{"resources":{"../THIRD_PARTY_NOTICES.md":"THIRD_PARTY_NOTICES.md","engines/manifest.json":"engines/manifest.json","engines/code-memory-language.exe":"engines/code-memory-language.exe","../code_memory/packs":"engines/packs","engines/database-memory.exe":"engines/database-memory.exe"}}}"#,
+            // TAURI_CONFIG is merged with RFC 7396 semantics. Omitting a key
+            // preserves the base value, while `null` removes it. Explicitly
+            // remove the large optional provider bundle for lint/test/internal
+            // builds instead of merely leaving it out of this override.
+            r#"{"bundle":{"resources":{"../THIRD_PARTY_NOTICES.md":"THIRD_PARTY_NOTICES.md","engines/manifest.json":"engines/manifest.json","engines/code-memory-language.exe":"engines/code-memory-language.exe","../code_memory/packs":"engines/packs","engines/provider-bundles":null,"engines/database-memory.exe":"engines/database-memory.exe"}}}"#,
         );
     }
     tauri_build::build()
