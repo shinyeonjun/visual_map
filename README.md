@@ -129,6 +129,14 @@ DB 엔진을 변경한 경우:
 cargo test --locked --manifest-path db_memory/Cargo.toml --workspace
 ```
 
+AI 프롬프트·출력 스키마·verifier를 변경한 경우 (설치된 Codex CLI 필요):
+
+```powershell
+cargo test --locked --manifest-path crates/semantic-compiler/Cargo.toml -- --ignored
+```
+
+위 네 건은 실제 모델을 호출하므로 CI와 기본 로컬 실행에서 제외되어 있습니다. 그래서 프롬프트 문구나 스키마가 바뀌었을 때 합성 응답만으로는 드러나지 않는 회귀 — 모델이 스키마에서 벗어나거나 verifier의 복구 지시를 따르지 못하는 경우 — 를 잡는 유일한 지점입니다. 변경 후 릴리스 전에 한 번은 실행합니다.
+
 10개 언어의 실제 근거·결정성 gate는 [Code Memory README](code_memory/README.md)에 정리되어 있습니다. fixture의 100% 수치는 닫힌 검토 corpus 결과이며 임의의 실제 저장소 전체 정확도 100%를 뜻하지 않습니다.
 
 ## 저장소 구조
@@ -162,6 +170,7 @@ scripts/                     build, verification, packaging, cleanup scripts
 ## 문서
 
 - [문서 인덱스](docs/README.md)
+- [분석 제품 경계](docs/analysis-product-boundary.md)
 - [Runtime architecture](docs/architecture.md)
 - [Engineering cleanup roadmap](docs/engineering-cleanup-roadmap.md)
 - [Security and privacy](docs/security-privacy.md)

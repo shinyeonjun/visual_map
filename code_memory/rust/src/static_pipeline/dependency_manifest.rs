@@ -205,6 +205,7 @@ mod tests {
             dispatch: DispatchKind::NotApplicable,
             semantic_context_id: SemanticContextId::from_components(&["typescript", "app"])
                 .unwrap(),
+            execution: None,
             evidence_ids: vec![EvidenceId::from_components(&["import", "site"]).unwrap()],
         }
     }

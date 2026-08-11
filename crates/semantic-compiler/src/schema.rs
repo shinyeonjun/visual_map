@@ -1,3 +1,4 @@
+use codebase_fact_model::identity::{Sha256Digest, SnapshotId};
 use codebase_semantic_model::BASE_SEMANTIC_SCHEMA_VERSION;
 use serde_json::{json, Value};
 
@@ -87,4 +88,20 @@ pub fn base_semantic_output_schema() -> Value {
         "warnings":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":300}}
       }
     })
+}
+
+pub(crate) fn base_semantic_output_schema_for(
+    snapshot_id: &SnapshotId,
+    semantic_input_digest: Sha256Digest,
+) -> Value {
+    let mut schema = base_semantic_output_schema();
+    schema["properties"]["snapshotId"] = json!({
+        "type": "string",
+        "enum": [snapshot_id.as_str()]
+    });
+    schema["properties"]["semanticInputDigest"] = json!({
+        "type": "string",
+        "enum": [semantic_input_digest.to_hex()]
+    });
+    schema
 }

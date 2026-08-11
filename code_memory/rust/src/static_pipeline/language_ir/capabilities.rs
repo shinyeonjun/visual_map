@@ -76,7 +76,7 @@ pub(super) fn capability_policies(
             false,
         ),
         policy(Overrides, overrides.0, overrides.1, overrides.2, false),
-        policy(OrmQuery, Unsupported, NotApplicable, None, false),
+        policy(OrmQuery, Conditional, Full, ExactRange, false),
         policy(EventExternal, Unsupported, NotApplicable, None, false),
     ]
 }

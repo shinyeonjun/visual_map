@@ -1,6 +1,6 @@
 use crate::{
     packet::{ensure_unique, error, validate_message, validate_text},
-    CompiledBasePrompt, SemanticCompileError, SemanticCompileErrorCode,
+    CompiledBasePrompt, SemanticCompileError, SemanticCompileErrorCode, SemanticVerificationPhase,
 };
 use codebase_fact_model::identity::{EvidenceId, FactNodeId, Sha256Digest};
 use codebase_semantic_model::{
@@ -24,12 +24,20 @@ pub fn parse_and_verify_base_response(
                 format!("provider response must be one strict JSON object: {err}"),
             )
         })?;
-    verify_base_proposal(&compiled.packet, proposal)
+    verify_base_proposal_for_phase(&compiled.packet, proposal, compiled.verification_phase)
 }
 
 pub fn verify_base_proposal(
     packet: &BaseSemanticPacket,
+    proposal: SemanticRevisionProposal,
+) -> Result<ApprovedSemanticRevision, SemanticCompileError> {
+    verify_base_proposal_for_phase(packet, proposal, SemanticVerificationPhase::FinalMap)
+}
+
+fn verify_base_proposal_for_phase(
+    packet: &BaseSemanticPacket,
     mut proposal: SemanticRevisionProposal,
+    phase: SemanticVerificationPhase,
 ) -> Result<ApprovedSemanticRevision, SemanticCompileError> {
     if proposal.schema_version != BASE_SEMANTIC_SCHEMA_VERSION {
         return Err(error(
@@ -53,11 +61,13 @@ pub fn verify_base_proposal(
         ));
     }
 
+    // These fields are mathematical sets in the product contract. Sorting and
+    // removing exact/case-only duplicates is mechanical normalization, not a
+    // semantic decision, so it must never consume another AI repair attempt.
+    normalize_provider_sets(&mut proposal);
+
     validate_project(&packet.input, &proposal)?;
-    ensure_unique(
-        proposal.areas.iter().map(|area| &area.proposal_key),
-        "areas[].proposalKey",
-    )?;
+    validate_unique_proposal_keys(&proposal.areas)?;
     if proposal.areas.is_empty() {
         return Err(error(
             SemanticCompileErrorCode::InvalidProviderOutput,
@@ -71,7 +81,7 @@ pub fn verify_base_proposal(
         .iter()
         .map(|area| (&area.proposal_key, area))
         .collect();
-    validate_area_hierarchy(&area_by_key)?;
+    validate_area_hierarchy(&area_by_key, phase)?;
     validate_assignments(packet, &proposal, &area_by_key)?;
 
     let direct_members = direct_members(&proposal.assignments);
@@ -80,6 +90,49 @@ pub fn verify_base_proposal(
 
     canonicalize_proposal(&mut proposal);
     approve(packet, proposal, direct_members, effective_members)
+}
+
+/// Enumerates every fallback contradiction in an otherwise parseable proposal.
+/// The normal verifier remains fail-fast, while the repair compiler can give
+/// the model all independent field corrections in one bounded retry.
+pub(crate) fn collect_contradictory_fallback_errors(
+    packet: &BaseSemanticPacket,
+    proposal: &SemanticRevisionProposal,
+) -> Vec<SemanticCompileError> {
+    let direct_members = direct_members(&proposal.assignments);
+    let effective_members = effective_members(&proposal.areas, &direct_members);
+    let region_labels = packet
+        .input
+        .regions
+        .iter()
+        .map(|region| (&region.region_id, region.structural_label.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let mut findings = Vec::new();
+
+    for area in &proposal.areas {
+        let members = effective_members
+            .get(&area.proposal_key)
+            .cloned()
+            .unwrap_or_default();
+        if members.is_empty() {
+            continue;
+        }
+        let member_set = members.iter().collect::<BTreeSet<_>>();
+        let path = format!("areas[{}]", area.proposal_key);
+        if let Err(error) = validate_fallback(area, &member_set, &region_labels, &path) {
+            if error.code == SemanticCompileErrorCode::ContradictoryFallback {
+                findings.push(error);
+            }
+        }
+    }
+
+    findings.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.message.cmp(&right.message))
+    });
+    findings.dedup();
+    findings
 }
 
 fn validate_project(
@@ -118,8 +171,8 @@ fn validate_project(
 
 fn validate_area_hierarchy(
     areas: &BTreeMap<&ProposalKey, &AreaProposal>,
+    phase: SemanticVerificationPhase,
 ) -> Result<(), SemanticCompileError> {
-    let mut sibling_labels = BTreeSet::new();
     for area in areas.values() {
         match (area.level, area.parent_proposal_key.as_ref()) {
             (0, None) => {}
@@ -147,22 +200,75 @@ fn validate_area_hierarchy(
                 ));
             }
         }
+    }
 
-        let parent = area
-            .parent_proposal_key
-            .as_ref()
-            .map(ProposalKey::as_str)
-            .unwrap_or("<root>");
-        let label = area.label.to_lowercase();
-        if !sibling_labels.insert((parent.to_string(), label)) {
-            return Err(error(
-                SemanticCompileErrorCode::NonCanonicalValue,
-                format!("areas[{}].label", area.proposal_key),
-                "sibling semantic labels must be distinct",
-            ));
+    // A local partition is an intermediate map whose parents may have been
+    // promoted after subsetting. Global reconciliation owns repository-wide
+    // naming. Two structural fallbacks may keep the same exact source label;
+    // when a semantic label collides, that semantic label remains renameable.
+    if phase == SemanticVerificationPhase::FinalMap {
+        let mut siblings = BTreeMap::<(String, String), Vec<&AreaProposal>>::new();
+        for area in areas.values() {
+            let parent = area
+                .parent_proposal_key
+                .as_ref()
+                .map(ProposalKey::as_str)
+                .unwrap_or("<root>");
+            siblings
+                .entry((parent.to_string(), area.label.to_lowercase()))
+                .or_default()
+                .push(area);
+        }
+        for duplicates in siblings.into_values().filter(|areas| areas.len() > 1) {
+            if let Some(area) = duplicates
+                .iter()
+                .find(|area| area.label_source == LabelSource::Semantic)
+            {
+                return Err(error(
+                    SemanticCompileErrorCode::NonCanonicalValue,
+                    format!("areas[{}].label", area.proposal_key),
+                    "a published semantic label must be distinct from every sibling label",
+                ));
+            }
         }
     }
     Ok(())
+}
+
+fn validate_unique_proposal_keys(areas: &[AreaProposal]) -> Result<(), SemanticCompileError> {
+    let mut indexes_by_key = BTreeMap::<&ProposalKey, Vec<usize>>::new();
+    for (index, area) in areas.iter().enumerate() {
+        indexes_by_key
+            .entry(&area.proposal_key)
+            .or_default()
+            .push(index);
+    }
+    let duplicates = indexes_by_key
+        .into_iter()
+        .filter(|(_, indexes)| indexes.len() > 1)
+        .map(|(key, indexes)| {
+            format!(
+                "{} at indexes [{}]",
+                key.as_str(),
+                indexes
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+        .collect::<Vec<_>>();
+    if duplicates.is_empty() {
+        return Ok(());
+    }
+    Err(error(
+        SemanticCompileErrorCode::DuplicateIdentifier,
+        "areas[].proposalKey",
+        format!(
+            "every area requires a unique proposalKey; duplicate values: {}",
+            duplicates.join("; ")
+        ),
+    ))
 }
 
 fn validate_assignments(
@@ -566,16 +672,34 @@ fn evidence_regions(
     result
 }
 
-fn canonicalize_proposal(proposal: &mut SemanticRevisionProposal) {
-    proposal.project.aliases.sort();
-    proposal.project.representative_fact_ids.sort();
-    proposal.project.evidence_ids.sort();
+fn normalize_provider_sets(proposal: &mut SemanticRevisionProposal) {
+    sort_dedup_case_insensitive(&mut proposal.project.aliases);
+    sort_dedup(&mut proposal.project.representative_fact_ids);
+    sort_dedup(&mut proposal.project.evidence_ids);
     for area in &mut proposal.areas {
-        area.aliases.sort();
-        area.representative_fact_ids.sort();
-        area.representative_trace_path_ids.sort();
-        area.evidence_ids.sort();
+        sort_dedup_case_insensitive(&mut area.aliases);
+        sort_dedup(&mut area.representative_fact_ids);
+        sort_dedup(&mut area.representative_trace_path_ids);
+        sort_dedup(&mut area.evidence_ids);
     }
+    sort_dedup_case_insensitive(&mut proposal.warnings);
+}
+
+fn sort_dedup<T: Ord>(values: &mut Vec<T>) {
+    values.sort();
+    values.dedup();
+}
+
+fn sort_dedup_case_insensitive(values: &mut Vec<String>) {
+    values.sort_by(|left, right| {
+        left.to_lowercase()
+            .cmp(&right.to_lowercase())
+            .then_with(|| left.cmp(right))
+    });
+    values.dedup_by(|left, right| left.to_lowercase() == right.to_lowercase());
+}
+
+fn canonicalize_proposal(proposal: &mut SemanticRevisionProposal) {
     proposal
         .areas
         .sort_by(|left, right| left.proposal_key.cmp(&right.proposal_key));

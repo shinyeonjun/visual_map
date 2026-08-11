@@ -39,6 +39,54 @@ There is no donor-to-legacy projection and no reverse conversion. The Language
 IR JSONL artifact is job-scoped staging; the canonical SQLite bundle is the
 only published engine output.
 
+## Provider identity boundary
+
+Provider symbol strings are opaque external identities, not canonical Fact
+IDs and not user-facing qualified names. Every supported language passes
+definitions, parent symbols, occurrences, framework handler references, and
+relation endpoints through the same boundary:
+
+- ordinary contract-safe provider identities are retained byte-for-byte;
+- identities containing control characters, exceeding the persisted size
+  bound, or colliding with the reserved derived prefix are mapped to one
+  domain-separated SHA-256 identity;
+- the mapping is deterministic and is applied before any symbol join, so a
+  definition and every reference to it remain the same endpoint;
+- characters are never trimmed or deleted to make an ID pass, because that
+  could merge two different provider identities;
+- an empty/unjoinable provider identity omits only the affected record and
+  contributes to the unit's typed omission/gap accounting. It cannot abort an
+  otherwise valid multi-language repository.
+
+Canonical Fact IDs remain strict and never accept provider-native control
+characters directly.
+
+## Source coordinate boundary
+
+Canonical source positions always use zero-based UTF-8 byte columns and
+half-open ranges. Provider coordinates are converted exactly once before they
+can participate in symbol matching, relation reconciliation, evidence, or
+storage:
+
+- each raw SCIP document is decoded using its own declared `position_encoding`
+  (`UTF-8`, `UTF-16`, or `UTF-32`), then rewritten to canonical UTF-8 columns;
+- typed SCIP ranges take precedence over deprecated vector ranges and are
+  folded into the same canonical representation;
+- supported legacy SCIP producers that omit the field use a closed compatibility
+  contract: TypeScript, JavaScript, and C# are UTF-16; C and C++ are UTF-8;
+- native LSP clients do not advertise alternate position encodings, so the LSP
+  default UTF-16 contract applies to Python, Java, Go, Rust, and Dart;
+- tree-sitter/compiler inventory uses UTF-8 byte columns directly;
+- UTF-8 BOM bytes are excluded from provider columns but retained in canonical
+  absolute byte offsets; CRLF is one line terminator, not source content.
+
+An unknown encoding, negative coordinate, out-of-range line/column, surrogate
+split, or UTF-8 mid-codepoint column is rejected at the provider-unit boundary.
+The engine never snaps a bad column to the nearest character because that would
+turn the wrong source text into apparently confirmed evidence. A provider-unit
+invalid-output result remains scoped; it cannot corrupt or abort facts from
+other languages.
+
 ## Evidence and truth
 
 - `confirmed` requires existing endpoints and at least one exact source
@@ -74,6 +122,8 @@ A test becomes `TestCase` only from runner/annotation/registration evidence,
 and `Tests` requires a provider-resolved call from that test body.
 
 Ordered paths are not stored as architecture output. The desktop derives a
-bounded TracePath only from confirmed execution-oriented facts. Type,
-containment, import, candidate, virtual, or unknown relations cannot become
-execution hops.
+bounded TracePath from source-backed execution occurrences. Direct dispatch can
+form an exact hop; resolved virtual/interface/dynamic dispatch remains visible
+as a candidate hop and forces the path to `gap`. Type, containment, import,
+unknown dispatch, calls without an execution occurrence, and deferred callbacks
+cannot become immediate execution hops.

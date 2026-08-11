@@ -5,6 +5,7 @@ import type {
   AnalyzeWorkspaceResult,
   EngineRegistry,
   FactGraphStatus,
+  FactNodeSearchResult,
   ProviderKind,
   ReasoningEffort,
   SourceActionResult,
@@ -55,9 +56,20 @@ export async function getFactGraphStatus(workspaceId: string): Promise<FactGraph
   return invoke<FactGraphStatus>("get_fact_graph_status", { workspaceId });
 }
 
-export async function analyzeWorkspace(workspaceId: string): Promise<AnalyzeWorkspaceResult> {
+/** @public Search read-model boundary reserved for the separately implemented search UI. */
+export async function searchFactNodes(workspaceId: string, query: string, limit = 40): Promise<FactNodeSearchResult[]> {
+  if (!hasDesktopRuntime() || !query.trim()) return [];
+  return invoke<FactNodeSearchResult[]>("search_fact_nodes", { workspaceId, query, limit });
+}
+
+type AnalysisCachePolicy = "reuse" | "fresh";
+
+export async function analyzeWorkspace(
+  workspaceId: string,
+  cachePolicy: AnalysisCachePolicy,
+): Promise<AnalyzeWorkspaceResult> {
   return invoke<AnalyzeWorkspaceResult>("analyze_workspace", {
-    request: { workspaceId },
+    request: { workspaceId, cachePolicy },
   });
 }
 

@@ -46,6 +46,13 @@ impl TraceLimits {
 struct ExecutionStep<'a> {
     edge: &'a FactEdge,
     target_id: FactNodeId,
+    uncertain_dispatch: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExecutionStepQuality {
+    Exact,
+    Candidate,
 }
 
 struct ExecutionGraph<'a> {
@@ -74,8 +81,7 @@ impl<'a> ExecutionGraph<'a> {
             .iter()
             .map(|edge| (edge.id.clone(), edge))
             .collect::<BTreeMap<_, _>>();
-        let mut adjacency_by_target =
-            BTreeMap::<FactNodeId, BTreeMap<FactNodeId, ExecutionStep<'a>>>::new();
+        let mut adjacency = BTreeMap::<FactNodeId, Vec<ExecutionStep<'a>>>::new();
         let mut blocked_sources = BTreeSet::new();
 
         for edge in edges {
@@ -95,31 +101,28 @@ impl<'a> ExecutionGraph<'a> {
                 blocked_sources.insert(source_id.clone());
                 continue;
             }
-            if edge.truth != FactTruth::Confirmed || !has_exact_execution_dispatch(edge) {
+            if edge.truth != FactTruth::Confirmed {
                 blocked_sources.insert(source_id.clone());
                 continue;
             }
-            let candidate = ExecutionStep {
+            let Some(quality) = execution_step_quality(edge) else {
+                blocked_sources.insert(source_id.clone());
+                continue;
+            };
+            if quality == ExecutionStepQuality::Candidate {
+                blocked_sources.insert(source_id.clone());
+            }
+            let step = ExecutionStep {
                 edge,
                 target_id: target_id.clone(),
+                uncertain_dispatch: quality == ExecutionStepQuality::Candidate,
             };
-            let by_target = adjacency_by_target.entry(source_id.clone()).or_default();
-            match by_target.get(target_id) {
-                Some(current) if step_key(current) <= step_key(&candidate) => {}
-                _ => {
-                    by_target.insert(target_id.clone(), candidate);
-                }
-            }
+            adjacency.entry(source_id.clone()).or_default().push(step);
         }
 
-        let adjacency = adjacency_by_target
-            .into_iter()
-            .map(|(source, targets)| {
-                let mut steps = targets.into_values().collect::<Vec<_>>();
-                steps.sort_by(|left, right| step_key(left).cmp(&step_key(right)));
-                (source, steps)
-            })
-            .collect();
+        for steps in adjacency.values_mut() {
+            steps.sort_by(|left, right| step_key(left).cmp(&step_key(right)));
+        }
 
         let mut capability_states = BTreeMap::new();
         for receipt in receipts {
@@ -184,6 +187,11 @@ impl<'a> ExecutionGraph<'a> {
             return TracePathState::Gap;
         };
         if self.blocked_sources.contains(fact_id) || self.node_has_explicit_gap(node) {
+            return TracePathState::Gap;
+        }
+        // Source text can prove that a table name was referenced, but only a
+        // certified database snapshot can prove the target object exists.
+        if node.kind == FactNodeKind::TableReference {
             return TracePathState::Gap;
         }
         if is_terminal_kind(node.kind) {
@@ -280,7 +288,7 @@ pub(crate) fn representative_trace_paths<K: Ord>(
         limits.max_paths_per_entry,
         limits.max_total_paths,
     );
-    result.sort_by(trace_order);
+    result.sort_by(|left, right| trace_order(&graph, left, right));
     result.dedup_by(|left, right| left.trace_path_id == right.trace_path_id);
     Ok(result)
 }
@@ -412,6 +420,7 @@ fn paths_from_entry(
             }
             expansions = expansions.saturating_add(1);
             let mut next = candidate.clone();
+            next.encountered_gap |= step.uncertain_dispatch;
             next.ordered_edge_ids.push(step.edge.id.clone());
             let cycle = next.ordered_fact_ids.contains(&step.target_id);
             next.ordered_fact_ids.push(step.target_id.clone());
@@ -426,7 +435,7 @@ fn paths_from_entry(
         }
     }
 
-    result.sort_by(trace_order);
+    result.sort_by(|left, right| trace_order(graph, left, right));
     result.dedup_by(|left, right| left.trace_path_id == right.trace_path_id);
     Ok(result)
 }
@@ -485,6 +494,11 @@ fn logical_execution_pair(edge: &FactEdge) -> Option<(&FactNodeId, &FactNodeId)>
         // order is the inverse: a request enters the endpoint, then its exact
         // handler runs. The canonical edge direction itself is never changed.
         FactEdgeKind::Handles => Some((&edge.target_id, &edge.source_id)),
+        // The canonical type relation is implementation -> contract. Runtime
+        // dispatch proceeds from a contract method to one of its exact
+        // implementation methods, so expose the inverse only as a candidate
+        // trace hop (see `execution_step_quality`).
+        FactEdgeKind::Overrides => Some((&edge.target_id, &edge.source_id)),
         FactEdgeKind::Calls
         | FactEdgeKind::Constructs
         | FactEdgeKind::RoutesTo
@@ -493,6 +507,7 @@ fn logical_execution_pair(edge: &FactEdge) -> Option<(&FactNodeId, &FactNodeId)>
         | FactEdgeKind::Reads
         | FactEdgeKind::Writes
         | FactEdgeKind::ExecutesQuery
+        | FactEdgeKind::MapsToTable
         | FactEdgeKind::Publishes
         | FactEdgeKind::Dispatches
         | FactEdgeKind::CallsExternal
@@ -502,13 +517,30 @@ fn logical_execution_pair(edge: &FactEdge) -> Option<(&FactNodeId, &FactNodeId)>
     }
 }
 
-fn has_exact_execution_dispatch(edge: &FactEdge) -> bool {
+fn execution_step_quality(edge: &FactEdge) -> Option<ExecutionStepQuality> {
     match edge.kind {
-        FactEdgeKind::Calls | FactEdgeKind::Constructs => edge.dispatch == DispatchKind::Direct,
+        FactEdgeKind::Overrides => Some(ExecutionStepQuality::Candidate),
+        FactEdgeKind::Calls | FactEdgeKind::Constructs => {
+            if edge
+                .execution
+                .as_ref()
+                .is_none_or(|execution| execution.control.deferred)
+            {
+                return None;
+            }
+            match edge.dispatch {
+                DispatchKind::Direct => Some(ExecutionStepQuality::Exact),
+                DispatchKind::Virtual | DispatchKind::Interface | DispatchKind::Dynamic => {
+                    Some(ExecutionStepQuality::Candidate)
+                }
+                DispatchKind::Unknown | DispatchKind::NotApplicable => None,
+            }
+        }
         _ => matches!(
             edge.dispatch,
             DispatchKind::Direct | DispatchKind::NotApplicable
-        ),
+        )
+        .then_some(ExecutionStepQuality::Exact),
     }
 }
 
@@ -528,7 +560,6 @@ fn is_terminal_kind(kind: FactNodeKind) -> bool {
             | FactNodeKind::Table
             | FactNodeKind::View
             | FactNodeKind::MaterializedView
-            | FactNodeKind::Query
             | FactNodeKind::Routine
             | FactNodeKind::Event
             | FactNodeKind::Queue
@@ -552,6 +583,7 @@ fn leaf_capability(kind: FactNodeKind) -> Option<AnalysisCapability> {
         | FactNodeKind::Function
         | FactNodeKind::Method
         | FactNodeKind::Constructor => Some(AnalysisCapability::DirectCalls),
+        FactNodeKind::Query => Some(AnalysisCapability::OrmQuery),
         FactNodeKind::FrontendAction => Some(AnalysisCapability::EventExternal),
         _ => None,
     }
@@ -569,8 +601,17 @@ fn entry_rank(kind: FactNodeKind) -> Option<u8> {
     }
 }
 
-fn step_key<'a>(step: &'a ExecutionStep<'a>) -> (u8, &'a FactNodeId, &'a FactEdgeId) {
-    (edge_rank(step.edge.kind), &step.target_id, &step.edge.id)
+fn step_key<'a>(step: &'a ExecutionStep<'a>) -> (u8, u32, &'a FactNodeId, &'a FactEdgeId) {
+    (
+        edge_rank(step.edge.kind),
+        step.edge
+            .execution
+            .as_ref()
+            .map(|execution| execution.lexical_ordinal)
+            .unwrap_or(u32::MAX),
+        &step.target_id,
+        &step.edge.id,
+    )
 }
 
 fn edge_rank(kind: FactEdgeKind) -> u8 {
@@ -580,24 +621,65 @@ fn edge_rank(kind: FactEdgeKind) -> u8 {
         FactEdgeKind::RoutesTo => 2,
         FactEdgeKind::FrontendActionCallsApi => 3,
         FactEdgeKind::Calls => 4,
-        FactEdgeKind::Constructs => 5,
-        FactEdgeKind::ExecutesQuery => 6,
-        FactEdgeKind::Reads => 7,
-        FactEdgeKind::Writes => 8,
-        FactEdgeKind::CallsExternal => 9,
-        FactEdgeKind::Publishes => 10,
-        FactEdgeKind::Dispatches => 11,
-        FactEdgeKind::UsesCache => 12,
-        FactEdgeKind::UsesFile => 13,
+        FactEdgeKind::Overrides => 5,
+        FactEdgeKind::Constructs => 6,
+        FactEdgeKind::ExecutesQuery => 7,
+        FactEdgeKind::Reads => 8,
+        FactEdgeKind::Writes => 9,
+        FactEdgeKind::CallsExternal => 10,
+        FactEdgeKind::Publishes => 11,
+        FactEdgeKind::Dispatches => 12,
+        FactEdgeKind::UsesCache => 13,
+        FactEdgeKind::UsesFile => 14,
         _ => u8::MAX,
     }
 }
 
-fn trace_order(left: &TracePathSummary, right: &TracePathSummary) -> std::cmp::Ordering {
+fn trace_order(
+    graph: &ExecutionGraph<'_>,
+    left: &TracePathSummary,
+    right: &TracePathSummary,
+) -> std::cmp::Ordering {
     left.entry_fact_id
         .cmp(&right.entry_fact_id)
-        .then_with(|| left.ordered_edge_ids.cmp(&right.ordered_edge_ids))
+        .then_with(|| compare_trace_edges(graph, left, right))
         .then_with(|| trace_state_rank(left.state).cmp(&trace_state_rank(right.state)))
+}
+
+fn compare_trace_edges(
+    graph: &ExecutionGraph<'_>,
+    left: &TracePathSummary,
+    right: &TracePathSummary,
+) -> std::cmp::Ordering {
+    for (left_id, right_id) in left.ordered_edge_ids.iter().zip(&right.ordered_edge_ids) {
+        let ordering = match (graph.edges.get(left_id), graph.edges.get(right_id)) {
+            (Some(left_edge), Some(right_edge)) => (
+                edge_rank(left_edge.kind),
+                left_edge
+                    .execution
+                    .as_ref()
+                    .map(|execution| execution.lexical_ordinal)
+                    .unwrap_or(u32::MAX),
+                left_id,
+            )
+                .cmp(&(
+                    edge_rank(right_edge.kind),
+                    right_edge
+                        .execution
+                        .as_ref()
+                        .map(|execution| execution.lexical_ordinal)
+                        .unwrap_or(u32::MAX),
+                    right_id,
+                )),
+            _ => left_id.cmp(right_id),
+        };
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.ordered_edge_ids
+        .len()
+        .cmp(&right.ordered_edge_ids.len())
 }
 
 fn trace_state_rank(state: TracePathState) -> u8 {
@@ -616,7 +698,10 @@ mod tests {
     use codebase_fact_model::{
         analysis::ProgrammingLanguage,
         coverage::{CoverageDenominator, DeclaredSupport, EvidencePrecision},
-        fact_graph::{FactNodeDetails, ResolutionMethod, Visibility},
+        fact_graph::{
+            ExecutionControlContext, ExecutionOccurrence, FactNodeDetails, ResolutionMethod,
+            Visibility,
+        },
         identity::{EvidenceId, SemanticContextId, SnapshotId},
         source::SourceFlags,
     };
@@ -661,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_or_non_direct_call_stops_as_a_gap_instead_of_drawing_a_hop() {
+    fn resolved_non_direct_call_is_visible_as_a_candidate_gap() {
         let unit = AnalysisUnitId::from_components(&["java", "orders"]).unwrap();
         let entry = node(FactNodeKind::Entrypoint, "OrdersApplication.main", &unit);
         let service = node(FactNodeKind::Method, "OrdersService.run", &unit);
@@ -672,16 +757,253 @@ mod tests {
             FactTruth::Confirmed,
             DispatchKind::Virtual,
         );
-        let nodes = [entry.clone(), service];
-        let edges = [uncertain];
+        let nodes = [entry.clone(), service.clone()];
+        let edges = [uncertain.clone()];
         let receipts = [receipt(&unit, AnalysisCapability::DirectCalls)];
         let graph = ExecutionGraph::new(&nodes, &edges, &receipts, &[]).unwrap();
 
         let paths = paths_from_entry(&graph, &entry.id, TraceLimits::selection()).unwrap();
 
-        assert_eq!(paths[0].ordered_fact_ids, vec![entry.id]);
-        assert!(paths[0].ordered_edge_ids.is_empty());
+        assert_eq!(paths[0].ordered_fact_ids, vec![entry.id, service.id]);
+        assert_eq!(paths[0].ordered_edge_ids, vec![uncertain.id]);
         assert_eq!(paths[0].state, TracePathState::Gap);
+    }
+
+    #[test]
+    fn interface_dispatch_can_continue_through_an_exact_override_candidate() {
+        let unit = AnalysisUnitId::from_components(&["python", "repository-dispatch"]).unwrap();
+        let entry = node(FactNodeKind::Function, "create_session", &unit);
+        let contract = node(FactNodeKind::Method, "SessionRepository.save", &unit);
+        let implementation = node(
+            FactNodeKind::Method,
+            "PostgreSQLSessionRepository.save",
+            &unit,
+        );
+        let query = node(FactNodeKind::Function, "upsert_session", &unit);
+        let sql = node(FactNodeKind::Query, "UPDATE sessions SET title = ?", &unit);
+        let table = node(FactNodeKind::Table, "sessions", &unit);
+        let contract_call = edge(
+            FactEdgeKind::Calls,
+            &entry,
+            &contract,
+            FactTruth::Confirmed,
+            DispatchKind::Interface,
+        );
+        let override_edge = edge(
+            FactEdgeKind::Overrides,
+            &implementation,
+            &contract,
+            FactTruth::Confirmed,
+            DispatchKind::NotApplicable,
+        );
+        let query_call = edge(
+            FactEdgeKind::Calls,
+            &implementation,
+            &query,
+            FactTruth::Confirmed,
+            DispatchKind::Direct,
+        );
+        let executes_query = edge(
+            FactEdgeKind::ExecutesQuery,
+            &query,
+            &sql,
+            FactTruth::Confirmed,
+            DispatchKind::NotApplicable,
+        );
+        let writes = edge(
+            FactEdgeKind::Writes,
+            &sql,
+            &table,
+            FactTruth::Confirmed,
+            DispatchKind::NotApplicable,
+        );
+        let nodes = [
+            entry.clone(),
+            contract,
+            implementation.clone(),
+            query.clone(),
+            sql.clone(),
+            table.clone(),
+        ];
+        let edges = [
+            contract_call.clone(),
+            override_edge.clone(),
+            query_call.clone(),
+            executes_query.clone(),
+            writes.clone(),
+        ];
+        let receipts = [
+            receipt(&unit, AnalysisCapability::DirectCalls),
+            receipt(&unit, AnalysisCapability::OrmQuery),
+        ];
+        let graph = ExecutionGraph::new(&nodes, &edges, &receipts, &[]).unwrap();
+
+        let paths = paths_from_entry(&graph, &entry.id, TraceLimits::selection()).unwrap();
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            paths[0].ordered_fact_ids,
+            vec![
+                entry.id,
+                nodes[1].id.clone(),
+                implementation.id,
+                query.id,
+                sql.id,
+                table.id,
+            ]
+        );
+        assert_eq!(
+            paths[0].ordered_edge_ids,
+            vec![
+                contract_call.id,
+                override_edge.id,
+                query_call.id,
+                executes_query.id,
+                writes.id,
+            ]
+        );
+        assert_eq!(paths[0].state, TracePathState::Gap);
+    }
+
+    #[test]
+    fn table_reference_requires_exact_database_reconciliation_to_complete() {
+        let unit = AnalysisUnitId::from_components(&["typescript", "database-reference"]).unwrap();
+        let entry = node(FactNodeKind::Function, "saveOrder", &unit);
+        let query = node(FactNodeKind::Query, "INSERT INTO orders", &unit);
+        let reference = node(FactNodeKind::TableReference, "orders", &unit);
+        let table = node(FactNodeKind::Table, "database.public.orders", &unit);
+        let executes = edge(
+            FactEdgeKind::ExecutesQuery,
+            &entry,
+            &query,
+            FactTruth::Confirmed,
+            DispatchKind::NotApplicable,
+        );
+        let writes = edge(
+            FactEdgeKind::Writes,
+            &query,
+            &reference,
+            FactTruth::Confirmed,
+            DispatchKind::NotApplicable,
+        );
+        let maps = edge(
+            FactEdgeKind::MapsToTable,
+            &reference,
+            &table,
+            FactTruth::Confirmed,
+            DispatchKind::NotApplicable,
+        );
+        let receipts = [receipt(&unit, AnalysisCapability::OrmQuery)];
+
+        let unresolved_nodes = [entry.clone(), query.clone(), reference.clone()];
+        let unresolved_edges = [executes.clone(), writes.clone()];
+        let unresolved_graph =
+            ExecutionGraph::new(&unresolved_nodes, &unresolved_edges, &receipts, &[]).unwrap();
+        let unresolved =
+            paths_from_entry(&unresolved_graph, &entry.id, TraceLimits::selection()).unwrap();
+        assert_eq!(unresolved[0].state, TracePathState::Gap);
+        assert_eq!(
+            unresolved[0].ordered_fact_ids,
+            vec![entry.id.clone(), query.id.clone(), reference.id.clone()]
+        );
+
+        let reconciled_nodes = [entry.clone(), query, reference, table.clone()];
+        let reconciled_edges = [executes, writes, maps.clone()];
+        let reconciled_graph =
+            ExecutionGraph::new(&reconciled_nodes, &reconciled_edges, &receipts, &[]).unwrap();
+        let reconciled =
+            paths_from_entry(&reconciled_graph, &entry.id, TraceLimits::selection()).unwrap();
+        assert_eq!(reconciled[0].state, TracePathState::Complete);
+        assert_eq!(reconciled[0].ordered_fact_ids.last(), Some(&table.id));
+        assert_eq!(reconciled[0].ordered_edge_ids.last(), Some(&maps.id));
+    }
+
+    #[test]
+    fn repeated_calls_to_one_target_remain_distinct_and_use_lexical_order() {
+        let unit = AnalysisUnitId::from_components(&["typescript", "repeat-call"]).unwrap();
+        let entry = node(FactNodeKind::Entrypoint, "main", &unit);
+        let target = node(FactNodeKind::Function, "render", &unit);
+        let first = edge_at(
+            FactEdgeKind::Calls,
+            &entry,
+            &target,
+            FactTruth::Confirmed,
+            DispatchKind::Direct,
+            0,
+            Default::default(),
+        );
+        let second = edge_at(
+            FactEdgeKind::Calls,
+            &entry,
+            &target,
+            FactTruth::Confirmed,
+            DispatchKind::Direct,
+            1,
+            Default::default(),
+        );
+        let nodes = [entry.clone(), target.clone()];
+        let edges = [second.clone(), first.clone()];
+        let receipts = [receipt(&unit, AnalysisCapability::DirectCalls)];
+        let graph = ExecutionGraph::new(&nodes, &edges, &receipts, &[]).unwrap();
+
+        let paths = paths_from_entry(&graph, &entry.id, TraceLimits::selection()).unwrap();
+
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0].ordered_edge_ids, vec![first.id]);
+        assert_eq!(paths[1].ordered_edge_ids, vec![second.id]);
+        assert_eq!(
+            paths[0].ordered_fact_ids,
+            vec![entry.id.clone(), target.id.clone()]
+        );
+        assert_eq!(paths[1].ordered_fact_ids, vec![entry.id, target.id]);
+    }
+
+    #[test]
+    fn deferred_and_legacy_calls_are_not_claimed_as_immediate_execution_hops() {
+        let unit = AnalysisUnitId::from_components(&["typescript", "deferred-call"]).unwrap();
+        let entry = node(FactNodeKind::Entrypoint, "main", &unit);
+        let target = node(FactNodeKind::Function, "later", &unit);
+        let deferred = edge_at(
+            FactEdgeKind::Calls,
+            &entry,
+            &target,
+            FactTruth::Confirmed,
+            DispatchKind::Direct,
+            0,
+            ExecutionControlContext {
+                deferred: true,
+                ..Default::default()
+            },
+        );
+        let mut legacy = edge_at(
+            FactEdgeKind::Calls,
+            &entry,
+            &target,
+            FactTruth::Confirmed,
+            DispatchKind::Direct,
+            1,
+            Default::default(),
+        );
+        legacy.execution = None;
+        legacy.id = FactEdge::stable_id(
+            &legacy.source_id,
+            &legacy.target_id,
+            legacy.kind,
+            legacy.semantic_context_id.as_ref(),
+            legacy.qualifier.as_deref(),
+            None,
+        )
+        .unwrap();
+        let nodes = [entry.clone(), target];
+        let receipts = [receipt(&unit, AnalysisCapability::DirectCalls)];
+
+        for blocked in [deferred, legacy] {
+            let edges = [blocked];
+            let graph = ExecutionGraph::new(&nodes, &edges, &receipts, &[]).unwrap();
+            let paths = paths_from_entry(&graph, &entry.id, TraceLimits::selection()).unwrap();
+            assert!(paths[0].ordered_edge_ids.is_empty());
+            assert_eq!(paths[0].state, TracePathState::Gap);
+        }
     }
 
     #[test]
@@ -705,16 +1027,27 @@ mod tests {
             DispatchKind::Virtual,
         );
         let nodes = [entry.clone(), resolved.clone(), unresolved];
-        let edges = [direct.clone(), virtual_call];
+        let edges = [direct.clone(), virtual_call.clone()];
         let receipts = [receipt(&unit, AnalysisCapability::DirectCalls)];
         let graph = ExecutionGraph::new(&nodes, &edges, &receipts, &[]).unwrap();
 
         let paths = paths_from_entry(&graph, &entry.id, TraceLimits::selection()).unwrap();
 
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0].ordered_fact_ids, vec![entry.id, resolved.id]);
-        assert_eq!(paths[0].ordered_edge_ids, vec![direct.id]);
-        assert_eq!(paths[0].state, TracePathState::Gap);
+        assert_eq!(paths.len(), 2);
+        let direct_path = paths
+            .iter()
+            .find(|path| path.ordered_edge_ids == vec![direct.id.clone()])
+            .unwrap();
+        let candidate_path = paths
+            .iter()
+            .find(|path| path.ordered_edge_ids == vec![virtual_call.id.clone()])
+            .unwrap();
+        assert_eq!(
+            direct_path.ordered_fact_ids,
+            vec![entry.id.clone(), resolved.id]
+        );
+        assert_eq!(direct_path.state, TracePathState::Gap);
+        assert_eq!(candidate_path.state, TracePathState::Gap);
     }
 
     #[test]
@@ -976,15 +1309,44 @@ mod tests {
         truth: FactTruth,
         dispatch: DispatchKind,
     ) -> FactEdge {
+        edge_at(kind, source, target, truth, dispatch, 0, Default::default())
+    }
+
+    fn edge_at(
+        kind: FactEdgeKind,
+        source: &FactNode,
+        target: &FactNode,
+        truth: FactTruth,
+        dispatch: DispatchKind,
+        lexical_ordinal: u32,
+        control: ExecutionControlContext,
+    ) -> FactEdge {
         let context = SemanticContextId::from_components(&["test"]).unwrap();
+        let lexical_ordinal_text = lexical_ordinal.to_string();
         let evidence_id = EvidenceId::from_components(&[
             "edge",
             source.id.as_str(),
             target.id.as_str(),
             kind.as_str(),
+            &lexical_ordinal_text,
         ])
         .unwrap();
-        let id = FactEdge::stable_id(&source.id, &target.id, kind, Some(&context), None).unwrap();
+        let execution = matches!(kind, FactEdgeKind::Calls | FactEdgeKind::Constructs).then(|| {
+            ExecutionOccurrence {
+                call_site_evidence_id: evidence_id.clone(),
+                lexical_ordinal,
+                control,
+            }
+        });
+        let id = FactEdge::stable_id(
+            &source.id,
+            &target.id,
+            kind,
+            Some(&context),
+            None,
+            execution.as_ref(),
+        )
+        .unwrap();
         FactEdge {
             id,
             snapshot_id: snapshot(),
@@ -997,6 +1359,7 @@ mod tests {
             dispatch,
             semantic_context_id: Some(context),
             qualifier: None,
+            execution,
             evidence_ids: vec![evidence_id],
         }
     }

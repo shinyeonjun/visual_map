@@ -64,15 +64,21 @@ const map: MapView = {
       name: "주문",
       originalName: "orders",
       summary: "주문을 처리합니다.",
+      category: "domain",
+      labelSource: "semantic",
+      fallbackReason: null,
       depth: 0,
       areas: [],
       nodes: [],
       hiddenNodeCount: 0,
       position: { x: 100, y: 100 },
       width: 240,
+      boundaryRelationCounts: { verified: 0, structural: 0, candidate: 0 },
+      affectingAnalysisGapCount: 0,
     },
   ],
   relations: [],
+  unattributedAnalysisGapCount: 0,
 };
 
 const selection: Selection = {
@@ -82,6 +88,7 @@ const selection: Selection = {
   relations: [],
   evidence: [{ path: "src/orders/service.ts", line: 12 }],
   source: null,
+  analysisGaps: { totalCount: 0, items: [], truncatedCount: 0 },
 };
 
 const evidenceConsentKey = "codebase-workspace.ai-source-evidence-consent.v1:ws-0123456789abcdef:codex";
@@ -138,7 +145,11 @@ describe("analysis vertical slice", () => {
 
     const areaButton = await screen.findByRole("button", { name: /주문.*orders.*L0/ });
     expect(areaButton).toBeVisible();
-    expect(mocks.analyzeWorkspace).toHaveBeenCalledWith("ws-0123456789abcdef");
+    expect(screen.getByRole("button", { name: "재분석" })).toHaveAttribute(
+      "title",
+      "이전 분석 결과를 재사용하지 않고 현재 코드를 처음부터 다시 분석합니다",
+    );
+    expect(mocks.analyzeWorkspace).toHaveBeenCalledWith("ws-0123456789abcdef", "fresh");
     fireEvent.click(areaButton);
 
     await waitFor(() => expect(mocks.getMapSelection).toHaveBeenCalledWith("ws-0123456789abcdef", "area-orders"));
@@ -248,7 +259,7 @@ describe("analysis vertical slice", () => {
     expect(mocks.analyzeWorkspace).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "동의하고 분석" }));
-    await waitFor(() => expect(mocks.analyzeWorkspace).toHaveBeenCalledWith("ws-0123456789abcdef"));
+    await waitFor(() => expect(mocks.analyzeWorkspace).toHaveBeenCalledWith("ws-0123456789abcdef", "fresh"));
     expect(window.localStorage.getItem(evidenceConsentKey)).toBe("accepted");
   });
 

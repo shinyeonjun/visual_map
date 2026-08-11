@@ -315,8 +315,14 @@ pub(crate) fn adapt_test_relations(
                 ));
             }
             for syntax_case in &syntax_cases {
-                let marker_span = source.utf8_span(&syntax_case.marker_range)?;
-                let body_span = source.utf8_span(&syntax_case.body_range)?;
+                // One unmappable range costs this test registration, never the
+                // run: the file coverage below still reports what was scanned.
+                let (Ok(marker_span), Ok(body_span)) = (
+                    source.utf8_span(&syntax_case.marker_range),
+                    source.utf8_span(&syntax_case.body_range),
+                ) else {
+                    continue;
+                };
                 let registration_evidence = FactEvidence::new(
                     EvidenceKind::FrameworkRegistration,
                     EvidenceProducer {

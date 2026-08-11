@@ -16,6 +16,7 @@ mod direct;
 mod imports;
 mod provider;
 mod source_coordinates;
+mod sql_literals;
 pub(crate) mod syntax;
 pub(crate) mod type_relations;
 

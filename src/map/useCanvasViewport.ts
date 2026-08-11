@@ -17,6 +17,8 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 /** Large repositories must still be able to fit the complete responsibility map. */
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 2.2;
+/** Small maps should use the available canvas instead of floating as an unreadable island. */
+const MAX_FIT_SCALE = 1.2;
 const GRID = 24;
 /** Room left around the content when fitting, so nothing touches the edge. */
 const FIT_PADDING = 64;
@@ -48,7 +50,7 @@ interface Viewport {
   y: number;
 }
 
-export function useCanvasViewport(contentWidth: number, contentHeight: number) {
+export function useCanvasViewport(contentWidth: number, contentHeight: number, minFitScale = MIN_SCALE) {
   const viewRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<Viewport>({ scale: 1, x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
@@ -59,15 +61,27 @@ export function useCanvasViewport(contentWidth: number, contentHeight: number) {
     if (!element) return;
     const bounds = element.getBoundingClientRect();
     if (bounds.width === 0 || bounds.height === 0) return;
+    /*
+      Fitting is only worth it while the result can still be read. A view whose
+      job is names and line numbers would rather overflow and be panned than
+      shrink its own text out of legibility, so it raises this floor.
+    */
     const scale = clamp(
-      Math.min((bounds.width - FIT_PADDING) / contentWidth, (bounds.height - FIT_PADDING) / contentHeight, 1),
+      Math.max(
+        minFitScale,
+        Math.min(
+          (bounds.width - FIT_PADDING) / contentWidth,
+          (bounds.height - FIT_PADDING) / contentHeight,
+          MAX_FIT_SCALE,
+        ),
+      ),
     );
     setView({
       scale,
       x: (bounds.width - contentWidth * scale) / 2,
       y: (bounds.height - contentHeight * scale) / 2,
     });
-  }, [contentHeight, contentWidth]);
+  }, [contentHeight, contentWidth, minFitScale]);
 
   useEffect(() => {
     fit();
@@ -131,31 +145,51 @@ export function useCanvasViewport(contentWidth: number, contentHeight: number) {
   }
 
   /*
-    React registers wheel at the root as a passive listener, so preventDefault
-    from an onWheel prop is silently ignored. Without it the WebView claims
-    ctrl+wheel as page zoom and the whole application scales instead of the
-    map, which is exactly what a trackpad pinch sends. The listener therefore
-    has to be attached natively and non-passively.
+    WebView2 first offers a precision-touchpad pinch to the page as a synthetic
+    ctrl+wheel event. Tauri has to enable that native gesture for the event to
+    exist at all; once it does, this non-passive listener consumes it before
+    WebView2 falls back to scaling the whole page.
+
+    Listen at the window boundary instead of only on the canvas. A pinch over
+    the canvas becomes map zoom, while a pinch over a sidebar is consumed and
+    does nothing. That keeps the desktop shell at 100% page scale.
   */
   useEffect(() => {
     const element = viewRef.current;
     if (!element) return;
+    const canvasElement: HTMLDivElement = element;
 
     function onWheel(event: WheelEvent) {
-      if (!element) return;
+      const overCanvas = event.composedPath().includes(canvasElement);
+      const pageZoomGesture = event.ctrlKey || event.metaKey;
+
+      if (!overCanvas) {
+        if (pageZoomGesture) event.preventDefault();
+        return;
+      }
+
       event.preventDefault();
-      const bounds = element.getBoundingClientRect();
+      const bounds = canvasElement.getBoundingClientRect();
       const { x: deltaX, y: deltaY } = wheelDeltaInPixels(event);
       // A trackpad pinch reaches the page as ctrl+wheel; so does ctrl+scroll.
-      if (event.ctrlKey || event.metaKey) {
+      if (pageZoomGesture) {
         zoomAt(zoomStep(deltaY), event.clientX - bounds.left, event.clientY - bounds.top);
         return;
       }
       setView((current) => ({ ...current, x: current.x - deltaX, y: current.y - deltaY }));
     }
 
-    element.addEventListener("wheel", onWheel, { passive: false, capture: true });
-    return () => element.removeEventListener("wheel", onWheel, true);
+    function onKeyDown(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      if (isPageZoomKey(event.key)) event.preventDefault();
+    }
+
+    window.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener("wheel", onWheel, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
   }, [zoomAt]);
 
   return {
@@ -198,4 +232,9 @@ function wheelDeltaInPixels(event: WheelEvent): { x: number; y: number } {
 function zoomStep(deltaY: number): number {
   const ratio = Math.exp(-deltaY * ZOOM_SENSITIVITY);
   return Math.min(MAX_ZOOM_STEP, Math.max(1 / MAX_ZOOM_STEP, ratio));
+}
+
+/** WebView page-zoom shortcuts must not resize the desktop application shell. */
+function isPageZoomKey(key: string): boolean {
+  return key === "+" || key === "=" || key === "-" || key === "_" || key === "0";
 }

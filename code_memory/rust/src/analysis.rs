@@ -356,10 +356,13 @@ fn analyze_provider_job(job: ProviderJob) -> Vec<ProviderUnitBatch> {
                 &member.root,
                 member.lang,
                 &member.cache_key,
-                &analysis.documents,
-                &analysis.relations,
-                &analysis.diagnostics,
-                &analysis.execution_context,
+                LanguageCacheWriteInput {
+                    documents: &analysis.documents,
+                    relations: &analysis.relations,
+                    diagnostics: &analysis.diagnostics,
+                    execution_context: &analysis.execution_context,
+                    cache_policy: member.cache_policy,
+                },
             );
             rebase_provider_batch(&mut analysis, &member.root, &member.project_root);
             analysis.project_excluded_files = member.project_excluded_files;

@@ -642,6 +642,7 @@ mod tests {
                     previous_revision: None,
                 },
             },
+            verification_phase: codebase_semantic_compiler::SemanticVerificationPhase::FinalMap,
             system_policy: "test".to_string(),
             task_prompt: "test".to_string(),
             output_schema: serde_json::json!({"type":"object"}),

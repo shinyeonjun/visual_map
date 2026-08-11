@@ -281,18 +281,67 @@ workspace coverage N%, unresolved M%”처럼 사용자가 무엇을 믿을 수 
 
 ## 구현 결과와 후속 강화 순서
 
-1. **완료:** 실제 source call-site inventory와 fail-closed relation reconciler를 provider 출력 경계에 연결했다.
-2. **완료:** Go/Rust symbol identity와 one-site/one-target invariant를 적용했다.
-3. **완료:** C/C++ execution scope를 언어별 compile context로 분리하고 header coverage를 복구했다.
-4. **완료:** C++/C# construct adapter와 LSP exact-definition fallback을 연결했다.
-5. **완료:** `CALLS`/`CONSTRUCTS` kind-aware v2 ground truth를 cold/warm strict gate로 재측정했다.
-6. **다음 강화:** 공용 CallSite ID를 canonical Language IR stream에 보존하고 typed unresolved gap을
-   serialization한다.
-7. **다음 측정:** negative/metamorphic/holdout와 imports/type/API/DB/external boundary의 별도 정답
+### 2026-08-10 canonical dispatch 패치
+
+1. **완료:** definition/import/type/call inventory가 파일별로 같은 tree-sitter tree를 재사용한다. 별도
+   재파싱 없이 TypeScript, JavaScript, Python, Java, C#, C, C++, Go, Rust, Dart 10개 언어의 실제
+   call/construct token과 enclosing callable을 수집한다.
+2. **완료:** provider의 `CALLS`/`CONSTRUCTS`는 이제 실제 callee range, relation kind, caller owner,
+   target definition name이 모두 맞아야 Language IR의 confirmed relation이 된다. provider가 caller
+   declaration 위치를 call이라고 보내는 negative fixture는 relation 0, typed omission 1로 닫힌다.
+3. **완료:** `Calls=unknown`, `Constructs=direct` 전역 하드코딩을 삭제했다. target kind, owner kind,
+   visibility, source-backed callable signature를 사용해 언어별 `direct/virtual/interface/dynamic/unknown`
+   dispatch를 보존한다.
+4. **완료:** C/C++/Go/Rust/Dart의 증명 가능한 free function과 Java/C# static method는 `direct`로
+   canonical SQLite까지 전달된다. TypeScript/JavaScript/Python처럼 runtime rebinding 가능성이 있는
+   target과 virtual/interface dispatch는 삭제하지 않고 `dynamic/virtual/interface`로 보존한다. TracePath는
+   이를 화면에 후보 hop으로 전달하되 path state를 `gap`으로 내려 실제 runtime target인 것처럼 확정하지
+   않는다. `unknown`과 근거 없는 legacy call은 실행 hop으로 만들지 않는다.
+5. **완료:** 공용 `ExecutionOccurrence`가 실제 call-site evidence ID, 동일 callable 안의 lexical ordinal,
+   `guarded/repeated/deferred/awaited` control context를 Language IR과 canonical SQLite에 보존한다. 같은
+   caller-target을 여러 번 호출해도 occurrence ID가 다르므로 하나의 logical edge로 합쳐지지 않는다.
+6. **완료:** 정적 TracePath는 source ordinal로 실행 순서를 정렬하고 반복 call을 유지한다. deferred callback은
+   즉시 실행 경로에서 제외하며, direct dispatch만 완전한 hop으로 인정한다. API·entrypoint에서 시작한
+   선택 경로는 영역 경계를 넘어 service/repository/external boundary까지 조회된다.
+7. **완료:** 10개 언어의 실제 호출문 기반 IR·canonical E2E, 선언-vs-call negative, 언어별 dispatch 차이,
+   control context, repeated occurrence, canonical 보존을 포함한 code engine 334 tests와 관련 crate 전체
+   `clippy -D warnings`가 통과했다.
+8. **다음 강화:** syntax call-site 전체 중 project-local target, known external target, unresolved target을
+   분리한 denominator를 추가한다. 현재 provider relation이 없는 임의 call site를 모두 내부 누락으로
+   세면 standard library와 외부 SDK까지 오탐이 되므로, 이 분류 전에는 전체 call-site recall을
+   과장하지 않는다.
+9. **다음 측정:** negative/metamorphic/holdout와 API→handler→code, DB/external boundary의 별도 정답
    분모를 확장한다.
 
 언어 하나를 임시로 100점으로 만드는 순서가 아니라, 공통 invariant가 가장 많은 오류 유형을 먼저
 차단하는 순서다.
+
+## 2026-08-10 프론트 제공 데이터 계약
+
+정적 엔진 내부에서만 실행 순서를 알아내고 UI에는 축약된 관계 수만 보내는 상태를 끝냈다. 현재 Tauri
+read model과 IPC 응답은 다음 데이터를 프론트에 제공한다.
+
+- 영역 간 관계: source/target 영역, relation family, truth class, 전체 건수와 dispatch별 건수
+- 선택한 API·entrypoint·영역의 정적 경로: 순서가 보존된 node와 hop 목록, path state
+- 각 hop: canonical relation ID, from/to fact ID, relation kind, truth, dispatch
+- 각 hop의 근거: repository-relative path와 1-based line
+- 실행 occurrence: call-site evidence ID, lexical ordinal, guarded/repeated/deferred/awaited
+
+영역을 선택했을 때는 AI가 고른 영역 내부 대표 trace만 재사용하지 않는다. 해당 영역의 API/entrypoint를
+canonical SQLite에서 다시 조회하고 영역 밖으로 이어지는 경로도 bounded query로 계산한다. 여러
+entrypoint의 결과는 round-robin으로 섞어 첫 endpoint 하나가 응답 예산을 독점하지 않으며, 중복 trace는
+제거한다. 조회는 필요한 node/edge/evidence ID만 SQLite에서 읽고, 하나라도 누락되면 불완전한 경로를
+그럴듯하게 만들어 보내지 않는다.
+
+프론트 표현 규칙은 다음과 같다.
+
+- `dispatch=direct`이고 path state가 `complete`인 hop만 확정 실행 순서로 표현할 수 있다.
+- `virtual/interface/dynamic` hop은 source-backed 후보이며 path state `gap`과 함께 표현해야 한다.
+- `unknown`, 근거 없는 legacy call, deferred callback은 현재 즉시 실행선으로 표현하지 않는다.
+- AI는 영역 이름·요약과 정적 gap 설명만 담당하며 hop, 순서, dispatch, 근거를 생성하거나 승격하지 않는다.
+
+검증 기준은 fact-model 계약 19개, code engine 334개, Tauri backend 86개 통과(외부 실행 환경이 필요한
+4개는 ignored), map serialization/selection 회귀 3개와 전 관련 crate의 `clippy -D warnings` 통과다.
 
 ## 한계와 추가 확인 항목
 
@@ -302,6 +351,9 @@ workspace coverage N%, unresolved M%”처럼 사용자가 무엇을 믿을 수 
   backend의 대규모 project 성능은 별도 prototype이 필요하다.
 - 이번 오류군에는 tree-sitter CST를 채택했다. 나머지 construct와 large-file 성능은 언어별 benchmark를
   계속 확장하되 공통 data contract는 parser 구현과 분리한다.
+- Codex CLI/AI는 static target, dispatch, call order를 생성하거나 승격하지 않는다. canonical facts와
+  typed gap을 받아 영역 이름·요약·동적 경계 설명을 만들 수 있을 뿐이며, 정적 관계의 빈칸은 그대로
+  남긴다.
 - 실제 제품 지도는 raw relation을 그대로 다 그리지 않는다. 정확한 facts를 만든 뒤 영역 경계·선택
   상태·zoom level에 따라 집계/축약하는 것은 별도의 visualization projection 책임이다.
 

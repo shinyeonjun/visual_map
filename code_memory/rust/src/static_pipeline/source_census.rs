@@ -82,6 +82,7 @@ impl SourceCensus {
             root: root.to_path_buf(),
             security_root,
             options,
+            product_scope_matcher: build_product_scope_matcher(root)?,
             files: Vec::new(),
             pending_measurements: Vec::new(),
             scopes: Vec::new(),
@@ -184,6 +185,7 @@ struct Scanner {
     root: PathBuf,
     security_root: PathBuf,
     options: SourceCensusOptions,
+    product_scope_matcher: Gitignore,
     files: Vec<SourceManifestFile>,
     pending_measurements: Vec<PendingMeasurement>,
     scopes: Vec<SourceScopeCoverageRecord>,
@@ -234,6 +236,29 @@ impl Scanner {
 
             if is_link_like(&metadata) {
                 self.record_symlink(&path, relative, &metadata)?;
+                continue;
+            }
+            if is_ignored_by(&self.product_scope_matcher, &path, is_directory) {
+                if is_directory {
+                    self.push_scope(
+                        relative,
+                        SourceScopeState::Excluded,
+                        vec![
+                            GapCode::ExcludedByRule,
+                            GapCode::ExplicitSourceScopeExclusion,
+                        ],
+                    )?;
+                } else if file_type.is_file() {
+                    self.files.push(unread_file(
+                        relative,
+                        metadata.len(),
+                        SourceEntryState::Excluded,
+                        vec![
+                            GapCode::ExcludedByRule,
+                            GapCode::ExplicitSourceScopeExclusion,
+                        ],
+                    ));
+                }
                 continue;
             }
             if is_ignored(matchers, &path, is_directory) {
@@ -751,6 +776,7 @@ fn is_semantic_config_file(name: &str) -> bool {
             | "pubspec.lock"
             | "analysis_options.yaml"
             | "prisma.schema"
+            | ".codebase-workspaceignore"
     ) || name.starts_with("tsconfig") && name.ends_with(".json")
         || name.starts_with("jsconfig") && name.ends_with(".json")
         || name.starts_with("requirements") && name.ends_with(".txt")
@@ -827,6 +853,30 @@ fn build_ignore_matcher(directory: &Path, is_root: bool) -> Result<Gitignore, St
             directory.display()
         )
     })
+}
+
+/// Product source-scope rules are explicit repository input. They use the
+/// familiar gitignore syntax but never infer lifecycle from directory names.
+/// This keeps a live package named `legacy` analyzable unless its owner opts
+/// out in `.codebase-workspaceignore`.
+fn build_product_scope_matcher(root: &Path) -> Result<Gitignore, String> {
+    let path = root.join(".codebase-workspaceignore");
+    let mut builder = GitignoreBuilder::new(root);
+    if path.is_file() {
+        if let Some(error) = builder.add(&path) {
+            return Err(format!("cannot parse {}: {error}", path.display()));
+        }
+    }
+    builder.build().map_err(|error| {
+        format!(
+            "cannot build product source-scope rules for {}: {error}",
+            root.display()
+        )
+    })
+}
+
+fn is_ignored_by(matcher: &Gitignore, path: &Path, is_directory: bool) -> bool {
+    matches!(matcher.matched(path, is_directory), Match::Ignore(_))
 }
 
 fn is_ignored(matchers: &[Gitignore], path: &Path, is_directory: bool) -> bool {

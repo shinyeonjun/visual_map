@@ -8,6 +8,7 @@ mod recovery;
 mod store;
 
 use crate::{
+    analysis::AnalysisCachePolicy,
     fact_graph,
     provider::{AiProviderKind as RuntimeProviderKind, ProviderRegistry, ResolvedProvider},
     workspace::Workspace,
@@ -28,6 +29,7 @@ pub(crate) fn analyze_and_publish(
     workspace: &Workspace,
     providers: &ProviderRegistry,
     operation_id: &str,
+    cache_policy: AnalysisCachePolicy,
     progress: SemanticProgress<'_>,
 ) -> Result<String, String> {
     let fact_reader = fact_graph::open_published_read_model(app_data_dir, &workspace.id)?
@@ -43,9 +45,11 @@ pub(crate) fn analyze_and_publish(
             "mode": if plan.is_direct() { "direct" } else { "partitioned-compact-global-reconciliation" },
         })
     );
-    if let Some(current) = store::load_current(app_data_dir, &workspace.id)? {
-        if current.packet == plan.base.packet {
-            return Ok(current.revision.revision_id.to_string());
+    if cache_policy.reuses_results() {
+        if let Some(current) = store::load_current(app_data_dir, &workspace.id)? {
+            if current.packet == plan.base.packet {
+                return Ok(current.revision.revision_id.to_string());
+            }
         }
     }
     let runtime_kind = match plan.base.packet.provider.kind {
@@ -67,6 +71,7 @@ pub(crate) fn analyze_and_publish(
             &runtime,
             &plan,
             operation_id,
+            cache_policy,
             progress,
         )?
     };
@@ -81,6 +86,7 @@ fn analyze_partitioned(
     runtime: &ResolvedProvider,
     plan: &CompiledSemanticPlan,
     operation_id: &str,
+    cache_policy: AnalysisCachePolicy,
     progress: SemanticProgress<'_>,
 ) -> Result<codebase_semantic_model::ApprovedSemanticRevision, String> {
     let total = plan.partitions.len() as u64 + 1;
@@ -97,7 +103,12 @@ fn analyze_partitioned(
     let mut pending_indexes = Vec::new();
     let mut pending_prompts = Vec::new();
     for (index, partition) in plan.partitions.iter().enumerate() {
-        if let Some(cached) = store::load_partition(app_data_dir, &workspace.id, partition)? {
+        let cached = if cache_policy.reuses_results() {
+            store::load_partition(app_data_dir, &workspace.id, partition)?
+        } else {
+            None
+        };
+        if let Some(cached) = cached {
             verified[index] = Some(cached);
             emit_progress(
                 progress,
@@ -130,6 +141,7 @@ fn analyze_partitioned(
                         plan,
                         index,
                         revision,
+                        cache_policy,
                         &mut verified,
                     ) {
                         fatal_errors.push(error);
@@ -181,6 +193,7 @@ fn analyze_partitioned(
                             plan,
                             request.partition_index,
                             revision,
+                            cache_policy,
                             &mut verified,
                         ) {
                             fatal_errors.push(error);
@@ -243,6 +256,7 @@ fn accept_verified_partition(
     plan: &CompiledSemanticPlan,
     index: usize,
     revision: codebase_semantic_model::ApprovedSemanticRevision,
+    cache_policy: AnalysisCachePolicy,
     verified: &mut [Option<VerifiedSemanticPartition>],
 ) -> Result<(), String> {
     let partition = &plan.partitions[index];
@@ -256,8 +270,14 @@ fn accept_verified_partition(
     // storage error is still reported, but no valid provider work is confused
     // with an invalid AI answer.
     verified[index] = Some(result.clone());
-    store::cache_partition(app_data_dir, &workspace.id, partition, &result)
-        .map_err(|error| partition_error(plan, index, &format!("검증 결과 저장 실패: {error}")))
+    store::cache_partition(
+        app_data_dir,
+        &workspace.id,
+        partition,
+        &result,
+        cache_policy,
+    )
+    .map_err(|error| partition_error(plan, index, &format!("검증 결과 저장 실패: {error}")))
 }
 
 fn summarize_partition_errors(errors: &[String]) -> String {
@@ -373,6 +393,7 @@ mod external_tests {
             &workspace,
             &providers,
             "semantic-cache-test",
+            AnalysisCachePolicy::Reuse,
             None,
         )
         .unwrap();
@@ -383,6 +404,7 @@ mod external_tests {
             &workspace,
             &providers,
             "semantic-cache-test",
+            AnalysisCachePolicy::Reuse,
             None,
         )
         .unwrap();

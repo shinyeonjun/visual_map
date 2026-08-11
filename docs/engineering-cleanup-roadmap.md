@@ -6,6 +6,11 @@ This is not a feature backlog. It records the safe cleanup sequence for the
 code-analysis vertical slice and separates completed structural work from the
 remaining measured completion gates.
 
+Product scope is fixed by
+[`analysis-product-boundary.md`](analysis-product-boundary.md). The remaining
+items below close that boundary; they do not add recommendation, what-if,
+runtime-observability, or chat features.
+
 ## Completed structural work
 
 ### One canonical engine path
@@ -174,7 +179,32 @@ published. It must not replace any of the local gates above.
 
 ## Remaining cleanup
 
-### P2. Measured large-repository read model
+### P1. Certified DB ingestion and exact code reconciliation
+
+- Keep source-derived SQL names as `TableReference`, never as certified
+  `Table` facts.
+- Import only a `complete`, validated Database Memory snapshot through its
+  public typed contract into the same canonical Fact Graph.
+- Emit `MapsToTable`/`MapsToColumn` only when a normalized code reference
+  resolves to exactly one object in that DB snapshot.
+- Keep absent and ambiguous matches as typed gaps. Never inspect row data.
+
+Completion: every supported DB family has a golden complete-snapshot adapter
+test; exact, absent, and ambiguous reconciliation are covered; a TracePath ends
+at a reference gap without DB truth and reaches the certified table after an
+exact match.
+
+### P2. Five backend read models
+
+Finish bounded backend contracts for Overview, Drill-down, Trace, Search, and
+Evidence. Search must cover static facts, certified DB objects, and approved
+semantic names/aliases without reconstructing truth in React.
+
+Completion: all five read models return canonical IDs and snapshot identities;
+pagination/truncation is explicit; AI failure leaves static search, evidence,
+and Trace available.
+
+### P3. Measured large-repository read model
 
 Record cold/warm map overview latency, selection latency, trace latency, and
 peak memory on representative small, medium, and large repositories. Add query
@@ -183,7 +213,7 @@ indexes or pagination only from measured evidence.
 Completion: explicit product budgets are documented from measurements rather
 than invented targets; truncation remains visible.
 
-### P3. Ten-language real-repository holdouts
+### P4. Ten-language real-repository holdouts
 
 Run frozen, unseen repositories for all supported languages, including
 multi-module/TU/target configurations. Compare selected facts to human-reviewed
@@ -202,6 +232,6 @@ documented dynamic or missing-context boundary.
 - AI referential/schema verification and abstention;
 - deterministic semantic and bundle digests.
 
-DB ingestion, grounded conversation, collaboration, and new relation families
-are separate product work. They do not reopen a second static graph or justify
-restoring a compatibility output.
+Grounded conversation, collaboration, recommendations, and new relation
+families are outside this completion sequence. They do not reopen a second
+static graph or justify restoring a compatibility output.

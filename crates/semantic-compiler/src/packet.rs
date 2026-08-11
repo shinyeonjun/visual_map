@@ -540,10 +540,11 @@ fn canonicalize_input(input: &mut BaseSemanticInput) {
     }
 }
 
-fn boundary_count_key(count: &BoundaryRelationCount) -> (String, String) {
+fn boundary_count_key(count: &BoundaryRelationCount) -> (String, String, String) {
     (
         serde_json::to_string(&count.family).unwrap_or_default(),
         serde_json::to_string(&count.truth).unwrap_or_default(),
+        serde_json::to_string(&count.dispatch).unwrap_or_default(),
     )
 }
 

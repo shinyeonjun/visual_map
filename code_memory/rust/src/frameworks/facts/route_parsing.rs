@@ -2,6 +2,17 @@ pub(crate) fn route_method(line: &str) -> Option<&'static str> {
     if let Some(method) = configured_route_method(line) {
         return Some(method);
     }
+    if [
+        ".websocket(",
+        "@app.websocket(",
+        "@router.websocket(",
+        ".add_api_websocket_route(",
+    ]
+    .iter()
+    .any(|marker| line.contains(marker))
+    {
+        return Some("WEBSOCKET");
+    }
     if line.contains("router.register(") {
         return Some("ANY");
     }
@@ -168,6 +179,7 @@ pub(crate) fn route_method(line: &str) -> Option<&'static str> {
     if line.contains(".route(")
         || line.contains(".add_url_rule(")
         || line.contains(".add_api_route(")
+        || line.contains(".add_api_websocket_route(")
         || line.contains(".addRoute(")
         || line.contains(".and_then(")
         || line.contains("Route(")

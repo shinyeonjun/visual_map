@@ -1,9 +1,12 @@
 mod support;
 
 use codebase_semantic_compiler::{
-    compile_base_prompt, compile_base_repair_prompt, parse_and_verify_base_response,
-    verify_base_proposal, CompiledBasePrompt,
+    compile_base_prompt, compile_base_repair_prompt, compile_global_reconciliation_prompt,
+    compile_semantic_plan_with_policy, parse_and_verify_base_response,
+    parse_and_verify_global_reconciliation, verify_base_proposal, CompiledBasePrompt,
+    SemanticPartitionPolicy, VerifiedSemanticPartition,
 };
+use codebase_semantic_model::{AreaCategory, LabelSource};
 use std::{
     fs,
     io::Write,
@@ -11,7 +14,7 @@ use std::{
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
-use support::{fixture_draft, valid_proposal};
+use support::{fixture_draft, structural_proposal, valid_proposal};
 
 /// Real-model prompt evaluation. It is ignored in normal CI because it needs
 /// an installed, authenticated Codex CLI and consumes provider capacity.
@@ -51,6 +54,101 @@ fn codex_groups_the_reviewed_commerce_fixture_without_repository_access() {
         auth_text.contains("인증") || auth_text.contains("세션"),
         "auth region did not receive an auth/session meaning: {auth_text}"
     );
+    let labels = approved
+        .areas
+        .iter()
+        .map(|area| area.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels
+            .iter()
+            .all(|label| !matches!(*label, "src/orders" | "src/auth")),
+        "evidence-rich fixture fell back to raw container labels: {labels:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .all(|label| !label.ends_with(" 기능") && !label.ends_with(" 기반")),
+        "fixture labels used a vague wrapper instead of the owned responsibility: {labels:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires an installed and authenticated Codex CLI"]
+fn codex_global_reduce_renames_evidence_rich_containers_by_responsibility() {
+    let (draft, _) = fixture_draft();
+    let plan = compile_semantic_plan_with_policy(
+        draft,
+        SemanticPartitionPolicy {
+            direct_max_regions: 0,
+            direct_max_prompt_bytes: 0,
+            max_regions_per_partition: 1,
+            max_partition_input_bytes: 96 * 1024,
+        },
+    )
+    .unwrap();
+    let verified = plan
+        .partitions
+        .iter()
+        .map(|partition| {
+            let structural_label = &partition.prompt.packet.input.regions[0].structural_label;
+            let (label, summary) = if structural_label.contains("orders") {
+                ("주문 처리", "주문 생성 요청과 주문 저장 흐름을 담당합니다.")
+            } else {
+                ("사용자 인증", "세션 토큰을 검증해 요청을 인증합니다.")
+            };
+            let mut proposal = structural_proposal(&partition.prompt);
+            proposal.areas[0].label = label.to_string();
+            proposal.areas[0].summary = summary.to_string();
+            proposal.areas[0].category = AreaCategory::Domain;
+            proposal.areas[0].label_source = LabelSource::Semantic;
+            proposal.areas[0].fallback_reason = None;
+            proposal.areas[0].aliases = vec![structural_label.clone()];
+            proposal.areas[0].representative_fact_ids = partition.prompt.packet.input.regions[0]
+                .anchor_fact_ids
+                .clone();
+            proposal.areas[0].evidence_ids = partition
+                .prompt
+                .packet
+                .input
+                .excerpts
+                .iter()
+                .map(|excerpt| excerpt.evidence_id.clone())
+                .collect();
+            let revision = verify_base_proposal(&partition.prompt.packet, proposal).unwrap();
+            VerifiedSemanticPartition {
+                partition_key: partition.partition_key.clone(),
+                region_ids: partition.region_ids.clone(),
+                packet_digest: partition.prompt.packet.semantic_input_digest,
+                revision,
+            }
+        })
+        .collect::<Vec<_>>();
+    let compiled = compile_global_reconciliation_prompt(&plan.base, &verified).unwrap();
+    let raw = run_codex(&compiled.prompt);
+    let approved = parse_and_verify_global_reconciliation(&compiled, &raw).unwrap();
+    let labels = approved
+        .areas
+        .iter()
+        .map(|area| area.label.as_str())
+        .collect::<Vec<_>>();
+    let semantic_text = approved
+        .areas
+        .iter()
+        .flat_map(|area| [&area.label, &area.summary])
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    println!("approved global labels: {labels:?}");
+    assert!(semantic_text.contains("주문"));
+    assert!(semantic_text.contains("인증") || semantic_text.contains("세션"));
+    assert!(labels
+        .iter()
+        .all(|label| !matches!(*label, "src/orders" | "src/auth")));
+    assert!(labels
+        .iter()
+        .all(|label| !label.ends_with(" 기능") && !label.ends_with(" 기반")));
 }
 
 #[test]

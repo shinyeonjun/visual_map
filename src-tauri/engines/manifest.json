@@ -18,11 +18,11 @@
         "sha256": "0478C15480BEA0E572F4A340B4600DDB664FE6D69B69F2A54D00970869356A3F"
       },
       "licenseId": "Apache-2.0",
-      "contractVersion": "3",
+      "contractVersion": "4",
       "releaseReady": false,
       "developmentArtifacts": [
         {
-          "sha256": "8B04899E97CCF972766E2826AAF5AFA8CE5852A1D0B0AFB31C6C3BDF201EEA09"
+          "sha256": "98F68CACE0C6D201CF47AAA84B7E06B654014A13D391857557DA77792D7DAE8B"
         }
       ]
     },

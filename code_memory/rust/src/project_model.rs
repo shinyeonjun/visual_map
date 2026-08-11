@@ -56,6 +56,7 @@ pub(crate) fn analyze_typescript_project(
     root: &Path,
     providers_root: Option<&Path>,
     cache_key: &str,
+    reuse_cached_result: bool,
 ) -> Result<ProjectModelResult, String> {
     let providers_root = providers_root.ok_or("providers root is not configured")?;
     let script = providers_root.join("node").join("project-model.cjs");
@@ -66,16 +67,18 @@ pub(crate) fn analyze_typescript_project(
         ));
     }
     let cache = project_cache_root(root).join(format!("tsjs-project-model-{cache_key}.json"));
-    let bytes = match fs::read(&cache) {
-        Ok(bytes) if serde_json::from_slice::<ProjectModelJson>(&bytes).is_ok() => {
+    let bytes = match reuse_cached_result.then(|| fs::read(&cache)) {
+        Some(Ok(bytes)) if serde_json::from_slice::<ProjectModelJson>(&bytes).is_ok() => {
             eprintln!("cached TypeScript/JavaScript project model");
             bytes
         }
-        Ok(_) => {
+        Some(Ok(_)) => {
             let _ = fs::remove_file(&cache);
             load_project_model_from_provider(providers_root, &script, root, &cache)?
         }
-        Err(_) => load_project_model_from_provider(providers_root, &script, root, &cache)?,
+        Some(Err(_)) | None => {
+            load_project_model_from_provider(providers_root, &script, root, &cache)?
+        }
     };
     let model: ProjectModelJson = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid project model output: {error}"))?;

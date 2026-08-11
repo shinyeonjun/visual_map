@@ -4,15 +4,18 @@ import {
   BracesRegular as Braces,
   ChatRegular as MessageSquareText,
   ChevronDownRegular as ChevronDown,
-  DatabaseRegular as Database,
+  ChevronRightRegular as ChevronRight,
+  CodeRegular as Code,
   DeleteRegular as Delete,
   DismissCircleRegular as StopCircle,
   ErrorCircleRegular as CircleAlert,
   FolderOpenRegular as FolderOpen,
   FolderRegular as FolderCode,
+  HomeRegular as Home,
+  MapRegular as Map,
   OrganizationRegular as Network,
+  PanelRightRegular as PanelRight,
   SearchRegular as Search,
-  SettingsRegular as Settings2,
   WarningRegular as TriangleAlert,
   WindowConsoleRegular as TerminalSquare,
 } from "@fluentui/react-icons";
@@ -28,13 +31,14 @@ import {
   Field,
   Input,
   Textarea,
-  Tooltip,
 } from "@fluentui/react-components";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Inspector } from "./map/Inspector";
 import { MapCanvas } from "./map/MapCanvas";
-import { PREVIEW_MAP, PREVIEW_SELECTION } from "./map/previewMap";
-import type { EvidenceRef, MapView, Selection } from "./map/types";
+import type { TraceView } from "./map/MapCanvas";
+import { PREVIEW_MAP, previewSelectionFor } from "./map/previewMap";
+import { flattenAreas, owningAreaId } from "./map/types";
+import type { EvidenceRef, MapArea, MapNode, MapView, Selection } from "./map/types";
 import {
   defaultEffortFor,
   defaultModelFor,
@@ -71,7 +75,64 @@ import {
 } from "./desktop";
 
 type LoadState = "loading" | "ready" | "error";
+type DockTab = "evidence" | "chat";
 const AI_EVIDENCE_CONSENT_VERSION = "v1";
+
+const DEVELOPMENT_PREVIEW =
+  import.meta.env.DEV &&
+  typeof window !== "undefined" &&
+  !hasDesktopRuntime() &&
+  new URLSearchParams(window.location.search).has("preview");
+
+const PREVIEW_WORKSPACE: Workspace = {
+  schemaVersion: 2,
+  id: "preview-commerce-platform",
+  name: "commerce-platform",
+  repoPath: "D:\\workspace\\commerce-platform",
+  provider: { kind: "codex", model: "gpt-5.6-sol", effort: "high" },
+  createdAt: Date.UTC(2026, 7, 9),
+  updatedAt: Date.UTC(2026, 7, 9),
+};
+
+const PREVIEW_FACT_STATUS: FactGraphStatus = {
+  schemaVersion: 1,
+  snapshotId: "a1b2c3d4",
+  sourceRevision: "main",
+  nodeCount: 214,
+  edgeCount: 109,
+  evidenceCount: 87,
+  coverageCount: 42,
+};
+
+const PREVIEW_ENGINE_REGISTRY: EngineRegistry = {
+  mode: "dev",
+  engineDir: "design-preview",
+  engines: [
+    {
+      id: "tree-sitter",
+      label: "Tree-sitter",
+      role: "syntax facts",
+      available: true,
+      integrity: "preview",
+      error: null,
+    },
+    {
+      id: "flowline",
+      label: "Flowline Static Analyzer",
+      role: "relations and traces",
+      available: true,
+      integrity: "preview",
+      error: null,
+    },
+  ],
+};
+
+interface MapSearchResult {
+  id: string;
+  kind: "영역" | "구현";
+  label: string;
+  detail: string;
+}
 
 export default function App() {
   const [loadState, setLoadState] = useState<LoadState>("loading");
@@ -88,10 +149,13 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mapView, setMapView] = useState<MapView | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [traceAreaId, setTraceAreaId] = useState<string | null>(null);
+  const [traceView, setTraceView] = useState<TraceView | null>(null);
   const [analyzingWorkspaceId, setAnalyzingWorkspaceId] = useState<string | null>(null);
   const [cancellingWorkspaceId, setCancellingWorkspaceId] = useState<string | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressEvent | null>(null);
   const [analysisStartedAt, setAnalysisStartedAt] = useState<number | null>(null);
+  const [dockTab, setDockTab] = useState<DockTab>("chat");
   const activeWorkspaceIdRef = useRef<string | null>(null);
   const cancellationRequests = useRef(new Set<string>());
 
@@ -109,10 +173,11 @@ export default function App() {
     Promise.all([listWorkspaces(), listProviders(), getEngineRegistry()])
       .then(([workspaceRows, providerRows, registry]) => {
         if (cancelled) return;
-        setWorkspaces(workspaceRows);
+        const availableWorkspaces = DEVELOPMENT_PREVIEW ? [PREVIEW_WORKSPACE] : workspaceRows;
+        setWorkspaces(availableWorkspaces);
         setProviders(providerRows);
         setEngineRegistry(registry);
-        const firstWorkspaceId = workspaceRows[0]?.id ?? null;
+        const firstWorkspaceId = availableWorkspaces[0]?.id ?? null;
         // Keep the stale-request guard in sync in the same turn as the state
         // update. Updating it in a later effect leaves a real window where the
         // newly visible workspace can start an analysis whose result is then
@@ -186,10 +251,12 @@ export default function App() {
   */
   const previewing = import.meta.env.DEV && !hasDesktopRuntime() && Boolean(activeWorkspace) && !factStatus?.snapshotId;
   const displayedMap: MapView | null = previewing ? PREVIEW_MAP : mapView;
+  const displayedFactStatus = previewing ? PREVIEW_FACT_STATUS : factStatus;
+  const displayedEngineRegistry = previewing ? PREVIEW_ENGINE_REGISTRY : engineRegistry;
 
   useEffect(() => {
     if (previewing) {
-      setSelection(selectedId === PREVIEW_SELECTION.id ? PREVIEW_SELECTION : null);
+      setSelection(previewSelectionFor(selectedId));
       return;
     }
     if (!activeWorkspaceId || !selectedId || !mapView || !hasDesktopRuntime()) {
@@ -208,6 +275,67 @@ export default function App() {
       cancelled = true;
     };
   }, [activeWorkspaceId, mapView, previewing, selectedId]);
+
+  useEffect(() => {
+    if (selection) setDockTab("evidence");
+  }, [selection]);
+
+  /*
+    The flow view holds the paths of the area it was opened for, captured once.
+    Selecting a step inside it must move the evidence panel without rebuilding
+    the drawing under the reader's cursor, so this deliberately does not follow
+    `selectedId`.
+  */
+  useEffect(() => {
+    if (!traceAreaId) {
+      setTraceView(null);
+      return;
+    }
+    const area = flattenAreas(displayedMap?.areas ?? []).find((item) => item.id === traceAreaId);
+    if (!area) {
+      setTraceView(null);
+      return;
+    }
+    if (previewing) {
+      // The preview area carries its own chain; it is one path, not a set.
+      const traces = area.trace ? [{ id: area.trace.id, state: area.trace.state, steps: area.nodes }] : [];
+      setTraceView({ areaId: area.id, title: area.name, summary: area.summary, traces });
+      return;
+    }
+    if (!activeWorkspaceId || !hasDesktopRuntime()) return;
+    let cancelled = false;
+    getMapSelection(activeWorkspaceId, traceAreaId)
+      .then((detail) => {
+        if (cancelled) return;
+        setTraceView({
+          areaId: area.id,
+          title: detail?.title ?? area.name,
+          summary: area.summary,
+          traces: detail?.traces ?? [],
+        });
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(errorMessage(reason));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, displayedMap, previewing, traceAreaId]);
+
+  function openTrace(areaId: string) {
+    setTraceAreaId(areaId);
+    setSelectedId(areaId);
+  }
+
+  function closeTrace() {
+    setTraceAreaId(null);
+  }
+
+  /** The panel describes whatever is picked; its flow belongs to the owning area. */
+  function openTraceForSelection() {
+    const owner = displayedMap ? owningAreaId(displayedMap, selectedId) : null;
+    if (owner) openTrace(owner);
+  }
 
   function requestAnalysis() {
     const workspace = activeWorkspace;
@@ -240,12 +368,12 @@ export default function App() {
       stage: "starting",
       completed: 0,
       total: 1,
-      label: "코드 분석을 시작합니다",
+      label: "캐시 없이 코드를 처음부터 분석합니다",
     });
     setAnalysisStartedAt(Date.now());
     setAnalyzingWorkspaceId(workspace.id);
     try {
-      const result = await analyzeWorkspace(workspace.id);
+      const result = await analyzeWorkspace(workspace.id, "fresh");
       if (activeWorkspaceIdRef.current !== workspace.id) return;
       setFactStatus(result.factGraph);
       const view = await getMapView(workspace.id);
@@ -333,7 +461,11 @@ export default function App() {
     <div className="app-shell">
       <Header
         workspace={activeWorkspace}
-        engineRegistry={engineRegistry}
+        engineRegistry={displayedEngineRegistry}
+        status={displayedFactStatus}
+        mapView={displayedMap}
+        selection={selection}
+        onSelect={setSelectedId}
         onOpenProvider={() => setProviderOpen(true)}
         onAnalyze={requestAnalysis}
         onCancel={() => void cancelAnalysis()}
@@ -342,11 +474,13 @@ export default function App() {
         analysisProgress={analysisProgress}
       />
       <div className="workbench">
-        <ToolRail onCreate={() => setCreateOpen(true)} />
-        <ProjectRail
+        <NavigationRail
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspaceId}
+          areas={displayedMap?.areas ?? []}
+          selectedId={selectedId}
           onSelect={selectWorkspace}
+          onSelectArea={setSelectedId}
           onCreate={() => setCreateOpen(true)}
           onDelete={setDeleteTarget}
           analyzingWorkspaceId={analyzingWorkspaceId}
@@ -359,7 +493,14 @@ export default function App() {
           ) : displayedMap ? (
             <>
               {previewing ? <PreviewBanner /> : null}
-              <MapCanvas view={displayedMap} selectedId={selectedId} onSelect={setSelectedId} />
+              <MapCanvas
+                view={displayedMap}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                traceView={traceView}
+                onOpenTrace={openTrace}
+                onCloseTrace={closeTrace}
+              />
               {activeWorkspace && analyzingWorkspaceId === activeWorkspace.id ? (
                 <AnalysisStatus
                   variant="overlay"
@@ -387,12 +528,59 @@ export default function App() {
         </main>
         <aside className="detail-column">
           <div className="detail-head">
-            <strong>{selection?.title ?? "선택 없음"}</strong>
+            <div>
+              <span>{selection ? "선택 상세" : "워크스페이스"}</span>
+              <strong>{selection?.title ?? activeWorkspace?.name ?? "선택 없음"}</strong>
+            </div>
+            <PanelRight fontSize={17} aria-hidden="true" />
           </div>
-          <Inspector selection={selection} onOpenEvidence={openEvidence} />
-          <ChatPanel workspace={activeWorkspace} status={factStatus} selection={selection} />
+          <div className="dock-tabs" role="tablist" aria-label="오른쪽 패널">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={dockTab === "evidence"}
+              className={dockTab === "evidence" ? "active" : undefined}
+              onClick={() => setDockTab("evidence")}
+            >
+              <Code fontSize={15} /> 근거
+              {selection?.evidence.length ? <span>{selection.evidence.length}</span> : null}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={dockTab === "chat"}
+              className={dockTab === "chat" ? "active" : undefined}
+              onClick={() => setDockTab("chat")}
+            >
+              <MessageSquareText fontSize={15} /> 대화
+            </button>
+          </div>
+          <div className="dock-content">
+            {dockTab === "evidence" ? (
+              <Inspector
+                selection={selection}
+                onHighlight={setSelectedId}
+                onOpenEvidence={openEvidence}
+                onOpenTrace={traceView ? undefined : openTraceForSelection}
+              />
+            ) : (
+              <ChatPanel
+                workspace={activeWorkspace}
+                status={displayedFactStatus}
+                selection={selection}
+                previewing={previewing}
+              />
+            )}
+          </div>
         </aside>
       </div>
+      <StatusLedger
+        workspace={activeWorkspace}
+        engineRegistry={displayedEngineRegistry}
+        status={displayedFactStatus}
+        previewing={previewing}
+        analyzing={Boolean(activeWorkspace) && analyzingWorkspaceId === activeWorkspace?.id}
+      />
       {error && loadState !== "error" ? (
         <ErrorNotice key={error} message={error} onClose={() => setError(null)} />
       ) : null}
@@ -480,6 +668,10 @@ function forgetAiEvidenceConsent(workspace: Workspace) {
 function Header({
   workspace,
   engineRegistry,
+  status,
+  mapView,
+  selection,
+  onSelect,
   onOpenProvider,
   onAnalyze,
   onCancel,
@@ -489,6 +681,10 @@ function Header({
 }: {
   workspace: Workspace | null;
   engineRegistry: EngineRegistry | null;
+  status: FactGraphStatus | null;
+  mapView: MapView | null;
+  selection: Selection | null;
+  onSelect: (id: string) => void;
   onOpenProvider: () => void;
   onAnalyze: () => void;
   onCancel: () => void;
@@ -496,38 +692,121 @@ function Header({
   cancelling: boolean;
   analysisProgress: AnalysisProgressEvent | null;
 }) {
+  const [query, setQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   const engineCount = engineRegistry?.engines.filter((engine) => engine.available).length ?? 0;
   const engineTotal = engineRegistry?.engines.length ?? 2;
   const activeModel = workspace?.provider ? modelFor(workspace.provider.kind, workspace.provider.model) : null;
+  const searchResults = useMemo(() => searchMap(mapView, query), [mapView, query]);
+
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+      if (event.key === "Escape" && document.activeElement === searchRef.current) {
+        setQuery("");
+        searchRef.current?.blur();
+      }
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
+
+  function chooseResult(result: MapSearchResult) {
+    onSelect(result.id);
+    setQuery("");
+    setSearchFocused(false);
+    searchRef.current?.blur();
+  }
+
   return (
     <header className="app-header">
       <div className="brand-block">
         <span className="brand-mark" aria-hidden="true">
-          CW
+          <Map fontSize={18} />
         </span>
-        <div>
-          <strong>Codebase workspace</strong>
-          <span>검증된 코드 구조 지도</span>
-        </div>
+        <strong>Codebase</strong>
+        <span>Workspace</span>
       </div>
-      <div className="header-context">
-        <span className="context-label">프로젝트</span>
-        <span className="context-value">{workspace?.name ?? "연결되지 않음"}</span>
-        {workspace ? <span className="context-path">{workspace.repoPath}</span> : null}
+      <div className="header-context" aria-label="현재 위치">
+        <span>워크스페이스</span>
+        <ChevronRight fontSize={13} aria-hidden="true" />
+        <strong>{workspace?.name ?? "프로젝트 없음"}</strong>
+        {selection ? (
+          <>
+            <ChevronRight fontSize={13} aria-hidden="true" />
+            <em>{selection.title}</em>
+          </>
+        ) : null}
+      </div>
+      <div className="header-search">
+        <Input
+          id="global-map-search"
+          ref={searchRef}
+          aria-label="지도 검색"
+          value={query}
+          onChange={(_, data) => setQuery(data.value)}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
+          contentBefore={<Search fontSize={16} />}
+          contentAfter={<kbd>Ctrl K</kbd>}
+          placeholder="영역, API, 심벌 검색"
+          disabled={!mapView}
+        />
+        {searchFocused && query.trim() ? (
+          <div className="search-results" role="listbox" aria-label="지도 검색 결과">
+            {searchResults.length > 0 ? (
+              searchResults.map((result) => (
+                <button key={result.id} type="button" role="option" onClick={() => chooseResult(result)}>
+                  <span className="search-result-icon" aria-hidden="true">
+                    {result.kind === "영역" ? <Network fontSize={15} /> : <Code fontSize={15} />}
+                  </span>
+                  <span>
+                    <strong>{result.label}</strong>
+                    <small>{result.detail}</small>
+                  </span>
+                  <ChevronRight fontSize={13} aria-hidden="true" />
+                </button>
+              ))
+            ) : (
+              <p>일치하는 지도 항목이 없습니다.</p>
+            )}
+          </div>
+        ) : null}
+      </div>
+      <div className="header-health" aria-label="분석 상태 요약">
+        <span>
+          <small>스냅샷</small>
+          <strong>{status?.snapshotId?.slice(0, 8) ?? "없음"}</strong>
+        </span>
+        <span className={engineCount === engineTotal ? "ok" : "warn"}>
+          <small>분석 엔진</small>
+          <strong>
+            {engineCount}/{engineTotal}
+          </strong>
+        </span>
+        <span>
+          <small>근거</small>
+          <strong>{status?.evidenceCount.toLocaleString("ko-KR") ?? "—"}</strong>
+        </span>
       </div>
       <div className="header-actions">
-        <span className={`engine-pill ${engineCount === engineTotal ? "ok" : "warn"}`}>
-          <TerminalSquare fontSize={14} /> 엔진 {engineCount}/{engineTotal}
-        </span>
         <Button
           className="analysis-button"
           appearance="primary"
           icon={analyzing ? <StopCircle fontSize={15} /> : <Network fontSize={15} />}
           onClick={analyzing ? onCancel : onAnalyze}
           disabled={!workspace || cancelling}
-          title={analyzing ? analysisProgress?.label : "현재 코드로 새 지도를 만듭니다"}
+          title={
+            analyzing
+              ? analysisProgress?.label
+              : "이전 분석 결과를 재사용하지 않고 현재 코드를 처음부터 다시 분석합니다"
+          }
         >
-          {analyzing ? (cancelling ? "취소 중" : "분석 중 · 취소") : "분석"}
+          {analyzing ? (cancelling ? "취소 중" : "분석 중 · 취소") : "재분석"}
         </Button>
         <Button className="provider-button" appearance="secondary" onClick={onOpenProvider} disabled={!workspace}>
           <span>
@@ -542,71 +821,81 @@ function Header({
   );
 }
 
-function ToolRail({ onCreate }: { onCreate: () => void }) {
-  return (
-    <nav className="tool-rail" aria-label="주요 도구">
-      <ToolButton label="구조 지도" active icon={<Network />} />
-      <ToolButton label="검색 · 준비 중" disabled icon={<Search />} />
-      <ToolButton label="데이터베이스 · 준비 중" disabled icon={<Database />} />
-      <span className="tool-spacer" />
-      <ToolButton label="프로젝트 추가" onClick={onCreate} icon={<Plus />} />
-      <ToolButton label="설정 · 준비 중" disabled icon={<Settings2 />} />
-    </nav>
-  );
-}
-
-function ToolButton({
-  label,
-  icon,
-  active = false,
-  disabled = false,
-  onClick,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  active?: boolean;
-  disabled?: boolean;
-  onClick?: () => void;
-}) {
-  return (
-    <Tooltip content={label} relationship="label" positioning="after">
-      <button
-        type="button"
-        className={active ? "tool active" : "tool"}
-        aria-label={label}
-        disabled={disabled}
-        onClick={onClick}
-      >
-        {icon}
-      </button>
-    </Tooltip>
-  );
-}
-
-function ProjectRail({
+function NavigationRail({
   workspaces,
   activeWorkspaceId,
+  areas,
+  selectedId,
   onSelect,
+  onSelectArea,
   onCreate,
   onDelete,
   analyzingWorkspaceId,
 }: {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
+  areas: MapArea[];
+  selectedId: string | null;
   onSelect: (workspaceId: string) => void;
+  onSelectArea: (areaId: string | null) => void;
   onCreate: () => void;
   onDelete: (workspace: Workspace) => void;
   analyzingWorkspaceId: string | null;
 }) {
   return (
-    <aside className="project-rail">
-      <div className="rail-heading">
-        <span>프로젝트</span>
-        <button type="button" onClick={onCreate} aria-label="작업공간 추가">
-          <Plus fontSize={14} />
+    <nav className="navigation-rail" aria-label="지도 탐색">
+      <div className="nav-section nav-primary">
+        <button type="button" className={!selectedId ? "nav-row active" : "nav-row"} onClick={() => onSelectArea(null)}>
+          <Home fontSize={18} />
+          <span>
+            <strong>개요</strong>
+            <small>전체 구조</small>
+          </span>
         </button>
       </div>
-      <div className="workspace-list">
+
+      <div className="nav-section nav-outline">
+        <div className="nav-section-title">
+          <span>의미 영역</span>
+          <small>{areas.length.toLocaleString("ko-KR")}</small>
+        </div>
+        <div className="area-outline">
+          {areas.map((area) => (
+            <button
+              type="button"
+              className={areaContainsSelection(area, selectedId) ? "nav-row active" : "nav-row"}
+              onClick={() => onSelectArea(area.id)}
+              key={area.id}
+            >
+              <span className="area-outline-mark" aria-hidden="true" />
+              <span>
+                <strong>{area.name}</strong>
+                <small>{area.originalName ?? area.summary}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="nav-section nav-tools">
+        <button type="button" className="nav-row" onClick={() => document.getElementById("global-map-search")?.focus()}>
+          <Search fontSize={17} />
+          <span>
+            <strong>검색</strong>
+            <small>영역 · API · 심벌</small>
+          </span>
+        </button>
+      </div>
+
+      <div className="nav-spacer" />
+
+      <div className="nav-section nav-workspaces">
+        <div className="nav-section-title">
+          <span>프로젝트</span>
+          <button type="button" onClick={onCreate} aria-label="작업공간 추가">
+            <Plus fontSize={14} />
+          </button>
+        </div>
         {workspaces.map((workspace) => (
           <div className="workspace-item" key={workspace.id}>
             <button
@@ -632,9 +921,9 @@ function ProjectRail({
             </button>
           </div>
         ))}
+        {workspaces.length === 0 ? <p className="rail-empty">연결된 프로젝트가 없습니다.</p> : null}
       </div>
-      {workspaces.length === 0 ? <p className="rail-empty">연결된 프로젝트가 없습니다.</p> : null}
-    </aside>
+    </nav>
   );
 }
 
@@ -861,22 +1150,72 @@ function LedgerMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
+function StatusLedger({
+  workspace,
+  engineRegistry,
+  status,
+  previewing,
+  analyzing,
+}: {
+  workspace: Workspace | null;
+  engineRegistry: EngineRegistry | null;
+  status: FactGraphStatus | null;
+  previewing: boolean;
+  analyzing: boolean;
+}) {
+  const availableEngines = engineRegistry?.engines.filter((engine) => engine.available).length ?? 0;
+  const engineTotal = engineRegistry?.engines.length ?? 2;
+  return (
+    <footer className="status-ledger" aria-label="워크스페이스 상태">
+      <span className="status-ledger-primary">
+        <i className={analyzing ? "pulse" : ""} aria-hidden="true" />
+        {previewing ? "디자인 미리보기" : analyzing ? "분석 진행 중" : "정적 분석 준비"}
+      </span>
+      <span>
+        프로젝트 <strong>{workspace?.name ?? "없음"}</strong>
+      </span>
+      <span>
+        스냅샷 <code>{status?.snapshotId?.slice(0, 8) ?? "—"}</code>
+      </span>
+      <span>
+        노드 <strong>{status?.nodeCount.toLocaleString("ko-KR") ?? "—"}</strong>
+      </span>
+      <span>
+        관계 <strong>{status?.edgeCount.toLocaleString("ko-KR") ?? "—"}</strong>
+      </span>
+      <span>
+        파일 <strong>{status?.coverageCount.toLocaleString("ko-KR") ?? "—"}</strong>
+      </span>
+      <span className="status-ledger-end">
+        엔진{" "}
+        <strong>
+          {availableEngines}/{engineTotal}
+        </strong>
+      </span>
+    </footer>
+  );
+}
+
 function ChatPanel({
   workspace,
   status,
   selection,
+  previewing,
 }: {
   workspace: Workspace | null;
   status: FactGraphStatus | null;
   selection: Selection | null;
+  previewing: boolean;
 }) {
-  const reason = !workspace
-    ? "프로젝트를 연결하면 대화 문맥이 만들어집니다."
-    : !workspace.provider
-      ? "Codex 또는 Claude 모델을 먼저 설정하세요."
-      : !status?.snapshotId
-        ? "검증된 분석 snapshot이 있어야 질문할 수 있습니다."
-        : null;
+  const reason = previewing
+    ? "디자인 미리보기에서는 대화를 전송하지 않습니다."
+    : !workspace
+      ? "프로젝트를 연결하면 대화 문맥이 만들어집니다."
+      : !workspace.provider
+        ? "Codex 또는 Claude 모델을 먼저 설정하세요."
+        : !status?.snapshotId
+          ? "검증된 분석 snapshot이 있어야 질문할 수 있습니다."
+          : null;
   return (
     <section className="chat-panel">
       <div className="chat-heading">
@@ -1183,6 +1522,38 @@ function ErrorNotice({ message, onClose }: { message: string; onClose: () => voi
         닫기
       </button>
     </div>
+  );
+}
+
+function searchMap(view: MapView | null, rawQuery: string): MapSearchResult[] {
+  const query = rawQuery.trim().toLocaleLowerCase("ko-KR");
+  if (!view || !query) return [];
+  const results: MapSearchResult[] = [];
+  for (const area of flattenAreas(view.areas)) {
+    const areaText = `${area.name} ${area.originalName ?? ""} ${area.summary}`.toLocaleLowerCase("ko-KR");
+    if (areaText.includes(query)) {
+      results.push({
+        id: area.id,
+        kind: "영역",
+        label: area.name,
+        detail: area.originalName ? `${area.originalName} · ${area.summary}` : area.summary,
+      });
+    }
+    for (const node of area.nodes) {
+      if (`${node.name} ${node.kind}`.toLocaleLowerCase("ko-KR").includes(query)) {
+        results.push({ id: node.id, kind: "구현", label: node.name, detail: `${area.name} · ${node.kind}` });
+      }
+    }
+  }
+  return results.slice(0, 8);
+}
+
+function areaContainsSelection(area: MapArea, selectedId: string | null): boolean {
+  if (!selectedId) return false;
+  return (
+    area.id === selectedId ||
+    area.nodes.some((node: MapNode) => node.id === selectedId) ||
+    area.areas.some((child) => areaContainsSelection(child, selectedId))
   );
 }
 

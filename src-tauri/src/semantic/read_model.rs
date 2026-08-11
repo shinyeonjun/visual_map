@@ -9,8 +9,8 @@ use codebase_fact_model::{
     coverage::{FileCoverageRecord, FileCoverageState},
     evidence::{EvidenceLocation, FactEvidence},
     fact_graph::{
-        FactEdge, FactEdgeFamily, FactEdgeKind, FactNode, FactNodeKind, FactRole, FactTruth,
-        Visibility,
+        DispatchKind, FactEdge, FactEdgeFamily, FactEdgeKind, FactNode, FactNodeKind, FactRole,
+        FactTruth, Visibility,
     },
     identity::{EvidenceId, FactNodeId, WorkspaceId},
     source::RepositoryPath,
@@ -634,8 +634,15 @@ fn anchor_rank(node: &FactNode, boundary_endpoint: bool) -> Option<u8> {
     None
 }
 
+struct BoundaryCountAccumulator {
+    family: FactEdgeFamily,
+    truth: FactTruth,
+    dispatch: DispatchKind,
+    relation_count: u64,
+}
+
 struct BundleAccumulator {
-    counts: BTreeMap<(u8, u8), (FactEdgeFamily, FactTruth, u64)>,
+    counts: BTreeMap<(u8, u8, u8), BoundaryCountAccumulator>,
     edge_ids: BTreeSet<codebase_fact_model::identity::FactEdgeId>,
     evidence_ids: BTreeSet<EvidenceId>,
 }
@@ -665,12 +672,21 @@ fn build_boundary_relations(
                 edge_ids: BTreeSet::new(),
                 evidence_ids: BTreeSet::new(),
             });
-        let key = (family_rank(edge.family), truth_rank(edge.truth));
+        let key = (
+            family_rank(edge.family),
+            truth_rank(edge.truth),
+            dispatch_rank(edge.dispatch),
+        );
         let count = accumulator
             .counts
             .entry(key)
-            .or_insert((edge.family, edge.truth, 0));
-        count.2 = count.2.saturating_add(1);
+            .or_insert(BoundaryCountAccumulator {
+                family: edge.family,
+                truth: edge.truth,
+                dispatch: edge.dispatch,
+                relation_count: 0,
+            });
+        count.relation_count = count.relation_count.saturating_add(1);
         if accumulator.edge_ids.len() < 16 {
             accumulator.edge_ids.insert(edge.id.clone());
         }
@@ -705,10 +721,11 @@ fn build_boundary_relations(
             families: accumulator
                 .counts
                 .into_values()
-                .map(|(family, truth, relation_count)| BoundaryRelationCount {
-                    family,
-                    truth,
-                    relation_count,
+                .map(|count| BoundaryRelationCount {
+                    family: count.family,
+                    truth: count.truth,
+                    dispatch: Some(count.dispatch),
+                    relation_count: count.relation_count,
                 })
                 .collect(),
             representative_edge_ids: accumulator.edge_ids.into_iter().collect(),
@@ -734,6 +751,17 @@ fn truth_rank(value: FactTruth) -> u8 {
         FactTruth::Confirmed => 0,
         FactTruth::Structural => 1,
         FactTruth::StaticCandidate => 2,
+    }
+}
+
+fn dispatch_rank(value: DispatchKind) -> u8 {
+    match value {
+        DispatchKind::Direct => 0,
+        DispatchKind::Virtual => 1,
+        DispatchKind::Interface => 2,
+        DispatchKind::Dynamic => 3,
+        DispatchKind::Unknown => 4,
+        DispatchKind::NotApplicable => 5,
     }
 }
 

@@ -5,11 +5,11 @@
   "files": [
     {
       "path": "src/fixture.py",
-      "source": "from fastapi import FastAPI\n@app.get('/fixture')\ndef handler(): pass\n@Autowired UserService service;"
+      "source": "from fastapi import FastAPI\napp = FastAPI()\n@app.get('/fixture')\ndef handler(): pass\n@app.websocket('/fixture/ws')\nasync def stream(websocket): pass\n@Autowired UserService service;"
     },
     {
       "path": "pyproject.toml",
-      "source": "[project]\nname = \"code-memory-framework-fixture\"\ndependencies = [\"fastapi\", \"@app.get\", \"APIRouter\"]\n# signal: fastapi\n# signal: @app.get\n# signal: APIRouter\n"
+      "source": "[project]\nname = \"code-memory-framework-fixture\"\ndependencies = [\"fastapi\", \"@app.get\", \"@app.websocket\", \"APIRouter\"]\n# signal: fastapi\n# signal: @app.get\n# signal: @app.websocket\n# signal: APIRouter\n"
     }
   ],
   "expected": {

@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::{
-    Diagnostic, DocumentOutput, LanguageOutput, LanguageSpec, ProviderUnitBatch,
-    ProviderWorkspaceBinding, RelationOutput,
+    AnalysisCachePolicy, Diagnostic, DocumentOutput, LanguageOutput, LanguageSpec,
+    ProviderUnitBatch, ProviderWorkspaceBinding, RelationOutput,
 };
 
 #[derive(Clone)]
@@ -27,6 +27,7 @@ pub(crate) struct LanguageJob {
     /// per-shard ceiling would silently discard legitimate project members.
     pub(crate) max_project_source_file_bytes: u64,
     pub(crate) writable_workspace: Option<ProviderWorkspaceBinding>,
+    pub(crate) cache_policy: AnalysisCachePolicy,
 }
 
 pub(crate) fn rebase_provider_batch(

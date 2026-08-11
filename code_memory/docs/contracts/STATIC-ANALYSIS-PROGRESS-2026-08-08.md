@@ -101,8 +101,8 @@ canonical clean=incremental, 수백~수천 파일 frozen/OSS holdout이 남았�
 | ORM·static SQL read/write | 자산 일부, 최종 미통합 | collector/DB 자산은 있으나 code symbol↔query↔table exact reconciliation과 strict gate가 없다. |
 | queue/cache/external/config boundary | 자산 일부, 최종 미통합 | messaging/deployment collector는 donor이며 canonical capability는 아직 unsupported다. |
 | test case→production relation | **10언어 독립 baseline 인증** | exact runner/annotation/registration으로 TestCase를 만들고, 그 body 안의 provider-resolved direct call이 기존 project-local production definition을 가리킬 때만 confirmed `Tests` edge를 만든다. 언어별 positive 1개와 이름만 비슷한 negative 1개를 고정해 10/10 연결·10/10 거부·2회 결정성·source mutation 0을 통과했다. 미연결 test는 edge 대신 typed gap으로 남긴다. |
-| 정적 TracePath | **desktop query·제품 read model 연결 완료** | published canonical node/edge/receipt/gap에서 confirmed exact 실행 관계만 따르는 bounded ordered path를 계산한다. complete/partial/gap/cycle/depth-limit, stable identity, evidence, representative/selection query를 MapView까지 연결했다. |
-| 경계 관계 수·순환·공유 resource·inbound 없음 | 기반 구현, 집계 미구현 | canonical exact edge는 보존되지만 상위 boundary로 접는 RelationBundle과 고유 상대 영역/종류/순환/공유 resource 집계는 아직 없다. |
+| 정적 TracePath | **desktop query·제품 read model 연결 완료** | published canonical occurrence를 source ordinal 순서로 따르는 bounded path를 계산한다. direct는 exact, resolved virtual/interface/dynamic은 visible gap, unknown/deferred/legacy는 즉시 실행선에서 제외한다. complete/partial/gap/cycle/depth-limit, hop별 dispatch·근거·control context를 MapView/Selection까지 연결했다. |
+| 경계 관계 수·순환·공유 resource·inbound 없음 | **영역 간 RelationBundle 집계 완료 / 고급 구조 집계 부분** | canonical edge를 상위 영역 쌍으로 접고 family·truth·dispatch별 건수, 대표 edge/evidence, inbound/outbound bundle을 제공한다. 고유 상대 영역, cycle, 공유 resource 전용 집계는 아직 별도 read model이 필요하다. |
 | 앱 지도에서 사용할 snapshot | **code-only vertical slice + AI MapReduce 경로 연결** | code engine immutable canonical bundle을 Tauri가 검증·원자 publish하고, static region·relation·TracePath·AI Base revision을 거쳐 typed MapView/Selection으로 제공한다. 큰 Base 입력은 결정적 local Map partition→개별 verifier/cache→compact shuffle→fan-in 4 병렬 계층 Reduce→전체 verifier로 연결됐다. 실제 대형 provider 품질·시간 gate와 DB는 남았다. |
 
 ## 현재 검증으로 실제 증명된 범위
@@ -133,11 +133,11 @@ canonical clean=incremental, 수백~수천 파일 frozen/OSS holdout이 남았�
 - framework flow: JavaScript/TypeScript Express, Go Gin, Rust Axum, C++ Crow, C# ASP.NET Core, Dart Shelf,
   Python FastAPI, Java Spring MVC의 HTTP route→handler→service와 C GTK/GLib event→callback→service를
   실제 provider로 실행해 10/10 통과했다. HTTP 9건은 canonical route/node/edge까지 확인한다.
-- 기계 회귀: Code Memory Rust **286/286**, shared fact-model **17/17**, semantic-model **3/3**,
-  semantic-compiler **21/21 + 1 provider opt-in**, Tauri **66 passed / 4 environment-only ignored**,
-  frontend **6/6**, fmt, typecheck, lint, production frontend build, internal Tauri release-profile build,
-  `clippy --all-targets -D warnings`, locked code-engine release build가 모두 통과한다.
-  import staging 미사용 경고 63건은 실제 IR 연결로 해소했으며 suppression을 추가하지 않았다.
+- 기계 회귀: Code Memory Rust **334/334**, shared fact-model **19/19**, semantic-model **3/3**,
+  semantic-compiler **1 unit + 21 base + 5 partition** 통과와 **3 provider E2E opt-in ignored**,
+  Tauri **86 passed / 4 environment-only ignored**다. code engine, fact/semantic model/compiler,
+  Tauri 전체가 `cargo fmt`와 `clippy --all-targets -D warnings`를 통과한다. 프론트 시각 구현은 별도
+  작업 범위이며 이번 checkpoint는 backend IPC 직렬화 계약까지 검증한다.
 
 ## 이번 재감사에서 찾고 바로 고친 결함
 
@@ -828,13 +828,15 @@ canonical endpoint·truth·evidence, source SHA-256 불변, semantic/bundle dige
 변경하지 않고, desktop query 층에서 다음 정적 제품 경계를 추가했다.
 
 - canonical node/edge/capability receipt/typed gap을 읽는 bounded `TracePath` query
-- confirmed exact 실행 edge만 hop으로 채택, candidate·virtual/interface·구조/type/test edge 배제
+- direct execution occurrence는 exact hop, resolved virtual/interface/dynamic occurrence는 visible gap hop으로
+  채택하고 unknown·legacy·deferred·구조/type/test edge는 즉시 실행선에서 배제
 - canonical `handler --Handles--> route`를 원본 변경 없이 runtime `route -> handler` 순서로 해석
 - complete/partial/gap/cycle/depth-limit과 stable path identity/evidence union
 - representative path를 static region과 Base semantic input에 연결하고 selected fact query 제공
 - evidence가 특정 fact를 가리키는 gap은 그 경로에만 적용하고 evidence-less unit/workspace gap만 넓게 적용
 - representative entry/path 예산을 static region별 round-robin으로 배분해 대형 한 영역의 독점 방지
-- trace 전체 region이 area 안에 있을 때만 AI representative trace 선택 허용
+- AI prompt citation용 representative trace는 trace 전체 region이 area 안에 있을 때만 선택하되, UI area
+  selection은 static API/entrypoint에서 다시 조회해 다른 area로 넘어가는 실행 경로도 제공
 - verified trace가 없으면 map에 node를 하나만 내보내 unordered anchor를 가짜 chain으로 만들지 않음
 
 실제 TypeScript Express canonical bundle에서 `/health`는 route→handler 2단계, handler를 해결하지 못한

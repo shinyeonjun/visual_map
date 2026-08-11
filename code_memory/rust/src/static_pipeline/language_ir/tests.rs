@@ -16,9 +16,12 @@ use codebase_fact_model::analysis::{
     ProviderExecutionContext, ProviderExecutionMode, ProviderProtocol,
 };
 use codebase_fact_model::coverage::{
-    AnalysisCapability, CapabilityExecutionState, CapabilityReceipt, DeclaredSupport, GapCode,
+    AnalysisCapability, AnalysisScope, CapabilityExecutionState, CapabilityReceipt,
+    DeclaredSupport, GapCode,
 };
-use codebase_fact_model::fact_graph::{FactNode, FactNodeDetails, FactNodeKind, FactRole};
+use codebase_fact_model::fact_graph::{
+    DispatchKind, FactEdge, FactEdgeKind, FactNode, FactNodeDetails, FactNodeKind, FactRole,
+};
 use codebase_fact_model::identity::{ProviderSymbolId, Sha256Digest};
 use codebase_fact_model::language_ir::{IrEndpoint, LanguageIrRecord};
 use codebase_fact_model::source::RepositoryPath;
@@ -75,7 +78,7 @@ fn all_ten_languages_emit_valid_deterministic_unit_streams() {
     assert_eq!(first_receipt.emitted_unit_count, 10);
     assert_eq!(first_receipt.unavailable_unit_count, 0);
     assert_eq!(first_receipt.file_record_count, 10);
-    assert_eq!(first_receipt.definition_count, 20);
+    assert_eq!(first_receipt.definition_count, 22);
     assert_eq!(first_receipt.relation_count, 10);
     assert_eq!(first_receipt.capability_receipt_count, 10 * 9);
     assert_eq!(first_receipt.omitted_definition_count, 0);
@@ -94,6 +97,192 @@ fn all_ten_languages_emit_valid_deterministic_unit_streams() {
         first.artifact.content_digest,
         repeated.artifact.content_digest
     );
+}
+
+#[test]
+fn all_ten_languages_normalize_opaque_provider_symbols_without_losing_joins() {
+    let mut fixture = DonorFixture::all_languages();
+    let replacements = fixture
+        .documents
+        .iter()
+        .flat_map(|document| document.symbols.iter())
+        .map(|symbol| {
+            (
+                symbol.symbol.clone(),
+                format!("{}\r\nprovider-native-fragment", symbol.symbol),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for document in &mut fixture.documents {
+        for symbol in &mut document.symbols {
+            symbol.symbol = replacements[&symbol.symbol].clone();
+            if let Some(parent) = &mut symbol.enclosing_symbol {
+                *parent = replacements[parent].clone();
+            }
+        }
+        for occurrence in &mut document.occurrences {
+            occurrence.symbol = replacements[&occurrence.symbol].clone();
+        }
+    }
+    for relation in &mut fixture.relations {
+        relation.from = replacements[&relation.from].clone();
+        relation.to = replacements[&relation.to].clone();
+    }
+
+    let first = fixture.emit().unwrap();
+    let repeated = fixture.emit().unwrap();
+    assert_eq!(first.receipt.emitted_unit_count, 10);
+    assert_eq!(first.receipt.definition_count, 22);
+    assert_eq!(first.receipt.relation_count, 10);
+    assert_eq!(first.receipt.omitted_definition_count, 0);
+    assert_eq!(first.receipt.omitted_relation_count, 0);
+    assert_eq!(
+        first.receipt.stream_set_digest,
+        repeated.receipt.stream_set_digest
+    );
+
+    let records = read_ir_records(&first.artifact.path);
+    let definition_ids = records
+        .iter()
+        .filter_map(|record| match record {
+            LanguageIrRecord::Definition(definition) => {
+                assert!(!definition.symbol_id.as_str().chars().any(char::is_control));
+                assert!(!definition.qualified_name.chars().any(char::is_control));
+                if let Some(parent) = &definition.parent_symbol_id {
+                    assert!(!parent.as_str().chars().any(char::is_control));
+                }
+                Some(definition.symbol_id.clone())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for relation in records.iter().filter_map(|record| match record {
+        LanguageIrRecord::Relation(relation) => Some(relation),
+        _ => None,
+    }) {
+        for endpoint in [&relation.source, &relation.target] {
+            if let IrEndpoint::NativeSymbol { symbol_id } = endpoint {
+                assert!(definition_ids.contains(symbol_id));
+            }
+        }
+    }
+}
+
+#[test]
+fn multiline_scip_type_literal_identity_keeps_definition_and_relation() {
+    let mut fixture = DonorFixture::one_language(ProgrammingLanguage::TypeScript);
+    let document = fixture.documents.first_mut().unwrap();
+    let original = document.symbols[0].symbol.clone();
+    let multiline = "scip-typescript npm fixture 1.0.0 src/main.ts/Component().(`{\r\n  value,\r\n}`)typeLiteral1:value.".to_string();
+    document.symbols[0].symbol = multiline.clone();
+    document.symbols[0].display_name = None;
+    for occurrence in &mut document.occurrences {
+        if occurrence.symbol == original {
+            occurrence.symbol = multiline.clone();
+        }
+    }
+    for relation in &mut fixture.relations {
+        if relation.from == original {
+            relation.from = multiline.clone();
+        }
+        if relation.to == original {
+            relation.to = multiline.clone();
+        }
+    }
+
+    let emission = fixture.emit().unwrap();
+    assert_eq!(emission.receipt.definition_count, 2);
+    assert_eq!(emission.receipt.relation_count, 1);
+    assert_eq!(emission.receipt.omitted_definition_count, 0);
+    assert_eq!(emission.receipt.omitted_relation_count, 0);
+
+    let records = read_ir_records(&emission.artifact.path);
+    let expected_symbol = ProviderSymbolId::from_provider_native(&multiline).unwrap();
+    let definition = records
+        .iter()
+        .find_map(|record| match record {
+            LanguageIrRecord::Definition(definition) if definition.symbol_id == expected_symbol => {
+                Some(definition)
+            }
+            _ => None,
+        })
+        .expect("multiline SCIP type literal definition");
+    assert!(!definition.symbol_id.as_str().chars().any(char::is_control));
+    assert!(!definition.display_name.chars().any(char::is_control));
+    assert_eq!(definition.qualified_name, definition.symbol_id.as_str());
+}
+
+#[test]
+fn empty_provider_symbol_is_scoped_omission_not_project_failure() {
+    let mut fixture = DonorFixture::one_language(ProgrammingLanguage::TypeScript);
+    let document = fixture.documents.first_mut().unwrap();
+    let original = document.symbols[0].symbol.clone();
+    document.symbols[0].symbol.clear();
+    for occurrence in &mut document.occurrences {
+        if occurrence.symbol == original {
+            occurrence.symbol.clear();
+        }
+    }
+    for relation in &mut fixture.relations {
+        if relation.from == original {
+            relation.from.clear();
+        }
+        if relation.to == original {
+            relation.to.clear();
+        }
+    }
+
+    let emission = fixture
+        .emit()
+        .expect("one malformed symbol must not abort the repository");
+    assert!(emission.receipt.omitted_definition_count > 0);
+    assert!(emission.receipt.omitted_relation_count > 0);
+}
+
+#[test]
+fn all_ten_languages_preserve_language_specific_dispatch_without_guessing() {
+    let fixture = DonorFixture::all_languages();
+    let emission = fixture.emit().unwrap();
+    let relations = read_ir_records(&emission.artifact.path)
+        .into_iter()
+        .filter_map(|record| match record {
+            LanguageIrRecord::Relation(relation) => Some(relation),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    for language in all_languages() {
+        let marker = format!("fixture {} Target#", language.as_str());
+        let relation = relations
+            .iter()
+            .find(|relation| {
+                matches!(
+                    &relation.target,
+                    IrEndpoint::NativeSymbol { symbol_id } if symbol_id.as_str() == marker
+                )
+            })
+            .unwrap_or_else(|| panic!("{} call relation", language.as_str()));
+        let expected = match language {
+            ProgrammingLanguage::TypeScript
+            | ProgrammingLanguage::JavaScript
+            | ProgrammingLanguage::Python => DispatchKind::Dynamic,
+            _ => DispatchKind::Direct,
+        };
+        assert_eq!(relation.dispatch, expected, "{}", language.as_str());
+        let execution = relation
+            .execution
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} execution occurrence", language.as_str()));
+        assert_eq!(execution.lexical_ordinal, 0, "{}", language.as_str());
+        assert!(
+            relation
+                .evidence_ids
+                .contains(&execution.call_site_evidence_id),
+            "{}",
+            language.as_str()
+        );
+    }
 }
 
 #[test]
@@ -190,15 +379,15 @@ fn all_ten_languages_link_into_one_deterministic_canonical_bundle() {
     })
     .unwrap();
 
-    assert_eq!(first.receipt.provider_definition_identity_count, 20);
-    assert_eq!(first.receipt.canonical_definition_node_count, 20);
-    assert_eq!(first.receipt.retained_definition_node_count, 20);
+    assert_eq!(first.receipt.provider_definition_identity_count, 22);
+    assert_eq!(first.receipt.canonical_definition_node_count, 22);
+    assert_eq!(first.receipt.retained_definition_node_count, 22);
     assert_eq!(first.receipt.pruned_definition_node_count, 0);
     assert_eq!(first.receipt.resolved_relation_count, 10);
     assert_eq!(first.receipt.unresolved_relation_count, 0);
     assert_eq!(first.manifest.analysis_unit_receipt_count, 10);
-    assert_eq!(first.manifest.node_count, 31);
-    assert_eq!(first.manifest.edge_count, 40);
+    assert_eq!(first.manifest.node_count, 33);
+    assert_eq!(first.manifest.edge_count, 42);
     assert_eq!(first.manifest.file_coverage_count, 10);
     assert_eq!(first.manifest.capability_receipt_count, 110);
     assert_eq!(first.receipt.dangling_endpoint_count, 0);
@@ -214,6 +403,176 @@ fn all_ten_languages_link_into_one_deterministic_canonical_bundle() {
     );
     assert!(first.artifact.bundle_path.is_file());
     assert!(first.artifact.manifest_path.is_file());
+
+    let connection = Connection::open(&first.artifact.bundle_path).unwrap();
+    let mut statement = connection
+        .prepare("SELECT payload_json FROM edges WHERE kind='calls' ORDER BY id")
+        .unwrap();
+    let call_edges = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .map(|payload| serde_json::from_str::<FactEdge>(&payload.unwrap()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(call_edges.len(), 10);
+    assert_eq!(
+        call_edges
+            .iter()
+            .filter(|edge| edge.dispatch == DispatchKind::Direct)
+            .count(),
+        7
+    );
+    assert_eq!(
+        call_edges
+            .iter()
+            .filter(|edge| edge.dispatch == DispatchKind::Dynamic)
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn canonical_bundle_retains_unreferenced_methods_for_later_trace_linking() {
+    let mut fixture = DonorFixture::one_language(ProgrammingLanguage::Java);
+    fixture.relations.clear();
+    let emission = fixture.emit().unwrap();
+    let output = TestProject::new("canonical-unreferenced-methods");
+
+    let canonical = normalize_language_ir(CanonicalLanguageInput {
+        project_root: &fixture.project.root,
+        repository_display_name: "fixture",
+        manifest: &fixture.census.manifest,
+        plan: &fixture.plan,
+        ir_path: &emission.artifact.path,
+        ir_snapshot_id: &emission.artifact.snapshot_id,
+        ir_content_digest: emission.artifact.content_digest,
+        ir_record_count: emission.artifact.record_count,
+        provider_set_digest: emission.receipt.provider_set_digest,
+        execution_context_set_digest: emission.receipt.execution_context_set_digest,
+        framework_ir: None,
+        test_ir: None,
+        output_root: &output.root,
+    })
+    .unwrap();
+
+    let connection = Connection::open(&canonical.artifact.bundle_path).unwrap();
+    let retained_methods: u64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM nodes WHERE kind='method'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained_methods, 2);
+    assert_eq!(canonical.receipt.pruned_definition_node_count, 0);
+}
+
+#[test]
+fn exact_sql_literal_links_callable_to_query_and_read_write_tables() {
+    let mut fixture = DonorFixture::one_language(ProgrammingLanguage::Python);
+    let source = r#"def Target():
+    pass
+
+def Caller(connection):
+    connection.execute('''
+        INSERT INTO sessions (id)
+        SELECT id FROM staged_sessions
+    ''')
+    Target()
+"#;
+    fixture.project.write("main.py", source.as_bytes());
+    let target_range = token_range(source, "Target", 0);
+    let caller_range = unique_token_range(source, "Caller");
+    let call_range = token_range(source, "Target", 1);
+    fixture.documents[0].occurrences[0].range = target_range.clone();
+    fixture.documents[0].occurrences[0].enclosing_range = target_range;
+    fixture.documents[0].occurrences[1].range = caller_range.clone();
+    fixture.documents[0].occurrences[1].enclosing_range = caller_range;
+    fixture.relations[0].range = call_range;
+    fixture.census = SourceCensus::scan(&fixture.project.root).unwrap();
+    fixture.plan = plan_analysis_units(&fixture.project.root, &fixture.census.manifest).unwrap();
+
+    let emission = fixture.emit().unwrap();
+    let records = read_ir_records(&emission.artifact.path);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| matches!(record, LanguageIrRecord::Definition(definition) if definition.canonical_kind_hint == FactNodeKind::Query))
+            .count(),
+        1
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| matches!(record, LanguageIrRecord::Definition(definition) if definition.canonical_kind_hint == FactNodeKind::TableReference))
+            .count(),
+        2
+    );
+
+    let output = TestProject::new("canonical-sql-literal");
+    let canonical = normalize_language_ir(CanonicalLanguageInput {
+        project_root: &fixture.project.root,
+        repository_display_name: "fixture",
+        manifest: &fixture.census.manifest,
+        plan: &fixture.plan,
+        ir_path: &emission.artifact.path,
+        ir_snapshot_id: &emission.artifact.snapshot_id,
+        ir_content_digest: emission.artifact.content_digest,
+        ir_record_count: emission.artifact.record_count,
+        provider_set_digest: emission.receipt.provider_set_digest,
+        execution_context_set_digest: emission.receipt.execution_context_set_digest,
+        framework_ir: None,
+        test_ir: None,
+        output_root: &output.root,
+    })
+    .unwrap();
+
+    let connection = Connection::open(&canonical.artifact.bundle_path).unwrap();
+    let nodes = connection
+        .prepare("SELECT payload_json FROM nodes ORDER BY id")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .map(|row| serde_json::from_str::<FactNode>(&row.unwrap()).unwrap())
+        .map(|node| (node.id.clone(), node))
+        .collect::<BTreeMap<_, _>>();
+    let edges = connection
+        .prepare("SELECT payload_json FROM edges ORDER BY id")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .map(|row| serde_json::from_str::<FactEdge>(&row.unwrap()).unwrap())
+        .collect::<Vec<_>>();
+
+    let query = nodes
+        .values()
+        .find(|node| node.kind == FactNodeKind::Query)
+        .expect("query node");
+    let sessions = nodes
+        .values()
+        .find(|node| node.kind == FactNodeKind::TableReference && node.display_name == "sessions")
+        .expect("sessions table reference");
+    let staged = nodes
+        .values()
+        .find(|node| {
+            node.kind == FactNodeKind::TableReference && node.display_name == "staged_sessions"
+        })
+        .expect("staged table reference");
+    let executes = edges
+        .iter()
+        .find(|edge| edge.kind == FactEdgeKind::ExecutesQuery)
+        .expect("callable executes query");
+    assert_eq!(nodes[&executes.source_id].display_name, "Caller");
+    assert_eq!(executes.target_id, query.id);
+    assert!(edges.iter().any(|edge| {
+        edge.kind == FactEdgeKind::Writes
+            && edge.source_id == query.id
+            && edge.target_id == sessions.id
+    }));
+    assert!(edges.iter().any(|edge| {
+        edge.kind == FactEdgeKind::Reads
+            && edge.source_id == query.id
+            && edge.target_id == staged.id
+    }));
 }
 
 #[test]
@@ -505,6 +864,69 @@ fn canonical_linker_merges_duplicate_logical_edges_without_losing_evidence() {
     assert_eq!(canonical.receipt.resolved_relation_count, 2);
     assert_eq!(canonical.receipt.merged_edge_count, 1);
     assert_eq!(canonical.manifest.edge_count, 4);
+    assert_eq!(canonical.receipt.duplicate_logical_edge_count, 0);
+}
+
+#[test]
+fn canonical_linker_preserves_distinct_written_calls_to_the_same_target() {
+    let mut fixture = DonorFixture::one_language(ProgrammingLanguage::TypeScript);
+    let source = "function Target() {}\nfunction Caller() { Target(); Target(); }\n";
+    fixture.project.write("main.ts", source.as_bytes());
+    fixture.relations[0].range = token_range(source, "Target", 1);
+    let mut second_call = fixture.relations[0].clone();
+    second_call.range = token_range(source, "Target", 2);
+    fixture.relations.push(second_call);
+    fixture.census = SourceCensus::scan(&fixture.project.root).unwrap();
+    fixture.plan = plan_analysis_units(&fixture.project.root, &fixture.census.manifest).unwrap();
+
+    let emission = fixture.emit().unwrap();
+    let mut ir_occurrences = read_ir_records(&emission.artifact.path)
+        .into_iter()
+        .filter_map(|record| match record {
+            LanguageIrRecord::Relation(relation) => relation.execution,
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    ir_occurrences.sort_by_key(|execution| execution.lexical_ordinal);
+    assert_eq!(ir_occurrences.len(), 2);
+    assert_eq!(ir_occurrences[0].lexical_ordinal, 0);
+    assert_eq!(ir_occurrences[1].lexical_ordinal, 1);
+    assert_ne!(
+        ir_occurrences[0].call_site_evidence_id,
+        ir_occurrences[1].call_site_evidence_id
+    );
+
+    let output = TestProject::new("canonical-two-call-occurrences");
+    let canonical = normalize_language_ir(CanonicalLanguageInput {
+        project_root: &fixture.project.root,
+        repository_display_name: "fixture",
+        manifest: &fixture.census.manifest,
+        plan: &fixture.plan,
+        ir_path: &emission.artifact.path,
+        ir_snapshot_id: &emission.artifact.snapshot_id,
+        ir_content_digest: emission.artifact.content_digest,
+        ir_record_count: emission.artifact.record_count,
+        provider_set_digest: emission.receipt.provider_set_digest,
+        execution_context_set_digest: emission.receipt.execution_context_set_digest,
+        framework_ir: None,
+        test_ir: None,
+        output_root: &output.root,
+    })
+    .unwrap();
+
+    let connection = Connection::open(&canonical.artifact.bundle_path).unwrap();
+    let mut statement = connection
+        .prepare("SELECT payload_json FROM edges WHERE kind='calls' ORDER BY execution_site_id")
+        .unwrap();
+    let call_edges = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .map(|payload| serde_json::from_str::<FactEdge>(&payload.unwrap()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(call_edges.len(), 2);
+    assert_ne!(call_edges[0].id, call_edges[1].id);
+    assert_eq!(canonical.receipt.resolved_relation_count, 2);
+    assert_eq!(canonical.receipt.merged_edge_count, 0);
     assert_eq!(canonical.receipt.duplicate_logical_edge_count, 0);
 }
 
@@ -982,6 +1404,50 @@ fn invalid_provider_range_is_omitted_and_never_promoted_to_a_relation() {
 }
 
 #[test]
+fn provider_relation_at_a_declaration_is_not_forged_into_a_call_site() {
+    let mut fixture = DonorFixture::one_language(ProgrammingLanguage::TypeScript);
+    fixture.relations[0].range = fixture.documents[0].occurrences[1].range.clone();
+
+    let receipt = fixture.emit().unwrap().receipt;
+
+    assert_eq!(receipt.relation_count, 0);
+    assert_eq!(receipt.omitted_relation_count, 1);
+    assert!(receipt.gap_count > 0);
+}
+
+#[test]
+fn python_class_call_is_kept_as_dynamic_construction_only_with_exact_type_target() {
+    let mut fixture = DonorFixture::one_language(ProgrammingLanguage::Python);
+    let source = "class Box:\n    pass\n\ndef Caller():\n    Box()\n";
+    fixture.project.write("main.py", source.as_bytes());
+    let document = fixture.documents.first_mut().unwrap();
+    document.symbols[0].kind = "Class".to_string();
+    document.symbols[0].display_name = Some("Box".to_string());
+    document.symbols[1].display_name = Some("Caller".to_string());
+    document.occurrences[0].range = token_range(source, "Box", 0);
+    document.occurrences[0].enclosing_range = document.occurrences[0].range.clone();
+    document.occurrences[1].range = unique_token_range(source, "Caller");
+    document.occurrences[1].enclosing_range = document.occurrences[1].range.clone();
+    fixture.relations[0].kind = "CONSTRUCTS".to_string();
+    fixture.relations[0].range = token_range(source, "Box", 1);
+    fixture.census = SourceCensus::scan(&fixture.project.root).unwrap();
+    fixture.plan = plan_analysis_units(&fixture.project.root, &fixture.census.manifest).unwrap();
+
+    let emission = fixture.emit().unwrap();
+    let relation = read_ir_records(&emission.artifact.path)
+        .into_iter()
+        .find_map(|record| match record {
+            LanguageIrRecord::Relation(relation) => Some(relation),
+            _ => None,
+        })
+        .expect("exact Python class target must retain the construction fact");
+
+    assert_eq!(relation.dispatch, DispatchKind::Dynamic);
+    assert_eq!(emission.receipt.relation_count, 1);
+    assert_eq!(emission.receipt.omitted_relation_count, 0);
+}
+
+#[test]
 fn generic_provider_references_are_not_persisted_as_product_relations() {
     for native_kind in ["REFERENCES", "SYMBOL_REFERENCE"] {
         let mut fixture = DonorFixture::one_language(ProgrammingLanguage::TypeScript);
@@ -1005,13 +1471,44 @@ fn definitions_do_not_create_a_relation_without_provider_evidence() {
 }
 
 #[test]
+fn incomplete_syntax_tree_is_published_as_an_exact_file_gap() {
+    let mut fixture = DonorFixture::one_language(ProgrammingLanguage::Python);
+    fixture.project.write("main.py", b"def broken(:\n");
+    fixture.documents[0].symbols.clear();
+    fixture.documents[0].occurrences.clear();
+    fixture.relations.clear();
+    fixture.census = SourceCensus::scan(&fixture.project.root).unwrap();
+    fixture.plan = plan_analysis_units(&fixture.project.root, &fixture.census.manifest).unwrap();
+
+    let emission = fixture.emit().unwrap();
+    let gap = read_ir_records(&emission.artifact.path)
+        .into_iter()
+        .find_map(|record| match record {
+            LanguageIrRecord::Gap(gap)
+                if gap.code == GapCode::ProviderExecutionIncomplete
+                    && gap.capability == Some(AnalysisCapability::Definitions)
+                    && matches!(
+                        &gap.scope,
+                        AnalysisScope::File { path, .. } if path.as_str() == "main.py"
+                    ) =>
+            {
+                Some(gap)
+            }
+            _ => None,
+        })
+        .expect("syntax failure must remain visible at file scope");
+
+    assert!(matches!(gap.scope, AnalysisScope::File { .. }));
+}
+
+#[test]
 fn java_blank_provider_signature_is_absent_instead_of_rejecting_the_unit() {
     let mut fixture = DonorFixture::one_language(ProgrammingLanguage::Java);
     fixture.documents[0].symbols[1].signature = Some("  \t ".to_string());
 
     let receipt = fixture.emit().unwrap().receipt;
 
-    assert_eq!(receipt.definition_count, 2);
+    assert_eq!(receipt.definition_count, 3);
     assert_eq!(receipt.omitted_definition_count, 0);
 }
 
@@ -1022,7 +1519,7 @@ fn csharp_provider_display_language_is_normalized_before_ir_partitioning() {
 
     let receipt = fixture.emit().unwrap().receipt;
 
-    assert_eq!(receipt.definition_count, 2);
+    assert_eq!(receipt.definition_count, 3);
     assert_eq!(receipt.relation_count, 1);
 }
 
@@ -1135,11 +1632,13 @@ impl DonorFixture {
             let path = format!("src/file-{ordinal:04}.ts");
             let target_name = format!("Target{ordinal:04}");
             let caller_name = format!("Caller{ordinal:04}");
-            let source =
-                format!("export class {target_name} {{}}\nexport function {caller_name}() {{}}\n");
+            let source = format!(
+                "export function {target_name}() {{}}\nexport function {caller_name}() {{ {target_name}(); }}\n"
+            );
             fixture.project.write(&path, source.as_bytes());
-            let target_range = unique_token_range(&source, &target_name);
+            let target_range = token_range(&source, &target_name, 0);
             let caller_range = unique_token_range(&source, &caller_name);
+            let call_range = token_range(&source, &target_name, 1);
             let target = format!("fixture typescript {target_name}#");
             let caller = format!("fixture typescript {caller_name}#call().");
             fixture.documents.push(DocumentOutput {
@@ -1148,7 +1647,7 @@ impl DonorFixture {
                 symbols: vec![
                     SymbolOutput {
                         symbol: target.clone(),
-                        kind: "Class".to_string(),
+                        kind: "Function".to_string(),
                         display_name: Some(target_name),
                         documentation: Vec::new(),
                         signature: None,
@@ -1189,7 +1688,7 @@ impl DonorFixture {
                 to: target,
                 kind: "CALLS".to_string(),
                 path: path.clone(),
-                range: caller_range,
+                range: call_range,
                 confidence: Some(1.0),
                 strategy: Some("fixture-provider".to_string()),
             });
@@ -1229,58 +1728,91 @@ impl DonorFixture {
             let path = format!("main.{}", fixture_extension(*language));
             let (source, target_kind, caller_kind) = fixture_definitions(*language);
             project.write(&path, source.as_bytes());
-            let target_range = unique_token_range(&source, "Target");
+            let target_range = token_range(&source, "Target", 0);
             let caller_range = unique_token_range(&source, "Caller");
+            let call_range = token_range(&source, "Target", 1);
             let target = format!("fixture {} Target#", language.as_str());
             let caller = format!("fixture {} Caller#call().", language.as_str());
+            let container = matches!(
+                language,
+                ProgrammingLanguage::Java | ProgrammingLanguage::CSharp
+            )
+            .then(|| {
+                (
+                    format!("fixture {} Fixture#", language.as_str()),
+                    unique_token_range(&source, "Fixture"),
+                )
+            });
+            let enclosing_symbol = container.as_ref().map(|(symbol, _)| symbol.clone());
+            let mut symbols = vec![
+                SymbolOutput {
+                    symbol: target.clone(),
+                    kind: target_kind.to_string(),
+                    display_name: Some("Target".to_string()),
+                    documentation: Vec::new(),
+                    signature: None,
+                    enclosing_symbol: enclosing_symbol.clone(),
+                },
+                SymbolOutput {
+                    symbol: caller.clone(),
+                    kind: caller_kind.to_string(),
+                    display_name: Some("Caller".to_string()),
+                    documentation: Vec::new(),
+                    signature: None,
+                    enclosing_symbol,
+                },
+            ];
+            let mut occurrences = vec![
+                OccurrenceOutput {
+                    symbol: target.clone(),
+                    range: target_range.clone(),
+                    enclosing_range: target_range,
+                    definition: true,
+                    import: false,
+                    read: false,
+                    write: false,
+                },
+                OccurrenceOutput {
+                    symbol: caller.clone(),
+                    range: caller_range.clone(),
+                    enclosing_range: caller_range.clone(),
+                    definition: true,
+                    import: false,
+                    read: false,
+                    write: false,
+                },
+            ];
+            if let Some((container_symbol, container_range)) = container {
+                symbols.push(SymbolOutput {
+                    symbol: container_symbol.clone(),
+                    kind: "Class".to_string(),
+                    display_name: Some("Fixture".to_string()),
+                    documentation: Vec::new(),
+                    signature: None,
+                    enclosing_symbol: None,
+                });
+                occurrences.push(OccurrenceOutput {
+                    symbol: container_symbol,
+                    range: container_range.clone(),
+                    enclosing_range: container_range,
+                    definition: true,
+                    import: false,
+                    read: false,
+                    write: false,
+                });
+            }
             documents.push(DocumentOutput {
                 language: language.as_str().to_string(),
                 path: path.clone(),
-                symbols: vec![
-                    SymbolOutput {
-                        symbol: target.clone(),
-                        kind: target_kind.to_string(),
-                        display_name: Some("Target".to_string()),
-                        documentation: Vec::new(),
-                        signature: None,
-                        enclosing_symbol: None,
-                    },
-                    SymbolOutput {
-                        symbol: caller.clone(),
-                        kind: caller_kind.to_string(),
-                        display_name: Some("Caller".to_string()),
-                        documentation: Vec::new(),
-                        signature: None,
-                        enclosing_symbol: None,
-                    },
-                ],
-                occurrences: vec![
-                    OccurrenceOutput {
-                        symbol: target.clone(),
-                        range: target_range.clone(),
-                        enclosing_range: target_range,
-                        definition: true,
-                        import: false,
-                        read: false,
-                        write: false,
-                    },
-                    OccurrenceOutput {
-                        symbol: caller.clone(),
-                        range: caller_range.clone(),
-                        enclosing_range: caller_range.clone(),
-                        definition: true,
-                        import: false,
-                        read: false,
-                        write: false,
-                    },
-                ],
+                symbols,
+                occurrences,
             });
             relations.push(RelationOutput {
                 from: caller,
                 to: target,
                 kind: "CALLS".to_string(),
                 path: path.clone(),
-                range: caller_range,
+                range: call_range,
                 confidence: Some(1.0),
                 strategy: Some("fixture-provider".to_string()),
             });
@@ -1428,53 +1960,55 @@ impl DonorFixture {
 fn fixture_definitions(language: ProgrammingLanguage) -> (String, &'static str, &'static str) {
     match language {
         ProgrammingLanguage::TypeScript => (
-            "class Target {}\nfunction Caller() {}\n".to_string(),
-            "Class",
+            "function Target() {}\nfunction Caller() { Target(); }\n".to_string(),
+            "Function",
             "Function",
         ),
         ProgrammingLanguage::JavaScript => (
-            "class Target {}\nfunction Caller() {}\n".to_string(),
-            "Class",
+            "function Target() {}\nfunction Caller() { Target(); }\n".to_string(),
+            "Function",
             "Function",
         ),
         ProgrammingLanguage::Python => (
-            "class Target:\n    pass\n\ndef Caller():\n    pass\n".to_string(),
-            "Class",
+            "def Target():\n    pass\n\ndef Caller():\n    Target()\n".to_string(),
+            "Function",
             "Function",
         ),
         ProgrammingLanguage::Java => (
-            "class Target {}\nclass Caller {}\n".to_string(),
-            "Class",
-            "Class",
+            "class Fixture { static void Target() {} static void Caller() { Target(); } }\n"
+                .to_string(),
+            "Method",
+            "Method",
         ),
         ProgrammingLanguage::CSharp => (
-            "class Target {}\nclass Caller {}\n".to_string(),
-            "Class",
-            "Class",
+            "class Fixture { static void Target() {} static void Caller() { Target(); } }\n"
+                .to_string(),
+            "Method",
+            "Method",
         ),
         ProgrammingLanguage::C => (
-            "struct Target;\nvoid Caller(void) {}\n".to_string(),
-            "Struct",
+            "void Target(void) {}\nvoid Caller(void) { Target(); }\n".to_string(),
+            "Function",
             "Function",
         ),
         ProgrammingLanguage::Cpp => (
-            "class Target {};\nvoid Caller() {}\n".to_string(),
-            "Class",
+            "void Target() {}\nvoid Caller() { Target(); }\n".to_string(),
+            "Function",
             "Function",
         ),
         ProgrammingLanguage::Go => (
-            "package fixture\ntype Target struct{}\nfunc Caller() {}\n".to_string(),
-            "Struct",
+            "package fixture\nfunc Target() {}\nfunc Caller() { Target() }\n".to_string(),
+            "Function",
             "Function",
         ),
         ProgrammingLanguage::Rust => (
-            "struct Target {}\nfn Caller() {}\n".to_string(),
-            "Struct",
+            "fn Target() {}\nfn Caller() { Target(); }\n".to_string(),
+            "Function",
             "Function",
         ),
         ProgrammingLanguage::Dart => (
-            "class Target {}\nvoid Caller() {}\n".to_string(),
-            "Class",
+            "void Target() {}\nvoid Caller() { Target(); }\n".to_string(),
+            "Function",
             "Function",
         ),
     }
@@ -1484,6 +2018,25 @@ fn unique_token_range(source: &str, token: &str) -> Vec<i32> {
     let mut matches = source.match_indices(token);
     let (offset, _) = matches.next().expect("fixture token");
     assert!(matches.next().is_none(), "fixture token must be unique");
+    let prefix = &source[..offset];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
+    let column = prefix
+        .rfind('\n')
+        .map(|newline| offset - newline - 1)
+        .unwrap_or(offset);
+    vec![
+        line as i32,
+        column as i32,
+        line as i32,
+        (column + token.len()) as i32,
+    ]
+}
+
+fn token_range(source: &str, token: &str, ordinal: usize) -> Vec<i32> {
+    let (offset, _) = source
+        .match_indices(token)
+        .nth(ordinal)
+        .unwrap_or_else(|| panic!("fixture token {token} occurrence {ordinal}"));
     let prefix = &source[..offset];
     let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
     let column = prefix

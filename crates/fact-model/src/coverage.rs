@@ -76,6 +76,29 @@ pub enum EvidencePrecision {
     None,
 }
 
+impl EvidencePrecision {
+    /// The precision a receipt is allowed to claim for one execution state.
+    ///
+    /// `CapabilityReceipt::validate` binds these two fields in both
+    /// directions: a run that completed or partially completed has to say how
+    /// it measured, and one that failed, never ran, or did not apply may not
+    /// claim a precision it never used. Restating that rule at each receipt
+    /// site is how a capability ends up reporting a partial run with no
+    /// precision — a contradiction the contract rejects, which aborts the
+    /// analysis instead of recording the shortfall it was describing.
+    ///
+    /// `measured` is the precision the capability delivers when it does run,
+    /// which is a static property of the capability rather than of one run.
+    pub fn for_execution(state: CapabilityExecutionState, measured: Self) -> Self {
+        match state {
+            CapabilityExecutionState::Complete | CapabilityExecutionState::Partial => measured,
+            CapabilityExecutionState::Failed
+            | CapabilityExecutionState::NotRun
+            | CapabilityExecutionState::NotApplicable => Self::None,
+        }
+    }
+}
+
 /// The eligible population for a coverage measurement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
@@ -109,6 +132,7 @@ pub enum GapCode {
     ProviderUnavailable,
     ProviderExecutionIncomplete,
     ExcludedByRule,
+    ExplicitSourceScopeExclusion,
     VcsIgnored,
     ProductIgnored,
     UnsupportedFileType,
@@ -141,6 +165,7 @@ impl GapCode {
             Self::ProviderUnavailable => "provider_unavailable",
             Self::ProviderExecutionIncomplete => "provider_execution_incomplete",
             Self::ExcludedByRule => "excluded_by_rule",
+            Self::ExplicitSourceScopeExclusion => "explicit_source_scope_exclusion",
             Self::VcsIgnored => "vcs_ignored",
             Self::ProductIgnored => "product_ignored",
             Self::UnsupportedFileType => "unsupported_file_type",

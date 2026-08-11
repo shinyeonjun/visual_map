@@ -5,7 +5,7 @@ use crate::{
 };
 use codebase_fact_model::{
     analysis::ProgrammingLanguage,
-    fact_graph::{FactEdgeFamily, FactNodeKind, FactRole, FactTruth},
+    fact_graph::{DispatchKind, FactEdgeFamily, FactNodeKind, FactRole, FactTruth},
     identity::{EvidenceId, FactEdgeId, FactNodeId, Sha256Digest, SnapshotId, WorkspaceId},
     source::RepositoryPath,
 };
@@ -161,6 +161,11 @@ pub struct BoundaryRelationSummary {
 pub struct BoundaryRelationCount {
     pub family: FactEdgeFamily,
     pub truth: FactTruth,
+    /// Dispatch is retained separately from truth. A resolved dynamic or
+    /// virtual target is still a real relation, but it is not an exact static
+    /// execution hop. Historical semantic packets deserialize as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch: Option<DispatchKind>,
     pub relation_count: u64,
 }
 

@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$EnginePath,
     [string]$ExpectedVersion = "0.1.0",
-    [string]$ExpectedContractVersion = "3"
+    [string]$ExpectedContractVersion = "4"
 )
 
 Set-StrictMode -Version Latest

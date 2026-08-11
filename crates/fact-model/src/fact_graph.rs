@@ -80,6 +80,11 @@ pub enum FactNodeKind {
     DatabaseType,
     Policy,
     Query,
+    /// A database object name written in application source. This is not a
+    /// certified database object. A deterministic DB reconciliation step may
+    /// connect it to exactly one [`FactNodeKind::Table`] through
+    /// [`FactEdgeKind::MapsToTable`].
+    TableReference,
     Migration,
     OrmModel,
     Event,
@@ -145,6 +150,7 @@ impl FactNodeKind {
             | Self::DatabaseType
             | Self::Policy
             | Self::Query
+            | Self::TableReference
             | Self::Migration
             | Self::OrmModel => FactNodeFamily::Data,
             Self::Event
@@ -210,6 +216,7 @@ impl FactNodeKind {
             Self::DatabaseType => "database_type",
             Self::Policy => "policy",
             Self::Query => "query",
+            Self::TableReference => "table_reference",
             Self::Migration => "migration",
             Self::OrmModel => "orm_model",
             Self::Event => "event",
@@ -693,6 +700,60 @@ pub enum DispatchKind {
     NotApplicable,
 }
 
+/// Source-backed control context attached to one written call occurrence.
+///
+/// These flags describe lexical source structure, not observed runtime
+/// behavior. In particular, `lexical_ordinal` below is never presented as a
+/// guarantee that the call executes before another branch at runtime.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecutionControlContext {
+    /// The call is inside a branch, short-circuit expression, handler, or
+    /// another construct whose body is not unconditionally entered.
+    pub guarded: bool,
+    /// The call is lexically inside a loop and may execute more than once.
+    pub repeated: bool,
+    /// The call is inside an anonymous callback/closure owned by the enclosing
+    /// named fact and is not an immediate synchronous hop from that owner.
+    pub deferred: bool,
+    /// The source explicitly awaits this call.
+    pub awaited: bool,
+}
+
+/// One exact written call occurrence retained on a canonical code edge.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecutionOccurrence {
+    pub call_site_evidence_id: EvidenceId,
+    /// Zero-based lexical order among calls owned by the same named callable.
+    pub lexical_ordinal: u32,
+    pub control: ExecutionControlContext,
+}
+
+impl ExecutionOccurrence {
+    pub(crate) fn validate_for(
+        &self,
+        kind: FactEdgeKind,
+        evidence_ids: &[EvidenceId],
+    ) -> Result<(), ContractError> {
+        if !matches!(kind, FactEdgeKind::Calls | FactEdgeKind::Constructs) {
+            return Err(ContractError::new(
+                ContractErrorCode::NonCanonicalValue,
+                "execution",
+                "execution occurrence is valid only for calls and constructs",
+            ));
+        }
+        if !evidence_ids.contains(&self.call_site_evidence_id) {
+            return Err(ContractError::new(
+                ContractErrorCode::MissingEvidence,
+                "execution.callSiteEvidenceId",
+                "execution occurrence must reference one of the edge evidence IDs",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// One canonical directed relation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -708,6 +769,11 @@ pub struct FactEdge {
     pub dispatch: DispatchKind,
     pub semantic_context_id: Option<SemanticContextId>,
     pub qualifier: Option<String>,
+    /// Present on new canonical call/construct edges. `serde(default)` keeps
+    /// historical snapshots readable, but TracePath treats a missing value as
+    /// an unproven legacy execution hop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionOccurrence>,
     pub evidence_ids: Vec<EvidenceId>,
 }
 
@@ -721,12 +787,16 @@ impl Validate for FactEdge {
             ));
         }
         validate_optional_text(self.qualifier.as_deref(), "qualifier", 1024)?;
+        if let Some(execution) = &self.execution {
+            execution.validate_for(self.kind, &self.evidence_ids)?;
+        }
         let expected = Self::stable_id(
             &self.source_id,
             &self.target_id,
             self.kind,
             self.semantic_context_id.as_ref(),
             self.qualifier.as_deref(),
+            self.execution.as_ref(),
         )?;
         if self.id != expected {
             return Err(ContractError::new(
@@ -756,13 +826,16 @@ impl Validate for FactEdge {
 
 impl FactEdge {
     /// Computes the logical edge identity. Truth, resolution, dispatch, and
-    /// evidence are mergeable provenance and therefore are not identity input.
+    /// general provenance evidence remain mergeable. An exact execution
+    /// occurrence is identity input because two written calls between the same
+    /// symbols must not collapse into one edge.
     pub fn stable_id(
         source_id: &FactNodeId,
         target_id: &FactNodeId,
         kind: FactEdgeKind,
         semantic_context_id: Option<&SemanticContextId>,
         qualifier: Option<&str>,
+        execution: Option<&ExecutionOccurrence>,
     ) -> Result<FactEdgeId, ContractError> {
         validate_optional_text(qualifier, "qualifier", 1024)?;
         let mut components = vec![
@@ -785,6 +858,24 @@ impl FactEdge {
                 components.push(qualifier.to_string());
             }
             None => components.push("absent".to_string()),
+        }
+        if let Some(execution) = execution {
+            // This suffix is deliberately absent for historical relations.
+            // Therefore snapshots written before execution occurrences were
+            // introduced keep their original IDs and remain verifiable.
+            components.extend([
+                "execution".to_string(),
+                "present".to_string(),
+                format!(
+                    "call_site_evidence:{}",
+                    execution.call_site_evidence_id.as_str()
+                ),
+                format!("lexical_ordinal:{}", execution.lexical_ordinal),
+                format!("guarded:{}", execution.control.guarded),
+                format!("repeated:{}", execution.control.repeated),
+                format!("deferred:{}", execution.control.deferred),
+                format!("awaited:{}", execution.control.awaited),
+            ]);
         }
         let component_refs = components.iter().map(String::as_str).collect::<Vec<_>>();
         FactEdgeId::from_components(&component_refs).map_err(|error| {

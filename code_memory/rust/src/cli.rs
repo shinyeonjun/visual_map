@@ -36,6 +36,22 @@ fn optional_value(args: &[String], flag: &str) -> Option<String> {
     None
 }
 
+fn parse_analysis_cache_policy(args: &[String]) -> Result<AnalysisCachePolicy, String> {
+    let explicitly_present = args
+        .iter()
+        .any(|value| value == "--cache-policy" || value.starts_with("--cache-policy="));
+    match optional_value(args, "--cache-policy").as_deref() {
+        None if explicitly_present => {
+            Err("missing --cache-policy value; expected reuse or fresh".to_string())
+        }
+        None | Some("reuse") => Ok(AnalysisCachePolicy::Reuse),
+        Some("fresh") => Ok(AnalysisCachePolicy::Fresh),
+        Some(value) => Err(format!(
+            "invalid --cache-policy '{value}'; expected reuse or fresh"
+        )),
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CodeEngineContract {
@@ -75,7 +91,10 @@ fn list_languages() -> Result<(), String> {
 
 #[cfg(test)]
 mod contract_tests {
-    use super::{code_engine_contract, CODE_ENGINE_COMMANDS};
+    use super::{
+        code_engine_contract, parse_analysis_cache_policy, AnalysisCachePolicy,
+        CODE_ENGINE_COMMANDS,
+    };
 
     #[test]
     fn code_engine_contract_declares_the_current_product_commands_only() {
@@ -86,11 +105,29 @@ mod contract_tests {
             "codebase-workspace.code-engine-contract.v1"
         );
         assert_eq!(contract.version, "0.1.0");
-        assert_eq!(contract.contract_version, "3");
+        assert_eq!(contract.contract_version, "4");
         for required in ["contract", "list", "doctor", "detect-languages", "index"] {
             assert!(contract.commands.contains(&required));
         }
         assert!(!CODE_ENGINE_COMMANDS.contains(&"collect"));
+    }
+
+    #[test]
+    fn cache_policy_is_backward_compatible_and_accepts_explicit_fresh_analysis() {
+        assert_eq!(
+            parse_analysis_cache_policy(&[]).unwrap(),
+            AnalysisCachePolicy::Reuse
+        );
+        assert_eq!(
+            parse_analysis_cache_policy(&["--cache-policy=fresh".to_string()]).unwrap(),
+            AnalysisCachePolicy::Fresh
+        );
+        assert!(parse_analysis_cache_policy(&[
+            "--cache-policy".to_string(),
+            "unknown".to_string()
+        ])
+        .is_err());
+        assert!(parse_analysis_cache_policy(&["--cache-policy".to_string()]).is_err());
     }
 }
 

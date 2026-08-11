@@ -98,7 +98,9 @@ impl VerifiedSourceFile {
     }
 
     /// Converts a provider range into the canonical UTF-8/byte coordinate
-    /// system. LSP columns are UTF-16; SCIP/compiler columns are UTF-8 bytes.
+    /// system. LSP columns are UTF-16; raw SCIP columns have already been
+    /// normalized from their per-document encoding at ingestion; compiler
+    /// columns are UTF-8 bytes.
     pub(crate) fn span(
         &self,
         range: &[i32],
@@ -259,6 +261,7 @@ fn utf16_column_to_byte(text: &str, requested: usize) -> Result<usize, String> {
 mod tests {
     use super::VerifiedSourceFile;
     use crate::static_pipeline::source_census::SourceCensus;
+    use codebase_fact_model::analysis::ProviderProtocol;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -289,6 +292,41 @@ mod tests {
         assert_eq!(span.start.byte_offset, 16);
         assert_eq!(span.end.utf8_column, "route('/한');".len() as u32);
         assert_eq!(span.end.byte_offset, 16 + "route('/한');".len() as u64);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn provider_protocol_boundaries_produce_the_same_utf8_span() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("source-protocols-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("name.ts"), "한🚀x\n").unwrap();
+        let census = SourceCensus::scan(&root).unwrap();
+        let file = census
+            .manifest
+            .files
+            .iter()
+            .find(|file| file.path.as_str() == "name.ts")
+            .unwrap();
+        let source = VerifiedSourceFile::load(&root, file).unwrap();
+
+        let lsp = source
+            .span(&[0, 0, 0, 3], ProviderProtocol::LanguageServerProtocol)
+            .unwrap();
+        let scip = source.span(&[0, 0, 0, 7], ProviderProtocol::Scip).unwrap();
+        let compiler = source
+            .span(&[0, 0, 0, 7], ProviderProtocol::CompilerApi)
+            .unwrap();
+        assert_eq!(lsp, scip);
+        assert_eq!(scip, compiler);
+        assert_eq!(scip.end.utf8_column, 7);
+        assert!(source
+            .span(&[0, 0, 0, 2], ProviderProtocol::LanguageServerProtocol)
+            .is_err());
+        assert!(source.span(&[0, 0, 0, 2], ProviderProtocol::Scip).is_err());
         let _ = fs::remove_dir_all(root);
     }
 }

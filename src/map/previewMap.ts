@@ -1,4 +1,23 @@
-import type { MapView, Selection } from "./types";
+import type { AreaCategory, MapArea, MapNode, MapView, Selection } from "./types";
+
+function previewAreaSignals(
+  category: AreaCategory,
+  verified = 0,
+  structural = 0,
+  candidate = 0,
+  gaps = 0,
+): Pick<
+  MapArea,
+  "category" | "labelSource" | "fallbackReason" | "boundaryRelationCounts" | "affectingAnalysisGapCount"
+> {
+  return {
+    category,
+    labelSource: "semantic",
+    fallbackReason: null,
+    boundaryRelationCounts: { verified, structural, candidate },
+    affectingAnalysisGapCount: gaps,
+  };
+}
 
 /**
  * A hand-written map, for looking at the canvas before the engine can fill it.
@@ -15,132 +34,179 @@ export const PREVIEW_MAP: MapView = {
   areas: [
     {
       id: "area:order",
+      ...previewAreaSignals("domain", 99, 0, 3, 1),
       name: "주문",
       originalName: "Order",
       summary: "주문 생성 · 조회 · 상태 관리",
       depth: 0,
       hiddenNodeCount: 0,
-      position: { x: 48, y: 108 },
-      width: 738,
+      position: { x: 36, y: 200 },
+      width: 280,
       nodes: [],
       areas: [
         {
           id: "area:order.create",
+          ...previewAreaSignals("domain", 29, 3, 1, 1),
           name: "주문 생성",
           summary: "주문을 생성하고 저장",
           depth: 1,
           hiddenNodeCount: 7,
           areas: [],
           nodes: [
-            { id: "node:post-orders", name: "POST /orders", kind: "HTTP Endpoint", role: "endpoint" },
+            { id: "node:post-orders", name: "POST /orders", kind: "HTTP Endpoint", role: "endpoint", definition: null },
             {
               id: "node:order-controller-create",
               name: "OrderController.create",
               kind: "Controller",
               role: "controller",
+              definition: null,
             },
-            { id: "node:order-service", name: "OrderService", kind: "Service", role: "service" },
-            { id: "node:order-repository", name: "OrderRepository", kind: "Repository", role: "repository" },
-            { id: "node:orders-table", name: "orders", kind: "PostgreSQL Table", role: "table" },
+            { id: "node:order-service", name: "OrderService", kind: "Service", role: "service", definition: null },
+            {
+              id: "node:order-repository",
+              name: "OrderRepository",
+              kind: "Repository",
+              role: "repository",
+              definition: null,
+            },
+            { id: "node:orders-table", name: "orders", kind: "PostgreSQL Table", role: "table", definition: null },
           ],
         },
         {
           id: "area:order.read",
+          ...previewAreaSignals("domain", 11),
           name: "주문 조회",
           summary: "주문 목록 · 상세 조회",
           depth: 1,
           hiddenNodeCount: 7,
           areas: [],
           nodes: [
-            { id: "node:get-orders", name: "GET /orders", kind: "HTTP Endpoint", role: "endpoint" },
-            { id: "node:order-controller-get", name: "OrderController.get", kind: "Controller", role: "controller" },
-            { id: "node:order-query-service", name: "OrderQueryService", kind: "Service", role: "service" },
+            { id: "node:get-orders", name: "GET /orders", kind: "HTTP Endpoint", role: "endpoint", definition: null },
+            {
+              id: "node:order-controller-get",
+              name: "OrderController.get",
+              kind: "Controller",
+              role: "controller",
+              definition: null,
+            },
+            {
+              id: "node:order-query-service",
+              name: "OrderQueryService",
+              kind: "Service",
+              role: "service",
+              definition: null,
+            },
           ],
         },
         {
           id: "area:order.inventory",
+          ...previewAreaSignals("domain", 13),
           name: "재고 확인",
           summary: "재고 확인 및 차감",
           depth: 1,
           hiddenNodeCount: 4,
           areas: [],
           nodes: [
-            { id: "node:inventory-service", name: "InventoryService", kind: "Service", role: "service" },
-            { id: "node:inventory-repository", name: "InventoryRepository", kind: "Repository", role: "repository" },
-            { id: "node:inventory-table", name: "inventory", kind: "PostgreSQL Table", role: "table" },
+            {
+              id: "node:inventory-service",
+              name: "InventoryService",
+              kind: "Service",
+              role: "service",
+              definition: null,
+            },
+            {
+              id: "node:inventory-repository",
+              name: "InventoryRepository",
+              kind: "Repository",
+              role: "repository",
+              definition: null,
+            },
+            {
+              id: "node:inventory-table",
+              name: "inventory",
+              kind: "PostgreSQL Table",
+              role: "table",
+              definition: null,
+            },
           ],
         },
       ],
     },
     {
       id: "area:auth",
+      ...previewAreaSignals("domain", 9, 0, 3),
       name: "인증·세션",
       originalName: "Auth",
       summary: "인증 · 인가 · 세션 관리",
       depth: 0,
       hiddenNodeCount: 0,
-      position: { x: 930, y: 96 },
-      width: 210,
+      position: { x: 360, y: 34 },
+      width: 236,
       areas: [],
       nodes: [],
     },
     {
       id: "area:payment",
+      ...previewAreaSignals("domain", 22, 7),
       name: "결제",
       originalName: "Payment",
       summary: "결제 처리 · 환불 · 정산",
       depth: 0,
       hiddenNodeCount: 0,
-      position: { x: 930, y: 272 },
-      width: 210,
+      position: { x: 360, y: 270 },
+      width: 236,
       areas: [],
       nodes: [],
     },
     {
       id: "area:user",
+      ...previewAreaSignals("domain", 16),
       name: "사용자",
       originalName: "User",
       summary: "사용자 프로필 · 권한",
       depth: 0,
       hiddenNodeCount: 0,
-      position: { x: 930, y: 448 },
-      width: 210,
+      position: { x: 360, y: 506 },
+      width: 236,
       areas: [],
       nodes: [],
     },
     {
       id: "area:product",
+      ...previewAreaSignals("domain", 13, 12),
       name: "상품",
       originalName: "Product",
       summary: "상품 · 카테고리 · 가격 관리",
       depth: 0,
       hiddenNodeCount: 0,
-      position: { x: 176, y: 780 },
+      position: { x: 644, y: 34 },
       width: 236,
       areas: [],
       nodes: [],
     },
     {
       id: "area:notification",
+      ...previewAreaSignals("integration", 8),
       name: "알림",
       originalName: "Notification",
       summary: "이메일 · 푸시 · SMS 발송",
       depth: 0,
       hiddenNodeCount: 0,
-      position: { x: 448, y: 780 },
-      width: 232,
+      position: { x: 644, y: 270 },
+      width: 236,
       areas: [],
       nodes: [],
     },
     {
       id: "area:shared",
+      ...previewAreaSignals("shared", 11, 19),
       name: "공통 인프라",
       originalName: "Shared Infra",
       summary: "구성 · 로깅 · 보안 · 유틸",
       depth: 0,
       hiddenNodeCount: 0,
-      position: { x: 716, y: 780 },
-      width: 252,
+      position: { x: 644, y: 506 },
+      width: 236,
       areas: [],
       nodes: [],
     },
@@ -177,9 +243,10 @@ export const PREVIEW_MAP: MapView = {
       count: 3,
     },
   ],
+  unattributedAnalysisGapCount: 0,
 };
 
-export const PREVIEW_SELECTION: Selection = {
+const PREVIEW_SELECTION: Selection = {
   id: "area:order.create",
   title: "주문 생성",
   role: "주문 생성 요청을 검증하고 저장 흐름으로 전달",
@@ -212,4 +279,99 @@ export const PREVIEW_SELECTION: Selection = {
       "}",
     ],
   },
+  analysisGaps: { totalCount: 0, items: [], truncatedCount: 0 },
+  traces: [
+    {
+      id: "trace:post-orders",
+      state: "complete",
+      steps: [
+        { id: "node:post-orders", name: "POST /orders", kind: "HTTP Endpoint", role: "endpoint", definition: null },
+        {
+          id: "node:order-controller-create",
+          name: "OrderController.create",
+          kind: "Controller",
+          role: "controller",
+          definition: null,
+        },
+        { id: "node:order-service", name: "OrderService", kind: "Service", role: "service", definition: null },
+        {
+          id: "node:order-repository",
+          name: "OrderRepository",
+          kind: "Repository",
+          role: "repository",
+          definition: null,
+        },
+        { id: "node:orders-table", name: "orders", kind: "PostgreSQL Table", role: "table", definition: null },
+      ],
+    },
+  ],
 };
+
+/** Rich, explicitly labelled development-only inspector data for every preview target. */
+export function previewSelectionFor(id: string | null): Selection | null {
+  if (!id) return null;
+  const area = findArea(PREVIEW_MAP.areas, id);
+  const owner = area ?? findNodeOwner(PREVIEW_MAP.areas, id);
+  if (!owner) return null;
+
+  if (owner.id === PREVIEW_SELECTION.id || containsNode(owner, id)) {
+    const node = findNode(owner, id);
+    return {
+      ...PREVIEW_SELECTION,
+      id,
+      title: node?.name ?? owner.name,
+      role: node ? `${owner.name} 실행 경로의 ${node.kind}` : PREVIEW_SELECTION.role,
+    };
+  }
+
+  const relations = PREVIEW_MAP.relations
+    .filter((relation) => relation.from === owner.id || relation.to === owner.id)
+    .map((relation) => ({
+      label: `${relation.label} · ${relation.from === owner.id ? "나감" : "들어옴"}`,
+      truth: relation.truth,
+      count: relation.count,
+    }));
+
+  return {
+    id,
+    title: owner.name,
+    role: owner.summary,
+    relations,
+    evidence: [],
+    source: null,
+    analysisGaps: { totalCount: 0, items: [], truncatedCount: 0 },
+    traces: owner.nodes.length > 0 ? [{ id: `trace:${owner.id}`, state: "complete", steps: owner.nodes }] : undefined,
+  };
+}
+
+function findArea(areas: MapView["areas"], id: string): MapView["areas"][number] | null {
+  for (const area of areas) {
+    if (area.id === id) return area;
+    const nested = findArea(area.areas, id);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function containsNode(area: MapView["areas"][number], id: string): boolean {
+  return area.nodes.some((node) => node.id === id) || area.areas.some((child) => containsNode(child, id));
+}
+
+function findNodeOwner(areas: MapView["areas"], id: string): MapView["areas"][number] | null {
+  for (const area of areas) {
+    const nested = findNodeOwner(area.areas, id);
+    if (nested) return nested;
+    if (area.nodes.some((node) => node.id === id)) return area;
+  }
+  return null;
+}
+
+function findNode(area: MapView["areas"][number], id: string): MapNode | null {
+  const direct = area.nodes.find((node) => node.id === id);
+  if (direct) return direct;
+  for (const child of area.areas) {
+    const nested = findNode(child, id);
+    if (nested) return nested;
+  }
+  return null;
+}

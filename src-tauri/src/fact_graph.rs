@@ -14,11 +14,11 @@ use codebase_fact_model::{
     },
     evidence::FactEvidence,
     fact_graph::{FactBundleManifest, FactEdge, FactEdgeKind, FactNode},
-    identity::{EvidenceId, FactNodeId, Sha256Digest, SnapshotId},
+    identity::{EvidenceId, FactEdgeId, FactNodeId, Sha256Digest, SnapshotId},
     validation::Validate,
     ContractSchema,
 };
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -85,6 +85,16 @@ pub(crate) struct CanonicalFactSnapshot {
     pub gaps: Vec<AnalysisGap>,
 }
 
+/// The smallest canonical slice needed to attribute analysis gaps to the
+/// semantic regions shown on the map. Keeping this separate from
+/// [`CanonicalFactSnapshot`] prevents a map read from materializing the full
+/// node and edge tables merely to display quality counters.
+#[derive(Debug, Clone)]
+pub(crate) struct GapAttributionSnapshot {
+    pub file_coverage: Vec<FileCoverageRecord>,
+    pub gaps: Vec<AnalysisGap>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FactGraphStatus {
@@ -97,6 +107,16 @@ pub(crate) struct FactGraphStatus {
     pub coverage_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FactNodeSearchResult {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) qualified_name: String,
+    pub(crate) kind: String,
+    pub(crate) language: Option<String>,
+}
+
 /// Query-oriented access to one already verified immutable Fact bundle.
 /// Consumers choose the rows they need instead of materializing every table.
 pub(crate) struct FactReadModel {
@@ -105,6 +125,30 @@ pub(crate) struct FactReadModel {
 }
 
 impl FactReadModel {
+    /// Searches the complete retained Fact graph rather than only the small AI
+    /// overview projection. New bundles use indexed denormalized name columns;
+    /// older v1 bundles fall back to a streaming payload scan.
+    pub(crate) fn search_nodes(
+        &self,
+        raw_query: &str,
+        limit: usize,
+    ) -> Result<Vec<FactNodeSearchResult>, String> {
+        let query = raw_query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        if query.len() > 1_024 || query.chars().count() > 256 {
+            return Err("검색어는 256자와 UTF-8 1024바이트 이하여야 합니다".to_string());
+        }
+        let limit = limit.clamp(1, 100);
+        let nodes = if has_node_search_columns(&self.connection)? {
+            indexed_node_search(&self.connection, query, limit)?
+        } else {
+            legacy_node_search(&self.connection, query, limit)?
+        };
+        Ok(nodes.into_iter().map(FactNodeSearchResult::from).collect())
+    }
+
     pub(crate) fn nodes_by_ids(
         &self,
         ids: impl IntoIterator<Item = FactNodeId>,
@@ -117,6 +161,20 @@ impl FactReadModel {
         ids: impl IntoIterator<Item = EvidenceId>,
     ) -> Result<Vec<FactEvidence>, String> {
         validated_rows_by_keys(&self.connection, "evidence", "id", ids)
+    }
+
+    pub(crate) fn edges_by_ids(
+        &self,
+        ids: impl IntoIterator<Item = FactEdgeId>,
+    ) -> Result<Vec<FactEdge>, String> {
+        validated_rows_by_keys(&self.connection, "edges", "id", ids)
+    }
+
+    pub(crate) fn gap_attribution_snapshot(&self) -> Result<GapAttributionSnapshot, String> {
+        Ok(GapAttributionSnapshot {
+            file_coverage: validated_rows(&self.connection, "file_coverage")?,
+            gaps: validated_rows(&self.connection, "gaps")?,
+        })
     }
 
     pub(crate) fn trace_snapshot(
@@ -187,6 +245,18 @@ impl FactReadModel {
             capability_receipts: validated_rows(&self.connection, "capability_receipts")?,
             gaps: validated_rows(&self.connection, "gaps")?,
         })
+    }
+}
+
+impl From<FactNode> for FactNodeSearchResult {
+    fn from(node: FactNode) -> Self {
+        Self {
+            id: node.id.to_string(),
+            name: node.display_name,
+            qualified_name: node.qualified_name,
+            kind: node.kind.as_str().to_string(),
+            language: node.language.map(|language| language.as_str().to_string()),
+        }
     }
 }
 
@@ -315,6 +385,18 @@ pub(crate) fn open_published_read_model(
         manifest: published.manifest,
         connection,
     }))
+}
+
+pub(crate) fn search_published_nodes(
+    app_data_dir: impl AsRef<Path>,
+    workspace_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<FactNodeSearchResult>, String> {
+    let Some(reader) = open_published_read_model(app_data_dir, workspace_id)? else {
+        return Ok(Vec::new());
+    };
+    reader.search_nodes(query, limit)
 }
 
 pub(crate) fn open_read_only(path: &Path) -> Result<Connection, String> {
@@ -532,7 +614,10 @@ fn validated_payload<T: DeserializeOwned + Validate>(
 }
 
 fn validate_key_query(table: &str, key_column: &str) -> Result<(), String> {
-    if matches!((table, key_column), ("nodes", "id") | ("evidence", "id")) {
+    if matches!(
+        (table, key_column),
+        ("nodes", "id") | ("edges", "id") | ("evidence", "id")
+    ) {
         Ok(())
     } else {
         Err("허용되지 않은 canonical key query입니다".to_string())
@@ -554,9 +639,131 @@ fn adjacent_edges(connection: &Connection, node_id: &FactNodeId) -> Result<Vec<F
     Ok(result)
 }
 
+fn has_node_search_columns(connection: &Connection) -> Result<bool, String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(nodes)")
+        .map_err(|error| format!("canonical node search schema를 읽지 못했습니다: {error}"))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| format!("canonical node search schema query가 실패했습니다: {error}"))?;
+    let mut names = BTreeSet::new();
+    for row in rows {
+        names.insert(row.map_err(|error| format!("canonical node search column 오류: {error}"))?);
+    }
+    Ok(["qualified_name", "display_name", "language"]
+        .iter()
+        .all(|name| names.contains(*name)))
+}
+
+fn indexed_node_search(
+    connection: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<FactNode>, String> {
+    let escaped = escape_like(query);
+    let prefix = format!("{escaped}%");
+    let contains = format!("%{escaped}%");
+    let mut statement = connection
+        .prepare(
+            "SELECT payload_json FROM nodes
+             WHERE relevant=1 AND (
+               display_name = ?1 COLLATE NOCASE OR
+               display_name LIKE ?2 ESCAPE '\\' COLLATE NOCASE OR
+               display_name LIKE ?3 ESCAPE '\\' COLLATE NOCASE OR
+               qualified_name LIKE ?3 ESCAPE '\\' COLLATE NOCASE
+             )
+             ORDER BY
+               CASE
+                 WHEN display_name = ?1 COLLATE NOCASE THEN 0
+                 WHEN display_name LIKE ?2 ESCAPE '\\' COLLATE NOCASE THEN 1
+                 WHEN display_name LIKE ?3 ESCAPE '\\' COLLATE NOCASE THEN 2
+                 ELSE 3
+               END,
+               length(display_name), display_name COLLATE NOCASE,
+               qualified_name COLLATE NOCASE, id
+             LIMIT ?4",
+        )
+        .map_err(|error| format!("canonical node search query를 준비하지 못했습니다: {error}"))?;
+    let rows = statement
+        .query_map(params![query, prefix, contains, limit as i64], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| format!("canonical node search가 실패했습니다: {error}"))?;
+    let mut nodes = Vec::new();
+    for row in rows {
+        let payload = row.map_err(|error| format!("canonical node search row 오류: {error}"))?;
+        nodes.push(validated_payload(&payload, "nodes")?);
+    }
+    Ok(nodes)
+}
+
+fn legacy_node_search(
+    connection: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<FactNode>, String> {
+    let mut statement = connection
+        .prepare("SELECT payload_json FROM nodes ORDER BY id")
+        .map_err(|error| format!("legacy canonical node search를 준비하지 못했습니다: {error}"))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("legacy canonical node search가 실패했습니다: {error}"))?;
+    let query = query.to_lowercase();
+    let mut matches = Vec::new();
+    for row in rows {
+        let payload = row.map_err(|error| format!("legacy node search row 오류: {error}"))?;
+        let node: FactNode = validated_payload(&payload, "nodes")?;
+        if let Some(rank) = node_search_rank(&node, &query) {
+            matches.push((rank, node));
+        }
+    }
+    matches.sort_by(|(left_rank, left), (right_rank, right)| {
+        left_rank
+            .cmp(right_rank)
+            .then_with(|| left.display_name.len().cmp(&right.display_name.len()))
+            .then_with(|| {
+                left.display_name
+                    .to_lowercase()
+                    .cmp(&right.display_name.to_lowercase())
+            })
+            .then_with(|| left.qualified_name.cmp(&right.qualified_name))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    matches.truncate(limit);
+    Ok(matches.into_iter().map(|(_, node)| node).collect())
+}
+
+fn node_search_rank(node: &FactNode, query: &str) -> Option<u8> {
+    let display = node.display_name.to_lowercase();
+    let qualified = node.qualified_name.to_lowercase();
+    if display == query {
+        Some(0)
+    } else if display.starts_with(query) {
+        Some(1)
+    } else if display.contains(query) {
+        Some(2)
+    } else if qualified.contains(query) {
+        Some(3)
+    } else {
+        None
+    }
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 fn execution_target(edge: &FactEdge, source: &FactNodeId) -> Option<FactNodeId> {
     match edge.kind {
         FactEdgeKind::Handles if &edge.target_id == source => Some(edge.source_id.clone()),
+        // Overrides is stored implementation -> contract, while runtime
+        // dispatch proceeds contract -> implementation. The trace verifier
+        // still marks this hop as a candidate; the SQLite read model must not
+        // silently omit the exact implementation endpoint.
+        FactEdgeKind::Overrides if &edge.target_id == source => Some(edge.source_id.clone()),
         FactEdgeKind::Calls
         | FactEdgeKind::Constructs
         | FactEdgeKind::RoutesTo
@@ -825,7 +1032,10 @@ mod tests {
     use codebase_fact_model::{
         analysis::ProgrammingLanguage,
         evidence::{EvidenceKind, EvidenceLocation, EvidenceProducer, EvidenceProducerKind},
-        fact_graph::{DispatchKind, FactNodeKind, FactTruth, ResolutionMethod, Visibility},
+        fact_graph::{
+            DispatchKind, ExecutionControlContext, ExecutionOccurrence, FactNodeKind, FactTruth,
+            ResolutionMethod, Visibility,
+        },
         identity::{AnalysisUnitId, SemanticContextId, WorkspaceId},
         source::{RepositoryPath, SourceFlags, SourcePosition, SourceSpan},
     };
@@ -921,6 +1131,7 @@ mod tests {
                     target_id TEXT NOT NULL,
                     payload_json TEXT NOT NULL
                  ) STRICT;
+                 CREATE TABLE file_coverage(payload_json TEXT NOT NULL) STRICT;
                  CREATE TABLE capability_receipts(payload_json TEXT NOT NULL) STRICT;
                  CREATE TABLE gaps(payload_json TEXT NOT NULL) STRICT;",
             )
@@ -940,6 +1151,11 @@ mod tests {
             &evidence.id,
         );
         let context = SemanticContextId::from_components(&["query", "context"]).unwrap();
+        let execution = ExecutionOccurrence {
+            call_site_evidence_id: evidence.id.clone(),
+            lexical_ordinal: 0,
+            control: ExecutionControlContext::default(),
+        };
         let edge = FactEdge {
             id: FactEdge::stable_id(
                 &caller.id,
@@ -947,6 +1163,7 @@ mod tests {
                 FactEdgeKind::Calls,
                 Some(&context),
                 None,
+                Some(&execution),
             )
             .unwrap(),
             snapshot_id: manifest.snapshot_id.clone(),
@@ -959,6 +1176,7 @@ mod tests {
             dispatch: DispatchKind::Direct,
             semantic_context_id: Some(context),
             qualifier: None,
+            execution: Some(execution),
             evidence_ids: vec![evidence.id.clone()],
         };
         edge.validate().unwrap();
@@ -995,6 +1213,11 @@ mod tests {
             connection,
         };
 
+        let search = reader.search_nodes("callee", 10).unwrap();
+        assert_eq!(search.len(), 1);
+        assert_eq!(search[0].id, callee.id.as_str());
+        assert_eq!(search[0].qualified_name, "src.service.callee");
+
         let missing = FactNodeId::from_components(&["missing"]).unwrap();
         let requested = reader
             .nodes_by_ids([caller.id.clone(), missing, caller.id.clone()])
@@ -1004,9 +1227,136 @@ mod tests {
             reader.evidence_by_ids([evidence.id.clone()]).unwrap(),
             vec![evidence]
         );
+        assert_eq!(
+            reader.edges_by_ids([edge.id.clone()]).unwrap(),
+            vec![edge.clone()]
+        );
+        let gap_snapshot = reader.gap_attribution_snapshot().unwrap();
+        assert!(gap_snapshot.file_coverage.is_empty());
+        assert!(gap_snapshot.gaps.is_empty());
         let trace = reader.trace_snapshot(&caller.id, 1, 1).unwrap().unwrap();
         assert_eq!(trace.nodes.len(), 2);
         assert_eq!(trace.edges, vec![edge]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sqlite_execution_neighborhood_follows_interface_contract_to_implementation() {
+        let root = test_root("override-direction");
+        fs::create_dir_all(&root).unwrap();
+        let fixture = empty_bundle_fixture(&root, "ws-0123456789abcdef");
+        let manifest: FactBundleManifest =
+            serde_json::from_slice(&fs::read(&fixture.manifest_path).unwrap()).unwrap();
+        let evidence = query_test_evidence();
+        let unit = AnalysisUnitId::from_components(&["query", "python"]).unwrap();
+        let implementation = query_test_node(
+            &manifest.snapshot_id,
+            &unit,
+            "PostgreSQLSessionRepository.save",
+            &evidence.id,
+        );
+        let contract = query_test_node(
+            &manifest.snapshot_id,
+            &unit,
+            "SessionRepository.save",
+            &evidence.id,
+        );
+        let edge = FactEdge {
+            id: FactEdge::stable_id(
+                &implementation.id,
+                &contract.id,
+                FactEdgeKind::Overrides,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            snapshot_id: manifest.snapshot_id,
+            source_id: implementation.id.clone(),
+            target_id: contract.id.clone(),
+            family: FactEdgeKind::Overrides.family(),
+            kind: FactEdgeKind::Overrides,
+            truth: FactTruth::Confirmed,
+            resolution: ResolutionMethod::SyntaxExact,
+            dispatch: DispatchKind::NotApplicable,
+            semantic_context_id: None,
+            qualifier: None,
+            execution: None,
+            evidence_ids: vec![evidence.id],
+        };
+        edge.validate().unwrap();
+
+        assert_eq!(
+            execution_target(&edge, &contract.id),
+            Some(implementation.id)
+        );
+        assert_eq!(execution_target(&edge, &edge.source_id), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn indexed_fact_search_covers_the_complete_retained_symbol_table() {
+        let root = test_root("indexed-search");
+        fs::create_dir_all(&root).unwrap();
+        let fixture = empty_bundle_fixture(&root, "ws-0123456789abcdef");
+        let manifest: FactBundleManifest =
+            serde_json::from_slice(&fs::read(&fixture.manifest_path).unwrap()).unwrap();
+        let evidence = query_test_evidence();
+        let unit = AnalysisUnitId::from_components(&["search", "typescript"]).unwrap();
+        let exact = query_test_node(
+            &manifest.snapshot_id,
+            &unit,
+            "src.application.Service",
+            &evidence.id,
+        );
+        let contains = query_test_node(
+            &manifest.snapshot_id,
+            &unit,
+            "src.sessions.SessionService",
+            &evidence.id,
+        );
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE nodes(
+                   id TEXT PRIMARY KEY,
+                   qualified_name TEXT NOT NULL,
+                   display_name TEXT NOT NULL,
+                   language TEXT NOT NULL,
+                   relevant INTEGER NOT NULL,
+                   payload_json TEXT NOT NULL
+                 ) STRICT;
+                 CREATE INDEX nodes_display_name_idx
+                   ON nodes(display_name COLLATE NOCASE, id);
+                 CREATE INDEX nodes_qualified_name_idx
+                   ON nodes(qualified_name COLLATE NOCASE, id);",
+            )
+            .unwrap();
+        for node in [&contains, &exact] {
+            connection
+                .execute(
+                    "INSERT INTO nodes(id,qualified_name,display_name,language,relevant,payload_json)
+                     VALUES(?1,?2,?3,?4,1,?5)",
+                    params![
+                        node.id.as_str(),
+                        node.qualified_name.as_str(),
+                        node.display_name.as_str(),
+                        node.language.unwrap().as_str(),
+                        serde_json::to_string(node).unwrap(),
+                    ],
+                )
+                .unwrap();
+        }
+        let reader = FactReadModel {
+            manifest,
+            connection,
+        };
+
+        let results = reader.search_nodes("service", 10).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, exact.id.as_str());
+        assert_eq!(results[1].id, contains.id.as_str());
+        assert!(reader.search_nodes("%_", 10).unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 

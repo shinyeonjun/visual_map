@@ -21,6 +21,7 @@ fn prepare_typescript_project_model(
     project_config_digest: u64,
     source_snapshot: &SourceSnapshot,
     all_source_files: &[PathBuf],
+    cache_policy: AnalysisCachePolicy,
 ) -> Result<ProjectModelPreparation, String> {
     let started = Instant::now();
     let tsjs_files = all_source_files
@@ -55,6 +56,7 @@ fn prepare_typescript_project_model(
         root,
         providers_root,
         &cache_key,
+        cache_policy.reuses_results(),
     ) {
         Ok(model) => ProjectModelPreparation {
             file_relations: model.relations,
@@ -166,6 +168,7 @@ struct ProviderPlanningInput<'a> {
     typescript_units: Vec<project_model::ProjectModelUnit>,
     typescript_call_ranges: Arc<HashMap<String, Vec<Vec<i32>>>>,
     active_cache_files: HashSet<PathBuf>,
+    cache_policy: AnalysisCachePolicy,
 }
 
 struct ProviderPlanningOutput {
@@ -401,6 +404,7 @@ fn plan_provider_execution(input: ProviderPlanningInput<'_>) -> Result<ProviderP
             project_excluded_files: scheduled.project_excluded_files,
             max_project_source_file_bytes: input.max_project_source_file_bytes,
             writable_workspace,
+            cache_policy: input.cache_policy,
             call_ranges: if matches!(lang.id, "typescript" | "javascript") {
                 input.typescript_call_ranges.clone()
             } else {

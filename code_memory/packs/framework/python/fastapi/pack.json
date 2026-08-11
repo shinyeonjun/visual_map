@@ -11,6 +11,8 @@
     "@app.put",
     "@app.patch",
     "@app.delete",
+    "@app.websocket",
+    "@router.websocket",
     "APIRouter"
   ],
   "outputs": [

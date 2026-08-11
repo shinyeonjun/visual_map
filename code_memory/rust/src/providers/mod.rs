@@ -14,7 +14,9 @@ pub(crate) use analysis::{
     language_invalid_output, provider_diagnostic_is_partial, rust_semantic_file_limit,
     source_exclusion_reason,
 };
-pub(crate) use call_sites::{inventory_call_sites, CallSiteForm, SyntaxCallSite};
+pub(crate) use call_sites::{
+    inventory_call_sites, inventory_call_sites_from_root, CallSiteForm, SyntaxCallSite,
+};
 pub(crate) use command::{
     active_c_family_files, compile_database_dirs, compile_database_files_for_scope, find_tool,
     has_compile_context_for_files, missing_tool_message, prepare_clangd_compile_database,

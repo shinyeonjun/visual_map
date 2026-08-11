@@ -18,8 +18,9 @@ pub use partition::{
     CompiledSemanticPlan, SemanticPartitionPolicy, VerifiedSemanticPartition,
 };
 pub use prompt::{
-    compile_base_prompt, compile_base_repair_prompt, BaseSemanticDraft, CompiledBasePrompt,
-    PACKET_COMPILER_VERSION, PROMPT_POLICY_VERSION,
+    compile_base_prompt, compile_base_repair_prompt, compile_base_repair_prompt_with_history,
+    BaseSemanticDraft, CompiledBasePrompt, SemanticVerificationPhase, PACKET_COMPILER_VERSION,
+    PROMPT_POLICY_VERSION,
 };
 pub use reconciliation::{
     compile_global_reconciliation_prompt, compile_global_reconciliation_repair_prompt,

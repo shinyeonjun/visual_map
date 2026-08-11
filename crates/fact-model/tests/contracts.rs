@@ -15,9 +15,9 @@ use codebase_fact_model::evidence::{
     FactEvidence,
 };
 use codebase_fact_model::fact_graph::{
-    DispatchKind, FactBundleManifest, FactEdge, FactEdgeFamily, FactEdgeKind, FactNode,
-    FactNodeDetails, FactNodeFamily, FactNodeKind, FactRole, FactRoleAssignment, FactTruth,
-    ResolutionMethod, Visibility,
+    DispatchKind, ExecutionControlContext, ExecutionOccurrence, FactBundleManifest, FactEdge,
+    FactEdgeFamily, FactEdgeKind, FactNode, FactNodeDetails, FactNodeFamily, FactNodeKind,
+    FactRole, FactRoleAssignment, FactTruth, ResolutionMethod, Visibility,
 };
 use codebase_fact_model::identity::{
     AnalysisUnitId, EvidenceId, FactEdgeId, FactNodeId, SemanticContextId, Sha256Digest,
@@ -49,6 +49,88 @@ fn stable_ids_are_domain_separated_and_length_delimited() {
     assert!(first.as_str().starts_with("node-"));
     assert_eq!(first.as_str().len(), "node-".len() + 64);
     assert!(FactNodeId::parse(first.as_str().to_uppercase()).is_err());
+}
+
+#[test]
+fn provider_native_symbols_are_normalized_without_changing_safe_existing_ids() {
+    use codebase_fact_model::identity::ProviderSymbolId;
+
+    let safe = "scip-typescript npm fixture 1.0.0 src/main.ts/Service#run().";
+    assert_eq!(
+        ProviderSymbolId::from_provider_native(safe)
+            .unwrap()
+            .as_str(),
+        safe
+    );
+
+    let multiline = "scip-typescript npm fixture 1.0.0 src/main.ts/Component().(`{\r\n  value,\r\n}`)typeLiteral1:value.";
+    let normalized = ProviderSymbolId::from_provider_native(multiline).unwrap();
+    assert!(!normalized.as_str().chars().any(char::is_control));
+    assert_eq!(
+        normalized,
+        ProviderSymbolId::from_provider_native(multiline).unwrap()
+    );
+    assert!(ProviderSymbolId::parse(normalized.as_str()).is_ok());
+}
+
+#[test]
+fn provider_native_symbol_normalization_is_collision_resistant_and_prefix_safe() {
+    use codebase_fact_model::identity::ProviderSymbolId;
+
+    let newline = ProviderSymbolId::from_provider_native("provider\nsymbol").unwrap();
+    let tab = ProviderSymbolId::from_provider_native("provider\tsymbol").unwrap();
+    assert_ne!(newline, tab);
+
+    // A provider is free to emit text that resembles our derived form. It must
+    // not be able to alias an identity that the boundary generated.
+    let reserved_literal = newline.as_str().to_string();
+    let normalized_literal = ProviderSymbolId::from_provider_native(&reserved_literal).unwrap();
+    assert_ne!(newline, normalized_literal);
+}
+
+#[test]
+fn provider_native_symbol_normalization_bounds_oversized_external_ids() {
+    use codebase_fact_model::identity::ProviderSymbolId;
+
+    let oversized = "x".repeat(20_000);
+    let normalized = ProviderSymbolId::from_provider_native(&oversized).unwrap();
+    assert!(normalized.as_str().len() < 256);
+    assert!(ProviderSymbolId::parse(normalized.as_str()).is_ok());
+}
+
+#[test]
+fn execution_occurrences_extend_edge_identity_without_breaking_legacy_ids() {
+    let (mut edge, _) = fixture_fact_edge();
+    let context = edge.semantic_context_id.as_ref().unwrap();
+    let legacy_components = [
+        format!("source:{}", edge.source_id.as_str()),
+        format!("target:{}", edge.target_id.as_str()),
+        format!("kind:{}", edge.kind.as_str()),
+        "semantic_context".to_string(),
+        "present".to_string(),
+        context.as_str().to_string(),
+        "qualifier".to_string(),
+        "absent".to_string(),
+    ];
+    let legacy_refs = legacy_components
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let legacy_id = FactEdgeId::from_components(&legacy_refs).unwrap();
+
+    edge.execution = None;
+    edge.id = FactEdge::stable_id(
+        &edge.source_id,
+        &edge.target_id,
+        edge.kind,
+        edge.semantic_context_id.as_ref(),
+        edge.qualifier.as_deref(),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(edge.id, legacy_id);
+    edge.validate().unwrap();
 }
 
 #[test]
@@ -1009,6 +1091,11 @@ fn fixture_ir_records() -> Vec<LanguageIrRecord> {
         resolution: ResolutionMethod::Provider,
         dispatch: DispatchKind::Direct,
         semantic_context_id: unit.context.id.clone(),
+        execution: Some(ExecutionOccurrence {
+            call_site_evidence_id: evidence_id.clone(),
+            lexical_ordinal: 0,
+            control: ExecutionControlContext::default(),
+        }),
         evidence_ids: vec![evidence_id],
     };
     let capability = CapabilityReceipt {
@@ -1119,12 +1206,18 @@ fn fixture_fact_edge() -> (FactEdge, EvidenceId) {
     )
     .unwrap();
     let evidence_id = fixture_evidence().id;
+    let execution = ExecutionOccurrence {
+        call_site_evidence_id: evidence_id.clone(),
+        lexical_ordinal: 0,
+        control: ExecutionControlContext::default(),
+    };
     let id = FactEdge::stable_id(
         &source,
         &target,
         FactEdgeKind::Calls,
         Some(&unit.context.id),
         None,
+        Some(&execution),
     )
     .unwrap();
     (
@@ -1140,6 +1233,7 @@ fn fixture_fact_edge() -> (FactEdge, EvidenceId) {
             dispatch: DispatchKind::Direct,
             semantic_context_id: Some(unit.context.id),
             qualifier: None,
+            execution: Some(execution),
             evidence_ids: vec![evidence_id.clone()],
         },
         evidence_id,
@@ -1152,4 +1246,67 @@ fn position(line: u32, utf8_column: u32, byte_offset: u64) -> SourcePosition {
         utf8_column,
         byte_offset,
     }
+}
+
+/// Every execution state the helper can be handed must produce a receipt the
+/// contract accepts.
+///
+/// The two fields are bound in both directions — a run that completed has to
+/// say how it measured, one that never ran may not claim it did — and the rule
+/// used to be restated at each receipt site. One site enumerated only
+/// `NotApplicable` and left `Failed` claiming an exact range; another
+/// hard-coded a measured precision beside a variable state. Both were latent
+/// until a capability reached the state they missed, and the contract then
+/// aborted the analysis it was supposed to describe.
+#[test]
+fn derived_precision_satisfies_the_receipt_contract_for_every_execution_state() {
+    let states = [
+        CapabilityExecutionState::Complete,
+        CapabilityExecutionState::Partial,
+        CapabilityExecutionState::Failed,
+        CapabilityExecutionState::NotRun,
+        CapabilityExecutionState::NotApplicable,
+    ];
+    for state in states {
+        let precision = EvidencePrecision::for_execution(state, EvidencePrecision::ExactRange);
+        let receipt = CapabilityReceipt {
+            unit_id: AnalysisUnitId::from_components(&["unit"]).unwrap(),
+            capability: AnalysisCapability::DirectCalls,
+            declared_support: DeclaredSupport::Conditional,
+            execution_state: state,
+            precision,
+            denominator: CoverageDenominator::Unknown,
+            covered_count: 0,
+            emitted_fact_count: 0,
+            emitted_relation_count: 0,
+            truncated_count: 0,
+            gap_codes: vec![GapCode::DynamicDispatch],
+        };
+        receipt
+            .validate()
+            .unwrap_or_else(|error| panic!("{state:?} produced an invalid receipt: {error}"));
+    }
+}
+
+/// A state that did not run may not borrow the precision of one that did.
+#[test]
+fn derived_precision_refuses_to_claim_measurement_a_run_never_made() {
+    for state in [
+        CapabilityExecutionState::Failed,
+        CapabilityExecutionState::NotRun,
+        CapabilityExecutionState::NotApplicable,
+    ] {
+        assert_eq!(
+            EvidencePrecision::for_execution(state, EvidencePrecision::ExactRange),
+            EvidencePrecision::None,
+            "{state:?} must not claim a precision"
+        );
+    }
+    assert_eq!(
+        EvidencePrecision::for_execution(
+            CapabilityExecutionState::Partial,
+            EvidencePrecision::Symbol
+        ),
+        EvidencePrecision::Symbol,
+    );
 }

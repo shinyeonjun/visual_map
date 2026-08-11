@@ -11,8 +11,8 @@ use crate::{
     is_fatal_lsp_error, lsp_failure_code, normalize_scip_path, not_executed_provider_context,
     read_scip, run_native_lsp, run_native_lsp_source_only, run_native_lsp_with_server,
     run_scip_indexer, write_language_cache, Diagnostic, DiagnosticCode, DocumentCoverage,
-    DocumentOutput, FileCoverageOutput, LanguageJob, LanguageOutput, LanguageSpec, ProviderKind,
-    ProviderRoots, ProviderUnitBatch, RelationOutput,
+    DocumentOutput, FileCoverageOutput, LanguageCacheWriteInput, LanguageJob, LanguageOutput,
+    LanguageSpec, ProviderKind, ProviderRoots, ProviderUnitBatch, RelationOutput,
 };
 
 static RUST_BUILD_TOOL_GAP_CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
@@ -466,10 +466,13 @@ pub(crate) fn analyze_language(job: &LanguageJob) -> ProviderUnitBatch {
                         root,
                         lang,
                         cache_key,
-                        &analysis.documents,
-                        &analysis.relations,
-                        &analysis.diagnostics,
-                        &analysis.execution_context,
+                        LanguageCacheWriteInput {
+                            documents: &analysis.documents,
+                            relations: &analysis.relations,
+                            diagnostics: &analysis.diagnostics,
+                            execution_context: &analysis.execution_context,
+                            cache_policy: job.cache_policy,
+                        },
                     );
                     analysis
                 }

@@ -3,6 +3,7 @@ use super::definition_inventory::SyntaxDefinition;
 use super::imports::{ImportRelation, ImportResolution, ImportSite, ProjectImportIndex};
 use super::provider::resolve_provider_descriptor;
 use super::source_coordinates::SourceCoordinates;
+use super::sql_literals::{SqlQuerySite, SqlTableAccessKind};
 use super::type_relations::{SyntaxTypeRelationSite, SyntaxTypeUseSite, TypeRelationIntent};
 use artifact_writer::{AtomicLanguageIrArtifactWriter, LanguageIrSink, ValidatingDigestSink};
 use codebase_fact_model::analysis::{
@@ -20,7 +21,8 @@ use codebase_fact_model::evidence::{
     EvidenceKind, EvidenceLocation, EvidenceProducer, EvidenceProducerKind, FactEvidence,
 };
 use codebase_fact_model::fact_graph::{
-    DispatchKind, FactNodeKind, FactTruth, ResolutionMethod, Visibility,
+    DispatchKind, ExecutionControlContext, ExecutionOccurrence, FactNodeKind, FactTruth,
+    ResolutionMethod, Visibility,
 };
 use codebase_fact_model::identity::{EvidenceId, ProviderSymbolId, Sha256Digest, SnapshotId};
 use codebase_fact_model::language_ir::{
@@ -31,11 +33,9 @@ use codebase_fact_model::source_manifest::{SourceEntryState, SourceManifest, Sou
 use codebase_fact_model::validation::Validate;
 use codebase_fact_model::ContractSchema;
 use definitions::{
-    canonical_definition_kind, definition_base_name, definition_display_name, is_type_owner_kind,
-    is_variable_definition_kind, normalized_optional_text, ranges_equal,
-    reconcile_definition_drafts, reconcile_definition_inventory, short_symbol_name, source_flags,
-    DefinitionDraft,
+    definition_base_name, is_type_owner_kind, ranges_equal, short_symbol_name, DefinitionDraft,
 };
+use provider_definitions::{reconcile_unit_definitions, ReconciledUnitDefinitions};
 pub(crate) use receipts::{
     DefinitionAuditFailure, DefinitionLanguageSummary, DefinitionMetadataAuditEntry,
     ImportAuditEntry, ImportAuditOutcome, ImportLanguageSummary, LanguageIrDiagnosticReceipt,
@@ -48,20 +48,24 @@ use relations::{
     ProviderRelationClassificationContext,
 };
 use source_inventory::inventory_unit_sources;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use sql_queries::{emit_sql_query_facts, SqlQueryAudit};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Instant;
 
 use crate::{
-    normalize_scip_language, Diagnostic, DiagnosticCode, DocumentOutput, FileCoverageOutput,
-    FileRelationOutput, LanguageOutput, OccurrenceOutput, RelationOutput, SymbolOutput, LANGUAGES,
+    Diagnostic, DiagnosticCode, DocumentOutput, FileCoverageOutput, FileRelationOutput,
+    LanguageOutput, RelationOutput, SymbolOutput, SyntaxCallSite, LANGUAGES,
 };
 
 mod artifact_writer;
 mod definitions;
+mod dispatch;
+mod provider_definitions;
 mod receipts;
 mod relations;
 mod source_inventory;
+mod sql_queries;
 
 const MIGRATION_RECEIPT_SCHEMA: &str = "codebase-workspace.language-ir-migration-receipt.v7";
 const DIAGNOSTIC_RECEIPT_SCHEMA: &str = "codebase-workspace.language-ir-diagnostic-receipt.v1";
@@ -700,8 +704,10 @@ fn emit_unit(
     let UnitSourceInventory {
         definition_audit,
         syntax_definitions,
+        syntax_call_sites,
         syntax_type_relations,
         syntax_type_uses,
+        syntax_sql_queries,
         type_relation_inventory_failed_files,
         import_audit,
         import_drafts,
@@ -742,12 +748,16 @@ fn emit_unit(
         omitted_definition_count,
         definition_audit,
         mut type_relation_audit,
+        sql_query_audit,
+        code_definition_count,
     } = classify_unit_relations(
         RelationClassificationStage {
             input: &input,
             syntax_definitions: &syntax_definitions,
+            syntax_call_sites: &syntax_call_sites,
             syntax_type_relations: &syntax_type_relations,
             syntax_type_uses: &syntax_type_uses,
+            syntax_sql_queries: &syntax_sql_queries,
             import_drafts,
             type_relation_audit,
             definitions,
@@ -790,6 +800,7 @@ fn emit_unit(
             issues.push(issue);
         }
     }
+    append_definition_gaps(input.unit, &definition_audit, &mut gaps);
     append_import_gaps(input.unit, &import_audit, &mut gaps);
     let base_state = unit_state(input.language_output.status);
     let state = if base_state == AnalysisUnitState::Complete
@@ -856,13 +867,14 @@ fn emit_unit(
         input.provider.protocol,
         state,
         file_records.len() as u64,
-        definition_records.len() as u64,
+        code_definition_count,
         definition_audit.syntax_definition_count,
         definition_audit.matched_definition_count,
         omitted_definition_count,
         &emitted_relations,
         &omitted_relations,
         &import_audit,
+        &sql_query_audit,
         &gaps,
     )?;
     for receipt in &capability_receipts {
@@ -903,31 +915,22 @@ fn emit_unit(
 struct UnitSourceInventory {
     definition_audit: DefinitionAudit,
     syntax_definitions: BTreeMap<RepositoryPath, Vec<SyntaxDefinition>>,
+    syntax_call_sites: BTreeMap<RepositoryPath, Vec<SyntaxCallSite>>,
     syntax_type_relations: BTreeMap<RepositoryPath, Vec<SyntaxTypeRelationSite>>,
     syntax_type_uses: BTreeMap<RepositoryPath, Vec<SyntaxTypeUseSite>>,
+    syntax_sql_queries: BTreeMap<RepositoryPath, Vec<SqlQuerySite>>,
     type_relation_inventory_failed_files: BTreeSet<RepositoryPath>,
     import_audit: ImportAudit,
     import_drafts: Vec<ImportDraft>,
 }
 
-struct ReconciledUnitDefinitions<'a> {
-    unit_documents: Vec<&'a DocumentOutput>,
-    document_paths: BTreeSet<&'a str>,
-    evidence: BTreeMap<EvidenceId, FactEvidence>,
-    definitions: BTreeMap<ProviderSymbolId, DefinitionDraft>,
-    definition_spans: BTreeMap<ProviderSymbolId, SourceSpan>,
-    provider_definition_aliases: BTreeMap<ProviderSymbolId, ProviderSymbolId>,
-    discarded_definition_ids: BTreeSet<ProviderSymbolId>,
-    omitted_definition_count: u64,
-    definition_records: Vec<IrDefinition>,
-    definition_audit: DefinitionAudit,
-}
-
 struct RelationClassificationStage<'a> {
     input: &'a UnitAdapterInput<'a>,
     syntax_definitions: &'a BTreeMap<RepositoryPath, Vec<SyntaxDefinition>>,
+    syntax_call_sites: &'a BTreeMap<RepositoryPath, Vec<SyntaxCallSite>>,
     syntax_type_relations: &'a BTreeMap<RepositoryPath, Vec<SyntaxTypeRelationSite>>,
     syntax_type_uses: &'a BTreeMap<RepositoryPath, Vec<SyntaxTypeUseSite>>,
+    syntax_sql_queries: &'a BTreeMap<RepositoryPath, Vec<SqlQuerySite>>,
     import_drafts: Vec<ImportDraft>,
     type_relation_audit: TypeRelationAudit,
     definitions: ReconciledUnitDefinitions<'a>,
@@ -942,6 +945,8 @@ struct ClassifiedUnitFacts {
     omitted_definition_count: u64,
     definition_audit: DefinitionAudit,
     type_relation_audit: TypeRelationAudit,
+    sql_query_audit: SqlQueryAudit,
+    code_definition_count: u64,
 }
 
 fn classify_unit_relations(
@@ -952,8 +957,10 @@ fn classify_unit_relations(
     let RelationClassificationStage {
         input,
         syntax_definitions,
+        syntax_call_sites,
         syntax_type_relations,
         syntax_type_uses,
+        syntax_sql_queries,
         import_drafts,
         mut type_relation_audit,
         definitions,
@@ -967,7 +974,7 @@ fn classify_unit_relations(
         provider_definition_aliases,
         discarded_definition_ids,
         omitted_definition_count,
-        definition_records,
+        mut definition_records,
         definition_audit,
     } = definitions;
     let mut phase_started = Instant::now();
@@ -991,7 +998,7 @@ fn classify_unit_relations(
             provider_relation_capability(&relation.kind) == Some(AnalysisCapability::TypeRelations)
         })
         .flat_map(|relation| [&relation.from, &relation.to])
-        .filter_map(|raw| ProviderSymbolId::parse(raw).ok())
+        .filter_map(|raw| ProviderSymbolId::from_provider_native(raw).ok())
         .map(|id| provider_definition_aliases.get(&id).cloned().unwrap_or(id))
         .collect::<BTreeSet<_>>();
     let mut hierarchy_occurrence_ranges =
@@ -999,7 +1006,7 @@ fn classify_unit_relations(
     for document in &unit_documents {
         let mut by_symbol = BTreeMap::<ProviderSymbolId, Vec<Vec<i32>>>::new();
         for occurrence in &document.occurrences {
-            let Ok(id) = ProviderSymbolId::parse(&occurrence.symbol) else {
+            let Ok(id) = ProviderSymbolId::from_provider_native(&occurrence.symbol) else {
                 continue;
             };
             let id = provider_definition_aliases.get(&id).cloned().unwrap_or(id);
@@ -1033,6 +1040,7 @@ fn classify_unit_relations(
         protocol: input.provider.protocol,
         definitions: &definitions,
         syntax_definitions,
+        syntax_call_sites,
         syntax_type_relations,
         syntax_type_uses,
         hierarchy_occurrence_ranges: &hierarchy_occurrence_ranges,
@@ -1143,6 +1151,11 @@ fn classify_unit_relations(
         .map_err(|error| format!("cannot build relation evidence: {error}"))?;
         let evidence_id = fact_evidence.id.clone();
         evidence.insert(evidence_id.clone(), fact_evidence);
+        let execution = mapping.execution.map(|draft| ExecutionOccurrence {
+            call_site_evidence_id: evidence_id.clone(),
+            lexical_ordinal: draft.lexical_ordinal,
+            control: draft.control,
+        });
         relation_records.push(IrRelation {
             unit_id: input.unit.id.clone(),
             source,
@@ -1150,12 +1163,9 @@ fn classify_unit_relations(
             kind: mapping.kind,
             truth: FactTruth::Confirmed,
             resolution: ResolutionMethod::Provider,
-            dispatch: match mapping.kind {
-                LanguageRelationKind::Calls => DispatchKind::Unknown,
-                LanguageRelationKind::Constructs => DispatchKind::Direct,
-                _ => DispatchKind::NotApplicable,
-            },
+            dispatch: mapping.dispatch,
             semantic_context_id: input.unit.context.id.clone(),
+            execution,
             evidence_ids: vec![evidence_id],
         });
         *emitted_relations.entry(mapping.capability).or_default() += 1;
@@ -1185,10 +1195,21 @@ fn classify_unit_relations(
             resolution: draft.resolution,
             dispatch: DispatchKind::NotApplicable,
             semantic_context_id: input.unit.context.id.clone(),
+            execution: None,
             evidence_ids: vec![evidence_id],
         });
         *emitted_relations.entry(capability).or_default() += 1;
     }
+    let code_definition_count = definition_records.len() as u64;
+    let mut sql =
+        emit_sql_query_facts(input, syntax_definitions, syntax_sql_queries, &definitions)?;
+    sql.audit.inventory_failed_file_count = definition_audit.inventory_failed_file_count;
+    evidence.extend(sql.evidence);
+    definition_records.extend(sql.definitions);
+    relation_records.extend(sql.relations);
+    *emitted_relations
+        .entry(AnalysisCapability::OrmQuery)
+        .or_default() += sql.audit.emitted_relation_count;
     relation_records.sort_by_key(relation_sort_key);
     emit_unit_timing(
         timing_enabled,
@@ -1207,202 +1228,8 @@ fn classify_unit_relations(
         omitted_definition_count,
         definition_audit,
         type_relation_audit,
-    })
-}
-
-fn reconcile_unit_definitions<'a>(
-    input: &'a UnitAdapterInput<'a>,
-    assigned: &BTreeSet<RepositoryPath>,
-    syntax_definitions: &BTreeMap<RepositoryPath, Vec<SyntaxDefinition>>,
-    mut definition_audit: DefinitionAudit,
-    timing_enabled: bool,
-    unit_started: Instant,
-) -> Result<ReconciledUnitDefinitions<'a>, String> {
-    let mut phase_started = Instant::now();
-    let mut unit_documents = input
-        .documents
-        .iter()
-        .filter(|document| {
-            normalize_scip_language(&document.language, input.unit.language.as_str())
-                == input.unit.language.as_str()
-                && RepositoryPath::parse(&document.path).is_ok_and(|path| assigned.contains(&path))
-        })
-        .collect::<Vec<_>>();
-    unit_documents.sort_by(|left, right| left.path.cmp(&right.path));
-    let document_paths = unit_documents
-        .iter()
-        .map(|document| document.path.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut evidence = BTreeMap::<EvidenceId, FactEvidence>::new();
-    let mut definitions = BTreeMap::<ProviderSymbolId, DefinitionDraft>::new();
-    let mut definition_spans = BTreeMap::<ProviderSymbolId, SourceSpan>::new();
-    let mut ignored_provider_definition_ids = BTreeSet::<ProviderSymbolId>::new();
-    let mut omitted_definition_count = 0_u64;
-
-    for document in &unit_documents {
-        let path = RepositoryPath::parse(&document.path)
-            .map_err(|error| format!("provider returned invalid document path: {error}"))?;
-        let manifest_file = input
-            .manifest_files
-            .get(&path)
-            .copied()
-            .ok_or_else(|| format!("provider document is absent from manifest: {path}"))?;
-        let coordinates = SourceCoordinates::load(input.project_root, manifest_file)?;
-        let definition_occurrences_by_symbol = document
-            .occurrences
-            .iter()
-            .filter(|occurrence| occurrence.definition)
-            .fold(
-                HashMap::<&str, &OccurrenceOutput>::new(),
-                |mut index, occurrence| {
-                    index
-                        .entry(occurrence.symbol.as_str())
-                        .and_modify(|current| {
-                            if occurrence.range < current.range {
-                                *current = occurrence;
-                            }
-                        })
-                        .or_insert(occurrence);
-                    index
-                },
-            );
-        let mut symbols = document.symbols.iter().collect::<Vec<_>>();
-        symbols.sort_by(|left, right| left.symbol.cmp(&right.symbol));
-        for symbol in symbols {
-            let kind = canonical_definition_kind(&symbol.kind);
-            let field_candidate = kind.is_none() && is_variable_definition_kind(&symbol.kind);
-            let Some(kind) = kind.or(field_candidate.then_some(FactNodeKind::Field)) else {
-                continue;
-            };
-            let Some(occurrence) = definition_occurrences_by_symbol
-                .get(symbol.symbol.as_str())
-                .copied()
-            else {
-                omitted_definition_count += 1;
-                continue;
-            };
-            let symbol_id = ProviderSymbolId::parse(&symbol.symbol)
-                .map_err(|error| format!("provider emitted invalid symbol ID: {error}"))?;
-            let span = match coordinates.span(&occurrence.range, input.provider.protocol) {
-                Ok(span) => span,
-                Err(_) => {
-                    omitted_definition_count += 1;
-                    continue;
-                }
-            };
-            // Zero-width document sentinels are not source definitions and
-            // cannot carry verifiable definition evidence.
-            if span.start.byte_offset == span.end.byte_offset {
-                omitted_definition_count += 1;
-                ignored_provider_definition_ids.insert(symbol_id);
-                continue;
-            }
-            let fact_evidence = FactEvidence::new(
-                EvidenceKind::SourceDefinition,
-                evidence_producer(input.provider, "provider-definition"),
-                EvidenceLocation::Source { span: span.clone() },
-                None,
-            )
-            .map_err(|error| format!("cannot build definition evidence: {error}"))?;
-            let evidence_id = fact_evidence.id.clone();
-            evidence.insert(evidence_id.clone(), fact_evidence);
-            let parent = symbol
-                .enclosing_symbol
-                .as_deref()
-                .map(ProviderSymbolId::parse)
-                .transpose()
-                .map_err(|error| format!("provider emitted invalid parent symbol ID: {error}"))?;
-            definitions
-                .entry(symbol_id.clone())
-                .or_insert_with(|| DefinitionDraft {
-                    symbol_id: symbol_id.clone(),
-                    native_kind: symbol.kind.clone(),
-                    canonical_kind_hint: kind,
-                    qualified_name: symbol.symbol.clone(),
-                    display_name: definition_display_name(symbol),
-                    signature: normalized_optional_text(symbol.signature.as_deref()),
-                    visibility: Visibility::Unknown,
-                    parent_symbol_id: parent,
-                    definition_evidence_id: evidence_id,
-                    flags: source_flags(manifest_file.file_kind),
-                    field_candidate,
-                    path: path.clone(),
-                    provider_range: occurrence.range.clone(),
-                    syntax_match: None,
-                });
-            definition_spans.entry(symbol_id).or_insert(span);
-        }
-    }
-    emit_unit_timing(
-        timing_enabled,
-        input.unit,
-        "provider_definitions",
-        phase_started,
-        unit_started,
-    );
-    phase_started = Instant::now();
-
-    let provider_definition_ids = definitions.keys().cloned().collect::<BTreeSet<_>>();
-    let provider_definition_aliases = reconcile_definition_inventory(
-        input.unit,
-        input.provider.protocol,
-        syntax_definitions,
-        &mut definitions,
-        &mut definition_audit,
-    );
-    reconcile_definition_drafts(input.unit.language, &mut definitions);
-    record_definition_metadata(input.unit, &definitions, &mut definition_audit);
-    omitted_definition_count += definition_audit.blocking_count();
-    let definition_ids = definitions.keys().cloned().collect::<BTreeSet<_>>();
-    let mut discarded_definition_ids = provider_definition_ids
-        .difference(&definition_ids)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    discarded_definition_ids.extend(ignored_provider_definition_ids);
-    let retained_definition_evidence = definitions
-        .values()
-        .map(|draft| draft.definition_evidence_id.clone())
-        .collect::<BTreeSet<_>>();
-    evidence.retain(|id, _| retained_definition_evidence.contains(id));
-    let mut definition_records = definitions
-        .values()
-        .cloned()
-        .map(|draft| IrDefinition {
-            unit_id: input.unit.id.clone(),
-            symbol_id: draft.symbol_id,
-            native_kind: draft.native_kind,
-            canonical_kind_hint: draft.canonical_kind_hint,
-            qualified_name: draft.qualified_name,
-            display_name: draft.display_name,
-            signature: draft.signature,
-            visibility: draft.visibility,
-            parent_symbol_id: draft
-                .parent_symbol_id
-                .filter(|parent| definition_ids.contains(parent)),
-            definition_evidence_id: draft.definition_evidence_id,
-            flags: draft.flags,
-        })
-        .collect::<Vec<_>>();
-    definition_records.sort_by(|left, right| left.symbol_id.cmp(&right.symbol_id));
-    emit_unit_timing(
-        timing_enabled,
-        input.unit,
-        "definition_reconciliation",
-        phase_started,
-        unit_started,
-    );
-
-    Ok(ReconciledUnitDefinitions {
-        unit_documents,
-        document_paths,
-        evidence,
-        definitions,
-        definition_spans,
-        provider_definition_aliases,
-        discarded_definition_ids,
-        omitted_definition_count,
-        definition_records,
-        definition_audit,
+        sql_query_audit: sql.audit,
+        code_definition_count,
     })
 }
 
@@ -1484,74 +1311,6 @@ fn emit_unit_timing(
             phase_started.elapsed().as_millis(),
             unit_started.elapsed().as_millis()
         );
-    }
-}
-
-fn record_definition_metadata(
-    unit: &AnalysisUnit,
-    definitions: &BTreeMap<ProviderSymbolId, DefinitionDraft>,
-    audit: &mut DefinitionAudit,
-) {
-    let owners = definitions
-        .iter()
-        .map(|(id, draft)| (id, draft.display_name.as_str()))
-        .collect::<BTreeMap<_, _>>();
-    let mut entries = definitions
-        .values()
-        .map(|draft| DefinitionMetadataAuditEntry {
-            unit_id: unit.id.as_str().to_string(),
-            language: unit.language,
-            path: draft.path.clone(),
-            kind: draft.canonical_kind_hint,
-            name: draft.display_name.clone(),
-            owner: draft
-                .parent_symbol_id
-                .as_ref()
-                .and_then(|parent| owners.get(parent).copied())
-                .map(str::to_string),
-            signature: draft.signature.clone(),
-            visibility: draft.visibility,
-        })
-        .collect::<Vec<_>>();
-    entries.sort();
-    for entry in &entries {
-        let callable = matches!(
-            entry.kind,
-            FactNodeKind::Function | FactNodeKind::Method | FactNodeKind::Constructor
-        );
-        audit.metadata_definition_count += 1;
-        audit.callable_definition_count += u64::from(callable);
-        audit.callable_signature_count += u64::from(callable && entry.signature.is_some());
-        audit.known_visibility_count += u64::from(entry.visibility != Visibility::Unknown);
-        audit.metadata_keys.push(definition_metadata_key(entry));
-    }
-    audit.metadata_keys.sort();
-    audit.metadata_keys.dedup();
-    audit.metadata_entries.extend(entries);
-    audit.metadata_entries.sort();
-    audit.metadata_entries.dedup();
-}
-
-fn definition_metadata_key(entry: &DefinitionMetadataAuditEntry) -> String {
-    format!(
-        "{}\t{}\t{}\t{}\t{}\t{}",
-        entry.path.as_str(),
-        entry.kind.as_str(),
-        entry.name,
-        entry.owner.as_deref().unwrap_or("-"),
-        visibility_name(entry.visibility),
-        entry.signature.as_deref().unwrap_or("-")
-    )
-}
-
-const fn visibility_name(visibility: Visibility) -> &'static str {
-    match visibility {
-        Visibility::Public => "public",
-        Visibility::Protected => "protected",
-        Visibility::Internal => "internal",
-        Visibility::Package => "package",
-        Visibility::Private => "private",
-        Visibility::Unknown => "unknown",
     }
 }
 
@@ -1706,6 +1465,30 @@ fn append_import_gaps(unit: &AnalysisUnit, audit: &ImportAudit, gaps: &mut Vec<A
                 ),
             });
         }
+    }
+}
+
+fn append_definition_gaps(
+    unit: &AnalysisUnit,
+    audit: &DefinitionAudit,
+    gaps: &mut Vec<AnalysisGap>,
+) {
+    for failure in audit
+        .failures
+        .iter()
+        .filter(|failure| failure.reason == "syntax-inventory-failed")
+    {
+        gaps.push(AnalysisGap {
+            code: GapCode::ProviderExecutionIncomplete,
+            scope: AnalysisScope::File {
+                unit_id: Some(unit.id.clone()),
+                path: failure.path.clone(),
+            },
+            capability: Some(AnalysisCapability::Definitions),
+            evidence_ids: Vec::new(),
+            message: "The source file did not produce a complete syntax tree; partial provider output must not be interpreted as complete definitions"
+                .to_string(),
+        });
     }
 }
 
@@ -2092,10 +1875,62 @@ fn build_capability_receipts(
     emitted_relations: &BTreeMap<AnalysisCapability, u64>,
     omitted_relations: &BTreeMap<AnalysisCapability, u64>,
     import_audit: &ImportAudit,
+    sql_query_audit: &SqlQueryAudit,
     gaps: &[AnalysisGap],
 ) -> Result<Vec<CapabilityReceipt>, String> {
     let mut receipts = Vec::new();
     for policy in capability_policies(unit.language, protocol) {
+        if policy.capability == AnalysisCapability::OrmQuery {
+            let eligible_count = sql_query_audit.eligible_query_count;
+            let truncated_count =
+                eligible_count.saturating_sub(sql_query_audit.accepted_query_count);
+            let inventory_incomplete = sql_query_audit.inventory_failed_file_count > 0;
+            let execution_state = if inventory_incomplete {
+                CapabilityExecutionState::Partial
+            } else if eligible_count == 0 {
+                CapabilityExecutionState::NotApplicable
+            } else if truncated_count == 0 {
+                CapabilityExecutionState::Complete
+            } else {
+                CapabilityExecutionState::Partial
+            };
+            let receipt = CapabilityReceipt {
+                unit_id: unit.id.clone(),
+                capability: policy.capability,
+                declared_support: policy.declared_support,
+                execution_state,
+                // Precision describes how the capability measures, not how
+                // much it happened to find; `covered_count` below already
+                // carries "nothing was accepted".
+                precision: EvidencePrecision::for_execution(
+                    execution_state,
+                    EvidencePrecision::ExactRange,
+                ),
+                denominator: if inventory_incomplete {
+                    CoverageDenominator::Unknown
+                } else {
+                    CoverageDenominator::Known { eligible_count }
+                },
+                covered_count: sql_query_audit.accepted_query_count,
+                emitted_fact_count: sql_query_audit
+                    .query_definition_count
+                    .saturating_add(sql_query_audit.table_definition_count),
+                emitted_relation_count: sql_query_audit.emitted_relation_count,
+                truncated_count,
+                gap_codes: if inventory_incomplete {
+                    vec![GapCode::ProviderExecutionIncomplete]
+                } else if truncated_count == 0 {
+                    Vec::new()
+                } else {
+                    vec![GapCode::DynamicDispatch]
+                },
+            };
+            receipt
+                .validate()
+                .map_err(|error| format!("invalid SQL-query capability receipt: {error}"))?;
+            receipts.push(receipt);
+            continue;
+        }
         if matches!(
             policy.capability,
             AnalysisCapability::Imports | AnalysisCapability::Exports
@@ -2144,7 +1979,10 @@ fn build_capability_receipts(
                 capability: policy.capability,
                 declared_support: policy.declared_support,
                 execution_state,
-                precision: EvidencePrecision::ExactRange,
+                precision: EvidencePrecision::for_execution(
+                    execution_state,
+                    EvidencePrecision::ExactRange,
+                ),
                 denominator,
                 covered_count: measured.covered_count,
                 emitted_fact_count: 0,
@@ -2216,14 +2054,7 @@ fn build_capability_receipts(
         }
         gap_codes.sort();
         gap_codes.dedup();
-        let precision = if matches!(
-            execution_state,
-            CapabilityExecutionState::Complete | CapabilityExecutionState::Partial
-        ) {
-            policy.precision
-        } else {
-            EvidencePrecision::None
-        };
+        let precision = EvidencePrecision::for_execution(execution_state, policy.precision);
         let denominator = if policy.capability == AnalysisCapability::Definitions {
             CoverageDenominator::Known {
                 eligible_count: definition_eligible_count,

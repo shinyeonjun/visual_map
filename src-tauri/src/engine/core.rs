@@ -101,7 +101,7 @@ pub struct EngineSpec {
 }
 
 pub const CODEBASE_MEMORY_VERSION: &str = "0.1.0";
-pub const CODEBASE_MEMORY_CONTRACT_VERSION: &str = "3";
+pub const CODEBASE_MEMORY_CONTRACT_VERSION: &str = "4";
 pub const DATABASE_MEMORY_VERSION: &str = "0.2.0";
 pub const DATABASE_MEMORY_CONTRACT_VERSION: &str = "3";
 

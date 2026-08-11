@@ -1,8 +1,8 @@
 use super::broker;
 use crate::provider::ResolvedProvider;
 use codebase_semantic_compiler::{
-    compile_base_repair_prompt, parse_and_verify_base_response, CompiledBasePrompt,
-    SemanticCompileError,
+    compile_base_repair_prompt, compile_base_repair_prompt_with_history,
+    parse_and_verify_base_response, CompiledBasePrompt, SemanticCompileError,
 };
 
 const MAX_VERIFIER_REPAIR_ATTEMPTS: usize = 2;
@@ -39,6 +39,7 @@ pub(super) struct RecoveryRequest {
     kind: RecoveryKind,
     repair_attempts: usize,
     error_history: Vec<String>,
+    verifier_errors: Vec<SemanticCompileError>,
 }
 
 impl RecoveryRequest {
@@ -65,15 +66,20 @@ pub(super) fn compile_recovery_prompt(
     failure: ProviderAttemptFailure,
 ) -> Result<RecoveryRequest, String> {
     let first_error = failure.describe("첫");
-    let (prompt, kind, repair_attempts) = match failure {
-        ProviderAttemptFailure::Execution(_) => (original.clone(), RecoveryKind::ExecutionRetry, 0),
-        ProviderAttemptFailure::Rejected { raw, error } => (
-            compile_base_repair_prompt(original, &raw, &error).map_err(|compile_error| {
-                format!("{first_error}; AI 교정 입력 생성 실패: {compile_error}")
-            })?,
-            RecoveryKind::Repair,
-            1,
+    let (prompt, kind, repair_attempts, verifier_errors) = match failure {
+        ProviderAttemptFailure::Execution(_) => (
+            original.clone(),
+            RecoveryKind::ExecutionRetry,
+            0,
+            Vec::new(),
         ),
+        ProviderAttemptFailure::Rejected { raw, error } => {
+            let prompt =
+                compile_base_repair_prompt(original, &raw, &error).map_err(|compile_error| {
+                    format!("{first_error}; AI 교정 입력 생성 실패: {compile_error}")
+                })?;
+            (prompt, RecoveryKind::Repair, 1, vec![error])
+        }
     };
     Ok(RecoveryRequest {
         partition_index,
@@ -81,6 +87,7 @@ pub(super) fn compile_recovery_prompt(
         kind,
         repair_attempts,
         error_history: vec![first_error],
+        verifier_errors,
     })
 }
 
@@ -97,18 +104,23 @@ pub(super) fn continue_recovery_prompt(
     if previous.repair_attempts >= MAX_VERIFIER_REPAIR_ATTEMPTS {
         return Err(error_history.join("; "));
     }
-    let prompt = compile_base_repair_prompt(original, &raw, &error).map_err(|compile_error| {
-        format!(
-            "{}; AI 후속 교정 입력 생성 실패: {compile_error}",
-            error_history.join("; ")
-        )
-    })?;
+    let prompt =
+        compile_base_repair_prompt_with_history(original, &raw, &error, &previous.verifier_errors)
+            .map_err(|compile_error| {
+                format!(
+                    "{}; AI 후속 교정 입력 생성 실패: {compile_error}",
+                    error_history.join("; ")
+                )
+            })?;
+    let mut verifier_errors = previous.verifier_errors.clone();
+    verifier_errors.push(error);
     Ok(RecoveryRequest {
         partition_index: previous.partition_index,
         prompt,
         kind: RecoveryKind::Repair,
         repair_attempts: previous.repair_attempts + 1,
         error_history,
+        verifier_errors,
     })
 }
 
@@ -180,12 +192,20 @@ mod tests {
         let first_failure = verify_provider_result(&original, Ok("{}".to_string())).unwrap_err();
         let first_repair = compile_recovery_prompt(2, &original, first_failure).unwrap();
         let second_failure =
-            verify_provider_result(&first_repair.prompt, Ok("{}".to_string())).unwrap_err();
+            verify_provider_result(&first_repair.prompt, Ok("[]".to_string())).unwrap_err();
         let second_repair =
             continue_recovery_prompt(&original, &first_repair, second_failure).unwrap();
 
         assert_eq!(second_repair.attempt_label(), "AI 2차 교정");
         assert_eq!(second_repair.partition_index, 2);
+        assert!(second_repair
+            .prompt
+            .task_prompt
+            .contains("previousVerifierErrors"));
+        assert!(second_repair
+            .prompt
+            .task_prompt
+            .contains("missing field `schemaVersion`"));
 
         let third_failure =
             verify_provider_result(&second_repair.prompt, Ok("{}".to_string())).unwrap_err();
@@ -235,6 +255,7 @@ mod tests {
                     previous_revision: None,
                 },
             },
+            verification_phase: codebase_semantic_compiler::SemanticVerificationPhase::FinalMap,
             system_policy: "test policy".to_string(),
             task_prompt: "test task".to_string(),
             output_schema: base_semantic_output_schema(),

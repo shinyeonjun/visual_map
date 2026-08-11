@@ -26,6 +26,10 @@ fn route_parser_covers_registration_and_annotation_shapes() {
         ("@app.get(\"/x\")\ndef health(): pass", "GET"),
         ("@router.post(\n\"/x\"\n)\ndef health(): pass", "POST"),
         (
+            "@router.websocket(\"/ws\")\nasync def stream(websocket): pass",
+            "WEBSOCKET",
+        ),
+        (
             "@app.route(\"/x\", methods=[\"PATCH\"])\ndef health(): pass",
             "PATCH",
         ),
@@ -384,6 +388,46 @@ fn fastapi_nested_router_prefix_and_handler_resolve() {
         facts[0].symbol.as_deref(),
         Some("lsp . . . context.catalog.py#list_accounts@2:4")
     );
+}
+
+#[test]
+fn fastapi_websocket_decorator_emits_a_websocket_route() {
+    let pack = FrameworkPack {
+        id: "fastapi".to_string(),
+        language: "python".to_string(),
+        name: "FastAPI".to_string(),
+        kind: "web".to_string(),
+        signals: vec!["fastapi".to_string(), "@router.websocket".to_string()],
+        outputs: vec!["HTTP_ROUTE".to_string(), "HANDLES".to_string()],
+        rules: vec!["HTTP_ROUTE".to_string()],
+        adapter: "annotation-routing".to_string(),
+        fixture: FrameworkFixture::default(),
+    };
+    let source = r#"from fastapi import APIRouter, WebSocket
+router = APIRouter()
+
+@router.websocket("/api/v1/ws/text/{session_id}")
+async def websocket_text(websocket: WebSocket, session_id: str):
+    pass
+"#;
+    let mut facts = Vec::new();
+
+    extract_routes(
+        &pack,
+        "server/app/api/http/routes/text_ws.py",
+        source,
+        &[],
+        None,
+        &mut facts,
+    );
+
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].method.as_deref(), Some("WEBSOCKET"));
+    assert_eq!(
+        facts[0].path.as_deref(),
+        Some("/api/v1/ws/text/{session_id}")
+    );
+    assert_eq!(facts[0].source_line, 4);
 }
 
 #[test]

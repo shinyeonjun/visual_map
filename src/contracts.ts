@@ -53,6 +53,15 @@ export interface FactGraphStatus {
   coverageCount: number;
 }
 
+/** One result from the complete canonical Fact graph, not only the overview map. */
+export interface FactNodeSearchResult {
+  id: string;
+  name: string;
+  qualifiedName: string;
+  kind: string;
+  language: string | null;
+}
+
 export interface AnalyzeWorkspaceResult {
   factGraph: FactGraphStatus;
   semanticRevisionId: string | null;

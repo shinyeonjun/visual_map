@@ -329,6 +329,7 @@ fn canonical_test_edge(
         FactEdgeKind::Tests,
         semantic_context_id,
         None,
+        None,
     )
     .map_err(|error| format!("cannot build canonical tests edge identity: {error}"))?;
     let edge = FactEdge {
@@ -343,6 +344,7 @@ fn canonical_test_edge(
         dispatch: DispatchKind::NotApplicable,
         semantic_context_id: semantic_context_id.cloned(),
         qualifier: None,
+        execution: None,
         evidence_ids,
     };
     edge.validate()

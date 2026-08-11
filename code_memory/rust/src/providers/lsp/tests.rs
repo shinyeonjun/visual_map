@@ -8,7 +8,7 @@ mod tests {
         default_lsp_request_timeout, java_configuration_runtimes, java_home_is_usable,
         java_explicit_override_annotation, java_language_server_settings_for_network,
         fair_large_call_site_queries, find_lsp_symbol_at_range, jdtls_heap_mb,
-        large_call_query_group, lsp_symbol_base_name,
+        large_call_query_group, large_direct_call_site_mode, lsp_symbol_base_name,
         large_symbol_call_priority, large_symbol_is_map_boundary, large_workspace_workload,
         lsp_message_length_allowed, lsp_open_document_limit, lsp_reference_enrichment_enabled,
         lsp_request_batch_size, python_private_member_name, reconcile_lsp_symbol_owners,
@@ -35,6 +35,14 @@ mod tests {
     #[test]
     fn large_workspace_lsp_pipeline_has_a_bounded_default_width() {
         assert!((1..=64).contains(&lsp_request_batch_size()));
+    }
+
+    #[test]
+    fn large_python_and_java_use_exact_call_site_definition_queries() {
+        assert!(large_direct_call_site_mode("python", true));
+        assert!(large_direct_call_site_mode("java", true));
+        assert!(!large_direct_call_site_mode("python", false));
+        assert!(!large_direct_call_site_mode("rust", true));
     }
 
     #[test]

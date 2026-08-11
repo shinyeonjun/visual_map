@@ -614,29 +614,19 @@ fn materialize_definition_nodes(
                 }
             }
             let baseline_relevant =
-                !declared_parent && baseline_definition_kind(first.canonical_kind_hint);
+                baseline_definition_is_product_relevant(first.canonical_kind_hint, declared_parent);
             store.insert_node(
                 &FactNode {
                     id: node_id.clone(),
                     snapshot_id: snapshot_id.clone(),
                     family: first.canonical_kind_hint.family(),
                     kind: first.canonical_kind_hint,
-                    native_kind: (native_kind.len() == 1).then(|| {
-                        native_kind
-                            .iter()
-                            .next()
-                            .expect("one native kind")
-                            .to_string()
-                    }),
+                    native_kind: sole(&native_kind).map(ToString::to_string),
                     qualified_name: first.qualified_name.clone(),
                     display_name: first.display_name.clone(),
                     signature: first.signature.clone(),
                     details: None,
-                    visibility: if visibility.len() == 1 {
-                        *visibility.iter().next().expect("one visibility")
-                    } else {
-                        Visibility::Unknown
-                    },
+                    visibility: sole(&visibility).copied().unwrap_or(Visibility::Unknown),
                     language: Some(unit.language),
                     analysis_unit_id: Some(first.unit_id.clone()),
                     parent_id: Some(parent_id),
@@ -715,6 +705,7 @@ fn link_relations(
         store.mark_node_relevant(&source_id)?;
         store.mark_node_relevant(&target_id)?;
         let kind = canonical_relation_kind(relation.kind);
+        let execution = relation.execution.clone();
         let id = contract(
             FactEdge::stable_id(
                 &source_id,
@@ -722,6 +713,7 @@ fn link_relations(
                 kind,
                 Some(&relation.semantic_context_id),
                 None,
+                execution.as_ref(),
             ),
             "cannot build canonical relation identity",
         )?;
@@ -737,6 +729,7 @@ fn link_relations(
             dispatch: relation.dispatch,
             semantic_context_id: Some(relation.semantic_context_id),
             qualifier: None,
+            execution,
             evidence_ids: relation.evidence_ids,
         })?;
         counts.resolved += 1;
@@ -898,7 +891,7 @@ fn structural_edge(
     evidence_ids.sort();
     evidence_ids.dedup();
     let id = contract(
-        FactEdge::stable_id(source_id, target_id, kind, semantic_context_id, None),
+        FactEdge::stable_id(source_id, target_id, kind, semantic_context_id, None, None),
         "cannot build canonical structural edge identity",
     )?;
     let edge = FactEdge {
@@ -913,6 +906,7 @@ fn structural_edge(
         dispatch: DispatchKind::NotApplicable,
         semantic_context_id: semantic_context_id.cloned(),
         qualifier: None,
+        execution: None,
         evidence_ids,
     };
     edge.validate()
@@ -920,21 +914,25 @@ fn structural_edge(
     Ok(edge)
 }
 
-fn baseline_definition_kind(kind: FactNodeKind) -> bool {
-    matches!(
-        kind,
+fn baseline_definition_is_product_relevant(kind: FactNodeKind, declared_parent: bool) -> bool {
+    match kind {
+        // Methods and constructors are executable graph vertices even when no
+        // relation happened to resolve to them in this analysis pass. Dropping
+        // them makes a later framework edge or source-exact call impossible to
+        // connect and turns real class internals into an artificial trace gap.
+        FactNodeKind::Method | FactNodeKind::Constructor => true,
         FactNodeKind::Namespace
-            | FactNodeKind::Type
-            | FactNodeKind::Class
-            | FactNodeKind::Interface
-            | FactNodeKind::Trait
-            | FactNodeKind::Struct
-            | FactNodeKind::Enum
-            | FactNodeKind::TypeAlias
-            | FactNodeKind::Callable
-            | FactNodeKind::Function
-            | FactNodeKind::Constructor
-    )
+        | FactNodeKind::Type
+        | FactNodeKind::Class
+        | FactNodeKind::Interface
+        | FactNodeKind::Trait
+        | FactNodeKind::Struct
+        | FactNodeKind::Enum
+        | FactNodeKind::TypeAlias
+        | FactNodeKind::Callable
+        | FactNodeKind::Function => !declared_parent,
+        _ => false,
+    }
 }
 
 fn canonical_relation_kind(kind: LanguageRelationKind) -> FactEdgeKind {
@@ -951,6 +949,9 @@ fn canonical_relation_kind(kind: LanguageRelationKind) -> FactEdgeKind {
         LanguageRelationKind::MixesIn => FactEdgeKind::MixesIn,
         LanguageRelationKind::Overrides => FactEdgeKind::Overrides,
         LanguageRelationKind::UsesType => FactEdgeKind::UsesType,
+        LanguageRelationKind::ExecutesQuery => FactEdgeKind::ExecutesQuery,
+        LanguageRelationKind::Reads => FactEdgeKind::Reads,
+        LanguageRelationKind::Writes => FactEdgeKind::Writes,
         LanguageRelationKind::Tests => FactEdgeKind::Tests,
     }
 }
@@ -970,6 +971,9 @@ fn capability_for_relation(kind: LanguageRelationKind) -> AnalysisCapability {
         | LanguageRelationKind::MixesIn
         | LanguageRelationKind::UsesType => AnalysisCapability::TypeRelations,
         LanguageRelationKind::Overrides => AnalysisCapability::Overrides,
+        LanguageRelationKind::ExecutesQuery
+        | LanguageRelationKind::Reads
+        | LanguageRelationKind::Writes => AnalysisCapability::OrmQuery,
         LanguageRelationKind::Tests => AnalysisCapability::TestRelations,
     }
 }
@@ -997,6 +1001,17 @@ fn flags_for_file_kind(kind: SourceFileKind) -> SourceFlags {
         vendor: kind == SourceFileKind::Vendor,
         external: false,
     }
+}
+
+/// The one value a set agrees on, or `None` when its members disagree.
+///
+/// Merged definitions only carry a native kind or a visibility forward when
+/// every contributor reported the same one; disagreement is not something to
+/// pick a winner from.
+fn sole<T: Ord>(values: &BTreeSet<T>) -> Option<&T> {
+    let mut members = values.iter();
+    let first = members.next()?;
+    members.next().is_none().then_some(first)
 }
 
 fn file_display_name(path: &RepositoryPath) -> String {

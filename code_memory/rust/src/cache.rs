@@ -12,7 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::source::is_managed_provider_root;
 use crate::{compile_database_dirs, find_tool, is_excluded_source_dir};
 use crate::{
-    Diagnostic, DiagnosticCode, DocumentOutput, LanguageSpec, RelationOutput, SourceSnapshot,
+    AnalysisCachePolicy, Diagnostic, DiagnosticCode, DocumentOutput, LanguageSpec, RelationOutput,
+    SourceSnapshot,
 };
 
 #[derive(Clone)]
@@ -49,6 +50,15 @@ struct CacheGenerationManifest {
 pub(crate) struct CacheImpact {
     pub(crate) force_all: bool,
     pub(crate) affected_paths: HashSet<String>,
+}
+
+impl CacheImpact {
+    pub(crate) fn fresh(snapshot: &SourceSnapshot) -> Self {
+        Self {
+            force_all: true,
+            affected_paths: snapshot.file_hashes.keys().cloned().collect(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -112,8 +122,9 @@ pub(crate) fn load_framework_cache(path: &Path) -> Option<crate::frameworks::Ana
 pub(crate) fn write_framework_cache(
     path: &Path,
     analysis: &crate::frameworks::Analysis,
+    cache_policy: AnalysisCachePolicy,
 ) -> Result<(), String> {
-    write_compressed_json(path, analysis)
+    write_compressed_json(path, analysis, cache_policy)
 }
 fn hash_pack_files(root: &Path, hash: &mut u64) {
     let Ok(entries) = fs::read_dir(root) else {
@@ -405,8 +416,9 @@ pub(crate) fn read_compressed_cache(path: &Path) -> Result<Vec<u8>, String> {
 pub(crate) fn write_compressed_json<T: Serialize + ?Sized>(
     path: &Path,
     value: &T,
+    cache_policy: AnalysisCachePolicy,
 ) -> Result<(), String> {
-    write_compressed(path, |encoder| {
+    write_compressed(path, cache_policy, |encoder| {
         serde_json::to_writer(encoder, value)
             .map_err(|error| format!("cannot serialize compressed cache: {error}"))
     })
@@ -414,9 +426,10 @@ pub(crate) fn write_compressed_json<T: Serialize + ?Sized>(
 
 fn write_compressed(
     path: &Path,
+    cache_policy: AnalysisCachePolicy,
     write: impl FnOnce(&mut GzEncoder<BufWriter<fs::File>>) -> Result<(), String>,
 ) -> Result<(), String> {
-    if path.is_file() {
+    if cache_policy.reuses_results() && path.is_file() {
         return Ok(());
     }
     if let Some(parent) = path.parent() {
@@ -446,17 +459,34 @@ fn write_compressed(
         let _ = fs::remove_file(&temporary);
         return Err(format!("cannot flush compressed cache: {error}"));
     }
-    if path.is_file() {
+    if cache_policy.reuses_results() && path.is_file() {
         let _ = fs::remove_file(&temporary);
         return Ok(());
     }
-    fs::rename(&temporary, path).map_err(|error| {
+    let previous = path.with_extension(format!("gz.{}.{nonce}.previous", std::process::id()));
+    if path.is_file() {
+        fs::rename(path, &previous).map_err(|error| {
+            let _ = fs::remove_file(&temporary);
+            format!(
+                "cannot back up compressed cache {}: {error}",
+                path.display()
+            )
+        })?;
+    }
+    if let Err(error) = fs::rename(&temporary, path) {
+        if previous.is_file() {
+            let _ = fs::rename(&previous, path);
+        }
         let _ = fs::remove_file(&temporary);
-        format!(
+        return Err(format!(
             "cannot promote compressed cache {}: {error}",
             path.display()
-        )
-    })
+        ));
+    }
+    if previous.is_file() {
+        let _ = fs::remove_file(&previous);
+    }
+    Ok(())
 }
 
 fn normalized_cache_path(path: &Path) -> String {
@@ -822,6 +852,16 @@ pub(crate) fn language_cache_key(input: LanguageCacheKeyInput<'_>) -> String {
     checksum_update(&mut hash, b"code-memory-language-cache.v154");
     checksum_update(&mut hash, root.to_string_lossy().as_bytes());
     checksum_update(&mut hash, lang.id.as_bytes());
+    if matches!(
+        lang.id,
+        "typescript" | "javascript" | "csharp" | "c" | "cpp"
+    ) {
+        // Raw SCIP documents may use UTF-8, UTF-16 or UTF-32 columns. Old
+        // caches treated every SCIP range as UTF-8 bytes, so non-ASCII source
+        // could retain invalid evidence coordinates even after the decoder was
+        // fixed. Invalidate only SCIP-backed language shards.
+        checksum_update(&mut hash, b"scip-position-encoding-normalization.v1");
+    }
     if matches!(lang.id, "typescript" | "javascript") {
         // Configless shards use an isolated generated project.  This marker
         // invalidates only TS/JS caches created by the old --infer-tsconfig
@@ -1014,14 +1054,19 @@ pub(crate) fn load_language_cache(
         deserialize_ms,
     }
 }
+pub(crate) struct LanguageCacheWriteInput<'a> {
+    pub(crate) documents: &'a [DocumentOutput],
+    pub(crate) relations: &'a [RelationOutput],
+    pub(crate) diagnostics: &'a [Diagnostic],
+    pub(crate) execution_context: &'a ProviderExecutionContext,
+    pub(crate) cache_policy: AnalysisCachePolicy,
+}
+
 pub(crate) fn write_language_cache(
     root: &Path,
     lang: LanguageSpec,
     key: &str,
-    documents: &[DocumentOutput],
-    relations: &[RelationOutput],
-    diagnostics: &[Diagnostic],
-    execution_context: &ProviderExecutionContext,
+    input: LanguageCacheWriteInput<'_>,
 ) {
     let directory = project_cache_root(root);
     if fs::create_dir_all(&directory).is_err() {
@@ -1030,10 +1075,11 @@ pub(crate) fn write_language_cache(
     let cached = CachedLanguageResult {
         schema: "code-memory.language-cache.v4".to_string(),
         key: key.to_string(),
-        documents: documents.to_vec(),
-        relations: relations.to_vec(),
-        execution_context: execution_context.clone(),
-        diagnostics: diagnostics
+        documents: input.documents.to_vec(),
+        relations: input.relations.to_vec(),
+        execution_context: input.execution_context.clone(),
+        diagnostics: input
+            .diagnostics
             .iter()
             .map(|diagnostic| CachedDiagnostic {
                 language: diagnostic.language.clone(),
@@ -1046,7 +1092,11 @@ pub(crate) fn write_language_cache(
             })
             .collect(),
     };
-    let _ = write_compressed_json(&language_cache_path(root, &lang, key), &cached);
+    let _ = write_compressed_json(
+        &language_cache_path(root, &lang, key),
+        &cached,
+        input.cache_policy,
+    );
 }
 
 pub(crate) struct ProviderWorkGuard(pub(crate) PathBuf);
@@ -1060,6 +1110,35 @@ impl Drop for ProviderWorkGuard {
 #[cfg(test)]
 mod generation_tests {
     use super::*;
+
+    #[test]
+    fn fresh_policy_replaces_a_completed_compressed_analysis_cache() {
+        let root = std::env::temp_dir().join(format!(
+            "code-memory-fresh-compressed-cache-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("result.json.gz");
+
+        write_compressed_json(
+            &path,
+            &serde_json::json!({ "value": "old" }),
+            AnalysisCachePolicy::Reuse,
+        )
+        .unwrap();
+        write_compressed_json(
+            &path,
+            &serde_json::json!({ "value": "fresh" }),
+            AnalysisCachePolicy::Fresh,
+        )
+        .unwrap();
+
+        let value: serde_json::Value =
+            serde_json::from_slice(&read_compressed_cache(&path).unwrap()).unwrap();
+        assert_eq!(value["value"], "fresh");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn language_cache_identity_includes_planned_scope_and_provider_config() {

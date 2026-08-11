@@ -995,10 +995,13 @@ fn language_cache_preserves_pathless_provider_diagnostics() {
         &root,
         language,
         "diagnostic-key",
-        &documents,
-        &[],
-        &diagnostics,
-        &execution_context,
+        LanguageCacheWriteInput {
+            documents: &documents,
+            relations: &[],
+            diagnostics: &diagnostics,
+            execution_context: &execution_context,
+            cache_policy: AnalysisCachePolicy::Reuse,
+        },
     );
     let cached = load_language_cache(&root, &language, "diagnostic-key")
         .value
@@ -1041,10 +1044,13 @@ fn language_cache_reuses_an_explicit_completed_empty_result() {
         &root,
         language,
         "empty-key",
-        &[],
-        &[],
-        &diagnostics,
-        &not_executed_provider_context(&language),
+        LanguageCacheWriteInput {
+            documents: &[],
+            relations: &[],
+            diagnostics: &diagnostics,
+            execution_context: &not_executed_provider_context(&language),
+            cache_policy: AnalysisCachePolicy::Reuse,
+        },
     );
 
     let cached = load_language_cache(&root, &language, "empty-key")

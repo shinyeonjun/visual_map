@@ -1,4 +1,4 @@
-use crate::workspace;
+use crate::{analysis::AnalysisCachePolicy, workspace};
 use codebase_fact_model::identity::Sha256Digest;
 use codebase_semantic_compiler::{CompiledSemanticPartition, VerifiedSemanticPartition};
 use codebase_semantic_model::{ApprovedSemanticRevision, BaseSemanticPacket, RegionId};
@@ -56,8 +56,6 @@ pub(super) fn publish(
     let revision_dir = workspace_dir.join("semantic-revisions");
     fs::create_dir_all(&revision_dir)
         .map_err(|error| format!("semantic revision 폴더 생성 실패: {error}"))?;
-    let record_file = format!("{}.json", revision.revision_id);
-    let record_path = revision_dir.join(&record_file);
     let record = StoredSemanticRevision {
         schema_version: RECORD_SCHEMA_VERSION,
         packet: packet.clone(),
@@ -66,6 +64,12 @@ pub(super) fn publish(
     let record_bytes = serde_json::to_vec_pretty(&record)
         .map_err(|error| format!("semantic revision 직렬화 실패: {error}"))?;
     let record_digest = Sha256Digest::of_bytes(&record_bytes);
+    // Revision identity intentionally excludes non-semantic diagnostics such
+    // as warning wording. A fresh provider run may therefore produce a new
+    // byte payload for the same semantic revision. Address the immutable
+    // stored record by both identities so those honest variants never collide.
+    let record_file = format!("{}-{}.json", revision.revision_id, record_digest);
+    let record_path = revision_dir.join(&record_file);
     write_immutable_bytes(&record_path, &record_bytes)?;
     let pointer = SemanticPointer {
         schema_version: RECORD_SCHEMA_VERSION,
@@ -74,7 +78,7 @@ pub(super) fn publish(
         record_file,
         record_digest,
     };
-    replace_json(&workspace_dir.join(POINTER_FILE), &pointer)
+    replace_json_atomically(&workspace_dir.join(POINTER_FILE), &pointer)
 }
 
 pub(crate) fn load_current(
@@ -157,6 +161,7 @@ pub(super) fn cache_partition(
     workspace_id: &str,
     partition: &CompiledSemanticPartition,
     verified: &VerifiedSemanticPartition,
+    cache_policy: AnalysisCachePolicy,
 ) -> Result<(), String> {
     if verified.partition_key != partition.partition_key
         || verified.region_ids != partition.region_ids
@@ -179,9 +184,13 @@ pub(super) fn cache_partition(
         packet_digest: partition.prompt.packet.semantic_input_digest,
         revision: verified.revision.clone(),
     };
-    let bytes = serde_json::to_vec_pretty(&record)
-        .map_err(|error| format!("의미 분할 cache 직렬화 실패: {error}"))?;
-    write_immutable_bytes(&path, &bytes)
+    if cache_policy == AnalysisCachePolicy::Fresh {
+        replace_json_atomically(&path, &record)
+    } else {
+        let bytes = serde_json::to_vec_pretty(&record)
+            .map_err(|error| format!("의미 분할 cache 직렬화 실패: {error}"))?;
+        write_immutable_bytes(&path, &bytes)
+    }
 }
 
 fn partition_cache_path(
@@ -217,25 +226,25 @@ fn read_digest_verified(path: &Path, expected: Sha256Digest) -> Result<Vec<u8>, 
     Ok(bytes)
 }
 
-fn replace_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+fn replace_json_atomically(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value)
-        .map_err(|error| format!("semantic pointer 직렬화 실패: {error}"))?;
+        .map_err(|error| format!("semantic JSON 직렬화 실패: {error}"))?;
     let temporary = path.with_extension("json.next");
     let previous = path.with_extension("json.previous");
     write_synced(&temporary, &bytes)?;
     if path.is_file() {
         if previous.is_file() {
             fs::remove_file(&previous)
-                .map_err(|error| format!("이전 semantic pointer 정리 실패: {error}"))?;
+                .map_err(|error| format!("이전 semantic JSON 정리 실패: {error}"))?;
         }
         fs::rename(path, &previous)
-            .map_err(|error| format!("semantic pointer backup 실패: {error}"))?;
+            .map_err(|error| format!("semantic JSON backup 실패: {error}"))?;
     }
     if let Err(error) = fs::rename(&temporary, path) {
         if previous.is_file() {
             let _ = fs::rename(&previous, path);
         }
-        return Err(format!("semantic pointer 게시 실패: {error}"));
+        return Err(format!("semantic JSON 게시 실패: {error}"));
     }
     if previous.is_file() {
         let _ = fs::remove_file(&previous);
@@ -266,6 +275,30 @@ fn validate_leaf_name(value: &str) -> Result<(), String> {
         return Err("semantic revision 파일 이름이 올바르지 않습니다".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod replacement_tests {
+    use super::*;
+
+    #[test]
+    fn atomic_json_replacement_refreshes_a_derivative_cache() {
+        let root = std::env::temp_dir().join(format!(
+            "codebase-workspace-semantic-cache-replace-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("partition.json");
+
+        replace_json_atomically(&path, &serde_json::json!({ "value": "old" })).unwrap();
+        replace_json_atomically(&path, &serde_json::json!({ "value": "fresh" })).unwrap();
+
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["value"], "fresh");
+        assert!(!path.with_extension("json.previous").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(test)]

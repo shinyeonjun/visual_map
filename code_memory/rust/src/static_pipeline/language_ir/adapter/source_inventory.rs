@@ -8,11 +8,15 @@ use crate::static_pipeline::language_ir::definition_inventory::{
 };
 use crate::static_pipeline::language_ir::imports::inventory_imports_from_root;
 use crate::static_pipeline::language_ir::source_coordinates::SourceCoordinates;
+use crate::static_pipeline::language_ir::sql_literals::{
+    inventory_sql_query_literals_from_root, SqlQuerySite,
+};
 use crate::static_pipeline::language_ir::syntax::parse_tree;
 use crate::static_pipeline::language_ir::type_relations::{
     inventory_type_relation_sites_from_root, inventory_type_use_sites_from_root,
     SyntaxTypeRelationSite, SyntaxTypeUseSite,
 };
+use crate::{inventory_call_sites_from_root, SyntaxCallSite};
 use codebase_fact_model::coverage::GapCode;
 use codebase_fact_model::source::RepositoryPath;
 use codebase_fact_model::source_manifest::SourceManifestFile;
@@ -35,8 +39,10 @@ pub(super) fn inventory_unit_sources(
     let file_inventories = inventory_source_files(input, assigned, worker_count)?;
     let mut definition_audit = DefinitionAudit::default();
     let mut syntax_definitions = BTreeMap::<RepositoryPath, Vec<SyntaxDefinition>>::new();
+    let mut syntax_call_sites = BTreeMap::<RepositoryPath, Vec<SyntaxCallSite>>::new();
     let mut syntax_type_relations = BTreeMap::<RepositoryPath, Vec<SyntaxTypeRelationSite>>::new();
     let mut syntax_type_uses = BTreeMap::<RepositoryPath, Vec<SyntaxTypeUseSite>>::new();
+    let mut syntax_sql_queries = BTreeMap::<RepositoryPath, Vec<SqlQuerySite>>::new();
     let mut type_relation_inventory_failed_files = BTreeSet::<RepositoryPath>::new();
     let mut import_audit = ImportAudit::for_language(input.unit.language);
     let mut import_drafts = Vec::new();
@@ -56,11 +62,19 @@ pub(super) fn inventory_unit_sources(
         if let Some(definitions) = file.definitions {
             syntax_definitions.insert(file.path.clone(), definitions);
         }
+        if let Some(call_sites) = file.call_sites {
+            syntax_call_sites.insert(file.path.clone(), call_sites);
+        }
         if let Some(type_relations) = file.type_relations {
             syntax_type_relations.insert(file.path.clone(), type_relations);
         }
         if let Some(type_uses) = file.type_uses {
-            syntax_type_uses.insert(file.path, type_uses);
+            syntax_type_uses.insert(file.path.clone(), type_uses);
+        }
+        if let Some(sql_queries) = file.sql_queries {
+            if !sql_queries.is_empty() {
+                syntax_sql_queries.insert(file.path, sql_queries);
+            }
         }
     }
 
@@ -71,7 +85,7 @@ pub(super) fn inventory_unit_sources(
     import_audit.canonicalize();
     if timing_enabled {
         eprintln!(
-            "timing stage=language_ir_source_inventory language={} unit={} workers={} wall_ms={} load_cpu_ms={} parse_cpu_ms={} definitions_cpu_ms={} type_relations_cpu_ms={} type_uses_cpu_ms={} imports_cpu_ms={} import_resolution_cpu_ms={}",
+            "timing stage=language_ir_source_inventory language={} unit={} workers={} wall_ms={} load_cpu_ms={} parse_cpu_ms={} definitions_cpu_ms={} call_sites_cpu_ms={} type_relations_cpu_ms={} type_uses_cpu_ms={} sql_literals_cpu_ms={} imports_cpu_ms={} import_resolution_cpu_ms={}",
             input.unit.language.as_str(),
             input.unit.id.as_str(),
             worker_count,
@@ -79,8 +93,10 @@ pub(super) fn inventory_unit_sources(
             timings.source_load.as_millis(),
             timings.source_parse.as_millis(),
             timings.definition_inventory.as_millis(),
+            timings.call_site_inventory.as_millis(),
             timings.type_relation_inventory.as_millis(),
             timings.type_use_inventory.as_millis(),
+            timings.sql_literal_inventory.as_millis(),
             timings.import_inventory.as_millis(),
             timings.import_resolution.as_millis(),
         );
@@ -89,8 +105,10 @@ pub(super) fn inventory_unit_sources(
     Ok(UnitSourceInventory {
         definition_audit,
         syntax_definitions,
+        syntax_call_sites,
         syntax_type_relations,
         syntax_type_uses,
+        syntax_sql_queries,
         type_relation_inventory_failed_files,
         import_audit,
         import_drafts,
@@ -102,8 +120,10 @@ struct SourceInventoryTimings {
     source_load: Duration,
     source_parse: Duration,
     definition_inventory: Duration,
+    call_site_inventory: Duration,
     type_relation_inventory: Duration,
     type_use_inventory: Duration,
+    sql_literal_inventory: Duration,
     import_inventory: Duration,
     import_resolution: Duration,
 }
@@ -113,8 +133,10 @@ impl SourceInventoryTimings {
         self.source_load += other.source_load;
         self.source_parse += other.source_parse;
         self.definition_inventory += other.definition_inventory;
+        self.call_site_inventory += other.call_site_inventory;
         self.type_relation_inventory += other.type_relation_inventory;
         self.type_use_inventory += other.type_use_inventory;
+        self.sql_literal_inventory += other.sql_literal_inventory;
         self.import_inventory += other.import_inventory;
         self.import_resolution += other.import_resolution;
     }
@@ -124,8 +146,10 @@ struct SourceFileInventory {
     path: RepositoryPath,
     definition_audit: DefinitionAudit,
     definitions: Option<Vec<SyntaxDefinition>>,
+    call_sites: Option<Vec<SyntaxCallSite>>,
     type_relations: Option<Vec<SyntaxTypeRelationSite>>,
     type_uses: Option<Vec<SyntaxTypeUseSite>>,
+    sql_queries: Option<Vec<SqlQuerySite>>,
     type_relation_inventory_failed: bool,
     import_audit: ImportAudit,
     import_drafts: Vec<ImportDraft>,
@@ -256,8 +280,10 @@ fn inventory_source_file(
         path: path.clone(),
         definition_audit: DefinitionAudit::default(),
         definitions: None,
+        call_sites: None,
         type_relations: None,
         type_uses: None,
+        sql_queries: None,
         type_relation_inventory_failed: false,
         import_audit: ImportAudit::for_language(input.unit.language),
         import_drafts: Vec::new(),
@@ -354,6 +380,14 @@ fn inventory_source_file(
         .count() as u64;
 
     let operation_started = Instant::now();
+    let call_sites = inventory_call_sites_from_root(
+        input.unit.language.as_str(),
+        tree.root_node(),
+        coordinates.text(),
+    );
+    result.timings.call_site_inventory += operation_started.elapsed();
+
+    let operation_started = Instant::now();
     let type_relations = inventory_type_relation_sites_from_root(
         input.unit.language,
         tree.root_node(),
@@ -369,6 +403,13 @@ fn inventory_source_file(
         &type_relations,
     );
     result.timings.type_use_inventory += operation_started.elapsed();
+    let operation_started = Instant::now();
+    let sql_queries = inventory_sql_query_literals_from_root(
+        input.unit.language.as_str(),
+        tree.root_node(),
+        coordinates.text(),
+    );
+    result.timings.sql_literal_inventory += operation_started.elapsed();
     let operation_started = Instant::now();
     let import_sites =
         inventory_imports_from_root(input.unit.language, tree.root_node(), coordinates.text());
@@ -398,7 +439,9 @@ fn inventory_source_file(
     );
     result.timings.import_resolution += operation_started.elapsed();
     result.definitions = Some(definitions);
+    result.call_sites = Some(call_sites);
     result.type_relations = Some(type_relations);
     result.type_uses = Some(type_uses);
+    result.sql_queries = Some(sql_queries);
     result
 }

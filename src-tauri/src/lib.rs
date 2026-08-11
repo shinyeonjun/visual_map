@@ -119,6 +119,7 @@ fn analyze_workspace(
         &app_data_dir,
         &workspace,
         analysis_guard.operation_id(),
+        request.cache_policy,
     )?;
     let _ = app.emit(
         "analysis-progress",
@@ -147,6 +148,7 @@ fn analyze_workspace(
         &workspace,
         providers.inner(),
         analysis_guard.operation_id(),
+        request.cache_policy,
         Some(&semantic_progress),
     );
     Ok(analysis::complete_analysis(
@@ -215,6 +217,23 @@ fn get_fact_graph_status(
 }
 
 #[tauri::command]
+fn search_fact_nodes(
+    app: tauri::AppHandle,
+    workspace_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> CommandResult<Vec<fact_graph::FactNodeSearchResult>> {
+    workspace::open_workspace(app_data_dir(&app)?, &workspace_id)?;
+    fact_graph::search_published_nodes(
+        app_data_dir(&app)?,
+        &workspace_id,
+        &query,
+        limit.unwrap_or(40),
+    )
+    .map_err(Into::into)
+}
+
+#[tauri::command]
 fn get_map_view(
     app: tauri::AppHandle,
     workspace_id: String,
@@ -277,6 +296,7 @@ pub fn run() {
             set_workspace_provider,
             delete_workspace,
             get_fact_graph_status,
+            search_fact_nodes,
             get_map_view,
             get_map_selection,
             open_source_location,

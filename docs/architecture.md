@@ -2,6 +2,10 @@
 
 Status: canonical-only code vertical slice, 2026-08-09.
 
+Analysis scope and producer ownership are normative in
+[`analysis-product-boundary.md`](analysis-product-boundary.md). This document
+describes how that fixed product boundary is implemented; it does not expand it.
+
 Codebase Workspace turns a selected local repository into one evidence-backed
 hierarchical map. The product supplies information quickly; it does not add
 onboarding, impact-analysis, API-design, or refactoring “modes”. Users interpret
@@ -71,9 +75,10 @@ job staging and are cleaned after publication.
 ### Sidecar identity and development startup
 
 The code sidecar publishes a machine-readable CLI contract. The desktop adapter
-and bundled manifest require contract v3, which includes `contract`, `list`,
+and bundled manifest require contract v4, which includes `contract`, `list`,
 `doctor`, `detect-languages`, and `index` and excludes the removed collector and
-JSON-index commands. `npm run tauri dev` first performs a pinned, locked,
+JSON-index commands. Contract v4 also requires the explicit `index
+--cache-policy reuse|fresh` execution policy. `npm run dev:desktop` first performs a pinned, locked,
 incremental release build, probes that contract, atomically stages the verified
 executable under `src-tauri/engines`, and updates its development checksum.
 Debug runtime resolution points directly at that staged directory; Cargo
@@ -100,6 +105,20 @@ partitions. A cancellation before canonical publication preserves the previous
 static snapshot; a semantic-provider failure after canonical publication keeps
 the newly verified static snapshot and publishes no semantic revision for it.
 
+The header action is deliberately named `재분석` and sends
+`cachePolicy: "fresh"` through the desktop boundary. Fresh analysis bypasses
+every completed-result cache owned by the product: TypeScript project model,
+language-provider batches, framework analysis, current semantic revision, and
+verified semantic partitions. It still reuses installed/signed provider
+toolchains because those are dependencies, not prior analysis answers. Newly
+verified derivative caches are atomically refreshed for a later warm run. The
+currently published Fact and semantic pointers stay readable while reanalysis
+runs and are swapped only after their respective new outputs pass validation;
+cancel or failure therefore cannot turn a usable map into an empty screen.
+Immutable semantic record filenames include both semantic revision identity
+and payload digest. Thus a fresh run may retain the same map identity while
+changing non-semantic warning text without colliding with an earlier record.
+
 The desktop validates the artifact schema, completion manifest, SQLite digest,
 known tables, typed rows, references, and counts before copying it into
 app-owned immutable storage and swapping the workspace pointer. It never writes
@@ -123,15 +142,25 @@ Fact, and semantic data; the source repository is explicitly preserved.
 ## Static TracePath
 
 TracePath is a query over canonical facts, not a second stored graph. It follows
-only confirmed execution-oriented relations with exact direction:
+source-backed execution-oriented relations with exact direction:
 
 - direct `Calls` and `Constructs`;
+- resolved `virtual`, `interface`, and `dynamic` calls as candidate hops that
+  force the path to `gap`;
 - route-to-handler order derived from exact `Handles` direction;
 - bounded continuation through known callable/service nodes.
 
-Containment, import, type, test, candidate, virtual/interface dispatch, and
-unknown targets cannot become execution arrows. Partial paths remain visible
-with gap/cycle/depth-limit status instead of being presented as complete.
+Containment, import, type, test, unknown dispatch, legacy calls without an
+execution occurrence, and deferred callbacks cannot become immediate execution
+arrows. Partial paths and non-direct dispatch remain visible with
+gap/cycle/depth-limit status instead of being presented as complete.
+
+The frontend selection contract receives ordered nodes and ordered hops. Each
+hop includes relation identity, truth, dispatch, exact evidence path/line, and
+the source occurrence (`lexicalOrdinal`, `guarded`, `repeated`, `deferred`,
+`awaited`). Area selection recomputes bounded paths from the area's static
+API/entrypoint anchors so paths may cross semantic-area boundaries; it does not
+truncate execution to AI citation membership.
 
 ## AI semantic boundary
 
@@ -164,8 +193,14 @@ rendered over a newer static snapshot.
 Large semantic inputs use adaptive, disjoint local Map jobs. The planner derives
 the partition shape from the complete prompt byte size, static region count,
 and the per-request safety budget; it does not target a fixed job count. Each
-local result is verified independently against its exact region scope. After
-all partitions pass, one compact global coordinator receives only short region
+local result is verified independently against its exact region scope. Local
+verification enforces packet identity, hierarchy references, exact-one region
+accounting, evidence ownership, and honest fallback tuples, but deliberately
+defers sibling-label uniqueness: subsetting may promote unrelated descendants
+to temporary local roots, and local results are never published. Structural
+fallback labels may also remain equal because they must copy the supplied
+structural label exactly. The final full-map verifier requires distinct sibling
+labels for evidence-backed semantic areas. After all partitions pass, one compact global coordinator receives only short region
 aliases, structural summaries, verified local area hints, and selected boundary
 counts. It may merge responsibilities across partition boundaries, but it never
 receives or emits canonical fact, evidence, or trace IDs. Deterministic code maps
@@ -191,7 +226,12 @@ JSON and the exact verifier error through a bounded repair prompt. For
 hierarchy/reference failures it also enumerates every safely detectable
 violation of the same invariant from the rejected object, because the strict
 verifier itself is fail-fast. If one repair exposes a later validation error,
-the latest rejected object may receive one final targeted repair; semantic
+the latest rejected object may receive one final targeted repair together with
+the earlier verifier errors so the provider cannot silently regress a prior
+fix. Set-like aliases, citation IDs, and warnings are sorted and deduplicated by
+deterministic code rather than consuming an AI repair. The structured-output
+schema pins `snapshotId` and `semanticInputDigest` to the exact request values,
+while the verifier checks them again at publication. Semantic
 analysis is never restarted and repair is capped at two provider calls. Every
 complete corrected object must pass the same verifier. Only an execution
 failure with no result retries the exact prompt that failed.
@@ -214,6 +254,57 @@ workspaces without effort default to `high`. The broker resolves and pins one
 installed compatible CLI runtime for the analysis boundary.
 
 The canvas is sized from the published layout rather than a fixed viewport.
+
+### Semantic map read model
+
+The desktop map endpoint preserves semantic and quality metadata instead of
+asking the frontend to infer it from labels, colours, or the number of visible
+cards:
+
+- `MapArea.category` is the verifier-approved semantic category (`domain`,
+  `shared`, `infrastructure`, `integration`, or `structural`).
+- `MapArea.labelSource` says whether the displayed name is a verified semantic
+  label or a retained structural label. `fallbackReason` explains why a
+  structural label was required; the frontend must not infer either field from
+  `category` or the spelling of the label.
+- `MapNode.definition` is projected only from the canonical node's exact
+  `definitionEvidenceId`. An incoming call-site location is evidence for the
+  caller and must never be shown as the target node's definition.
+- `MapArea.boundaryRelationCounts` counts canonical relation records with
+  exactly one endpoint in the area's effective member regions, split into
+  `verified`, `structural`, and `candidate`. Relations wholly inside the area
+  are excluded.
+- `MapArea.affectingAnalysisGapCount` counts canonical gap records whose
+  declared file, repository, analysis-unit, or native-symbol scope overlaps the
+  area's effective member regions. A gap may affect both a parent and child, so
+  these values are not additive.
+- `MapView.unattributedAnalysisGapCount` retains workspace-wide gaps and gaps
+  that cannot be assigned to any published area. They must not be converted to
+  a false area-level zero.
+- `MapSelection.analysisGaps` returns the deterministic gap total for the
+  selected scope, the first 16 stably ordered `{ code, capability, message }`
+  records, and the exact truncated count. Area selections reuse canonical
+  file/unit/repository attribution. A raw fact selection requires matching
+  evidence or scope; symbol names are never used to guess attribution.
+
+These fields have different denominators and must be labelled separately in
+the UI. In particular, the number of visible or hidden map nodes is not an
+evidence, confirmed-relation, or gap count.
+
+### Canvas input boundary
+
+On Windows, the main WebView enables native pinch recognition so Chromium can
+offer precision-touchpad pinch updates to the page as cancelable `ctrl+wheel`
+events. The canvas owns those events with a non-passive window listener:
+
+- a pinch over the map zooms around the pointer;
+- ordinary two-finger scrolling over the map pans it;
+- a pinch outside the map is consumed without scaling the application shell;
+- browser page-zoom keyboard shortcuts are suppressed while the map is mounted.
+
+Do not add Chromium's `--disable-pinch` switch as a substitute. That switch
+disables compositor pinch recognition before the application can translate the
+gesture into canvas zoom.
 Top-level areas without saved reader positions are packed deterministically
 using their projected width and content height; the column count expands with
 the area count. Fit-to-screen may zoom out to 5% for very large repositories.

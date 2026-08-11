@@ -41,6 +41,14 @@ function wheel(element: HTMLElement, init: WheelEventInit): WheelEvent {
   return event;
 }
 
+function keydown(init: KeyboardEventInit): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+  act(() => {
+    window.dispatchEvent(event);
+  });
+  return event;
+}
+
 describe("useCanvasViewport wheel handling", () => {
   it("takes the wheel away from the WebView so ctrl+wheel never becomes page zoom", () => {
     const { element } = mountCanvas();
@@ -105,5 +113,37 @@ describe("useCanvasViewport wheel handling", () => {
     const { element, read } = mountCanvas();
     wheel(element, { deltaX: 30, deltaY: -50 });
     expect(read().view).toMatchObject({ x: -30, y: 50, scale: 1 });
+  });
+
+  it("blocks page-scale pinch outside the canvas without moving the map", () => {
+    const { read } = mountCanvas();
+    const outside = document.createElement("aside");
+    document.body.appendChild(outside);
+
+    const event = wheel(outside, { deltaY: -20, ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(read().view).toMatchObject({ x: 0, y: 0, scale: 1 });
+    outside.remove();
+  });
+
+  it("leaves ordinary scrolling outside the canvas alone", () => {
+    const { read } = mountCanvas();
+    const outside = document.createElement("aside");
+    document.body.appendChild(outside);
+
+    const event = wheel(outside, { deltaY: 40 });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(read().view).toMatchObject({ x: 0, y: 0, scale: 1 });
+    outside.remove();
+  });
+
+  it("blocks browser page-zoom keyboard shortcuts", () => {
+    mountCanvas();
+    expect(keydown({ key: "+", ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(keydown({ key: "-", ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(keydown({ key: "0", ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(keydown({ key: "k", ctrlKey: true }).defaultPrevented).toBe(false);
   });
 });

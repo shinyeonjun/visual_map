@@ -5,13 +5,16 @@
 //! syntax and definition evidence supports the mapping. It never invents a
 //! target from a name or directory.
 
+use super::dispatch::classify_execution_dispatch;
 use super::{
     definition_base_name, is_type_owner_kind, ranges_equal, type_relation_site_key,
-    AnalysisCapability, BTreeMap, BTreeSet, DefinitionDraft, EvidenceKind, FactNodeKind,
-    IrEndpoint, IrRelation, LanguageRelationKind, ProgrammingLanguage, ProviderProtocol,
-    ProviderSymbolId, RelationOutput, RepositoryPath, SyntaxDefinition, SyntaxTypeRelationSite,
-    SyntaxTypeUseSite, TypeRelationIntent,
+    AnalysisCapability, BTreeMap, BTreeSet, DefinitionDraft, DispatchKind, EvidenceKind,
+    ExecutionControlContext, FactNodeKind, IrEndpoint, IrRelation, LanguageRelationKind,
+    ProgrammingLanguage, ProviderProtocol, ProviderSymbolId, RelationOutput, RepositoryPath,
+    SyntaxCallSite, SyntaxDefinition, SyntaxTypeRelationSite, SyntaxTypeUseSite,
+    TypeRelationIntent,
 };
+use crate::static_pipeline::language_ir::syntax::range_contains;
 
 #[derive(Clone, Debug)]
 pub(super) struct ProviderRelationMapping {
@@ -21,6 +24,14 @@ pub(super) struct ProviderRelationMapping {
     pub(super) reverse_endpoints: bool,
     pub(super) evidence_range: Option<Vec<i32>>,
     pub(super) matched_explicit_site_key: Option<String>,
+    pub(super) dispatch: DispatchKind,
+    pub(super) execution: Option<ExecutionOccurrenceDraft>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ExecutionOccurrenceDraft {
+    pub(super) lexical_ordinal: u32,
+    pub(super) control: ExecutionControlContext,
 }
 
 pub(super) struct ProviderRelationClassificationContext<'a> {
@@ -28,6 +39,7 @@ pub(super) struct ProviderRelationClassificationContext<'a> {
     pub(super) protocol: ProviderProtocol,
     pub(super) definitions: &'a BTreeMap<ProviderSymbolId, DefinitionDraft>,
     pub(super) syntax_definitions: &'a BTreeMap<RepositoryPath, Vec<SyntaxDefinition>>,
+    pub(super) syntax_call_sites: &'a BTreeMap<RepositoryPath, Vec<SyntaxCallSite>>,
     pub(super) syntax_type_relations: &'a BTreeMap<RepositoryPath, Vec<SyntaxTypeRelationSite>>,
     pub(super) syntax_type_uses: &'a BTreeMap<RepositoryPath, Vec<SyntaxTypeUseSite>>,
     pub(super) hierarchy_occurrence_ranges:
@@ -60,15 +72,8 @@ pub(super) fn classify_provider_relation(
     target: &IrEndpoint,
     context: &ProviderRelationClassificationContext<'_>,
 ) -> Option<ProviderRelationMapping> {
-    if let Some((kind, capability, evidence_kind)) = basic_relation_mapping(&relation.kind) {
-        return Some(ProviderRelationMapping {
-            kind,
-            capability,
-            evidence_kind,
-            reverse_endpoints: false,
-            evidence_range: None,
-            matched_explicit_site_key: None,
-        });
+    if matches!(relation.kind.as_str(), "CALLS" | "CONSTRUCTS") {
+        return executable_relation_mapping(relation, source, target, context);
     }
 
     let (source_id, target_id) = match (source, target) {
@@ -154,27 +159,145 @@ fn is_type_reference_target_kind(kind: FactNodeKind) -> bool {
     is_type_owner_kind(kind) || kind == FactNodeKind::TypeAlias
 }
 
-fn basic_relation_mapping(
-    native: &str,
-) -> Option<(LanguageRelationKind, AnalysisCapability, EvidenceKind)> {
-    match native {
-        "IMPORTS" => None,
-        "REFERENCES" | "SYMBOL_REFERENCE" => None,
-        "CALLS" => Some((
-            LanguageRelationKind::Calls,
-            AnalysisCapability::DirectCalls,
-            EvidenceKind::CallSite,
-        )),
-        "CONSTRUCTS" => Some((
-            LanguageRelationKind::Constructs,
-            AnalysisCapability::DirectCalls,
-            EvidenceKind::CallSite,
-        )),
-        // Hierarchy and override relationships need endpoint kinds plus the
-        // independent syntax inventory, so they are classified separately.
-        "IMPLEMENTATION" | "DEFINITION_OVERRIDE" | "DEFINITION" => None,
-        "TYPE_DEFINITION" | "USES_TYPE" => None,
-        _ => None,
+fn executable_relation_mapping(
+    relation: &RelationOutput,
+    source: &IrEndpoint,
+    target: &IrEndpoint,
+    context: &ProviderRelationClassificationContext<'_>,
+) -> Option<ProviderRelationMapping> {
+    let kind = match relation.kind.as_str() {
+        "CALLS" => LanguageRelationKind::Calls,
+        "CONSTRUCTS" => LanguageRelationKind::Constructs,
+        _ => return None,
+    };
+    let IrEndpoint::NativeSymbol {
+        symbol_id: target_id,
+    } = target
+    else {
+        return None;
+    };
+    let target_definition = context.definitions.get(target_id)?;
+    let path = RepositoryPath::parse(&relation.path).ok()?;
+    let expected_names = executable_target_names(target_definition, context.definitions);
+    let mut sites = context
+        .syntax_call_sites
+        .get(&path)?
+        .iter()
+        .filter(|site| site.matches_provider_range(&relation.range))
+        .filter(|site| {
+            call_site_matches_relation(
+                site,
+                kind,
+                context.language,
+                target_definition.canonical_kind_hint,
+            )
+        })
+        .filter(|site| expected_names.contains(&site.callee_text))
+        .filter(|site| call_site_belongs_to_source(site, source, &path, context));
+    let site = sites.next()?;
+    if sites.next().is_some() {
+        // Multiple independently plausible call sites at one provider range
+        // are not collapsed into a confirmed executable edge.
+        return None;
+    }
+    Some(ProviderRelationMapping {
+        kind,
+        capability: AnalysisCapability::DirectCalls,
+        evidence_kind: EvidenceKind::CallSite,
+        reverse_endpoints: false,
+        evidence_range: Some(site.callee_range(context.protocol)),
+        matched_explicit_site_key: None,
+        dispatch: classify_execution_dispatch(
+            context.language,
+            kind,
+            site,
+            target_definition,
+            context.definitions,
+        ),
+        execution: Some(ExecutionOccurrenceDraft {
+            lexical_ordinal: site.lexical_ordinal,
+            control: site.control,
+        }),
+    })
+}
+
+fn executable_target_names(
+    target: &DefinitionDraft,
+    definitions: &BTreeMap<ProviderSymbolId, DefinitionDraft>,
+) -> BTreeSet<String> {
+    let mut names = BTreeSet::from([definition_base_name(&target.display_name)]);
+    if target.canonical_kind_hint == FactNodeKind::Constructor {
+        if let Some(owner) = target
+            .parent_symbol_id
+            .as_ref()
+            .and_then(|owner_id| definitions.get(owner_id))
+        {
+            // Providers commonly resolve `new Box()` to `.ctor`, `<init>`, or
+            // `__init__`. The source token is the owner type (`Box`), so both
+            // exact semantic identities are needed for the same call site.
+            names.insert(definition_base_name(&owner.display_name));
+        }
+    }
+    names
+}
+
+fn call_site_matches_relation(
+    site: &SyntaxCallSite,
+    kind: LanguageRelationKind,
+    language: ProgrammingLanguage,
+    target_kind: FactNodeKind,
+) -> bool {
+    match kind {
+        LanguageRelationKind::Calls => site.form != crate::CallSiteForm::Construct,
+        LanguageRelationKind::Constructs => {
+            site.form == crate::CallSiteForm::Construct
+                || (matches!(
+                    language,
+                    ProgrammingLanguage::Python | ProgrammingLanguage::Dart
+                ) && matches!(
+                    target_kind,
+                    FactNodeKind::Constructor
+                        | FactNodeKind::Type
+                        | FactNodeKind::Class
+                        | FactNodeKind::Struct
+                ))
+        }
+        _ => false,
+    }
+}
+
+fn call_site_belongs_to_source(
+    site: &SyntaxCallSite,
+    source: &IrEndpoint,
+    relation_path: &RepositoryPath,
+    context: &ProviderRelationClassificationContext<'_>,
+) -> bool {
+    match source {
+        IrEndpoint::File { path } => path == relation_path,
+        IrEndpoint::NativeSymbol { symbol_id } => {
+            let Some(source_definition) = context.definitions.get(symbol_id) else {
+                return false;
+            };
+            if &source_definition.path != relation_path {
+                return false;
+            }
+            let Some(source_syntax) = source_definition
+                .syntax_match
+                .and_then(|index| context.syntax_definitions.get(relation_path)?.get(index))
+            else {
+                return false;
+            };
+            match site.owner_name_range(context.protocol) {
+                Some(owner_range) => {
+                    ranges_equal(owner_range, source_syntax.name_range(context.protocol))
+                }
+                None => range_contains(
+                    source_syntax.declaration_range(context.protocol),
+                    site.expression_range(context.protocol),
+                ),
+            }
+        }
+        IrEndpoint::Structure { .. } => false,
     }
 }
 
@@ -216,6 +339,8 @@ fn type_relation_mapping(
         reverse_endpoints,
         evidence_range,
         matched_explicit_site_key,
+        dispatch: DispatchKind::NotApplicable,
+        execution: None,
     }
 }
 
@@ -310,7 +435,7 @@ pub(super) fn endpoint(raw: &str) -> Result<IrEndpoint, String> {
             .map(|path| IrEndpoint::File { path })
             .map_err(|error| format!("invalid provider file endpoint: {error}"));
     }
-    ProviderSymbolId::parse(raw)
+    ProviderSymbolId::from_provider_native(raw)
         .map(|symbol_id| IrEndpoint::NativeSymbol { symbol_id })
         .map_err(|error| format!("invalid provider symbol endpoint: {error}"))
 }
@@ -413,5 +538,8 @@ pub(super) fn relation_kind_rank(kind: LanguageRelationKind) -> u8 {
         Overrides => 11,
         UsesType => 12,
         Tests => 13,
+        ExecutesQuery => 14,
+        Reads => 15,
+        Writes => 16,
     }
 }

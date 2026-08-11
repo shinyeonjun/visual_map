@@ -3478,7 +3478,7 @@ raw provider artifact의 document sentinel 자체는 provider fidelity를 위해
 
 ---
 
-## TS-2026-08-09-78 — scip-typescript non-BMP column은 UTF-16 경계다 (미해결)
+## TS-2026-08-09-78 — scip-typescript non-BMP column은 UTF-16 경계다 (TS-2026-08-11-107에서 해결)
 
 ### 증상
 
@@ -4321,6 +4321,718 @@ canonical-only 전환 중 구형 coordinator를 제거하는 데 집중하면서
 개발 시작 전 release sidecar 증분 build가 추가되므로 Rust 소스가 바뀐 첫 실행에는 컴파일 시간이 든다.
 변경이 없으면 Cargo가 즉시 재사용한다. provider pack과 DB sidecar는 각자의 독립 계약을 유지하며, 코드
 엔진 명령 변경을 이유로 함께 재빌드하지 않는다.
+
+---
+
+## TS-2026-08-09-97 — 실행 엔진의 source receipt에 임시 문자열을 남기지 않는다
+
+### 증상과 영향
+
+desktop engine manifest의 `sourceCommit`이 실제 Git commit이 아니라
+`uncommitted-hard-cut-2026-08-07`이었다. 실행 파일 checksum과 CLI contract는 검증할 수 있어도, 그
+binary가 어느 source revision에서 만들어졌는지는 재현할 수 없었다. 설치본 장애나 분석 결과 회귀가 생기면
+동일 source를 checkout해 비교한다는 provenance 약속이 깨진다.
+
+### 잘못 짚기 쉬운 원인
+
+binary SHA-256이 있으므로 충분하다고 보기 쉽다. SHA-256은 받은 파일이 바뀌지 않았다는 것은 증명하지만,
+그 파일을 다시 만들 source revision은 설명하지 않는다. 반대로 commit hash만 있고 binary checksum이 없으면
+실제 설치 파일이 그 source로 만들어졌는지 알 수 없다. 두 receipt가 모두 필요하다.
+
+### 근본 원인과 적용한 수정
+
+canonical hard cut을 Git checkpoint보다 먼저 진행하면서 manifest의 임시 provenance를 후속 작업으로
+남겼다. Code Memory는 실제 source checkpoint `b13370c450c809796d61a563720c7352da5cebf7`, Database
+Memory는 `bb6a6830eb609b9bd7269bbfd4b60c58488beda7`로 고정했다. runtime contract version, source commit,
+binary checksum은 서로 다른 주장으로 유지한다.
+
+### 재발 시 점검 순서
+
+1. engine manifest의 `sourceCommit`이 `uncommitted`, `local`, 날짜 별칭 같은 임시 문자열인지 확인한다.
+2. commit이 실제 repository에서 조회되고 해당 engine source subtree를 포함하는지 확인한다.
+3. source checkout으로 만든 binary가 manifest의 CLI contract와 command set을 만족하는지 확인한다.
+4. 배포 asset의 checksum/signature 검증을 source receipt 검증으로 대체하지 않는다.
+
+---
+
+## TS-2026-08-09-98 — Tauri 기본 pinch 차단 뒤에는 DOM wheel handler만 추가해도 동작하지 않는다
+
+### 증상
+
+캔버스에 native non-passive `wheel` listener, `ctrlKey` 분기, 비율 기반 zoom, `touch-action: none`을
+추가했고 synthetic `WheelEvent` 단위 테스트도 통과했지만 Windows 정밀 터치패드의 두 손가락 pinch는
+실제 앱에서 아무 반응이 없었다. 화면의 `+/-` 버튼과 일반 두 손가락 pan은 동작했다.
+
+### 영향
+
+Figma/Miro형 무한 캔버스의 기본 탐색이 실기기에서 실패했다. 더 위험한 점은 DOM fixture가
+`ctrl+wheel`을 직접 만들어 주기 때문에 테스트만 보면 기능이 완성된 것처럼 보였다는 것이다.
+
+### 잘못 짚기 쉬운 원인
+
+- Windows 터치패드 설정이나 Synaptics driver 결함으로 단정하지 않는다. 확인한 장치는 Precision
+  Touchpad였고 OS의 zoom gesture도 활성화돼 있었다.
+- `ICoreWebView2Settings5::IsPinchZoomEnabled` 문서의 “touch input enabled devices”만 보고 터치스크린
+  전용이라고 단정하지 않는다. 현재 Wry는 이 설정을 trackpad/touch gesture zoom 스위치로도 사용한다.
+- `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--disable-pinch`는 custom canvas pinch를 살리는 근거가 아니다.
+  이 플래그는 compositor pinch 인식을 끄는 방향이며, 이번 목표는 페이지 확대를 막는 동시에 취소 가능한
+  gesture event를 애플리케이션에 전달하는 것이다.
+
+### 근본 원인
+
+현재 desktop은 Tauri `2.11.5`, `tauri-runtime-wry 2.11.4`, Wry `0.55.1`을 사용한다. Tauri window의
+`zoomHotkeysEnabled` 기본값은 `false`이고, Wry의 Windows 설정 코드는 이 값으로
+`SetIsZoomControlEnabled`뿐 아니라 `SetIsPinchZoomEnabled`도 호출한다. 따라서 DOM listener가 기다리는
+precision-touchpad synthetic `ctrl+wheel`이 만들어지기 전에 native WebView2 계층에서 gesture가
+차단됐다.
+
+### 적용한 수정
+
+- main WebView의 `zoomHotkeysEnabled`를 활성화해 native pinch recognition을 연다.
+- window capture 경계에 `{ passive: false }` wheel listener를 둔다.
+- pinch가 canvas 위에서 시작되면 pointer 위치를 원점으로 map scale만 바꾼다.
+- canvas 밖의 `ctrl/meta+wheel`과 browser page-zoom keyboard shortcut은 소비해 application shell이
+  확대되지 않게 한다.
+- modifier 없는 두 손가락 wheel은 canvas 위에서 pan으로 유지하고 canvas 밖의 일반 scroll은 건드리지
+  않는다.
+
+Chromium의 touchpad pinch queue는 native pinch를 먼저 취소 가능한 synthetic `ctrl+wheel`로 renderer에
+제공하고, page가 소비하지 않았을 때만 실제 page-scale pinch를 수행한다. 이번 구현은 그 경계를 이용한다.
+
+### 검증 결과
+
+- viewport wheel/pinch 회귀 테스트 **10/10 통과**
+- nested area 위 pinch, 비율 기반 확대, 한 event 최대 step, line/pixel delta, 일반 two-finger pan,
+  canvas 밖 page-scale 차단을 각각 검증했다.
+- 실제 Windows Precision Touchpad에서 pinch 확대·축소가 동작함을 사용자 실기기로 확인했다.
+- 병렬로 진행 중인 다른 UI 변경과 충돌하지 않기 위해 전체 desktop build는 이 항목 작성 시점에 중단했다.
+
+### 재발 시 점검 순서
+
+1. `tauri.conf.json`의 main window가 native gesture를 활성화하는지 확인한다.
+2. 실제 WebView dependency의 Windows 설정에서 pinch와 hotkey가 같은 flag에 묶였는지 다시 확인한다.
+3. DevTools에서 pinch가 `ctrlKey=true`, cancelable `wheel`로 도착하고 `defaultPrevented=true`가 되는지 본다.
+4. canvas listener가 React passive synthetic event가 아니라 native non-passive capture listener인지 본다.
+5. DOM unit test와 별도로 실제 Precision Touchpad smoke를 수행한다.
+
+### 남은 한계 또는 후속 gate
+
+현재 검증은 Windows WebView2와 Precision Touchpad 기준이다. touchscreen, macOS WKWebView, Linux
+WebKitGTK의 native gesture 계약은 각각 별도 실기기 gate가 생기기 전까지 통과했다고 선언하지 않는다.
+
+---
+
+## TS-2026-08-09-99 — AI 실패가 이미 게시된 새 정적 Fact snapshot을 되돌리면 안 된다
+
+### 증상과 영향
+
+프론트 계약은 “AI 의미 분석이 실패해도 정적 사실은 저장된다”고 안내했지만 backend는 분석 시작 전
+published Fact pointer를 checkpoint한 뒤 semantic 단계가 실패하면 이전 pointer로 복원했다. 새 source를
+정적으로 정확히 분석했어도 AI provider 오류 하나 때문에 새 Fact snapshot이 제품에서 사라졌다. UI 문구,
+제품 원칙, 실제 저장 동작이 서로 달랐다.
+
+### 잘못 짚기 쉬운 원인
+
+전체 분석을 하나의 transaction처럼 보는 것이 더 안전해 보일 수 있다. 그러나 이 제품에서 정적 Fact는
+권위 있는 원본이고 AI map은 교체 가능한 파생물이다. 정적 publication이 검증·원자 게시까지 끝난 뒤에는
+semantic 실패가 정적 사실의 실패를 의미하지 않는다. 이전 semantic map을 새 snapshot 위에 재사용하는 것도
+identity가 다르므로 허용할 수 없다.
+
+### 근본 원인과 적용한 수정
+
+초기 구현이 static+semantic 전체를 한 성공 단위로 취급해 `checkpoint_published_pointer`와
+`restore_published_pointer`를 semantic error recovery에 사용했다. rollback API와 호출을 제거하고 완료
+결과를 다음처럼 분리했다.
+
+- 정적 게시 전 취소·실패: 기존 published snapshot 유지
+- 정적 게시 성공 + semantic 성공: 새 Fact snapshot + 새 semantic revision
+- 정적 게시 성공 + semantic 실패: 새 Fact snapshot + `semanticRevisionId: null` + redacted error
+
+map query는 Fact snapshot ID와 semantic revision의 source snapshot ID가 정확히 같을 때만 결합하므로,
+오래된 의미 지도를 새 사실처럼 표시하지 않는다.
+
+### 검증 결과
+
+backend 회귀 테스트가 semantic provider failure 뒤에도 `snapshot-new`와 node/edge/evidence/coverage count를
+그대로 반환하는 것을 확인했다. frontend vertical-slice 테스트는 같은 결과에서 새 분석 원장을 표시하고
+“코드 사실은 저장됐지만 의미 지도를 만들지 못했습니다”를 안내하며 map이 없음을 확인했다.
+
+### 재발 시 점검 순서
+
+1. static canonical pointer가 정확히 어느 시점에 원자 게시되는지 확인한다.
+2. semantic error path가 Fact pointer 파일을 쓰거나 삭제하는지 검색한다.
+3. 새 Fact status와 `semanticRevisionId: null`이 함께 전달되는지 본다.
+4. 이전 semantic revision을 snapshot identity 검사 없이 fallback 렌더링하지 않는지 본다.
+
+---
+
+## TS-2026-08-09-100 — AI source excerpt는 prompt 생성 전과 provider 실행 직전에 두 번 검사한다
+
+### 증상과 영향
+
+일반 engine diagnostic은 secret redaction을 거쳤지만 AI prompt용 source excerpt는 선택된 원문을 그대로
+담았다. 최대 excerpt 수와 byte ceiling이 있어도 production token, DB connection string, private key가
+코드에 커밋돼 있으면 외부 CLI/provider 경계로 나갈 수 있었다. 분석 버튼을 누르는 동작이 source 발췌의
+외부 전송 동의라는 사실도 UI에 명시되지 않았다.
+
+### 잘못 짚기 쉬운 원인
+
+- 전송량이 작다는 것은 비밀값이 없다는 뜻이 아니다.
+- `.env`를 제외해도 source literal, test fixture, connection builder 안에 credential이 있을 수 있다.
+- redaction 한 번만 호출하면 이후 refactor에서 우회 경로가 생길 수 있다.
+- 자동 마스킹이 임의의 모든 고엔트로피 비밀을 판별한다고 약속해서는 안 된다.
+
+### 적용한 수정
+
+- bounded source excerpt 전체에 redaction을 먼저 적용한 뒤 UTF-8 boundary를 지키며 byte ceiling으로 자른다.
+- key/value credential, authenticated URL/connection string, bearer/JWT, common provider token prefix,
+  AWS access key, private-key block을 마스킹한다.
+- `token: string` 같은 정상 type annotation은 비밀값 key/value로 오인하지 않는다.
+- provider process 실행 직전에 같은 redactor를 다시 적용한다. 결과가 한 글자라도 달라지면 unredacted
+  pattern이 남은 것이므로 호출을 fail closed한다.
+- workspace/provider 쌍의 첫 semantic run은 source evidence가 CLI 설정에 따라 외부 AI 서비스로 전달될
+  수 있음을 명시적으로 동의받는다. 자동 마스킹의 한계도 함께 표시한다.
+- workspace 삭제 시 해당 동의 receipt를 제거한다. 동의 receipt는 credential이 아니며 지도·대화
+  snapshot에 저장하지 않는다.
+
+### 검증 결과
+
+production DB password와 GitHub token shape가 사라지고 함수 이름, type annotation, repository call 같은
+의미 문맥은 유지되는 테스트가 통과했다. provider 경계에 의도적으로 unredacted excerpt를 넣으면 AI
+process 시작 전에 차단되는 테스트와, 동의 전에는 analysis invoke가 호출되지 않는 UI 테스트가 통과했다.
+
+### 재발 시 점검 순서
+
+1. excerpt selection 직후와 provider spawn 직전 두 경계가 모두 같은 redaction authority를 쓰는지 본다.
+2. truncate가 redaction보다 먼저 실행돼 secret pattern을 반쪽으로 잘라 탐지를 피하지 않는지 확인한다.
+3. 새 provider adapter가 broker를 우회해 raw excerpt를 직접 실행 인자로 넣지 않는지 확인한다.
+4. 실제 secret을 fixture에 커밋하지 말고 실행 중 조합한 synthetic shape로 negative test한다.
+5. 새 secret shape를 추가할 때 정상 source type/identifier의 false positive도 함께 검증한다.
+
+### 남은 한계 또는 후속 gate
+
+pattern redaction은 임의의 custom secret format을 완전하게 판별하지 못한다. 따라서 source 저장소에
+credential을 두지 않는 원칙과 명시적 동의가 계속 필요하다. 향후 redactor를 확장해도 “모든 비밀 100%
+탐지”로 마케팅하지 않는다.
+
+---
+
+## TS-2026-08-09-101 — 일반 CI 테스트가 ignored 대형 provider installer asset에 의존하지 않는다
+
+### 증상과 영향
+
+GitHub Actions에서 `CODEBASE_WORKSPACE_SKIP_PROVIDER_RESOURCES=1`로 desktop test/clippy를 실행했지만
+provider asset 테스트 세 개는 실제 `src-tauri/engines/provider-bundles`를 열려고 했다. 해당 대형 ZIP은
+Git에서 제외되므로 깨끗한 checkout의 CI가 실패했다. 로컬 개발 PC에는 bundle이 있어 통과하므로 기능
+결함처럼 보이거나 반대로 CI만 무시하게 될 위험이 있었다.
+
+### 잘못 짚기 쉬운 원인
+
+skip 환경변수를 계속 늘리거나 테스트 세 개를 ignore하면 signature, catalog selection, append-only
+activation 회귀를 일반 CI에서 잃는다. 반대로 매 CI마다 수백 MiB 실제 provider installer를 만들거나 받으면
+시간·네트워크 비용과 외부 환경 변동을 unit test에 끌어들인다.
+
+### 근본 원인과 적용한 수정
+
+일반 asset contract 테스트와 실제 release asset certification이 같은 물리 ZIP을 authority로 사용했다.
+테스트 안에서 임시 signing key, compact core pack, 10언어 in-memory catalog를 결정적으로 만들도록 분리했다.
+일반 CI는 synthetic signed fixture로 다음을 검증한다.
+
+- catalog signature와 tamper rejection
+- catalog schema와 10언어 pack selection
+- core pack의 append-only v3 activation/reuse
+- path traversal, top-level pack identity, receipt 계약
+
+실제 대형 signed archives, executable liveness, 10언어 canonical publication은 별도 provider release gate가
+계속 소유한다. 일반 CI에서는 더 이상 `CODEBASE_WORKSPACE_SKIP_PROVIDER_RESOURCES`로 Rust test/clippy를
+왜곡하지 않는다.
+
+### 검증 결과
+
+compact signed bundle로 catalog 위변조 거부, core pack 2회 activation 시 같은 v3 path 재사용, 필요한 언어
+pack만 선택하는 회귀가 통과했다. 이 항목의 완료 조건은 로컬 fixture 통과뿐 아니라 깨끗한 GitHub Actions
+checkout에서 실제 provider directory 없이 Rust test/clippy가 통과하는 것이다.
+
+### 재발 시 점검 순서
+
+1. 일반 unit test가 `env!(CARGO_MANIFEST_DIR)/engines/provider-bundles`를 직접 읽는지 확인한다.
+2. synthetic fixture가 signature 검증을 우회하거나 production validator의 별도 복사본을 쓰지 않는지 본다.
+3. 일반 CI와 release provider gate의 책임을 합치지 않는다.
+4. CI 실패를 해결하려고 실 installer asset을 Git에 커밋하거나 핵심 asset 테스트를 ignore하지 않는다.
+
+---
+
+## TS-2026-08-09-102 — 개발 서버 감시 경로에서 provider archive를 쓰면 앱이 무한 재시작한다
+
+### 증상
+
+`npm run tauri dev`로 실행한 앱이 켜졌다 꺼지기를 반복하고, 터미널에는 아래 메시지가 계속 나타났다.
+
+```text
+Info File src-tauri\engines\provider-bundles\providers-go.zip changed. Rebuilding application...
+Running DevCommand (`cargo run ...`)
+```
+
+### 영향
+
+앱이 실제로 crash한 것처럼 보이지만, 매번 다른 프로세스가 다시 실행되므로 분석 상태와 UI가 계속 초기화된다.
+불완전하게 생성되던 대형 ZIP도 provider asset으로 오인될 수 있다.
+
+### 잘못 짚기 쉬운 원인
+
+- Tauri runtime 또는 Rust binary의 반복 crash
+- 프론트 hot reload 오류
+- `providers-go.zip` 내용 자체의 변경 감지 버그
+
+### 근본 원인
+
+이전에 시작한 `tauri build --debug --no-bundle`의 자식 PowerShell asset builder가 부모 터미널을 중단한 뒤에도
+고아 프로세스로 남아 있었다. 이 프로세스가 Tauri가 감시하는 `src-tauri` 아래의
+`engines/provider-bundles/providers-go.zip`을 압축 중 계속 덮어썼다. Tauri dev watcher는 각 write event를
+소스 변경으로 판단해 실행 중인 앱을 내리고 다시 빌드했다.
+
+즉, 원인은 앱 crash가 아니라 아래 feedback loop였다.
+
+```text
+고아 asset builder가 ZIP 쓰기
+  -> Tauri watcher가 src-tauri 변경 감지
+  -> 앱 재시작
+  -> asset builder는 계속 ZIP 쓰기
+  -> 다시 변경 감지
+```
+
+### 적용한 수정
+
+1. command line과 부모·자식 PID를 확인해 해당 build process tree만 종료했다.
+2. ZIP 크기가 더 이상 변하지 않는지 확인했다.
+3. 중앙 디렉터리가 없는 불완전 ZIP임을 검증했다.
+4. 불완전 ZIP을 감시 경로 밖의 임시 격리 폴더로 이동했다.
+
+개발 빌드는 source provider 경로를 사용하고 `build.rs`가 provider bundle resource를 제외하므로, 이 ZIP을
+제거해도 `tauri dev`의 provider 실행 계약은 깨지지 않는다. release asset 준비 과정에서는 완성본을 다시
+생성한다.
+
+### 검증 결과
+
+- 관련 build/asset-builder 자식 프로세스가 남지 않았다.
+- `src-tauri/engines/provider-bundles/providers-go.zip`이 감시 경로에 남지 않았다.
+- 종료 후 대기해도 ZIP 크기 변경과 추가 write event가 발생하지 않았다.
+- 격리한 파일은 `End of Central Directory record could not be found`로 불완전 archive임을 확인했다.
+
+### 재발 시 점검 순서
+
+1. 로그가 `panicked`/exit code가 아니라 `File ... changed. Rebuilding`인지 먼저 구분한다.
+2. `tauri build`, `prepare-build-assets.ps1`, `prepare-provider-assets.ps1` 프로세스의 부모·자식 PID를 확인한다.
+3. 표시된 archive의 길이와 수정 시간이 계속 변하는지 측정한다.
+4. 정확한 build process tree만 종료하고, 부분 archive는 열어 검증한 뒤 감시 경로 밖으로 격리한다.
+5. 개발 서버와 release asset packaging을 동시에 실행하지 않는다.
+
+### 남은 한계 또는 후속 gate
+
+현재 packaging script가 완성 전 archive를 `src-tauri` 안에 직접 쓰는 구조라, 정상적인 release build와
+`tauri dev`를 동시에 실행해도 같은 rebuild storm이 재현될 수 있다. 장기적으로는 archive 전체를 감시 경로
+밖의 staging directory에서 만들고 검증한 뒤, 완성본만 원자적으로 publish해야 한다.
+
+---
+
+## TS-2026-08-10-103 — 여러 structural fallback 오류를 하나씩 고쳐 AI 교정 횟수를 소진함
+
+### 증상
+
+정적 Fact Graph는 정상 저장되고 의미 분석 분할 대부분도 성공했지만, 마지막 일부 분할에서
+`ContradictoryFallback`이 반복되어 의미 지도를 publish하지 못했다. 같은 분석을 다시 실행하면 이미 검증된
+분할은 cache에서 재사용됐지만, 실패 분할은 AI 1차·2차 교정을 거친 뒤에도 다음 fallback 오류가 하나씩
+나타나 종료될 수 있었다.
+
+대표 상태는 다음과 같았다.
+
+```text
+검증된 의미 분할: 15/16
+실패: ContradictoryFallback at areas[...].label
+정적 snapshot: publish됨
+의미 snapshot: publish되지 않음
+```
+
+### 영향
+
+- 정적 분석 결과는 잃지 않지만 의미 지도는 완성되지 않는다.
+- 성공한 분할을 다시 계산하지는 않더라도, 실패한 한 분할이 최대 교정 횟수를 소진해 전체 publish를 막는다.
+- 사용자에게는 같은 종류의 오류가 계속 새로 생기는 것처럼 보인다.
+
+### 잘못 짚기 쉬운 원인
+
+- 성공한 15개 분할까지 매번 전부 다시 분석한다고 오해하기 쉽다.
+- AI가 fallback 계약을 전혀 이해하지 못한다고 보기 쉽다.
+- 검증을 느슨하게 하거나 structural label을 백엔드가 임의 보정하면 해결된다고 보기 쉽다.
+
+### 근본 원인
+
+일반 verifier는 제품 안전을 위해 첫 오류에서 중단하는 fail-fast 방식이다. 반면 repair prompt의 관련 오류
+수집기는 `MissingReference`와 `InvalidHierarchy`만 전체 열거했고, `ContradictoryFallback`은 첫 항목 하나만
+AI에 전달했다. 한 분할에 fallback 모순이 3개 이상 있으면 AI가 한 번에 하나씩 고쳐도 최대 2회의 verifier
+교정을 소진했다.
+
+합법적인 fallback 조합은 아래 두 가지뿐이다.
+
+1. 의미 이름: `labelSource=semantic`, 비구조 category, `fallbackReason=null`
+2. 구조 fallback: `labelSource=structural`, `category=structural`, fallback reason 존재, label은 해당 영역에
+   배정된 region의 `structuralLabel` 중 하나를 byte-for-byte 그대로 사용
+
+### 적용한 수정
+
+1. 기존 `validate_fallback`을 유일한 판정 기준으로 재사용해, parse 가능한 거절 결과의 모든
+   `ContradictoryFallback`을 결정적 순서로 수집한다.
+2. 첫 오류와 나머지 관련 오류를 같은 repair payload에 넣어 실패한 분할 하나를 한 번의 AI 응답으로
+   전부 교정하게 한다.
+3. repair policy에 두 합법 조합과 structural label의 번역·결합·의역 금지를 명시했다.
+4. 정상 verifier는 계속 fail-fast로 유지하고, 근거 없는 이름을 승인하거나 백엔드가 AI 출력을 몰래
+   보정하지 않는다.
+5. 이미 검증된 분할 cache는 삭제하거나 무효화하지 않는다. 다음 실행은 현재 packet identity와 일치하는
+   성공 분할을 재사용하고 cache가 없는 실패 분할만 실행한다.
+
+### 검증 결과
+
+- 3개 영역을 동시에 잘못 만든 fixture에서 첫 오류 외 나머지 2개도 repair payload에 함께 포함됨을
+  회귀 테스트로 고정했다.
+- semantic compiler 전체 재검증 통과: 기본 suite 26개, partition suite 6개, 외부 provider 4개는 ignore.
+- semantic compiler Clippy `-D warnings` 통과.
+- Tauri 백엔드 테스트: 97개 통과, 외부 환경 의존 4개 ignore.
+
+### 재발 시 점검 순서
+
+1. `semantic-partition-cache-v1`에서 성공 분할 파일이 유지되는지 확인한다.
+2. 오류가 provider 실행 실패인지, JSON parse 실패인지, verifier 거절인지 구분한다.
+3. verifier 거절이면 repair payload의 `verifierError`와 `relatedVerifierErrors`에 같은 종류의 독립 오류가
+   모두 들어갔는지 확인한다.
+4. cache를 지우기 전에 packet digest, 모델, reasoning effort, prompt policy version 변경 여부를 확인한다.
+5. 문제를 숨기기 위해 verifier를 약화하거나 structural fallback을 임의 생성하지 않는다.
+
+### 남은 한계 또는 후속 gate
+
+이번 수정은 독립적으로 열거할 수 있는 fallback 모순을 한 번에 교정한다. JSON 자체가 parse되지 않거나 한
+오류를 고친 결과로 전혀 다른 계약 오류가 새로 드러나면 제한된 후속 교정이 필요할 수 있다. 이 경우에도
+성공 분할은 그대로 보존되고 실패 분할만 복구 대상이 된다.
+
+---
+
+## TS-2026-08-10-104 — 로컬 분할에 최종 이름 규칙을 적용하고 기계 중복까지 AI에 맡겨 교정이 연쇄 실패함
+
+### 증상
+
+18개 의미 분할 중 대부분은 검증됐지만 일부 분할이 아래처럼 서로 다른 오류로 1차·2차 교정을 소진했다.
+
+```text
+NonCanonicalValue: sibling semantic labels must be distinct
+DuplicateIdentifier: aliases contains a duplicate value
+DuplicateIdentifier: proposalKey collection contains a duplicate value
+DigestMismatch: provider output does not echo the exact semantic input digest
+```
+
+첫 오류를 고친 응답이 별칭 중복을 만들고, 그다음 응답이 packet digest를 바꾸는 식으로 오류 종류가 이동했다.
+정적 Fact snapshot은 정상 publish됐지만 의미 revision은 fail-closed로 남았다.
+
+### 영향
+
+- AI가 의미를 잘못 이해한 것이 아닌데도 구조 이름 `domain`, `src`, `services`의 반복만으로 로컬 작업이
+  실패할 수 있었다.
+- 정렬·중복 제거·identity 복사처럼 코드가 정확히 할 수 있는 작업이 비싼 AI 교정 횟수를 소비했다.
+- 후속 교정은 직전 오류만 받아 이전에 고친 계약을 다시 깨뜨릴 수 있었다.
+
+### 잘못 짚기 쉬운 원인
+
+- 모든 sibling label 중복은 나쁜 최종 지도이므로 로컬에서도 거부해야 한다고 보기 쉽다.
+- 구조 fallback 이름 뒤에 번호를 붙이면 된다고 보기 쉽다.
+- digest mismatch는 병렬 실행 결과가 서로 섞인 문제라고 보기 쉽다.
+- 검증기가 까다로우므로 검증 자체를 느슨하게 하면 된다고 보기 쉽다.
+
+### 근본 원인
+
+1. partition subsetting은 원래 parent가 partition 밖이면 해당 region을 임시 root로 승격한다. 서로 무관한
+   `domain` 자식 둘이 로컬에서 sibling이 될 수 있지만, 기존 verifier는 publish용 sibling uniqueness를
+   중간 결과에도 동일하게 적용했다.
+2. verifier가 `labelSource`와 무관하게 모든 이름을 비교했다. 구조 fallback은 근거가 약할 때 입력의
+   `structuralLabel`을 byte-for-byte 복사해야 하므로, 같은 이름을 억지로 바꾸라는 규칙과 동시에 만족할 수
+   없었다.
+3. aliases, representative ID, evidence ID, warning은 set 의미인데 verifier가 중복 제거 전에 거부했다.
+4. output schema는 snapshot/digest의 모양만 제한하고 실제 요청 값은 제한하지 않아, repair 응답이 유효한
+   다른 64자 digest를 낼 수 있었다.
+5. 2차 교정에는 직전 오류만 들어가 이전 교정에서 이미 거부된 invariant를 잊었다.
+
+### 적용한 수정
+
+1. `SemanticVerificationPhase`를 도입해 `FinalMap`과 `LocalPartition`을 코드 계약으로 분리했다.
+2. 로컬 분할은 identity, 참조, 계층 모양, exact-one membership, evidence ownership, fallback 진실성은 그대로
+   검증하되 sibling name uniqueness만 최종 reconciliation로 미룬다.
+3. 최종 지도는 `labelSource=semantic`인 sibling 이름만 고유해야 한다. structural fallback은 같은 원본
+   이름을 정직하게 유지할 수 있다.
+4. aliases, fact/trace/evidence ID, warnings는 backend가 결정적 정렬·중복 제거한다. assignments, areas,
+   proposalKey는 의미가 달라질 수 있어 자동 보정하지 않는다.
+5. base와 global structured-output schema의 `snapshotId`와 `semanticInputDigest`를 요청의 정확한 enum 값으로
+   고정하고, publish verifier의 동일성 검사도 유지한다.
+6. proposalKey 중복 오류는 중복 값과 모든 array index를 명시한다. repair policy는 key와 parent/assignment
+   참조를 함께 고치고 영역 병합·region 이동으로 숨기지 못하게 한다.
+7. 2차 교정 payload에 이전 verifier 오류를 bounded history로 전달한다. prompt policy version은 v6으로
+   올려 옛 규칙의 결과와 새 규칙의 결과가 같은 cache identity를 공유하지 않게 했다.
+
+### 검증 결과
+
+- 로컬 분할의 중복 의미 이름은 중간 결과로 승인되고 동일 결과가 최종 verifier에서는 거부되는 회귀 테스트
+  통과.
+- 같은 structural fallback 이름 두 개는 최종 지도에서도 거짓 이름 생성 없이 승인되는 회귀 테스트 통과.
+- case-only alias와 중복 fact/trace/evidence ID가 AI 재호출 없이 하나로 정규화되는 테스트 통과.
+- duplicate proposalKey 오류가 `orders at indexes [0, 2]`처럼 정확한 위치를 제공하는 테스트 통과.
+- base/global output schema가 실제 snapshot ID와 digest를 exact enum으로 고정하는 테스트 통과.
+- semantic compiler: 33개 통과(기본 26, partition 6, unit 1), provider 실호출 4개 ignore.
+- Tauri backend: 97개 통과, 외부 환경 의존 4개 ignore.
+- semantic compiler와 Tauri lib Clippy `-D warnings` 통과.
+
+### 재발 시 점검 순서
+
+1. 오류가 local partition인지 final/global reconciliation인지 먼저 확인한다.
+2. local prompt의 `verification_phase`가 `LocalPartition`으로 보존되고 repair prompt에도 같은 phase가 이어지는지
+   확인한다.
+3. aliases/citation duplicate가 provider error로 남는다면 normalization보다 앞에서 새 validator가 실행되는지
+   본다.
+4. output schema의 snapshot/digest가 regex가 아니라 현재 packet 값의 enum인지 확인한다.
+5. 2차 repair payload에 `previousVerifierErrors`가 포함되는지 확인한다.
+6. proposalKey나 assignment 중복을 backend가 임의로 고치지 않는다. 참조 의도가 모호하므로 verifier-guided
+   repair 또는 fail-closed 대상이다.
+
+### 남은 한계 또는 후속 gate
+
+이 패치는 계약상 불가능했던 오류와 기계적으로 해결 가능한 오류를 제거한다. provider 실행 실패, JSON
+형식 파손, 근거 없는 의미 이름, 잘못된 region membership, 모호한 duplicate proposalKey까지 무조건 승인하는
+것은 아니다. 그런 결과는 두 번의 bounded repair 뒤에도 정확하지 않으면 계속 fail-closed한다. 실제 provider
+E2E 성공률은 같은 대형 repository fresh run으로 별도 측정해야 하며, unit test 통과를 100% 모델 성공률로
+해석하지 않는다.
+
+---
+
+## TS-2026-08-10-105 — 같은 코드의 의미 지도가 정책마다 크게 달라지고 명시적 legacy 경계까지 사라짐
+
+### 증상
+
+- 같은 164개 static region을 사용한 분석이 프롬프트 정책 변화에 따라 `L0 11 + L1 29`,
+  `L0 16 + L1 42`, `L0 12 + L1 0`으로 크게 달라졌다.
+- 마지막 지도는 실제 `legacy/` 하위 코드 33개 region을 primary 구현과 같은 책임 영역에 병합해, 사용자는
+  레거시 코드가 없는 것으로 오해할 수 있었다.
+- 모든 영역이 검증기를 통과했지만 11/12 영역에 대표 TracePath가 없어서, 검증 성공만으로 의미 분류의
+  안정성이나 깊이를 보장할 수 없었다.
+
+### 영향
+
+큰 책임 이름은 대체로 읽히지만 재분석할 때 membership과 계층이 크게 바뀌고, lifecycle·application 경계가
+숨겨져 코드베이스 이해 도구의 신뢰를 떨어뜨린다.
+
+### 잘못 짚기 쉬운 원인
+
+- 모델의 무작위성만 문제라고 보기 쉽다. 비교한 세 결과는 v4/v5/v6로 정책이 달랐고 마지막 static
+  snapshot도 달랐으므로 동일 조건 반복 실험이 아니었다.
+- `legacy`라는 단어를 이름에서 없애면 더 현대적인 지도가 된다고 보기 쉽다. 상태 단어가 책임은 아니지만,
+  material explicit lifecycle boundary는 구조 정보다.
+- 경로·파일명·주석은 추측이므로 쓰지 말아야 한다고 보기 쉽다. 이들은 약하거나 강한 증거가 될 수 있으며
+  다른 독립 신호와 함께 해석해야 한다.
+
+### 근본 원인
+
+1. 초기/전역 프롬프트가 `작은 상위 지도`, `모든 region exact-one`, `상태 단어 억제`를 동시에 강조해
+   global reduce가 가독성을 위해 서로 다른 lifecycle leaf를 합쳤다.
+2. 추측 금지 규칙은 많았지만 경로·심벌·관계·설정·주석을 어떻게 가중하고 결합할지 긍정 규칙이 약했다.
+3. 전역 통합이 목표 영역 수는 없다고 명시하지 않았고, L1 계층보다 넓은 L0 병합을 선택할 여지가 컸다.
+4. fresh 분석은 previousRevision을 사용하지 않으므로 이전 membership을 안정화 기준으로 삼지 않았다.
+
+### 적용한 수정
+
+1. prompt policy를 `base-semantic-policy-v7`로 올려 이전 partition/semantic cache identity와 분리했다.
+2. local과 global prompt가 동일한 `EVIDENCE AND INFERENCE POLICY`를 사용한다. 경로·파일명·공개 심벌·관계·
+   route/job/event·DB·framework·설정·annotation·주석·docstring·excerpt를 모두 증거로 사용하되 강도와 독립성을
+   구분한다.
+3. 한 direct signal 또는 두 independent consistent signal로 좁은 의미 추론을 허용한다. 결론 강도는 증거
+   강도를 넘지 않으며, 충돌 시 좁히기·분리·정확한 structural fallback을 선택한다.
+4. material explicit legacy/deprecated 구현과 primary 구현은 같은 leaf에 병합하지 않는다. 같은 책임이면
+   lifecycle-separated L1, 독립 실행 시스템이면 별도 L0를 사용한다.
+5. global reduce에는 고정 목표 영역 수가 없고 가독성은 semantic truth와 boundary 보존 뒤의 tie-breaker라고
+   명시했다. 서로 다른 cohesive feature는 vague L0로 평탄화하지 않고 L1로 유지한다.
+6. 초기 의미 판단과 verifier-guided mechanical repair를 분리해 repair가 unrelated membership/label을 다시
+   분석하지 않게 했다.
+
+### 검증 결과
+
+- semantic compiler: 33개 통과(기본 26, partition 6, unit 1), provider 실호출 4개 ignore.
+- semantic compiler Clippy `-D warnings` 통과.
+- Tauri `cargo check --no-default-features` 통과.
+- prompt policy/packet digest가 v7로 바뀌고 local/global prompt가 같은 evidence/lifecycle contract를 포함하는
+  회귀 테스트 통과.
+
+### 재발 시 점검 순서
+
+1. 비교 결과의 snapshot ID, prompt policy version, model, effort가 모두 같은지 먼저 확인한다.
+2. region-to-area partition은 이름 문자열이 아니라 label-independent ARI/Jaccard로 비교한다.
+3. explicit lifecycle path root가 primary root와 같은 leaf에 들어갔는지 검사한다.
+4. L0/L1 수와 L1=0 여부를 확인해 global reduce의 과도한 평탄화를 찾는다.
+5. semantic label마다 direct signal 또는 독립적인 두 signal이 실제 packet에 있는지 대조한다.
+
+### 남은 한계 또는 후속 gate
+
+프롬프트 계약은 lifecycle 병합을 금지하지만 verifier가 임의 repository의 lifecycle 의미를 기계적으로 판정할
+수는 없다. 동일 snapshot/model/policy의 반복 fresh run과 대표 대규모 repository 평가로 membership 안정성과
+실제 lifecycle 분리 성공률을 별도 측정해야 한다.
+
+---
+
+## TS-2026-08-10-106 — 정상 TypeScript 구조 분해 심벌 하나가 전체 다언어 분석을 중단함
+
+### 증상
+
+`D:\visual_map_reliability_lab\plane`처럼 처음 연결한 범용 프로젝트에서 정적 분석이 AI 단계 전에 아래 오류로
+중단됐다.
+
+```text
+provider emitted invalid symbol ID: identity component contains a forbidden control character
+```
+
+최근 provider 캐시를 직접 검사한 결과 TypeScript 11개 파일의 41개 심벌이 같은 모양이었다. 예를 들어 정상
+코드 `function PercentageText({ x, y, percentage, className }: Props)`를 `scip-typescript`가 아래처럼 원본
+줄바꿈까지 포함한 native symbol로 표현했다.
+
+```text
+PercentageText().(`{\r\n  x,\r\n  y,\r\n  percentage,\r\n  className,\r\n}`)typeLiteral26:x.
+```
+
+### 영향
+
+- 사용자 소스에는 오류가 없지만 provider 심벌 한 개 때문에 전체 repository 분석이 실패했다.
+- 캐시 삭제·fresh 분석·AI 프롬프트 수정으로는 동일한 provider 출력이 반복되므로 해결되지 않았다.
+- TypeScript에서 발견됐지만 raw provider identity를 쓰는 모든 언어가 같은 구조적 위험을 가졌다.
+
+### 잘못 짚기 쉬운 원인
+
+- 입력 프로젝트가 이상하거나 파일에 불법 제어문자가 있다고 보기 쉽다.
+- 줄바꿈을 `trim()`하거나 삭제하면 된다고 보기 쉽다. 이 방식은 서로 다른 심벌을 같은 ID로 합칠 수 있다.
+- canonical Fact ID 검증을 느슨하게 하면 된다고 보기 쉽다. 그러면 저장·조회·digest 계약까지 오염된다.
+- AI 의미 분석 오류라고 보기 쉽지만 실패 지점은 provider -> Language IR 정적 경계다.
+
+### 근본 원인
+
+`ProviderSymbolId`는 provider-native evidence identity라고 선언돼 있었지만 adapter가 외부 raw 문자열을 곧바로
+내부 persisted identity 검증기에 넣었다. 외부 provider 문법과 내부 Fact 계약을 같은 문법으로 취급한 경계
+오류였다. definition에서는 fatal error였고 relation occurrence에서는 조용히 누락돼 동작도 일관되지 않았다.
+
+### 적용한 수정
+
+1. `ProviderSymbolId::from_provider_native`를 공용 Fact 계약에 추가했다.
+2. 계약상 안전한 기존 ID는 그대로 유지하고, 제어문자·초장문·예약 prefix 값만 domain-separated SHA-256
+   identity로 결정적으로 변환한다.
+3. 10개 언어의 definition, parent, occurrence, relation endpoint와 framework handler가 같은 함수를 사용한다.
+4. 변환된 ID를 unsafe raw qualified name 대신 Language IR qualified name에도 사용한다.
+5. 빈 심벌처럼 실제로 join할 수 없는 단일 record는 omit/gap 회계로 내리고 repository 전체를 중단하지 않는다.
+6. provider definition 수집·정규화·metadata audit를 `adapter/provider_definitions.rs`로 분리해 거대
+   `adapter.rs`의 책임을 줄였다.
+
+### 검증 결과
+
+- 실제 Plane 실패 형태와 같은 CRLF 포함 SCIP type-literal definition/occurrence/relation 회귀 테스트 통과.
+- TypeScript, JavaScript, Python, Java, C#, C, C++, Go, Rust, Dart 10개 언어 모두 control-character symbol,
+  parent, occurrence, relation join 및 반복 digest 결정성 테스트 통과.
+- 안전 ID 호환성, 서로 다른 제어문자 ID 분리, 예약 prefix 충돌 방지, 초장문 bounded identity 계약 테스트 통과.
+- Fact contract 22/22 통과.
+- code-memory 전체 348/348 통과.
+
+### 재발 시 점검 순서
+
+1. 오류가 AI가 아니라 provider -> Language IR 단계인지 확인한다.
+2. 새 provider raw ID 진입점이 `parse`를 직접 호출하지 않고 `from_provider_native`를 쓰는지 찾는다.
+3. definition, parent, occurrence, relation, framework handler 중 한쪽만 다른 변환을 쓰지 않는지 확인한다.
+4. ID에서 문자를 삭제하거나 whitespace를 접어 서로 다른 raw identity를 합치지 않았는지 확인한다.
+5. 안전한 기존 provider ID의 serialized value와 digest가 불필요하게 바뀌지 않았는지 확인한다.
+
+### 남은 한계 또는 후속 gate
+
+SHA-256은 제품의 다른 stable ID와 같은 현실적 충돌 저항 계약이며 수학적 무충돌 인코딩은 아니다. 실제
+provider가 빈 identity를 내면 그 record의 정확한 endpoint는 복구하지 않고 typed omission으로 남긴다. 새
+provider를 추가할 때도 언어별 예외 대신 동일 공통 경계를 통과해야 한다.
+
+---
+
+## TS-2026-08-11-107 — SCIP 문서별 UTF-8·UTF-16·UTF-32 좌표를 provider 경계에서 정규화한다
+
+### 증상
+
+한글 문자열이 있는 범용 JavaScript 프로젝트에서 정적 분석이 아래 오류로 중단됐다.
+
+```text
+UTF-8 provider column 84 is outside a character boundary
+```
+
+실제 실패 파일 `client/web/src/components/layout/WorkbenchHeader.jsx`의 provider range는 `[53,80,84]`였다.
+이 값은 UTF-16 column으로는 정확히 `type`을 가리키지만 UTF-8 byte column으로 오해하면 한글 바이트 중간을
+가리킨다. 올바른 canonical range는 `[53,88,92]`다. 같은 실행의 JavaScript cache에서 이 패턴을 전수 검사하니
+UTF-8로 해석할 수 없는 range가 69개였다.
+
+### 영향
+
+- 사용자 코드와 provider 결과가 모두 정상이지만 non-ASCII source evidence 생성이 실패했다.
+- ASCII 프로젝트에서는 두 좌표가 같아 결함이 장기간 숨었다.
+- TypeScript/JavaScript뿐 아니라 문서별 encoding을 선언할 수 있는 모든 SCIP producer와 새 typed range에서
+  같은 경계 오류가 재발할 수 있었다.
+- 이미 저장된 잘못된 provider cache를 재사용하면 엔진 패치 뒤에도 같은 오류가 남을 수 있었다.
+
+### 잘못 짚기 쉬운 원인
+
+- source 파일의 UTF-8이 깨졌거나 한글을 제거해야 한다고 보기 쉽다. 실제 source bytes는 유효했다.
+- AI 의미 분석이나 prompt 오류로 보기 쉽지만 실패는 AI 이전 provider -> Language IR evidence 경계였다.
+- 모든 SCIP range가 UTF-8이라고 가정하기 쉽다. SCIP schema는 `Document.position_encoding`으로 UTF-8,
+  UTF-16, UTF-32를 모두 허용한다.
+- 잘못된 column을 앞뒤 character boundary로 이동시키면 된다고 보기 쉽다. 그러면 다른 토큰을 확정 근거로
+  저장하게 된다.
+
+### 근본 원인
+
+raw SCIP reader는 `Document.position_encoding`과 typed range를 이미 파싱했지만 `DocumentOutput` 변환 전에
+그 정보를 버렸다. downstream은 `ProviderProtocol::Scip`이면 무조건 UTF-8 byte column이라고 해석했다.
+C#만 별도 UTF-16 보정이 있었고 TypeScript/JavaScript와 UTF-32 producer를 포괄하는 공통 경계가 없었다.
+
+### 적용한 수정
+
+1. raw SCIP document를 읽은 직후, symbol/range join보다 앞에서 모든 occurrence와 enclosing range를 문서별
+   encoding에 따라 UTF-8 byte column으로 변환한다.
+2. SCIP 0.9 typed single/multi-line range가 있으면 deprecated vector보다 우선하고 canonical vector로 접는다.
+3. 선언된 UTF-8/UTF-16/UTF-32를 모두 지원한다.
+4. encoding이 없는 지원 provider만 폐쇄형 호환 규칙을 쓴다: TS/JS/C#은 UTF-16, C/C++은 UTF-8이다.
+5. BOM을 provider column에서 제외하고 CRLF의 `\r`을 line text에서 제외해 canonical source evidence와 같은
+   byte 기준을 사용한다.
+6. unknown encoding, 음수, 범위 밖 column, surrogate split, UTF-8 codepoint 중간은 추측 보정하지 않고 해당
+   provider unit의 invalid-output으로 제한한다.
+7. SCIP-backed 5개 언어 cache key에 좌표 계약 버전을 추가해 잘못 저장된 옛 cache만 무효화한다. LSP 5개
+   언어 cache는 불필요하게 버리지 않는다.
+
+### 검증 결과
+
+- 실제 Korean JSX range `80..84 -> 88..92` 회귀 테스트 통과.
+- BMP(`ß`)와 supplementary emoji(`🚀`) UTF-16 변환 통과.
+- UTF-32 scalar column 변환 통과.
+- UTF-8 mid-codepoint 거부 통과.
+- SCIP typed range 우선순위 통과.
+- UTF-8 BOM + CRLF source 통과.
+- 구버전 TS/JS/C#/C/C++ encoding fallback 계약 통과.
+- LSP UTF-16, normalized SCIP UTF-8, compiler UTF-8이 동일 canonical span을 만드는 protocol 회귀 테스트 통과.
+
+### 재발 시 점검 순서
+
+1. 오류 range가 raw SCIP, native LSP, compiler/tree-sitter 중 어디서 왔는지 먼저 확인한다.
+2. SCIP이면 해당 `Document.position_encoding`과 typed/deprecated range 중 실제 우선값을 확인한다.
+3. source line의 UTF-8 byte 길이, UTF-16 code-unit 길이, Unicode scalar 길이를 각각 계산해 raw column과
+   대조한다.
+4. 변환이 exact range join과 relation reconciliation보다 먼저 실행되는지 확인한다.
+5. provider normalization 변경 시 SCIP 언어 cache identity도 함께 갱신했는지 확인한다.
+6. column을 clamp/snap하거나 non-ASCII source를 삭제하는 우회가 들어오지 않았는지 확인한다.
+
+### 남은 한계 또는 후속 gate
+
+LSP 3.17은 alternate position encoding 협상을 허용하지만 현재 client는 이를 광고하지 않아 표준 기본 UTF-16을
+사용한다. 향후 UTF-8/UTF-32를 광고할 때는 initialize response의 선택 값을 document coordinate metadata로
+보존한 뒤 같은 공통 변환 경계를 사용해야 한다. 실제 대형 repository E2E는 번들 엔진 재생성 후 별도 fresh
+분석으로 확인한다.
 
 ---
 

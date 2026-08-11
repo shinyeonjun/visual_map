@@ -2,13 +2,14 @@ mod support;
 
 use codebase_semantic_compiler::{
     compile_global_reconciliation_prompt, compile_semantic_plan_with_policy,
-    parse_and_verify_global_reconciliation, verify_base_proposal, SemanticCompileErrorCode,
-    SemanticPartitionPolicy, VerifiedSemanticPartition,
+    parse_and_verify_base_response, parse_and_verify_global_reconciliation, verify_base_proposal,
+    SemanticCompileErrorCode, SemanticPartitionPolicy, SemanticVerificationPhase,
+    VerifiedSemanticPartition,
 };
 use codebase_semantic_model::AreaCategory;
 use serde_json::json;
 use std::collections::BTreeSet;
-use support::{fixture_draft, structural_proposal};
+use support::{fixture_draft, structural_proposal, valid_proposal};
 
 fn forced_partition_policy(max_regions: usize) -> SemanticPartitionPolicy {
     SemanticPartitionPolicy {
@@ -113,6 +114,28 @@ fn source_evidence_is_sent_only_to_its_own_local_partition() {
 }
 
 #[test]
+fn local_partition_defers_sibling_name_uniqueness_to_global_reconciliation() {
+    let (draft, ids) = fixture_draft();
+    let plan = compile_semantic_plan_with_policy(draft, forced_partition_policy(2)).unwrap();
+    assert_eq!(plan.partitions.len(), 1);
+    let partition = &plan.partitions[0];
+    assert_eq!(
+        partition.prompt.verification_phase,
+        SemanticVerificationPhase::LocalPartition
+    );
+    let mut proposal = valid_proposal(&partition.prompt, &ids);
+    proposal.areas[2].label = proposal.areas[0].label.clone();
+    let raw = serde_json::to_string(&proposal).unwrap();
+
+    parse_and_verify_base_response(&partition.prompt, &raw).unwrap();
+    let final_error = verify_base_proposal(&partition.prompt.packet, proposal).unwrap_err();
+    assert_eq!(
+        final_error.code,
+        SemanticCompileErrorCode::NonCanonicalValue
+    );
+}
+
+#[test]
 fn compact_global_reconciliation_can_merge_meaning_across_partition_boundaries() {
     let (draft, _) = fixture_draft();
     let plan = compile_semantic_plan_with_policy(draft, forced_partition_policy(1)).unwrap();
@@ -125,6 +148,27 @@ fn compact_global_reconciliation_can_merge_meaning_across_partition_boundaries()
     assert!(rendered.contains("r0000"));
     assert!(rendered.contains("r0001"));
     assert!(!rendered.contains(plan.base.packet.input.regions[0].region_id.as_str()));
+    assert!(compiled.prompt.system_policy.contains("NAMING CONTRACT"));
+    assert!(compiled
+        .prompt
+        .system_policy
+        .contains("There is no target area count"));
+    assert!(compiled
+        .prompt
+        .system_policy
+        .contains("readability is only a tie-breaker"));
+    assert!(compiled
+        .prompt
+        .system_policy
+        .contains("Never merge an explicit material legacy/deprecated implementation"));
+    assert_eq!(
+        compiled.prompt.output_schema["properties"]["snapshotId"]["enum"][0],
+        serde_json::json!(plan.base.packet.snapshot_id.as_str())
+    );
+    assert_eq!(
+        compiled.prompt.output_schema["properties"]["semanticInputDigest"]["enum"][0],
+        serde_json::json!(plan.base.packet.semantic_input_digest.to_hex())
+    );
 
     let raw = serde_json::to_string(&json!({
         "schemaVersion": 1,

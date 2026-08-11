@@ -18,6 +18,7 @@ struct CanonicalPublicationContext {
     dependency_context_digest: u64,
     active_cache_files: HashSet<PathBuf>,
     timings: Vec<StageTiming>,
+    cache_policy: AnalysisCachePolicy,
 }
 
 fn publish_canonical_fact_bundle(input: CanonicalPublicationContext) -> Result<(), String> {
@@ -39,6 +40,7 @@ fn publish_canonical_fact_bundle(input: CanonicalPublicationContext) -> Result<(
         dependency_context_digest,
         mut active_cache_files,
         mut timings,
+        cache_policy,
     } = input;
     let language_ir_started = Instant::now();
     // Scheduler-owned provider batches are the sole Language IR authority.
@@ -108,7 +110,11 @@ fn publish_canonical_fact_bundle(input: CanonicalPublicationContext) -> Result<(
     let framework_cache =
         project_cache_root(&root).join(format!("framework-{framework_key}.json.gz"));
     active_cache_files.insert(framework_cache.clone());
-    let framework_analysis = match load_framework_cache(&framework_cache) {
+    let framework_analysis = match cache_policy
+        .reuses_results()
+        .then(|| load_framework_cache(&framework_cache))
+        .flatten()
+    {
         Some(analysis) => {
             eprintln!("cached framework analysis");
             analysis
@@ -121,7 +127,7 @@ fn publish_canonical_fact_bundle(input: CanonicalPublicationContext) -> Result<(
                 &pack_root,
                 &source_snapshot,
             )?;
-            let _ = write_framework_cache(&framework_cache, &analysis);
+            let _ = write_framework_cache(&framework_cache, &analysis, cache_policy);
             analysis
         }
     };

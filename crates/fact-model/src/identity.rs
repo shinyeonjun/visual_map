@@ -5,7 +5,10 @@ use sha2::{Digest as _, Sha256};
 use std::{fmt, str::FromStr};
 
 const STABLE_ID_DOMAIN: &[u8] = b"codebase-workspace.stable-id.v1\0";
+const PROVIDER_SYMBOL_NATIVE_DOMAIN: &[u8] = b"codebase-workspace.provider-symbol-native.v1\0";
 const SHA256_HEX_LEN: usize = 64;
+const PROVIDER_SYMBOL_MAX_BYTES: usize = 16_384;
+const DERIVED_PROVIDER_SYMBOL_PREFIX: &str = "provider-symbol-digest-v1:";
 
 /// Errors returned while constructing or parsing an identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -324,13 +327,46 @@ impl ProviderSymbolId {
         if value.is_empty() {
             return Err(IdentityError::EmptyComponent);
         }
-        if value.len() > 16_384 {
+        if value.len() > PROVIDER_SYMBOL_MAX_BYTES {
             return Err(IdentityError::ComponentTooLong);
         }
         if value.chars().any(char::is_control) {
             return Err(IdentityError::InvalidControlCharacter);
         }
         Ok(Self(value))
+    }
+
+    /// Converts an opaque provider-native identity into the persisted contract
+    /// representation used by Language IR.
+    ///
+    /// Provider protocols are allowed to choose their own symbol grammar. Some
+    /// real providers include multi-line source fragments in otherwise stable
+    /// identities, while the persisted Fact contract deliberately forbids
+    /// control characters. Ordinary contract-safe identities are retained for
+    /// backward compatibility. Unsafe, oversized, or reserved-prefix values
+    /// are mapped to a domain-labelled SHA-256 identity. Applying this at every
+    /// provider boundary keeps definitions, parents, occurrences, and relation
+    /// endpoints joinable without deleting or trimming identity bytes.
+    pub fn from_provider_native(value: impl AsRef<str>) -> Result<Self, IdentityError> {
+        let value = value.as_ref();
+        if value.is_empty() {
+            return Err(IdentityError::EmptyComponent);
+        }
+        if value.len() <= PROVIDER_SYMBOL_MAX_BYTES
+            && !value.chars().any(char::is_control)
+            && !value.starts_with(DERIVED_PROVIDER_SYMBOL_PREFIX)
+        {
+            return Ok(Self(value.to_string()));
+        }
+
+        let mut hasher = Sha256::new();
+        hasher.update(PROVIDER_SYMBOL_NATIVE_DOMAIN);
+        hasher.update((value.len() as u64).to_le_bytes());
+        hasher.update(value.as_bytes());
+        Ok(Self(format!(
+            "{DERIVED_PROVIDER_SYMBOL_PREFIX}{}",
+            lower_hex(&hasher.finalize())
+        )))
     }
 
     pub fn as_str(&self) -> &str {

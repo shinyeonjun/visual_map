@@ -7,29 +7,21 @@ pub(crate) fn read_scip(
     call_ranges: Option<&HashMap<String, Vec<Vec<i32>>>>,
 ) -> Result<(Vec<DocumentOutput>, Vec<RelationOutput>), String> {
     let mut scip_documents = read_scoped_scip_documents(path, project_root, allowed_paths)?;
-    if fallback_language == "csharp" {
-        normalize_scip_dotnet_utf16_ranges(
-            &mut scip_documents,
-            project_root,
-            allowed_paths,
-        );
+    if protocol == ProviderProtocol::Scip {
+        normalize_scip_document_ranges(&mut scip_documents, fallback_language, project_root)?;
     }
     let mut definitions: HashMap<String, Vec<(String, Vec<i32>)>> = HashMap::new();
-    let mut definition_ranges_by_symbol =
-        HashMap::<String, HashMap<String, Vec<i32>>>::new();
+    let mut definition_ranges_by_symbol = HashMap::<String, HashMap<String, Vec<i32>>>::new();
     let mut definition_indexes: HashMap<String, DefinitionRangeIndex> = HashMap::new();
     let mut definitions_by_range = SymbolsByRange::new();
     let mut definitions_by_name_range = SymbolsByRange::new();
     let mut type_symbols = HashSet::new();
     let mut source_cache = HashMap::<String, String>::new();
-    let mut type_use_sites_by_document =
-        HashMap::<(String, String), Vec<SyntaxTypeUseSite>>::new();
-    let mut type_use_indexes_by_document =
-        HashMap::<(String, String), SourceRangeIndex>::new();
+    let mut type_use_sites_by_document = HashMap::<(String, String), Vec<SyntaxTypeUseSite>>::new();
+    let mut type_use_indexes_by_document = HashMap::<(String, String), SourceRangeIndex>::new();
     let mut hierarchy_sites_by_document =
         HashMap::<(String, String), Vec<SyntaxTypeRelationSite>>::new();
-    let mut hierarchy_indexes_by_document =
-        HashMap::<(String, String), SourceRangeIndex>::new();
+    let mut hierarchy_indexes_by_document = HashMap::<(String, String), SourceRangeIndex>::new();
     let mut scope_fallback_paths = HashSet::<String>::new();
     for document in &scip_documents {
         let document_path = normalize_scip_path(&document.relative_path, project_root);
@@ -236,8 +228,7 @@ pub(crate) fn read_scip(
     });
     let mut relations = Vec::new();
     let mut documents = Vec::new();
-    let mut syntax_sites_by_document =
-        HashMap::<(String, String), Vec<SyntaxCallSite>>::new();
+    let mut syntax_sites_by_document = HashMap::<(String, String), Vec<SyntaxCallSite>>::new();
     for document in scip_documents.drain(..) {
         let document_path = normalize_scip_path(&document.relative_path, project_root);
         if !allowed_paths.contains(&document_path) {
@@ -266,17 +257,21 @@ pub(crate) fn read_scip(
                 hierarchy_indexes_by_document.insert(
                     key.clone(),
                     SourceRangeIndex::from_ranges(
-                        type_syntax.relations.iter().enumerate().map(|(index, site)| {
-                            (index, site.target_range(protocol))
-                        }),
+                        type_syntax
+                            .relations
+                            .iter()
+                            .enumerate()
+                            .map(|(index, site)| (index, site.target_range(protocol))),
                     ),
                 );
                 type_use_indexes_by_document.insert(
                     key.clone(),
                     SourceRangeIndex::from_ranges(
-                        type_syntax.uses.iter().enumerate().map(|(index, site)| {
-                            (index, site.target_range(protocol))
-                        }),
+                        type_syntax
+                            .uses
+                            .iter()
+                            .enumerate()
+                            .map(|(index, site)| (index, site.target_range(protocol))),
                     ),
                 );
                 hierarchy_sites_by_document.insert(key.clone(), type_syntax.relations);
@@ -417,10 +412,10 @@ pub(crate) fn read_scip(
             if !definition && !occurrence.symbol.is_empty() {
                 let type_use_site = type_use_sites_by_document
                     .get(&(language.clone(), document_path.clone()))
-                    .zip(type_use_indexes_by_document.get(&(
-                        language.clone(),
-                        document_path.clone(),
-                    )))
+                    .zip(
+                        type_use_indexes_by_document
+                            .get(&(language.clone(), document_path.clone())),
+                    )
                     .and_then(|(sites, index)| {
                         index
                             .first_bidirectional_containment(&occurrence.range)
@@ -428,10 +423,10 @@ pub(crate) fn read_scip(
                     });
                 let hierarchy_site = hierarchy_sites_by_document
                     .get(&(language.clone(), document_path.clone()))
-                    .zip(hierarchy_indexes_by_document.get(&(
-                        language.clone(),
-                        document_path.clone(),
-                    )))
+                    .zip(
+                        hierarchy_indexes_by_document
+                            .get(&(language.clone(), document_path.clone())),
+                    )
                     .and_then(|(sites, index)| {
                         index
                             .first_bidirectional_containment(&occurrence.range)
@@ -462,41 +457,41 @@ pub(crate) fn read_scip(
                     .cloned();
                 let owner = exact_relation_owner
                     .or(exact_call_owner)
-                    .or_else(|| (!occurrence.enclosing_range.is_empty())
-                    .then(|| {
-                        definitions_by_range
-                            .get(&document_path)
-                            .and_then(|ranges| {
-                                range_parts(&occurrence.enclosing_range)
-                                    .and_then(|range| ranges.get(&range))
+                    .or_else(|| {
+                        (!occurrence.enclosing_range.is_empty())
+                            .then(|| {
+                                definitions_by_range
+                                    .get(&document_path)
+                                    .and_then(|ranges| {
+                                        range_parts(&occurrence.enclosing_range)
+                                            .and_then(|range| ranges.get(&range))
+                                    })
+                                    .cloned()
                             })
-                            .cloned()
+                            .flatten()
+                            .or_else(|| {
+                                find_definition_for_enclosing_range_index(
+                                    definition_indexes.get(&document_path),
+                                    definitions.get(&document_path),
+                                    &occurrence.enclosing_range,
+                                    &occurrence.range,
+                                )
+                            })
+                            .or_else(|| {
+                                find_source_owner_indexed(
+                                    owner_scopes.get(&document_path),
+                                    owner_scope_indexes.get(&document_path),
+                                    &occurrence.range,
+                                )
+                            })
                     })
-                    .flatten()
-                    .or_else(|| {
-                        find_definition_for_enclosing_range_index(
-                            definition_indexes.get(&document_path),
-                            definitions.get(&document_path),
-                            &occurrence.enclosing_range,
-                            &occurrence.range,
-                        )
-                    })
-                    .or_else(|| {
-                        find_source_owner_indexed(
-                            owner_scopes.get(&document_path),
-                            owner_scope_indexes.get(&document_path),
-                            &occurrence.range,
-                        )
-                    }))
                     .map(|owner| {
                         canonical_scip_symbol(&owner, local_symbol_aliases, &unique_symbol_aliases)
                     });
                 if let Some(owner) = owner {
                     let kind = if import {
                         "IMPORTS"
-                    } else if syntax_site
-                        .is_some_and(|site| site.form == CallSiteForm::Construct)
-                    {
+                    } else if syntax_site.is_some_and(|site| site.form == CallSiteForm::Construct) {
                         "CONSTRUCTS"
                     } else if syntax_site.is_some()
                         || (matches!(fallback_language, "typescript" | "javascript")
@@ -507,23 +502,18 @@ pub(crate) fn read_scip(
                                 &occurrence.range,
                                 source_cache.get(&document_path).map(String::as_str),
                             ))
-                        || (!matches!(
-                            language.as_str(),
-                            "csharp" | "c" | "cpp" | "go" | "rust"
-                        ) && !matches!(fallback_language, "typescript" | "javascript")
+                        || (!matches!(language.as_str(), "csharp" | "c" | "cpp" | "go" | "rust")
+                            && !matches!(fallback_language, "typescript" | "javascript")
                             && is_call_occurrence(
                                 source_cache.get(&document_path).map(String::as_str),
                                 &occurrence.range,
                             ))
                     {
                         "CALLS"
-                    } else if hierarchy_site.is_some()
-                        && type_symbols.contains(&occurrence.symbol)
+                    } else if hierarchy_site.is_some() && type_symbols.contains(&occurrence.symbol)
                     {
                         "IMPLEMENTATION"
-                    } else if type_use_site.is_some()
-                        && type_symbols.contains(&occurrence.symbol)
-                    {
+                    } else if type_use_site.is_some() && type_symbols.contains(&occurrence.symbol) {
                         "USES_TYPE"
                     } else {
                         "REFERENCES"
@@ -593,82 +583,6 @@ pub(crate) fn read_scip(
     Ok((documents, relations))
 }
 
-/// scip-dotnet 0.2.14 forwards Roslyn `TextSpan` columns as UTF-16 code-unit
-/// offsets. SCIP's portable source contract uses UTF-8 byte columns, so the
-/// provider output must be normalized before any exact-range matching or
-/// evidence construction. ASCII-only repositories conceal this difference;
-/// identifiers such as `Entityß` otherwise end in the middle of a UTF-8 code
-/// point and are rejected by the canonical evidence boundary.
-fn normalize_scip_dotnet_utf16_ranges(
-    documents: &mut [scip::types::Document],
-    project_root: &Path,
-    allowed_paths: &HashSet<String>,
-) {
-    for document in documents {
-        let document_path = normalize_scip_path(&document.relative_path, project_root);
-        if !allowed_paths.contains(&document_path) {
-            continue;
-        }
-        let Ok(source) = fs::read_to_string(project_root.join(&document_path)) else {
-            continue;
-        };
-        let lines = source.lines().collect::<Vec<_>>();
-        for occurrence in &mut document.occurrences {
-            normalize_scip_dotnet_range(&lines, &mut occurrence.range);
-            normalize_scip_dotnet_range(&lines, &mut occurrence.enclosing_range);
-        }
-    }
-}
-
-fn normalize_scip_dotnet_range(lines: &[&str], range: &mut Vec<i32>) {
-    let converted = match range.as_slice() {
-        [line, start, end] => {
-            let Some(text) = usize::try_from(*line)
-                .ok()
-                .and_then(|line| lines.get(line))
-            else {
-                return;
-            };
-            let (Some(start), Some(end)) = (
-                usize::try_from(*start)
-                    .ok()
-                    .and_then(|column| utf16_to_byte_column(text, column)),
-                usize::try_from(*end)
-                    .ok()
-                    .and_then(|column| utf16_to_byte_column(text, column)),
-            ) else {
-                return;
-            };
-            vec![*line, start as i32, end as i32]
-        }
-        [start_line, start_column, end_line, end_column, ..] => {
-            let (Some(start_text), Some(end_text)) = (
-                usize::try_from(*start_line)
-                    .ok()
-                    .and_then(|line| lines.get(line)),
-                usize::try_from(*end_line)
-                    .ok()
-                    .and_then(|line| lines.get(line)),
-            ) else {
-                return;
-            };
-            let (Some(start), Some(end)) = (
-                usize::try_from(*start_column)
-                    .ok()
-                    .and_then(|column| utf16_to_byte_column(start_text, column)),
-                usize::try_from(*end_column)
-                    .ok()
-                    .and_then(|column| utf16_to_byte_column(end_text, column)),
-            ) else {
-                return;
-            };
-            vec![*start_line, start as i32, *end_line, end as i32]
-        }
-        _ => return,
-    };
-    *range = converted;
-}
-
 fn contract_language(language: &str) -> Option<ProgrammingLanguage> {
     match language {
         "typescript" => Some(ProgrammingLanguage::TypeScript),
@@ -682,30 +596,5 @@ fn contract_language(language: &str) -> Option<ProgrammingLanguage> {
         "rust" => Some(ProgrammingLanguage::Rust),
         "dart" => Some(ProgrammingLanguage::Dart),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod document_coordinate_tests {
-    use super::*;
-
-    #[test]
-    fn scip_dotnet_utf16_columns_become_utf8_byte_columns() {
-        let lines = ["protected class Entityß", "class Rocket🚀"];
-        let mut bmp = vec![0, 16, 23];
-        normalize_scip_dotnet_range(&lines, &mut bmp);
-        assert_eq!(bmp, vec![0, 16, 24]);
-
-        let mut supplementary = vec![1, 6, 14];
-        normalize_scip_dotnet_range(&lines, &mut supplementary);
-        assert_eq!(supplementary, vec![1, 6, 16]);
-    }
-
-    #[test]
-    fn invalid_scip_dotnet_column_is_left_for_typed_gap_handling() {
-        let lines = ["class A"];
-        let mut range = vec![0, 0, 99];
-        normalize_scip_dotnet_range(&lines, &mut range);
-        assert_eq!(range, vec![0, 0, 99]);
     }
 }

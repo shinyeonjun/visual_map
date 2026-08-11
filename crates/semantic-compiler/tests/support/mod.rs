@@ -2,7 +2,7 @@
 
 use codebase_fact_model::{
     analysis::ProgrammingLanguage,
-    fact_graph::{FactEdgeFamily, FactNodeKind, FactRole, FactTruth},
+    fact_graph::{DispatchKind, FactEdgeFamily, FactNodeKind, FactRole, FactTruth},
     identity::{EvidenceId, FactEdgeId, FactNodeId, Sha256Digest, SnapshotId, WorkspaceId},
     source::RepositoryPath,
 };
@@ -157,6 +157,7 @@ pub fn fixture_draft() -> (BaseSemanticDraft, FixtureIds) {
             families: vec![BoundaryRelationCount {
                 family: FactEdgeFamily::Code,
                 truth: FactTruth::Confirmed,
+                dispatch: Some(DispatchKind::Direct),
                 relation_count: 1,
             }],
             representative_edge_ids: vec![service_auth],

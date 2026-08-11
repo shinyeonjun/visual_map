@@ -23,6 +23,10 @@ pub(crate) fn large_workspace_workload(
         || semantic_query_symbols > 500
 }
 
+pub(crate) fn large_direct_call_site_mode(language: &str, large_workspace: bool) -> bool {
+    large_workspace && matches!(language, "java" | "python")
+}
+
 pub(crate) fn rust_large_symbol_is_public(source: &str, symbol: &LspSymbol) -> bool {
     if symbol.name == "main" {
         return true;

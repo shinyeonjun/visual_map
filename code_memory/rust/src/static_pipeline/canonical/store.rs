@@ -127,6 +127,9 @@ impl BundleStore {
                    id TEXT PRIMARY KEY NOT NULL,
                    snapshot_id TEXT NOT NULL,
                    kind TEXT NOT NULL,
+                   qualified_name TEXT NOT NULL,
+                   display_name TEXT NOT NULL,
+                   language TEXT NOT NULL DEFAULT '',
                    parent_id TEXT,
                    definition_evidence_id TEXT,
                    relevant INTEGER NOT NULL CHECK (relevant IN (0, 1)),
@@ -145,9 +148,10 @@ impl BundleStore {
                    kind TEXT NOT NULL,
                    semantic_context_id TEXT NOT NULL DEFAULT '',
                    qualifier TEXT NOT NULL DEFAULT '',
+                   execution_site_id TEXT NOT NULL DEFAULT '',
                    truth TEXT NOT NULL,
                    payload_json TEXT NOT NULL,
-                   UNIQUE(source_id, target_id, kind, semantic_context_id, qualifier)
+                   UNIQUE(source_id, target_id, kind, semantic_context_id, qualifier, execution_site_id)
                  ) STRICT;
                  CREATE TABLE edge_evidence (
                    edge_id TEXT NOT NULL,
@@ -213,6 +217,8 @@ impl BundleStore {
                  CREATE INDEX definition_identity_node_idx ON definition_identity(node_id, unit_id, symbol_id);
                  CREATE INDEX definition_identity_symbol_idx ON definition_identity(symbol_id, unit_id);
                  CREATE INDEX nodes_parent_idx ON nodes(parent_id);
+                 CREATE INDEX nodes_display_name_idx ON nodes(display_name COLLATE NOCASE, kind, id);
+                 CREATE INDEX nodes_qualified_name_idx ON nodes(qualified_name COLLATE NOCASE, kind, id);
                  CREATE INDEX edges_source_idx ON edges(source_id, kind);
                  CREATE INDEX edges_target_idx ON edges(target_id, kind);",
             )
@@ -815,9 +821,12 @@ impl BundleStore {
             .unwrap_or(0);
         connection
             .execute(
-                "INSERT INTO nodes(id, snapshot_id, kind, parent_id, definition_evidence_id, relevant, payload_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "INSERT INTO nodes(id, snapshot_id, kind, qualified_name, display_name, language, parent_id, definition_evidence_id, relevant, payload_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(id) DO UPDATE SET
+                   qualified_name=excluded.qualified_name,
+                   display_name=excluded.display_name,
+                   language=excluded.language,
                    parent_id=excluded.parent_id,
                    definition_evidence_id=excluded.definition_evidence_id,
                    relevant=MAX(nodes.relevant, excluded.relevant),
@@ -826,6 +835,12 @@ impl BundleStore {
                     merged.id.as_str(),
                     merged.snapshot_id.as_str(),
                     merged.kind.as_str(),
+                    merged.qualified_name.as_str(),
+                    merged.display_name.as_str(),
+                    merged
+                        .language
+                        .map(|language| language.as_str())
+                        .unwrap_or(""),
                     merged.parent_id.as_ref().map(FactNodeId::as_str),
                     merged.definition_evidence_id.as_ref().map(ToString::to_string),
                     i64::from(relevant || previous_relevant != 0),
@@ -877,8 +892,8 @@ impl BundleStore {
         let connection = self.connection()?;
         connection
             .execute(
-                "INSERT INTO edges(id, snapshot_id, source_id, target_id, kind, semantic_context_id, qualifier, truth, payload_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                "INSERT INTO edges(id, snapshot_id, source_id, target_id, kind, semantic_context_id, qualifier, execution_site_id, truth, payload_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(id) DO UPDATE SET truth=excluded.truth, payload_json=excluded.payload_json",
                 params![
                     merged.id.as_str(),
@@ -892,6 +907,11 @@ impl BundleStore {
                         .map(ToString::to_string)
                         .unwrap_or_default(),
                     merged.qualifier.as_deref().unwrap_or_default(),
+                    merged
+                        .execution
+                        .as_ref()
+                        .map(|execution| execution.call_site_evidence_id.as_str())
+                        .unwrap_or_default(),
                     truth_name(merged.truth),
                     to_json(&merged)?
                 ],
@@ -1031,8 +1051,8 @@ impl BundleStore {
         let duplicate_logical_edges = count_query(
             connection,
             "SELECT COUNT(*) FROM (
-               SELECT source_id, target_id, kind, semantic_context_id, qualifier, COUNT(*) AS n
-               FROM edges GROUP BY source_id, target_id, kind, semantic_context_id, qualifier
+               SELECT source_id, target_id, kind, semantic_context_id, qualifier, execution_site_id, COUNT(*) AS n
+               FROM edges GROUP BY source_id, target_id, kind, semantic_context_id, qualifier, execution_site_id
                HAVING n > 1
              )",
         )?;
@@ -1295,6 +1315,7 @@ fn merge_edges(mut left: FactEdge, right: FactEdge) -> Result<FactEdge, String> 
         || left.kind != right.kind
         || left.semantic_context_id != right.semantic_context_id
         || left.qualifier != right.qualifier
+        || left.execution != right.execution
     {
         return Err(format!("canonical edge identity collision for {}", left.id));
     }

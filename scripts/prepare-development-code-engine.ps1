@@ -63,12 +63,12 @@ try {
     $developmentArtifacts = @($entry.developmentArtifacts)
     $manifestNeedsUpdate =
         [string]$entry.version -ne "0.1.0" -or
-        [string]$entry.contractVersion -ne "3" -or
+        [string]$entry.contractVersion -ne "4" -or
         $developmentArtifacts.Count -ne 1 -or
         [string]$developmentArtifacts[0].sha256 -ne $sourceHash
     if ($manifestNeedsUpdate) {
         $entry.version = "0.1.0"
-        $entry.contractVersion = "3"
+        $entry.contractVersion = "4"
         $entry.developmentArtifacts = @([pscustomobject]@{ sha256 = $sourceHash })
         $normalized = ($manifest | ConvertTo-Json -Depth 12) + "`n"
         $stagedManifest = "$manifestPath.new-$([guid]::NewGuid().ToString('N'))"

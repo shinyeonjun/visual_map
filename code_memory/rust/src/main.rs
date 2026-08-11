@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 const _: &str = codebase_fact_model::ContractSchema::LanguageIrV2.as_str();
 const CODE_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
-const CODE_ENGINE_CONTRACT_VERSION: &str = "3";
+const CODE_ENGINE_CONTRACT_VERSION: &str = "4";
 const CODE_ENGINE_CONTRACT_SCHEMA: &str = "codebase-workspace.code-engine-contract.v1";
 const CODE_ENGINE_COMMANDS: &[&str] = &[
     "contract",
@@ -21,6 +21,19 @@ const CODE_ENGINE_COMMANDS: &[&str] = &[
     "framework-packs",
     "compare-scip",
 ];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum AnalysisCachePolicy {
+    #[default]
+    Reuse,
+    Fresh,
+}
+
+impl AnalysisCachePolicy {
+    const fn reuses_results(self) -> bool {
+        matches!(self, Self::Reuse)
+    }
+}
 
 mod cache;
 mod frameworks;
@@ -120,12 +133,14 @@ fn run() -> Result<(), String> {
                         .to_string(),
                 );
             }
+            let cache_policy = parse_analysis_cache_policy(&rest)?;
             index_project(
                 &root,
                 &pack_root,
                 providers_root.as_deref(),
                 source_manifest.as_deref(),
                 expected_source_manifest.as_ref(),
+                cache_policy,
             )
         }
         Some(command) => Err(format!(

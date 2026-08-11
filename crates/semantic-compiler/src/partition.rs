@@ -1,6 +1,6 @@
 use crate::{
     compile_base_prompt, BaseSemanticDraft, CompiledBasePrompt, SemanticCompileError,
-    SemanticCompileErrorCode,
+    SemanticCompileErrorCode, SemanticVerificationPhase,
 };
 use codebase_fact_model::{
     fact_graph::FactTruth,
@@ -13,7 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const LOCAL_PARTITION_POLICY: &str = r#"This request is one complete, disjoint local partition of a larger repository.
 Describe and group only the regions present in PAYLOAD_JSON. Do not invent missing repository areas or treat this local project summary as the final repository summary.
-The local result is an evidence-verified input to a later compact global reconciliation and is never published directly."#;
+The local result is an evidence-verified input to a later compact global reconciliation and is never published directly.
+Local partition labels are provisional. Preserve every explicit application, runtime, and lifecycle signal present in this partition so global reconciliation can retain the boundary. Do not change an honest structural fallback merely to make it distinct from a locally promoted sibling; repository-wide sibling naming is owned by final reconciliation."#;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SemanticPartitionPolicy {
@@ -114,6 +115,7 @@ fn compile_semantic_plan_from_base(
             input,
         };
         let mut prompt = compile_base_prompt(draft)?;
+        prompt.verification_phase = SemanticVerificationPhase::LocalPartition;
         prompt.system_policy = format!("{}\n\n{}", prompt.system_policy, LOCAL_PARTITION_POLICY);
         let partition_key = partition_key(&base.packet.snapshot_id, &region_ids);
         partitions.push(CompiledSemanticPartition {

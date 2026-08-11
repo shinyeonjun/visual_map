@@ -28,6 +28,32 @@ static ACTIVE_WORKSPACE_OPERATIONS: OnceLock<Mutex<BTreeMap<String, String>>> = 
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AnalyzeWorkspaceRequest {
     pub workspace_id: String,
+    #[serde(default)]
+    pub cache_policy: AnalysisCachePolicy,
+}
+
+/// Controls reuse of completed analysis results. Toolchains and signed
+/// provider assets are installation dependencies rather than analysis
+/// results, so both policies may reuse those bytes.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AnalysisCachePolicy {
+    #[default]
+    Reuse,
+    Fresh,
+}
+
+impl AnalysisCachePolicy {
+    pub(crate) const fn reuses_results(self) -> bool {
+        matches!(self, Self::Reuse)
+    }
+
+    const fn engine_argument(self) -> &'static str {
+        match self {
+            Self::Reuse => "reuse",
+            Self::Fresh => "fresh",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,6 +182,7 @@ pub(crate) fn run_code_analysis(
     app_data_dir: &Path,
     workspace: &Workspace,
     operation_id: &str,
+    cache_policy: AnalysisCachePolicy,
 ) -> Result<FactGraphStatus, String> {
     let registry = crate::engine_registry_for_app(app)?;
     let code_engine = registry
@@ -211,6 +238,8 @@ pub(crate) fn run_code_analysis(
         path_text(&source_manifest_path, "source manifest")?,
         "--expected-source-manifest".to_string(),
         source_languages.manifest_digest.to_string(),
+        "--cache-policy".to_string(),
+        cache_policy.engine_argument().to_string(),
     ];
     let observer = progress_observer(app.clone(), workspace.id.clone());
     let result = engine::run_engine_command_with_env_observer(
@@ -453,6 +482,18 @@ fn unix_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analysis_request_defaults_to_reuse_but_accepts_explicit_fresh_policy() {
+        let legacy: AnalyzeWorkspaceRequest =
+            serde_json::from_str(r#"{"workspaceId":"ws-legacy"}"#).unwrap();
+        let fresh: AnalyzeWorkspaceRequest =
+            serde_json::from_str(r#"{"workspaceId":"ws-fresh","cachePolicy":"fresh"}"#).unwrap();
+
+        assert_eq!(legacy.cache_policy, AnalysisCachePolicy::Reuse);
+        assert_eq!(fresh.cache_policy, AnalysisCachePolicy::Fresh);
+        assert!(!fresh.cache_policy.reuses_results());
+    }
 
     #[test]
     fn marker_parser_uses_the_last_complete_receipt() {

@@ -118,6 +118,51 @@ fn census_parallel_measurement_is_identical_to_serial_measurement() {
 }
 
 #[test]
+fn census_separates_only_explicit_source_scopes_without_guessing_folder_names() {
+    let project = TestProject::new("reference-roots");
+    project.write("src/current.ts", b"export const current = true;\n");
+    project.write(
+        "src/legacy/compatibility.ts",
+        b"export const stillCurrent = true;\n",
+    );
+    project.write("legacy/old.ts", b"export const archived = true;\n");
+
+    let without_rule = SourceCensus::scan(&project.root).unwrap();
+    assert!(without_rule
+        .manifest
+        .files
+        .iter()
+        .any(|file| file.path.as_str() == "src/legacy/compatibility.ts"));
+    assert!(without_rule
+        .manifest
+        .files
+        .iter()
+        .any(|file| file.path.as_str() == "legacy/old.ts"));
+
+    project.write(".codebase-workspaceignore", b"legacy/\n");
+    let current = SourceCensus::scan(&project.root).unwrap();
+    assert!(!current
+        .manifest
+        .files
+        .iter()
+        .any(|file| file.path.as_str() == "legacy/old.ts"));
+    let excluded_scope = current
+        .manifest
+        .scopes
+        .iter()
+        .find(|scope| scope.path.as_str() == "legacy")
+        .expect("explicitly excluded source scope receipt");
+    assert!(excluded_scope
+        .gap_codes
+        .contains(&GapCode::ExplicitSourceScopeExclusion));
+    assert!(!excluded_scope.descendants_enumerated);
+    assert_ne!(
+        without_rule.manifest.manifest_digest,
+        current.manifest.manifest_digest,
+    );
+}
+
+#[test]
 fn a_validated_preflight_manifest_reuses_the_exact_census_identity() {
     let project = TestProject::new("census-preflight");
     project.write("src/main.ts", b"export const value = 1;\n");

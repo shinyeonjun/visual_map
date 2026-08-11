@@ -277,15 +277,8 @@ pub(crate) fn adapt_framework_routes(
             };
             let handler_symbol_id = fact
                 .symbol
-                .as_ref()
-                .map(|symbol| ProviderSymbolId::parse(symbol.clone()))
-                .transpose()
-                .map_err(|error| {
-                    format!(
-                        "framework {} returned invalid provider symbol for {} {}: {error}",
-                        framework.id, method, route_path
-                    )
-                })?;
+                .as_deref()
+                .and_then(|symbol| ProviderSymbolId::from_provider_native(symbol).ok());
 
             for unit_id in unit_ids {
                 let record = FrameworkRouteRecord {

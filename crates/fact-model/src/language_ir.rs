@@ -8,7 +8,10 @@ use crate::coverage::{
     AnalysisGap, AnalysisIssue, AnalysisUnitCompletion, CapabilityReceipt, FileCoverageRecord,
 };
 use crate::evidence::{EvidenceProducerKind, FactEvidence};
-use crate::fact_graph::{DispatchKind, FactNodeKind, FactTruth, ResolutionMethod, Visibility};
+use crate::fact_graph::{
+    DispatchKind, ExecutionOccurrence, FactEdgeKind, FactNodeKind, FactTruth, ResolutionMethod,
+    Visibility,
+};
 use crate::identity::{
     AnalysisUnitId, EvidenceId, ProviderSymbolId, SemanticContextId, Sha256Digest, SnapshotId,
 };
@@ -157,7 +160,7 @@ impl Validate for IrEndpoint {
 }
 
 /// Relations produced directly by a language provider or exact project model.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LanguageRelationKind {
     Contains,
@@ -172,6 +175,9 @@ pub enum LanguageRelationKind {
     MixesIn,
     Overrides,
     UsesType,
+    ExecutesQuery,
+    Reads,
+    Writes,
     Tests,
 }
 
@@ -187,6 +193,8 @@ pub struct IrRelation {
     pub resolution: ResolutionMethod,
     pub dispatch: DispatchKind,
     pub semantic_context_id: SemanticContextId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionOccurrence>,
     pub evidence_ids: Vec<EvidenceId>,
 }
 
@@ -217,6 +225,29 @@ impl Validate for IrRelation {
                 "evidenceIds",
                 "language relations require evidence",
             ));
+        }
+        match (&self.execution, self.kind) {
+            (Some(execution), LanguageRelationKind::Calls) => execution
+                .validate_for(FactEdgeKind::Calls, &self.evidence_ids)
+                .map_err(|error| error.under("execution"))?,
+            (Some(execution), LanguageRelationKind::Constructs) => execution
+                .validate_for(FactEdgeKind::Constructs, &self.evidence_ids)
+                .map_err(|error| error.under("execution"))?,
+            (Some(_), _) => {
+                return Err(ContractError::new(
+                    ContractErrorCode::NonCanonicalValue,
+                    "execution",
+                    "only calls and constructs may carry execution occurrence data",
+                ));
+            }
+            (None, LanguageRelationKind::Calls | LanguageRelationKind::Constructs) => {
+                return Err(ContractError::new(
+                    ContractErrorCode::MissingEvidence,
+                    "execution",
+                    "call and construct relations require one exact execution occurrence",
+                ));
+            }
+            (None, _) => {}
         }
         ensure_unique(self.evidence_ids.iter(), "evidenceIds")?;
         if !self.evidence_ids.windows(2).all(|pair| pair[0] <= pair[1]) {

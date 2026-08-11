@@ -643,7 +643,12 @@ fn run_native_lsp_with_server_mode(
         .filter(|name| !name.is_empty())
         .collect();
 
-    let large_java_direct_call_mode = large_workspace && lang.id == "java";
+    // Call-hierarchy support is uneven on cold, large workspaces. Java and
+    // Python providers both answer definition-at-call-site reliably, so query
+    // the exact syntax call token and attach the provider-resolved endpoint.
+    // This retains evidence-backed member/field calls without repository-wide
+    // name matching (for example `self._repository.save(...)`).
+    let large_direct_call_mode = large_direct_call_site_mode(lang.id, large_workspace);
     let mut call_syntax_by_file = HashMap::<String, Vec<SyntaxCallSite>>::new();
     let mut large_call_queries = Vec::<(String, u32, u32)>::new();
     let mut prefetched_large_call_queries = HashSet::<(String, u32, u32)>::new();
@@ -652,7 +657,7 @@ fn run_native_lsp_with_server_mode(
     let mut large_call_owned_site_count = 0usize;
     let mut large_call_eligible_group_count = 0usize;
     if large_workspace && !skip_large_workspace_call_enrichment && partial_reason.is_none() {
-        if large_java_direct_call_mode {
+        if large_direct_call_mode {
             let mut candidates = Vec::<LargeCallSiteQuery>::new();
             let mut groups = HashSet::new();
             for file in &semantic_files {
@@ -942,7 +947,7 @@ fn run_native_lsp_with_server_mode(
             // deterministic production/public call slice before type lookups;
             // the previous hierarchy-first order spent the entire Java session
             // on empty definition retries and emitted zero calls.
-            let call_limit = if large_java_direct_call_mode {
+            let call_limit = if large_direct_call_mode {
                 let reserved_type_requests = hierarchy_definition_queries
                     .len()
                     .saturating_add(type_use_definition_queries.len().min(2_048))
@@ -960,7 +965,7 @@ fn run_native_lsp_with_server_mode(
             };
             let selected_calls = &large_call_queries[..call_limit];
             prefetched_large_call_queries.extend(selected_calls.iter().cloned());
-            if large_java_direct_call_mode {
+            if large_direct_call_mode {
                 call_definition_query_count = large_call_queries.len();
                 call_definition_unique_query_count = large_call_queries.len();
                 connection.prefetch_definitions_once(selected_calls, lsp_request_batch_size());
@@ -1489,7 +1494,7 @@ fn run_native_lsp_with_server_mode(
 
             let call_query = (uri.clone(), symbol.selection_line, symbol.selection_character);
             let outgoing_calls = if !skip_large_workspace_call_enrichment
-                && !large_java_direct_call_mode
+                && !large_direct_call_mode
                 && symbol_semantic_enrichment
                 && is_callable_kind(symbol.kind)
                 && (!large_workspace || prefetched_large_call_queries.contains(&call_query))
@@ -1525,7 +1530,7 @@ fn run_native_lsp_with_server_mode(
             }
         }
 
-        if large_java_direct_call_mode {
+        if large_direct_call_mode {
             for site in syntax_call_sites {
                 let [line, character, ..] = site.callee_utf16_range.as_slice() else {
                     continue;
@@ -1760,7 +1765,7 @@ fn run_native_lsp_with_server_mode(
                 "largeDirectCallAccepted": accepted_large_direct_call_site_count,
                 "largeDirectCallUnresolved": unresolved_large_direct_call_site_count,
                 "largeDirectCallAmbiguous": ambiguous_large_direct_call_site_count,
-                "largeDirectCallMode": large_java_direct_call_mode,
+                "largeDirectCallMode": large_direct_call_mode,
                 "largeDefinitionSelected": prefetched_large_definition_queries.len(),
                 "localTypeDefinitions": local_type_definition_count,
                 "acceptedTypeRelationSites": accepted_type_relation_site_count,

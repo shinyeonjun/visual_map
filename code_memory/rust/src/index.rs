@@ -8,6 +8,7 @@ pub(crate) fn index_project(
     providers_root: Option<&Path>,
     source_manifest_path: Option<&Path>,
     expected_source_manifest: Option<&codebase_fact_model::identity::Sha256Digest>,
+    cache_policy: AnalysisCachePolicy,
 ) -> Result<(), String> {
     let root = crate::source::canonical_project_root(root)?;
     let pack_root = pack_root
@@ -82,13 +83,15 @@ pub(crate) fn index_project(
     let source_snapshot = source_census.source_snapshot_metadata();
     let source_hash_elapsed = source_hash_started.elapsed();
     let cache_invalidation_started = Instant::now();
-    let cache_impact_state = cache_impact(
-        &root,
-        &source_snapshot,
-        dependency_context_digest,
-    );
+    let cache_impact_state = if cache_policy.reuses_results() {
+        cache_impact(&root, &source_snapshot, dependency_context_digest)
+    } else {
+        CacheImpact::fresh(&source_snapshot)
+    };
     let cache_invalidation_elapsed = cache_invalidation_started.elapsed();
-    if cache_impact_state.force_all {
+    if cache_policy == AnalysisCachePolicy::Fresh {
+        eprintln!("analysis cache policy: fresh; bypassing all prior analysis results");
+    } else if cache_impact_state.force_all {
         eprintln!("language cache invalidation: no previous source manifest");
     } else if !cache_impact_state.affected_paths.is_empty() {
         eprintln!(
@@ -120,6 +123,7 @@ pub(crate) fn index_project(
         project_config_digest,
         &source_snapshot,
         &all_source_files,
+        cache_policy,
     )?;
     let mut active_cache_files = HashSet::new();
     if let Some(cache_file) = project_model.cache_file.clone() {
@@ -160,6 +164,7 @@ pub(crate) fn index_project(
         typescript_units: project_model.units,
         typescript_call_ranges: project_model.call_ranges,
         active_cache_files,
+        cache_policy,
     })?;
     timings.extend(planning.timings);
     timings.push(StageTiming {
@@ -236,6 +241,7 @@ pub(crate) fn index_project(
         dependency_context_digest,
         active_cache_files: planning.active_cache_files,
         timings,
+        cache_policy,
     })
 }
 

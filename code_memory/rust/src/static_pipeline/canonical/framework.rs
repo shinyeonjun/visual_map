@@ -297,7 +297,7 @@ fn canonical_edge(
 ) -> Result<FactEdge, String> {
     evidence_ids.sort();
     evidence_ids.dedup();
-    let id = FactEdge::stable_id(source_id, target_id, kind, semantic_context_id, None)
+    let id = FactEdge::stable_id(source_id, target_id, kind, semantic_context_id, None, None)
         .map_err(|error| format!("cannot build canonical framework edge identity: {error}"))?;
     let edge = FactEdge {
         id,
@@ -311,6 +311,7 @@ fn canonical_edge(
         dispatch: DispatchKind::NotApplicable,
         semantic_context_id: semantic_context_id.cloned(),
         qualifier: None,
+        execution: None,
         evidence_ids,
     };
     edge.validate()

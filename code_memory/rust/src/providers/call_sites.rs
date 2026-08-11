@@ -6,6 +6,8 @@
 //! are reconciled.
 
 use codebase_fact_model::analysis::ProviderProtocol;
+use codebase_fact_model::fact_graph::ExecutionControlContext;
+use std::collections::BTreeMap;
 use tree_sitter::{Language, Node, Parser, Point};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -31,6 +33,9 @@ pub(crate) struct SyntaxCallSite {
     pub(crate) owner_name_utf8_range: Option<Vec<i32>>,
     pub(crate) owner_name_utf16_range: Option<Vec<i32>>,
     pub(crate) callee_text: String,
+    /// Zero-based source order among calls owned by the same named callable.
+    pub(crate) lexical_ordinal: u32,
+    pub(crate) control: ExecutionControlContext,
 }
 
 impl SyntaxCallSite {
@@ -74,23 +79,36 @@ pub(crate) fn inventory_call_sites(
     language: &str,
     source: &str,
 ) -> Result<Vec<SyntaxCallSite>, String> {
-    let Some(language) = parser_language(language) else {
+    let Some(parser_language) = parser_language(language) else {
         return Ok(Vec::new());
     };
     let mut parser = Parser::new();
     parser
-        .set_language(&language)
+        .set_language(&parser_language)
         .map_err(|error| format!("cannot load {language:?} syntax grammar: {error}"))?;
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| "syntax parser returned no tree".to_string())?;
-    let mut sites = Vec::new();
-    visit(
-        language_name(language),
+    Ok(inventory_call_sites_from_root(
+        language,
         tree.root_node(),
         source,
-        &mut sites,
-    );
+    ))
+}
+
+/// Reuses a syntax tree already parsed by the canonical source inventory.
+///
+/// Provider adapters still use [`inventory_call_sites`] when they own the
+/// parse. The Language IR boundary calls this form so definitions, imports,
+/// type sites, and executable call sites all share one grammar/tree and one
+/// coordinate system.
+pub(crate) fn inventory_call_sites_from_root(
+    language: &str,
+    root: Node<'_>,
+    source: &str,
+) -> Vec<SyntaxCallSite> {
+    let mut sites = Vec::new();
+    visit(language, root, source, &mut sites);
     sites.sort_by(|left, right| {
         (
             &left.callee_utf8_range,
@@ -111,42 +129,52 @@ pub(crate) fn inventory_call_sites(
             && left.expression_utf8_range == right.expression_utf8_range
             && left.owner_name_utf8_range == right.owner_name_utf8_range
     });
-    Ok(sites)
+    let mut next_ordinal = BTreeMap::<Option<Vec<i32>>, u32>::new();
+    for site in &mut sites {
+        let ordinal = next_ordinal
+            .entry(site.owner_name_utf8_range.clone())
+            .or_default();
+        site.lexical_ordinal = *ordinal;
+        *ordinal = ordinal.saturating_add(1);
+    }
+    sites
 }
 
 fn parser_language(language: &str) -> Option<Language> {
     match language {
+        // Provider-side callers do not retain the source extension. TSX is
+        // parsed by the shared canonical tree and reaches the from-root API.
+        "typescript" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        "javascript" => Some(tree_sitter_javascript::LANGUAGE.into()),
+        "python" => Some(tree_sitter_python::LANGUAGE.into()),
         "csharp" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
         "java" => Some(tree_sitter_java::LANGUAGE.into()),
         "c" => Some(tree_sitter_c::LANGUAGE.into()),
         "cpp" => Some(tree_sitter_cpp::LANGUAGE.into()),
         "go" => Some(tree_sitter_go::LANGUAGE.into()),
         "rust" => Some(tree_sitter_rust::LANGUAGE.into()),
+        "dart" => Some(tree_sitter_dart::LANGUAGE.into()),
         _ => None,
-    }
-}
-
-// Language does not retain the caller's label, and comparing generated
-// language handles is not a public tree-sitter contract. Keep this helper
-// local to the parser selection order above.
-fn language_name(language: Language) -> &'static str {
-    if language == tree_sitter_c_sharp::LANGUAGE.into() {
-        "csharp"
-    } else if language == tree_sitter_java::LANGUAGE.into() {
-        "java"
-    } else if language == tree_sitter_c::LANGUAGE.into() {
-        "c"
-    } else if language == tree_sitter_cpp::LANGUAGE.into() {
-        "cpp"
-    } else if language == tree_sitter_go::LANGUAGE.into() {
-        "go"
-    } else {
-        "rust"
     }
 }
 
 fn visit(language: &str, node: Node<'_>, source: &str, sites: &mut Vec<SyntaxCallSite>) {
     match (language, node.kind()) {
+        ("typescript" | "javascript", "call_expression") => {
+            if let Some(function) = node.child_by_field_name("function") {
+                push_site(sites, call_form(function), function, node, source);
+            }
+        }
+        ("typescript" | "javascript", "new_expression") => {
+            if let Some(constructor) = node.child_by_field_name("constructor") {
+                push_site(sites, CallSiteForm::Construct, constructor, node, source);
+            }
+        }
+        ("python", "call") => {
+            if let Some(function) = node.child_by_field_name("function") {
+                push_site(sites, call_form(function), function, node, source);
+            }
+        }
         ("csharp", "invocation_expression") => {
             if let Some(function) = node.child_by_field_name("function") {
                 push_site(sites, call_form(function), function, node, source);
@@ -193,6 +221,19 @@ fn visit(language: &str, node: Node<'_>, source: &str, sites: &mut Vec<SyntaxCal
             }
         }
         ("cpp", "declaration") => collect_cpp_direct_initializers(node, source, sites),
+        ("dart", "call_expression") => {
+            if let Some(function) = node.child_by_field_name("function") {
+                push_site(sites, call_form(function), function, node, source);
+            }
+        }
+        ("dart", "new_expression") => {
+            let callee = node
+                .child_by_field_name("constructor")
+                .or_else(|| node.child_by_field_name("type"));
+            if let Some(callee) = callee {
+                push_site(sites, CallSiteForm::Construct, callee, node, source);
+            }
+        }
         _ => {}
     }
 
@@ -227,7 +268,12 @@ fn collect_cpp_direct_initializers(
 fn call_form(function: Node<'_>) -> CallSiteForm {
     if matches!(
         function.kind(),
-        "field_expression" | "member_access_expression" | "selector_expression"
+        "attribute"
+            | "field_expression"
+            | "member_access_expression"
+            | "member_expression"
+            | "null_aware_member_expression"
+            | "selector_expression"
     ) {
         CallSiteForm::MethodCall
     } else {
@@ -262,6 +308,7 @@ fn push_site_from_span(
         return;
     }
     let owner_name = enclosing_named_execution_owner(expression);
+    let control = execution_control_context(expression, source);
     sites.push(SyntaxCallSite {
         form,
         callee_utf8_range: point_range(callee.start_position(), callee.end_position()),
@@ -277,7 +324,101 @@ fn push_site_from_span(
         owner_name_utf16_range: owner_name
             .map(|owner| utf16_range(source, owner.start_position(), owner.end_position())),
         callee_text: callee_text.to_string(),
+        lexical_ordinal: 0,
+        control,
     });
+}
+
+fn execution_control_context(mut node: Node<'_>, source: &str) -> ExecutionControlContext {
+    let mut context = ExecutionControlContext::default();
+    while let Some(parent) = node.parent() {
+        if is_named_execution_owner(parent.kind()) {
+            break;
+        }
+        let kind = parent.kind();
+        context.awaited |= matches!(kind, "await" | "await_expression" | "await_expression_body");
+        context.repeated |= is_repetition_context(kind);
+        context.deferred |= is_deferred_context(kind);
+        context.guarded |= is_guard_context(kind)
+            && !node_is_within_field(node, parent, "condition")
+            && !node_is_within_field(node, parent, "value");
+        context.guarded |= is_short_circuit_context(parent, source);
+        node = parent;
+    }
+    context
+}
+
+fn is_repetition_context(kind: &str) -> bool {
+    matches!(
+        kind,
+        "for_statement"
+            | "for_in_statement"
+            | "for_each_statement"
+            | "foreach_statement"
+            | "for_expression"
+            | "enhanced_for_statement"
+            | "while_statement"
+            | "do_statement"
+            | "do_while_statement"
+            | "loop_expression"
+    )
+}
+
+fn is_deferred_context(kind: &str) -> bool {
+    matches!(
+        kind,
+        "lambda"
+            | "lambda_expression"
+            | "arrow_function"
+            | "anonymous_function"
+            | "anonymous_function_expression"
+            | "closure_expression"
+            | "function_expression"
+            | "function_literal"
+            | "func_literal"
+    )
+}
+
+fn is_guard_context(kind: &str) -> bool {
+    matches!(
+        kind,
+        "if_statement"
+            | "if_expression"
+            | "conditional_expression"
+            | "ternary_expression"
+            | "case_statement"
+            | "case_clause"
+            | "catch_clause"
+            | "except_clause"
+            | "match_arm"
+            | "switch_case"
+            | "switch_section"
+            | "switch_block_statement_group"
+            | "switch_expression_arm"
+            | "expression_case"
+            | "type_case"
+            | "select_case"
+            | "when_entry"
+    )
+}
+
+fn node_is_within_field(node: Node<'_>, parent: Node<'_>, field: &str) -> bool {
+    parent.child_by_field_name(field).is_some_and(|field_node| {
+        field_node.start_byte() <= node.start_byte() && node.end_byte() <= field_node.end_byte()
+    })
+}
+
+fn is_short_circuit_context(node: Node<'_>, source: &str) -> bool {
+    if !matches!(node.kind(), "binary_expression" | "boolean_operator") {
+        return false;
+    }
+    let mut cursor = node.walk();
+    let contains_short_circuit_operator = node.children(&mut cursor).any(|child| {
+        child
+            .utf8_text(source.as_bytes())
+            .is_ok_and(|token| matches!(token.trim(), "&&" | "||" | "and" | "or" | "??"))
+    });
+    contains_short_circuit_operator
 }
 
 fn enclosing_named_execution_owner(mut node: Node<'_>) -> Option<Node<'_>> {
@@ -294,7 +435,7 @@ fn enclosing_named_execution_owner(mut node: Node<'_>) -> Option<Node<'_>> {
 fn is_named_execution_owner(kind: &str) -> bool {
     matches!(
         kind,
-        // C#
+        // Several grammars intentionally share these declaration labels.
         "method_declaration"
             | "constructor_declaration"
             | "destructor_declaration"
@@ -304,19 +445,20 @@ fn is_named_execution_owner(kind: &str) -> bool {
             | "property_declaration"
             | "indexer_declaration"
             | "event_declaration"
-            // Java
             | "compact_constructor_declaration"
-            // C / C++
-            | "function_definition"
-            // Go
             | "function_declaration"
-            // Rust
+            | "generator_function_declaration"
+            | "method_definition"
+            | "variable_declarator"
+            | "function_definition"
             | "function_item"
+            | "function_signature"
+            | "method_signature"
     )
 }
 
 fn execution_owner_name(node: Node<'_>) -> Option<Node<'_>> {
-    for field in ["name", "declarator"] {
+    for field in ["name", "declarator", "signature"] {
         if let Some(candidate) = node.child_by_field_name(field) {
             if let Some(name) = declarator_name(candidate) {
                 return Some(name);
@@ -344,7 +486,15 @@ fn callee_leaf(node: Node<'_>) -> Option<Node<'_>> {
     if is_callee_leaf(node.kind()) {
         return Some(node);
     }
-    for field in ["name", "field", "member"] {
+    for field in [
+        "name",
+        "field",
+        "member",
+        "property",
+        "attribute",
+        "constructor",
+        "type",
+    ] {
         if let Some(child) = node.child_by_field_name(field) {
             if let Some(found) = callee_leaf(child) {
                 return Some(found);
@@ -364,6 +514,7 @@ fn is_callee_leaf(kind: &str) -> bool {
         kind,
         "identifier"
             | "field_identifier"
+            | "property_identifier"
             | "type_identifier"
             | "namespace_identifier"
             | "operator_name"
@@ -537,6 +688,169 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn dynamic_language_inventories_preserve_real_calls_and_exact_owners() {
+        for (language, source) in [
+            (
+                "typescript",
+                "function Target() {}\nfunction Caller() { Target(); new Box(); }",
+            ),
+            (
+                "javascript",
+                "function Target() {}\nfunction Caller() { Target(); new Box(); }",
+            ),
+            (
+                "python",
+                "def Target():\n    pass\n\nclass Box:\n    pass\n\ndef Caller():\n    Target()\n    Box()\n",
+            ),
+            (
+                "dart",
+                "void Target() {}\nvoid Caller() { Target(); new Box(); }\nclass Box {}",
+            ),
+        ] {
+            let sites = inventory_call_sites(language, source).unwrap();
+            let target = sites
+                .iter()
+                .find(|site| site.callee_text == "Target")
+                .unwrap_or_else(|| panic!("{language} Target call"));
+            let owner = target
+                .owner_name_utf8_range
+                .as_ref()
+                .unwrap_or_else(|| panic!("{language} Caller owner"));
+            assert_eq!(&source[range_bytes(source, owner)], "Caller", "{language}");
+
+            let box_site = sites
+                .iter()
+                .find(|site| site.callee_text == "Box")
+                .unwrap_or_else(|| panic!("{language} Box call"));
+            let expected_form = if language == "python" {
+                // Python construction is syntactically a normal call. Only
+                // the semantic target tells us whether the callee is a class.
+                CallSiteForm::Call
+            } else {
+                CallSiteForm::Construct
+            };
+            assert_eq!(box_site.form, expected_form, "{language}");
+        }
+    }
+
+    #[test]
+    fn execution_occurrences_keep_source_order_and_lexical_control_context() {
+        let source = r#"
+async function Caller(flag: boolean, values: number[]) {
+  start();
+  if (flag) { await guarded(); }
+  for (const value of values) { repeated(value); }
+  values.forEach(() => deferred());
+  finish();
+}
+"#;
+        let sites = inventory_call_sites("typescript", source).unwrap();
+        let by_name = sites
+            .iter()
+            .map(|site| (site.callee_text.as_str(), site))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(by_name["start"].lexical_ordinal, 0);
+        assert_eq!(by_name["guarded"].lexical_ordinal, 1);
+        assert_eq!(by_name["repeated"].lexical_ordinal, 2);
+        assert_eq!(by_name["forEach"].lexical_ordinal, 3);
+        assert_eq!(by_name["deferred"].lexical_ordinal, 4);
+        assert_eq!(by_name["finish"].lexical_ordinal, 5);
+
+        assert!(by_name["guarded"].control.guarded);
+        assert!(by_name["guarded"].control.awaited);
+        assert!(by_name["repeated"].control.repeated);
+        assert!(by_name["deferred"].control.deferred);
+        assert_eq!(by_name["start"].control, ExecutionControlContext::default());
+        assert_eq!(
+            by_name["finish"].control,
+            ExecutionControlContext::default()
+        );
+    }
+
+    #[test]
+    fn all_ten_languages_keep_supported_control_context_without_runtime_guessing() {
+        let cases = [
+            (
+                "typescript",
+                "async function Caller(flag:boolean, xs:number[]){ if(flag){guarded();} for(const x of xs){repeated();} const f=()=>deferred(); await awaited(); }",
+                true,
+                true,
+            ),
+            (
+                "javascript",
+                "async function Caller(flag,xs){ if(flag){guarded();} for(const x of xs){repeated();} const f=()=>deferred(); await awaited(); }",
+                true,
+                true,
+            ),
+            (
+                "python",
+                "async def Caller(flag, xs):\n    if flag:\n        guarded()\n    for x in xs:\n        repeated()\n    f = lambda: deferred()\n    await awaited()\n",
+                true,
+                true,
+            ),
+            (
+                "java",
+                "class C { static void Caller(boolean flag, int[] xs){ if(flag){guarded();} for(int x:xs){repeated();} Runnable f=()->deferred(); } }",
+                true,
+                false,
+            ),
+            (
+                "csharp",
+                "class C { static async Task Caller(bool flag, int[] xs){ if(flag){guarded();} foreach(var x in xs){repeated();} System.Action f=()=>deferred(); await awaited(); } }",
+                true,
+                true,
+            ),
+            (
+                "c",
+                "void Caller(int flag){ if(flag){guarded();} for(int i=0;i<1;i++){repeated();} }",
+                false,
+                false,
+            ),
+            (
+                "cpp",
+                "void Caller(bool flag){ if(flag){guarded();} for(int i=0;i<1;i++){repeated();} auto f=[](){deferred();}; }",
+                true,
+                false,
+            ),
+            (
+                "go",
+                "package p\nfunc Caller(flag bool){ if flag { guarded() }; for i:=0;i<1;i++ { repeated() }; f:=func(){ deferred() }; _=f }",
+                true,
+                false,
+            ),
+            (
+                "rust",
+                "async fn Caller(flag:bool){ if flag { guarded(); } for _i in 0..1 { repeated(); } let _f=|| deferred(); awaited().await; }",
+                true,
+                true,
+            ),
+            (
+                "dart",
+                "Future<void> Caller(bool flag, List<int> xs) async { if(flag){guarded();} for(final x in xs){repeated();} final f=(){deferred();}; await awaited(); }",
+                true,
+                true,
+            ),
+        ];
+
+        for (language, source, has_deferred, has_awaited) in cases {
+            let sites = inventory_call_sites(language, source).unwrap();
+            let by_name = sites
+                .iter()
+                .map(|site| (site.callee_text.as_str(), site))
+                .collect::<BTreeMap<_, _>>();
+            assert!(by_name["guarded"].control.guarded, "{language}");
+            assert!(by_name["repeated"].control.repeated, "{language}");
+            if has_deferred {
+                assert!(by_name["deferred"].control.deferred, "{language}");
+            }
+            if has_awaited {
+                assert!(by_name["awaited"].control.awaited, "{language}");
+            }
+        }
     }
 
     #[test]
