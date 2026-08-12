@@ -219,7 +219,10 @@ mod tests {
             file_id: "file".into(),
             relative_path: "src/file.ts".into(),
             language,
-            parent_id: None,
+            // 테스트 fixture에서도 실제 walker가 만드는 파일 유닛 아래의
+            // lexical scope를 표현한다. 전역 이름 fallback을 허용하지 않는
+            // resolver 계약을 검증하려면 부모 scope가 필요하다.
+            parent_id: Some("file".into()),
             span: SourceSpan::new("file", "src/file.ts", 1, 1, 1, 1),
             body_span: None,
             signature: None,
@@ -331,5 +334,66 @@ mod tests {
 
         assert!(store.references[0].target_unit_id.is_none());
         assert_eq!(store.references[0].status, ResolutionStatus::Unknown);
+    }
+
+    #[test]
+    fn 참조_해석은_다른_파일의_orphan을_확정하지_않는다() {
+        let mut orphan = unit("orphan", "orphan", "orphan");
+        orphan.file_id = "other-file".into();
+        orphan.parent_id = Some("other-root".into());
+
+        let mut store = FactStore {
+            units: BTreeMap::from([
+                ("source".into(), unit("source", "source", "source")),
+                ("orphan".into(), orphan),
+            ]),
+            references: vec![reference("ref_1", "orphan", ResolutionStatus::Confirmed)],
+            ..FactStore::default()
+        };
+
+        store.resolve_references();
+
+        assert_eq!(store.references[0].status, ResolutionStatus::Unknown);
+        assert!(store.references[0].target_unit_id.is_none());
+    }
+
+    #[test]
+    fn 참조_해석은_대소문자가_다른_심볼을_확정하지_않는다() {
+        let mut store = FactStore {
+            units: BTreeMap::from([
+                ("source".into(), unit("source", "source", "source")),
+                ("exact".into(), unit("exact", "ExactCase", "ExactCase")),
+            ]),
+            references: vec![reference("ref_1", "exactcase", ResolutionStatus::Confirmed)],
+            ..FactStore::default()
+        };
+
+        store.resolve_references();
+
+        assert_eq!(store.references[0].status, ResolutionStatus::Unknown);
+        assert!(store.references[0].target_unit_id.is_none());
+    }
+
+    #[test]
+    fn receiver_suffix만으로_다른_객체의_메서드를_확정하지_않는다() {
+        let mut owner_save = unit("owner_save", "save", "Owner::save");
+        owner_save.parent_id = Some("file".into());
+        let mut store = FactStore {
+            units: BTreeMap::from([
+                ("source".into(), unit("source", "source", "source")),
+                ("owner_save".into(), owner_save),
+            ]),
+            references: vec![reference(
+                "ref_1",
+                "other.save",
+                ResolutionStatus::Candidate,
+            )],
+            ..FactStore::default()
+        };
+
+        store.resolve_references();
+
+        assert_eq!(store.references[0].status, ResolutionStatus::Unknown);
+        assert!(store.references[0].target_unit_id.is_none());
     }
 }
