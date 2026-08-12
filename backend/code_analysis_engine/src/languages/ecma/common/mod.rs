@@ -123,6 +123,7 @@ fn extract_ecma_exports(root: Node<'_>, source: &[u8], file: &FileEntry, bundle:
                     id,
                     source_unit_id: unit_index.unit_for_line(node.start_position().row as u32 + 1),
                     target_unit_id: None,
+                    candidate_unit_ids: Vec::new(),
                     target_name: target_name.clone(),
                     kind: ReferenceKind::Export,
                     status: ResolutionStatus::Candidate,

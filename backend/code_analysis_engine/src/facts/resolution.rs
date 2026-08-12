@@ -35,16 +35,27 @@ pub(super) fn resolve(store: &mut FactStore) {
         candidates.sort();
         candidates.dedup();
 
-        if candidates.len() == 1 {
-            reference.target_unit_id = candidates.pop();
-            reference.status = ResolutionStatus::Confirmed;
-        } else if candidates.len() > 1 && reference.status == ResolutionStatus::Confirmed {
-            reference.status = ResolutionStatus::Candidate;
-        } else if candidates.is_empty() && reference.status == ResolutionStatus::Confirmed {
-            // `Confirmed`는 실제 프로젝트 유닛으로 연결된 상태만 의미해야
-            // 한다. 외부 라이브러리나 분석되지 않은 심볼은 추측하지 않고
-            // Unknown으로 내려 프론트가 상태를 오해하지 않도록 한다.
-            reference.status = ResolutionStatus::Unknown;
+        reference.candidate_unit_ids.clear();
+        match candidates.len() {
+            1 => {
+                reference.target_unit_id = candidates.pop();
+                reference.status = ResolutionStatus::Confirmed;
+            }
+            2.. => {
+                // Candidate는 후보가 여러 개인 상태로만 사용한다. 후보
+                // 자체를 함께 보존해야 프론트가 모호성의 근거를 보여줄 수
+                // 있다.
+                reference.candidate_unit_ids = candidates;
+                reference.target_unit_id = None;
+                reference.status = ResolutionStatus::Candidate;
+            }
+            0 => {
+                // 외부 라이브러리·분석 제외 파일·존재하지 않는 심볼은
+                // 프로젝트 내부 후보가 없는 Unknown이다. 추출 단계에서
+                // 임시로 Candidate였더라도 최종 해석 결과로 정규화한다.
+                reference.target_unit_id = None;
+                reference.status = ResolutionStatus::Unknown;
+            }
         }
     }
 }

@@ -141,6 +141,7 @@ pub(super) fn walk_tree(
                 ),
                 source_unit_id: current_parent.clone(),
                 target_unit_id: None,
+                candidate_unit_ids: Vec::new(),
                 target_name: super::references::normalize_reference_name(&text),
                 kind: if node.kind().contains("include") {
                     ReferenceKind::Include
@@ -168,6 +169,7 @@ pub(super) fn walk_tree(
                     ),
                     source_unit_id: current_parent.clone(),
                     target_unit_id: None,
+                    candidate_unit_ids: Vec::new(),
                     target_name: target_name.clone(),
                     kind: if matches!(
                         node.kind(),
