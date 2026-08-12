@@ -57,7 +57,7 @@ sharedRatioNumerator = 3
 sharedRatioDenominator = 4
 sharedMinimumScore = 3
 genericTokens = ["src","lib","app","apps","main","index","test","tests","spec","fixture","fixtures","from","adapter","adapters","aggregate","aggregation","analysis","analyze","analyzer","analyzers","access","all","argument","arguments","array","ast","async","attribute","attributes","build","call","callback","candidate","candidates","catalog","codex","bundle","capability","capabilities","class","code","compile","collection","cpp","csharp","context","coverage","declaration","declarations","dependency","dependencies","default","detect","detected","detection","detector","diagnostic","diagnostics","domain","dispatch","dispatcher","dynamic","dart","engine","ecma","entry","entries","entrypoint","entrypoints","error","errors","evidence","extension","extensions","fact","facts","file","files","flow","framework","frameworks","function","functions","generic","go","get","graph","group","groups","grouping","collect","confidence","family","fmt","for","import","imports","input","issue","issues","ids","info","internal","join","key","keys","java","javascript","kind","language","languages","line","lines","map","member","members","membership","metadata","merge","method","methods","module","modules","mod","name","names","naming","new","normalize","normalized","node","nodes","option","options","output","package","packages","python","parameter","parameters","parser","parsers","path","paths","pipeline","project","projects","read","provider","providers","reference","references","relation","relations","resource","resources","result","results","request","route","routes","overview","progress","projector","proposal","registry","resolution","resolve","rust","scan","schema","schemas","semantic","signal","signals","snapshot","source","span","status","stable","stages","store","structure","target","targets","token","tokens","tree","trees","typescript","type","types","suggestion","summarize","summary","temporary","unit","units","unknown","value","values","validate","validated","validator","view","views","warning","warnings","worse","service","services","controller","controllers","handler","handlers","manager","factory","helper","helpers","util","utils","common","shared","base","impl","repository","repositories","model","models","dto","infra","infrastructure","config","configuration","logging","logger","database","transaction","transactions","http","api","apis","com","org","net","set","skip","with","post","backend","legacy","rstrip","strip","format","parse","run","load","save","put","delete","create","update","list","item","items","data","state","client","server","frontend","runtime","core","web","ui"]
-crossCuttingKeys = ["common","shared","infra","infrastructure","logging","logger","config","database","transaction","http"]
+crossCuttingKeys = ["common","shared","infra","infrastructure","logging","logger","config","database","transaction","http","server"]
 
 [parser]
 sqlPattern = '''(?i)\b(?:from|into|update|join|table)\s+[`"']?([a-zA-Z_][a-zA-Z0-9_]*)'''
@@ -245,3 +245,26 @@ promptReserveBytes = 8192
 maximumLabelLength = 120
 maximumSummaryLength = 500
 maximumMergeReasonLength = 500
+
+[postprocess]
+maxFilesPerDomain = 24
+maxEntrypointsPerDomain = 24
+maxResourcesPerDomain = 32
+maxFeaturesPerDomain = 48
+maxInternalFeaturesPerDomain = 24
+maxSymbolsPerFeature = 16
+maxPathsPerFeature = 8
+maxFlowsPerDomain = 12
+maxFlowNodes = 48
+maxFlowEdges = 72
+genericDomainMaxUnits = 4
+domainOverlapPercent = 80
+flowEntrypointWeight = 100
+flowResourceWeight = 60
+flowDynamicWeight = 40
+flowComplexityWeight = 1
+featureEntrypointWeight = 100
+featureResourceWeight = 60
+featureDynamicWeight = 40
+featureComplexityWeight = 1
+featureComplexityCap = 100

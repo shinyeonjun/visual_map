@@ -14,9 +14,15 @@ fn main() -> ExitCode {
     {
         return run_codex_names_from_result(&arguments);
     }
+    if arguments.first().map(String::as_str) == Some("postprocess")
+        && arguments.get(1).map(String::as_str) == Some("codex-context")
+    {
+        return run_codex_context_postprocess(&arguments[2..]);
+    }
 
     let Some(root_path) = arguments.first() else {
         eprintln!("사용법: code-analysis-engine <프로젝트-경로> [--compact] [--profile] [--no-output] [--output=<경로>] [--prepared-output=<경로>] [--codex] [--config=<경로>] [--codex-executable=<경로>] [--codex-timeout-ms=<밀리초>] [--codex-max-input-bytes=<바이트>] [--codex-context-output=<경로>] [--codex-context-only]");
+        eprintln!("       code-analysis-engine postprocess codex-context --input=<분석결과.json> --output=<컨텍스트.json> [--config=<경로>]");
         return ExitCode::from(2);
     };
 
@@ -137,6 +143,62 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn run_codex_context_postprocess(arguments: &[String]) -> ExitCode {
+    let Some(input_path) = option_value(arguments, "--input") else {
+        eprintln!("postprocess codex-context에는 --input=<분석 결과 JSON>이 필요합니다.");
+        return ExitCode::from(2);
+    };
+    let Some(output_path) = option_value(arguments, "--output") else {
+        eprintln!("postprocess codex-context에는 --output=<컨텍스트 JSON>이 필요합니다.");
+        return ExitCode::from(2);
+    };
+    let source = match fs::read_to_string(&input_path) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("분석 결과 JSON을 읽지 못했습니다: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let result: code_analysis_engine::AnalysisResult = match serde_json::from_str(&source) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("분석 결과 JSON을 해석하지 못했습니다: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let config = match option_value(arguments, "--config") {
+        Some(path) => match AnalysisConfig::from_file(Path::new(&path)) {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("설정 적용 실패: {error}");
+                return ExitCode::from(2);
+            }
+        },
+        None => AnalysisConfig::default(),
+    };
+    let context = match code_analysis_engine::postprocess::build_codex_context(&result, &config) {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("Codex 컨텍스트 후보정 실패: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = output::write_pretty_json(Path::new(&output_path), &context) {
+        eprintln!("Codex 컨텍스트 저장 실패: {error}");
+        return ExitCode::from(1);
+    }
+    eprintln!(
+        "Codex 컨텍스트 후보정 완료: domains={} features={}/{} flows={}/{} output={}",
+        context.summary.included_domains,
+        context.summary.included_features,
+        context.summary.total_features,
+        context.summary.included_flows,
+        context.summary.total_flows,
+        output_path
+    );
+    ExitCode::SUCCESS
 }
 
 fn run_codex_names_from_result(arguments: &[String]) -> ExitCode {

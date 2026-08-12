@@ -253,3 +253,36 @@ impl Default for SemanticPolicy {
         default_section("semantic")
     }
 }
+
+/// 정적 Overview를 Codex 입력 카드로 축약하는 정책이다.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostprocessPolicy {
+    pub max_files_per_domain: usize,
+    pub max_entrypoints_per_domain: usize,
+    pub max_resources_per_domain: usize,
+    pub max_features_per_domain: usize,
+    pub max_internal_features_per_domain: usize,
+    pub max_symbols_per_feature: usize,
+    pub max_paths_per_feature: usize,
+    pub max_flows_per_domain: usize,
+    pub max_flow_nodes: usize,
+    pub max_flow_edges: usize,
+    pub generic_domain_max_units: usize,
+    pub domain_overlap_percent: u32,
+    pub flow_entrypoint_weight: u32,
+    pub flow_resource_weight: u32,
+    pub flow_dynamic_weight: u32,
+    pub flow_complexity_weight: u32,
+    pub feature_entrypoint_weight: u32,
+    pub feature_resource_weight: u32,
+    pub feature_dynamic_weight: u32,
+    pub feature_complexity_weight: u32,
+    pub feature_complexity_cap: usize,
+}
+
+impl Default for PostprocessPolicy {
+    fn default() -> Self {
+        default_section("postprocess")
+    }
+}
