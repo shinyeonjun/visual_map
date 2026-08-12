@@ -115,6 +115,7 @@ pub(super) fn extract_import_references(
             id: reference_id,
             source_unit_id: source_unit_id.clone(),
             target_unit_id: None,
+            candidate_unit_ids: Vec::new(),
             target_name: target_name.clone(),
             kind: ReferenceKind::Import,
             status: ResolutionStatus::Candidate,

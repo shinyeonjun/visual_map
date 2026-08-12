@@ -1,7 +1,7 @@
 use code_analysis_engine::{analyze, model::AnalysisStatus, AnalysisRequest};
 use std::fs;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn temporary_project(name: &str) -> PathBuf {
     let suffix = SystemTime::now()
@@ -11,6 +11,37 @@ fn temporary_project(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("visual-map-quality-{name}-{suffix}"));
     fs::create_dir_all(&path).expect("임시 프로젝트를 만들어야 한다");
     path
+}
+
+fn assert_elapsed_within(name: &str, elapsed: Duration, default_max_ms: u128) {
+    let configured_max_ms = std::env::var("VISUAL_MAP_SCALE_MAX_MS")
+        .ok()
+        .and_then(|value| value.parse::<u128>().ok())
+        .unwrap_or(default_max_ms);
+    eprintln!(
+        "[scale-gate] fixture={name} elapsed_ms={} max_ms={configured_max_ms}",
+        elapsed.as_millis()
+    );
+    assert!(
+        elapsed.as_millis() <= configured_max_ms,
+        "{name} fixture가 시간 한도를 초과했다: {}ms > {configured_max_ms}ms",
+        elapsed.as_millis()
+    );
+}
+
+fn write_cross_file_fixture(root: &Path, file_count: usize, functions_per_file: usize) {
+    for file_index in 0..file_count {
+        let mut source = format!("export function main() {{ return f_{file_index}_0(); }}\n");
+        for function_index in 0..functions_per_file {
+            let target_file = (file_index + 1) % file_count;
+            let target = format!("f_{target_file}_{function_index}");
+            source.push_str(&format!(
+                "export function f_{file_index}_{function_index}() {{ return {target}(); }}\n"
+            ));
+        }
+        fs::write(root.join(format!("module_{file_index}.ts")), source)
+            .expect("스케일 fixture를 써야 한다");
+    }
 }
 
 #[test]
@@ -88,19 +119,7 @@ fn 파일간_호출이_많은_프로젝트도_overview를_완성한다() {
     let root = temporary_project("cross-file-scale");
     const FILE_COUNT: usize = 120;
     const FUNCTIONS_PER_FILE: usize = 12;
-
-    for file_index in 0..FILE_COUNT {
-        let mut source = format!("export function main() {{ return f_{file_index}_0(); }}\n");
-        for function_index in 0..FUNCTIONS_PER_FILE {
-            let target_file = (file_index + 1) % FILE_COUNT;
-            let target = format!("f_{target_file}_{function_index}");
-            source.push_str(&format!(
-                "export function f_{file_index}_{function_index}() {{ return {target}(); }}\n"
-            ));
-        }
-        fs::write(root.join(format!("module_{file_index}.ts")), source)
-            .expect("스케일 fixture를 써야 한다");
-    }
+    write_cross_file_fixture(&root, FILE_COUNT, FUNCTIONS_PER_FILE);
 
     let result = analyze(AnalysisRequest::new(&root)).expect("대형 결합 fixture를 분석해야 한다");
     let overview = result.overview.expect("Overview가 있어야 한다");
@@ -113,4 +132,53 @@ fn 파일간_호출이_많은_프로젝트도_overview를_완성한다() {
         .all(|unit_id| { overview.units.iter().any(|unit| &unit.id == unit_id) })));
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}
+
+#[test]
+#[ignore = "Orange Pi 야간 성능 게이트에서 release 모드로 실행한다"]
+fn 대규모_파일간_호출은_시간_한도안에_overview를_완성한다() {
+    let root = temporary_project("cross-file-large-scale");
+    const FILE_COUNT: usize = 400;
+    const FUNCTIONS_PER_FILE: usize = 50;
+    write_cross_file_fixture(&root, FILE_COUNT, FUNCTIONS_PER_FILE);
+
+    let started = Instant::now();
+    let mut request = AnalysisRequest::new(&root);
+    request.options.profile = true;
+    let result = analyze(request).expect("대형 결합 fixture를 분석해야 한다");
+    let elapsed = started.elapsed();
+    let overview = result.overview.expect("Overview가 생성되어야 한다");
+
+    assert_eq!(overview.coverage.total_files, FILE_COUNT);
+    assert!(!overview.features.is_empty());
+    assert!(overview
+        .features
+        .iter()
+        .any(|feature| feature.reachable_unit_count > feature.unit_ids.len()));
+    assert_elapsed_within("cross-file-large-scale", elapsed, 30_000);
+    fs::remove_dir_all(root).expect("대형 fixture를 정리해야 한다");
+}
+
+#[test]
+#[ignore = "Orange Pi 야간 성능 게이트에서 release 모드로 실행한다"]
+fn 단일_대형_파일은_시간_한도안에_분석한다() {
+    let root = temporary_project("single-file-large-scale");
+    const FUNCTION_COUNT: usize = 20_000;
+    let mut source = String::from("export function main() { return helper_0(); }\n");
+    for index in 0..FUNCTION_COUNT {
+        let next = (index + 1) % FUNCTION_COUNT;
+        source.push_str(&format!(
+            "export function helper_{index}() {{ return helper_{next}(); }}\n"
+        ));
+    }
+    fs::write(root.join("large.ts"), source).expect("대형 단일 파일을 써야 한다");
+
+    let started = Instant::now();
+    let mut request = AnalysisRequest::new(&root);
+    request.options.profile = true;
+    let result = analyze(request).expect("대형 단일 파일을 분석해야 한다");
+    let elapsed = started.elapsed();
+    assert!(result.overview.is_some());
+    assert_elapsed_within("single-file-large-scale", elapsed, 120_000);
+    fs::remove_dir_all(root).expect("대형 fixture를 정리해야 한다");
 }

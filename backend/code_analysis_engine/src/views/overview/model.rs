@@ -97,7 +97,13 @@ pub struct FeatureGroup {
     pub status: FeatureStatus,
     pub confidence: FeatureConfidence,
     pub domain_ids: Vec<String>,
+    /// 응답에 직접 materialize한 유닛이다. 대형 operation은 전체 전이
+    /// 폐쇄를 중복 직렬화하지 않고 소유 유닛만 담는다.
     pub unit_ids: Vec<String>,
+    /// 정적으로 도달 가능한 전체 유닛 수다. 상세 유닛은 staticGraph와
+    /// unitIds를 이용해 별도 조회할 수 있다.
+    #[serde(default)]
+    pub reachable_unit_count: usize,
     pub entrypoint_ids: Vec<String>,
     pub flow_ids: Vec<String>,
     pub resource_ids: Vec<String>,
