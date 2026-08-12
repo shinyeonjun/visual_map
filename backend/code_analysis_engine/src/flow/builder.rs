@@ -59,6 +59,10 @@ pub(crate) fn build(facts: &FactStore, limits: &AnalysisLimits) -> (ExecutionFlo
     for flow in &mut flows {
         truncated |= limit_flow(flow, &mut remaining_nodes, &mut remaining_edges);
     }
+    // Entry/exit 노드조차 예산에 들어가지 않는 흐름은 부분 그래프로
+    // 내보내면 안 된다. 존재하지 않는 entryNodeId를 프론트가 따라가게
+    // 하는 대신 해당 flow를 생략하고 한도 도달 상태만 보고한다.
+    flows.retain(|flow| !flow.nodes.is_empty());
     links.retain(|link| {
         flows.iter().any(|flow| {
             flow.id == link.source_flow_id
@@ -202,6 +206,13 @@ fn limit_flow(
     remaining_edges: &mut usize,
 ) -> bool {
     let mut truncated = false;
+    if *remaining_nodes < 2 {
+        let had_nodes = !flow.nodes.is_empty();
+        flow.nodes.clear();
+        flow.edges.clear();
+        flow.dynamic_boundary_ids.clear();
+        return had_nodes;
+    }
     let node_budget = (*remaining_nodes).min(flow.nodes.len());
     if flow.nodes.len() > node_budget {
         truncated = true;

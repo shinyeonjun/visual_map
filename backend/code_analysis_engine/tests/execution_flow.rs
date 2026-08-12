@@ -510,3 +510,26 @@ function after() { return true; }
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
 }
+
+#[test]
+fn 실행흐름_노드_한도가_entry_exit보다_작으면_깨진_flow를_내보내지_않는다() {
+    let root = temporary_project();
+    fs::write(
+        root.join("limited.ts"),
+        "export function run() { return load(); }\nfunction load() { return true; }\n",
+    )
+    .expect("한도 fixture를 써야 한다");
+
+    let mut request = AnalysisRequest::new(&root);
+    request.options.config.limits.max_flow_nodes = 0;
+    let result = analyze(request).expect("한도 분석이 성공해야 한다");
+    let overview = result.overview.expect("Overview가 생성되어야 한다");
+
+    assert!(overview.execution_flows.flows.is_empty());
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "ANALYSIS_LIMIT_REACHED"));
+
+    fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}

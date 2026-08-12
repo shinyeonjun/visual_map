@@ -358,6 +358,28 @@ mod tests {
     }
 
     #[test]
+    fn 동적_호출도_정적으로_찾은_가능한_대상을_경계와_함께_보존한다() {
+        let mut target = unit("target", "dispatch", "source::dispatch");
+        target.parent_id = Some("source".into());
+        let mut store = FactStore {
+            units: BTreeMap::from([
+                ("source".into(), unit("source", "source", "source")),
+                ("target".into(), target),
+            ]),
+            references: vec![reference("dynamic", "dispatch", ResolutionStatus::Dynamic)],
+            ..FactStore::default()
+        };
+
+        store.resolve_references();
+
+        assert_eq!(
+            store.references[0].target_unit_id.as_deref(),
+            Some("target")
+        );
+        assert_eq!(store.references[0].status, ResolutionStatus::Dynamic);
+    }
+
+    #[test]
     fn 참조_해석은_대소문자가_다른_심볼을_확정하지_않는다() {
         let mut store = FactStore {
             units: BTreeMap::from([

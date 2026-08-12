@@ -15,9 +15,10 @@ pub(super) fn resolve(store: &mut FactStore) {
         .map(|unit| (unit.id.clone(), unit.file_id.clone()))
         .collect::<HashMap<_, _>>();
     for reference in &mut store.references {
-        if reference.target_unit_id.is_some() || reference.status == ResolutionStatus::Dynamic {
+        if reference.target_unit_id.is_some() {
             continue;
         }
+        let preserve_dynamic = reference.status == ResolutionStatus::Dynamic;
 
         let source_file_id = source_files.get(&reference.source_unit_id);
         let source_language = index
@@ -81,7 +82,11 @@ pub(super) fn resolve(store: &mut FactStore) {
         match candidates.len() {
             1 => {
                 reference.target_unit_id = candidates.pop();
-                reference.status = ResolutionStatus::Confirmed;
+                reference.status = if preserve_dynamic {
+                    ResolutionStatus::Dynamic
+                } else {
+                    ResolutionStatus::Confirmed
+                };
             }
             2.. => {
                 // Candidate는 후보가 여러 개인 상태로만 사용한다. 후보
@@ -89,14 +94,22 @@ pub(super) fn resolve(store: &mut FactStore) {
                 // 있다.
                 reference.candidate_unit_ids = candidates;
                 reference.target_unit_id = None;
-                reference.status = ResolutionStatus::Candidate;
+                reference.status = if preserve_dynamic {
+                    ResolutionStatus::Dynamic
+                } else {
+                    ResolutionStatus::Candidate
+                };
             }
             0 => {
                 // 외부 라이브러리·분석 제외 파일·존재하지 않는 심볼은
                 // 프로젝트 내부 후보가 없는 Unknown이다. 추출 단계에서
                 // 임시로 Candidate였더라도 최종 해석 결과로 정규화한다.
                 reference.target_unit_id = None;
-                reference.status = ResolutionStatus::Unknown;
+                reference.status = if preserve_dynamic {
+                    ResolutionStatus::Dynamic
+                } else {
+                    ResolutionStatus::Unknown
+                };
             }
         }
     }
