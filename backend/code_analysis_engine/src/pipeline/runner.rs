@@ -9,6 +9,7 @@ use crate::languages::analyze_file;
 use crate::model::{AnalysisRequest, AnalysisResult, AnalysisStatus};
 use crate::project::ProjectScanner;
 use crate::views::overview::projector::project;
+use crate::views::preprocessed::prepare;
 use crate::EngineError;
 use rayon::prelude::*;
 use std::fs;
@@ -273,6 +274,7 @@ impl DomainAnalysisPipeline {
             semantic_status,
             semantic_analysis,
         );
+        let preprocessed_overview = prepare(&overview, &files);
         profiler.record(
             "overview_projection",
             stage_started,
@@ -299,6 +301,7 @@ impl DomainAnalysisPipeline {
             diagnostics,
             elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
             overview: Some(overview),
+            preprocessed_overview: Some(preprocessed_overview),
         })
     }
 }

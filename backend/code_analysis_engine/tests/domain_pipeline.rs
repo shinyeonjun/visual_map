@@ -205,6 +205,25 @@ export function dispatch(name: string, request: Request) {
         overview.static_graph.dynamic_edge_ids.len(),
         overview.dynamic_boundary_ids.len()
     );
+    let prepared = result
+        .preprocessed_overview
+        .as_ref()
+        .expect("정적 전처리 Overview가 생성되어야 한다");
+    let prepared_json = serde_json::to_string(prepared).expect("전처리 결과를 직렬화해야 한다");
+    assert_eq!(prepared.schema_version, "prepared-static-overview.v1");
+    assert!(!prepared_json.contains("staticGraph"));
+    assert!(prepared.features.iter().all(|feature| feature
+        .unit_ids
+        .iter()
+        .all(|unit_id| { prepared.units.iter().any(|unit| &unit.id == unit_id) })));
+    assert!(prepared.features.iter().all(|feature| {
+        feature.domain_ids.iter().all(|domain_id| {
+            prepared
+                .domains
+                .iter()
+                .any(|domain| &domain.id == domain_id)
+        })
+    }));
     assert!(result
         .files
         .iter()

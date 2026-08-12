@@ -16,7 +16,7 @@ fn main() -> ExitCode {
     }
 
     let Some(root_path) = arguments.first() else {
-        eprintln!("사용법: code-analysis-engine <프로젝트-경로> [--compact] [--profile] [--no-output] [--output=<경로>] [--codex] [--config=<경로>] [--codex-executable=<경로>] [--codex-timeout-ms=<밀리초>] [--codex-max-input-bytes=<바이트>] [--codex-context-output=<경로>] [--codex-context-only]");
+        eprintln!("사용법: code-analysis-engine <프로젝트-경로> [--compact] [--profile] [--no-output] [--output=<경로>] [--prepared-output=<경로>] [--codex] [--config=<경로>] [--codex-executable=<경로>] [--codex-timeout-ms=<밀리초>] [--codex-max-input-bytes=<바이트>] [--codex-context-output=<경로>] [--codex-context-only]");
         return ExitCode::from(2);
     };
 
@@ -29,6 +29,10 @@ fn main() -> ExitCode {
     let output_path = flags
         .iter()
         .find_map(|argument| argument.strip_prefix("--output="))
+        .map(PathBuf::from);
+    let prepared_output_path = flags
+        .iter()
+        .find_map(|argument| argument.strip_prefix("--prepared-output="))
         .map(PathBuf::from);
     let codex_enabled = flags.iter().any(|argument| argument == "--codex");
     // [DEV ONLY] 컨텍스트 덤프만 확인할 때 36MB 이상인 최종 분석 JSON 출력을
@@ -88,6 +92,17 @@ fn main() -> ExitCode {
 
     match analyze(request) {
         Ok(result) => {
+            if let Some(path) = prepared_output_path {
+                let Some(prepared) = result.preprocessed_overview.as_ref() else {
+                    eprintln!("전처리 Overview가 생성되지 않았습니다.");
+                    return ExitCode::from(1);
+                };
+                if let Err(error) = output::write_pretty_json(&path, prepared) {
+                    eprintln!("전처리 Overview 저장 실패: {error}");
+                    return ExitCode::from(1);
+                }
+                eprintln!("전처리 Overview 저장 완료: {}", path.display());
+            }
             if emit_codex_context_only {
                 eprintln!("Codex 컨텍스트 저장 완료: 최종 분석 JSON 출력 생략");
                 return ExitCode::SUCCESS;
