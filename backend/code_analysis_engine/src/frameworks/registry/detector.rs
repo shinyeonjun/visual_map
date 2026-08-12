@@ -6,7 +6,7 @@ use crate::model::{FileEntry, Language};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// 감지된 프레임워크와 그 근거다.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,13 +38,12 @@ pub fn detect(
         }
     }
 
-    for manifest in &policy.manifests {
-        let path = root.join(manifest);
+    for (manifest, path) in collect_manifest_sources(root, policy) {
         if let Ok(source) = fs::read_to_string(&path) {
             contents.push((
                 FileEntry {
                     file_id: format!("manifest:{manifest}"),
-                    relative_path: manifest.to_string(),
+                    relative_path: manifest.clone(),
                     language: Language::Unknown,
                     size_bytes: source.len() as u64,
                     line_count: source.lines().count() as u64,
@@ -139,11 +138,16 @@ fn framework_language_matches(file: &FileEntry, languages: &[String]) -> bool {
 /// manifest는 의존성 이름 자체가 문자열이므로 원문 검색을 허용하고, 소스는
 /// import/include·호출·attribute 문맥에서만 marker를 근거로 사용한다.
 fn marker_line<'a>(file: &FileEntry, source: &str, marker: &'a str) -> Option<(&'a str, u32)> {
+    if is_manifest_path(&file.relative_path) {
+        return manifest_marker_line(file, source, marker);
+    }
     if file.language == Language::Unknown {
         return source
             .to_ascii_lowercase()
-            .contains(&marker.to_ascii_lowercase())
-            .then_some((marker, 1));
+            .lines()
+            .enumerate()
+            .find(|(_, line)| contains_marker(line, marker))
+            .map(|(index, _)| (marker, index as u32 + 1));
     }
 
     let marker_lower = marker.to_ascii_lowercase();
@@ -172,8 +176,8 @@ fn marker_line<'a>(file: &FileEntry, source: &str, marker: &'a str) -> Option<(&
                 .contains(&marker_lower);
         let code = code_without_literals_and_comments(line);
         let lower = code.to_ascii_lowercase();
-        if !(lower.contains(&marker_lower)
-            || is_import_context && raw_lower.contains(&marker_lower)
+        if !(contains_marker(&lower, &marker_lower)
+            || is_import_context && contains_marker(&raw_lower, &marker_lower)
             || is_file_marker)
         {
             continue;
@@ -184,11 +188,11 @@ fn marker_line<'a>(file: &FileEntry, source: &str, marker: &'a str) -> Option<(&
             || lower.contains(&format!("{marker_lower}."))
             || lower.contains(&format!("{marker_lower}::"));
         let is_type_context = marker.chars().next().is_some_and(char::is_uppercase)
-            && (lower.contains(&format!("new {marker_lower}"))
-                || lower.contains(&format!("extends {marker_lower}"))
-                || lower.contains(&format!("implements {marker_lower}"))
-                || lower.contains(&format!(": {marker_lower}"))
-                || lower.contains(&format!("<{marker_lower}")));
+            && (contains_marker(&lower, &format!("new {marker_lower}"))
+                || contains_marker(&lower, &format!("extends {marker_lower}"))
+                || contains_marker(&lower, &format!("implements {marker_lower}"))
+                || contains_marker(&lower, &format!(": {marker_lower}"))
+                || contains_marker(&lower, &format!("<{marker_lower}")));
         if is_import_context
             || is_attribute_context
             || is_call_context
@@ -199,6 +203,207 @@ fn marker_line<'a>(file: &FileEntry, source: &str, marker: &'a str) -> Option<(&
         }
     }
     None
+}
+
+fn collect_manifest_sources(root: &Path, policy: &FrameworkPolicy) -> Vec<(String, PathBuf)> {
+    let names = policy
+        .manifests
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<std::collections::HashSet<_>>();
+    let mut pending = vec![root.to_path_buf()];
+    let mut result = Vec::new();
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                if !is_ignored_manifest_directory(&path) {
+                    pending.push(path);
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if !names.contains(&name.to_ascii_lowercase()) {
+                continue;
+            }
+            let Some(relative) = path
+                .strip_prefix(root)
+                .ok()
+                .and_then(|value| value.to_str())
+                .map(|value| value.replace('\\', "/"))
+            else {
+                continue;
+            };
+            result.push((relative, path));
+        }
+    }
+    result.sort_by(|left, right| left.0.cmp(&right.0));
+    result
+}
+
+fn is_ignored_manifest_directory(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                ".git"
+                    | "node_modules"
+                    | "target"
+                    | "build"
+                    | "dist"
+                    | "out"
+                    | "coverage"
+                    | "vendor"
+                    | ".venv"
+                    | "venv"
+                    | "__pycache__"
+                    | ".dart_tool"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn is_manifest_path(path: &str) -> bool {
+    matches!(
+        path.rsplit('/')
+            .next()
+            .unwrap_or(path)
+            .to_ascii_lowercase()
+            .as_str(),
+        "package.json"
+            | "cargo.toml"
+            | "pom.xml"
+            | "build.gradle"
+            | "requirements.txt"
+            | "pyproject.toml"
+            | "pubspec.yaml"
+            | "go.mod"
+    )
+}
+
+fn manifest_marker_line<'a>(
+    file: &FileEntry,
+    source: &str,
+    marker: &'a str,
+) -> Option<(&'a str, u32)> {
+    let name = file.relative_path.rsplit('/').next().unwrap_or_default();
+    let matched = match name.to_ascii_lowercase().as_str() {
+        "package.json" => json_dependency_contains(source, marker),
+        "cargo.toml" | "pyproject.toml" => toml_dependency_contains(source, marker),
+        "requirements.txt" => source.lines().enumerate().find_map(|(index, line)| {
+            let dependency = line.split('#').next()?.trim();
+            let dependency = dependency
+                .split(['=', '<', '>', '!', '~', '['])
+                .next()?
+                .trim();
+            contains_package_name(dependency, marker).then_some(index as u32 + 1)
+        }),
+        _ => source
+            .lines()
+            .enumerate()
+            .find(|(_, line)| contains_marker(line, marker))
+            .map(|(index, _)| index as u32 + 1),
+    }?;
+    Some((marker, matched))
+}
+
+fn json_dependency_contains(source: &str, marker: &str) -> Option<u32> {
+    let value = serde_json::from_str::<serde_json::Value>(source).ok()?;
+    for section in [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+        "bundledDependencies",
+    ] {
+        let Some(values) = value.get(section) else {
+            continue;
+        };
+        let names = values
+            .as_object()
+            .map(|object| object.keys().map(String::as_str).collect::<Vec<_>>())
+            .or_else(|| {
+                values
+                    .as_array()
+                    .map(|items| items.iter().filter_map(|item| item.as_str()).collect())
+            })
+            .unwrap_or_default();
+        if names.iter().any(|name| contains_package_name(name, marker)) {
+            return source
+                .lines()
+                .enumerate()
+                .find(|(_, line)| contains_marker(line, marker))
+                .map(|(index, _)| index as u32 + 1)
+                .or(Some(1));
+        }
+    }
+    None
+}
+
+fn toml_dependency_contains(source: &str, marker: &str) -> Option<u32> {
+    let value = toml::from_str::<toml::Value>(source).ok()?;
+    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        let Some(table) = value.get(section).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        if table.keys().any(|name| contains_package_name(name, marker)) {
+            return source
+                .lines()
+                .enumerate()
+                .find(|(_, line)| contains_marker(line, marker))
+                .map(|(index, _)| index as u32 + 1)
+                .or(Some(1));
+        }
+    }
+    None
+}
+
+fn contains_package_name(name: &str, marker: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    let marker = marker.trim().trim_end_matches('(').trim_end_matches('/');
+    name == marker.to_ascii_lowercase()
+        || (marker.contains('/') && name.starts_with(&marker.to_ascii_lowercase()))
+        || (marker.contains('-') && name.starts_with(&marker.to_ascii_lowercase()))
+}
+
+fn contains_marker(value: &str, marker: &str) -> bool {
+    if marker.is_empty() {
+        return false;
+    }
+    let value = value.to_ascii_lowercase();
+    let marker = marker.to_ascii_lowercase();
+    let mut offset = 0;
+    while let Some(relative) = value[offset..].find(&marker) {
+        let start = offset + relative;
+        let end = start + marker.len();
+        let before = value[..start].chars().next_back();
+        let after = value[end..].chars().next();
+        let marker_is_identifier = marker
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_');
+        if !marker_is_identifier
+            || !before
+                .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+                && !after
+                    .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+        {
+            return true;
+        }
+        offset = end;
+    }
+    false
 }
 
 /// 소스 코드에서 문자열·주석 안의 marker는 framework 근거로 사용하지 않는다.
