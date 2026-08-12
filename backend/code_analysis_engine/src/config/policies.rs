@@ -188,6 +188,18 @@ pub struct ResourceRule {
     pub kind: String,
     pub mode: String,
     pub argument_index: usize,
+    #[serde(default)]
+    pub name_source: ResourceNameSource,
+}
+
+/// 자원 이름을 호출 인자에서 읽을지 수신 객체에서 읽을지 정한다.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ResourceNameSource {
+    #[default]
+    Argument,
+    Receiver,
+    LiteralOrReceiver,
 }
 
 impl Default for ParserPolicy {

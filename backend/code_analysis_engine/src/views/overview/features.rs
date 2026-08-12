@@ -1,6 +1,8 @@
 //! 정적 Facts를 도메인과 실행 흐름 사이의 기능 그룹으로 변환한다.
 
-use super::model::{FeatureConfidence, FeatureGroup, FeatureKind, FeatureStatus};
+use super::model::{
+    FeatureConfidence, FeatureGroup, FeatureKind, FeatureStatus, FeatureVisibility,
+};
 use super::reachability::ReachabilityIndex;
 use crate::domain::DomainAnalysisOutput;
 use crate::facts::{
@@ -35,14 +37,15 @@ pub(super) fn build(
     for entrypoint in &facts.entrypoints {
         let units = reachability.reachable_from(&entrypoint.unit_id);
         covered_units.extend(units.iter().copied());
-        features.push(context.build_feature(
-            FeatureKind::Endpoint,
-            FeatureStatus::Confirmed,
-            Some(entrypoint),
-            None,
-            &units,
-            units.len(),
-        ));
+        features.push(context.build_feature(FeatureBuildInput {
+            kind: FeatureKind::Endpoint,
+            base_status: FeatureStatus::Confirmed,
+            visibility: FeatureVisibility::UserFacing,
+            entrypoint: Some(entrypoint),
+            operation_root_id: None,
+            units: &units,
+            reachable_unit_count: units.len(),
+        }));
     }
 
     // 진입점이 없는 CLI·배치·라이브러리 함수도 2단계에서 사라지지 않도록
@@ -83,14 +86,15 @@ pub(super) fn build(
             }
             covered_units.extend(units.iter().copied());
         }
-        features.push(context.build_feature(
-            FeatureKind::Operation,
-            FeatureStatus::Candidate,
-            None,
-            Some(operation_root.as_str()),
-            &units,
-            reachable_units.len(),
-        ));
+        features.push(context.build_feature(FeatureBuildInput {
+            kind: FeatureKind::Operation,
+            base_status: FeatureStatus::Candidate,
+            visibility: FeatureVisibility::Internal,
+            entrypoint: None,
+            operation_root_id: Some(operation_root.as_str()),
+            units: &units,
+            reachable_unit_count: reachable_units.len(),
+        }));
     }
 
     features.sort_by(|left, right| left.key.cmp(&right.key));
@@ -106,31 +110,41 @@ struct FeatureBuildContext<'a> {
     reachability: &'a ReachabilityIndex,
 }
 
+struct FeatureBuildInput<'a> {
+    kind: FeatureKind,
+    base_status: FeatureStatus,
+    visibility: FeatureVisibility,
+    entrypoint: Option<&'a Entrypoint>,
+    operation_root_id: Option<&'a str>,
+    units: &'a [usize],
+    reachable_unit_count: usize,
+}
+
 impl FeatureBuildContext<'_> {
-    fn build_feature(
-        &self,
-        kind: FeatureKind,
-        base_status: FeatureStatus,
-        entrypoint: Option<&Entrypoint>,
-        operation_root_id: Option<&str>,
-        units: &[usize],
-        reachable_unit_count: usize,
-    ) -> FeatureGroup {
-        let root_unit_id = operation_root_id
+    fn build_feature(&self, input: FeatureBuildInput<'_>) -> FeatureGroup {
+        let root_unit_id = input
+            .operation_root_id
             .or_else(|| {
-                entrypoint
+                input
+                    .entrypoint
                     .map(|value| value.unit_id.as_str())
-                    .or_else(|| units.first().map(|index| self.reachability.unit_id(*index)))
+                    .or_else(|| {
+                        input
+                            .units
+                            .first()
+                            .map(|index| self.reachability.unit_id(*index))
+                    })
             })
             .unwrap_or_default();
-        let key = entrypoint
+        let key = input
+            .entrypoint
             .map(|value| format!("entrypoint:{}", value.id))
             .unwrap_or_else(|| format!("operation:{}", root_unit_id));
         let id = stable_id("feature", &key);
         let root_unit = self.facts.unit(root_unit_id);
 
         let mut domain_ids = BTreeSet::new();
-        for &unit_index in units {
+        for &unit_index in input.units {
             let unit_id = self.reachability.unit_id(unit_index);
             if let Some(ids) = self.domains_by_unit.get(unit_id) {
                 domain_ids.extend(ids.iter().cloned());
@@ -149,11 +163,11 @@ impl FeatureBuildContext<'_> {
                 unit.span.clone(),
             ));
         }
-        if let Some(entrypoint) = entrypoint {
+        if let Some(entrypoint) = input.entrypoint {
             evidence.extend(entrypoint.evidence.clone());
         }
 
-        for &unit_index in units {
+        for &unit_index in input.units {
             let unit_id = self.reachability.unit_id(unit_index);
             for reference in self.outgoing.get(unit_id).into_iter().flatten() {
                 match reference.status {
@@ -174,13 +188,15 @@ impl FeatureBuildContext<'_> {
         dynamic_boundary_ids.sort();
         dynamic_boundary_ids.dedup();
 
-        let flow_ids = units
+        let flow_ids = input
+            .units
             .iter()
             .filter_map(|index| self.flows_by_owner.get(self.reachability.unit_id(*index)))
             .flatten()
             .map(|flow| flow.id.clone())
             .collect::<Vec<_>>();
-        let resource_ids = units
+        let resource_ids = input
+            .units
             .iter()
             .filter_map(|index| {
                 self.resources_by_unit
@@ -190,16 +206,17 @@ impl FeatureBuildContext<'_> {
             .map(|resource| resource.id.clone())
             .collect::<Vec<_>>();
         let status = if dynamic_edge_count > 0 || unresolved_edge_count > 0 {
-            if matches!(base_status, FeatureStatus::Confirmed) {
+            if matches!(input.base_status, FeatureStatus::Confirmed) {
                 FeatureStatus::Candidate
             } else {
-                base_status
+                input.base_status.clone()
             }
         } else {
-            base_status
+            input.base_status.clone()
         };
 
-        let label = entrypoint
+        let label = input
+            .entrypoint
             .map(entrypoint_label)
             .or_else(|| root_unit.map(|unit| unit.qualified_name.clone()))
             .unwrap_or_else(|| key.clone());
@@ -208,8 +225,9 @@ impl FeatureBuildContext<'_> {
             id,
             key,
             label,
-            kind,
+            kind: input.kind,
             status,
+            visibility: input.visibility,
             confidence: FeatureConfidence {
                 level: confidence_level(
                     resolved_edge_count,
@@ -222,12 +240,14 @@ impl FeatureBuildContext<'_> {
                 evidence_count: evidence.len(),
             },
             domain_ids: domain_ids.into_iter().collect(),
-            unit_ids: units
+            unit_ids: input
+                .units
                 .iter()
                 .map(|index| self.reachability.unit_id(*index).to_string())
                 .collect(),
-            reachable_unit_count,
-            entrypoint_ids: entrypoint
+            reachable_unit_count: input.reachable_unit_count,
+            entrypoint_ids: input
+                .entrypoint
                 .map(|value| vec![value.id.clone()])
                 .unwrap_or_default(),
             flow_ids,

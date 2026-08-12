@@ -1,6 +1,7 @@
 //! 코드 유닛 이름 기반 참조 해석 책임.
 
-use super::{CodeUnit, FactStore, Reference, ReferenceKind, ResolutionStatus};
+use super::{CodeUnit, CodeUnitKind, FactStore, Reference, ReferenceKind, ResolutionStatus};
+use crate::model::Language;
 use std::collections::{BTreeMap, HashMap};
 
 pub(super) fn resolve(store: &mut FactStore) {
@@ -17,10 +18,15 @@ pub(super) fn resolve(store: &mut FactStore) {
         }
 
         let source_file_id = source_files.get(&reference.source_unit_id);
+        let source_language = index
+            .language_by_unit
+            .get(&reference.source_unit_id)
+            .copied();
         let target_name = bindings
             .resolve(reference, source_file_id.map(String::as_str))
             .unwrap_or_else(|| reference.target_name.clone());
         let target = normalize_target_name(&target_name);
+        let target = index.expand_relative_target(source_file_id.map(String::as_str), &target);
         if target.is_empty() {
             continue;
         }
@@ -29,9 +35,19 @@ pub(super) fn resolve(store: &mut FactStore) {
             .local_candidates(
                 &reference.source_unit_id,
                 source_file_id.map(String::as_str),
+                source_language,
                 &target,
+                &reference.kind,
             )
-            .unwrap_or_else(|| index.candidates(&target));
+            .unwrap_or_else(|| index.candidates(source_language, &target, &reference.kind));
+        if matches!(
+            reference.kind,
+            ReferenceKind::Import | ReferenceKind::Include
+        ) {
+            let qualified_import =
+                target.contains('.') || target.contains("::") || target.contains('/');
+            candidates.retain(|candidate| qualified_import || index.is_import_target(candidate));
+        }
         candidates.sort();
         candidates.dedup();
 
@@ -137,10 +153,13 @@ fn unique(values: &[String]) -> Option<&str> {
 /// 이름 기반 참조 해석을 위한 프로젝트 단위 인덱스다.
 #[derive(Debug, Default)]
 struct ReferenceResolutionIndex {
-    by_name: HashMap<String, Vec<String>>,
-    by_qualified_name: HashMap<String, Vec<String>>,
-    by_file_name: HashMap<(String, String), Vec<String>>,
-    by_parent_name: HashMap<(String, String), Vec<String>>,
+    by_language_name: BTreeMap<(Language, String), Vec<String>>,
+    by_language_qualified_name: BTreeMap<(Language, String), Vec<String>>,
+    by_language_file_name: BTreeMap<(Language, String, String), Vec<String>>,
+    by_language_parent_name: BTreeMap<(Language, String, String), Vec<String>>,
+    language_by_unit: HashMap<String, Language>,
+    kind_by_unit: HashMap<String, CodeUnitKind>,
+    module_by_file: HashMap<String, String>,
     parent_by_unit: HashMap<String, String>,
 }
 
@@ -149,24 +168,44 @@ impl ReferenceResolutionIndex {
         let mut index = Self::default();
         for unit in units.values() {
             index
-                .by_name
-                .entry(unit.name.to_ascii_lowercase())
+                .language_by_unit
+                .insert(unit.id.clone(), unit.language);
+            index
+                .kind_by_unit
+                .insert(unit.id.clone(), unit.kind.clone());
+            if unit.kind == CodeUnitKind::File {
+                index.module_by_file.insert(
+                    unit.file_id.clone(),
+                    unit.qualified_name.to_ascii_lowercase(),
+                );
+            }
+            index
+                .by_language_name
+                .entry((unit.language, unit.name.to_ascii_lowercase()))
                 .or_default()
                 .push(unit.id.clone());
             index
-                .by_qualified_name
-                .entry(unit.qualified_name.to_ascii_lowercase())
+                .by_language_qualified_name
+                .entry((unit.language, unit.qualified_name.to_ascii_lowercase()))
                 .or_default()
                 .push(unit.id.clone());
             index
-                .by_file_name
-                .entry((unit.file_id.clone(), unit.name.to_ascii_lowercase()))
+                .by_language_file_name
+                .entry((
+                    unit.language,
+                    unit.file_id.clone(),
+                    unit.name.to_ascii_lowercase(),
+                ))
                 .or_default()
                 .push(unit.id.clone());
             if let Some(parent_id) = &unit.parent_id {
                 index
-                    .by_parent_name
-                    .entry((parent_id.clone(), unit.name.to_ascii_lowercase()))
+                    .by_language_parent_name
+                    .entry((
+                        unit.language,
+                        parent_id.clone(),
+                        unit.name.to_ascii_lowercase(),
+                    ))
                     .or_default()
                     .push(unit.id.clone());
                 index
@@ -175,23 +214,58 @@ impl ReferenceResolutionIndex {
             }
         }
 
-        for candidates in index.by_name.values_mut() {
+        for candidates in index.by_language_name.values_mut() {
             candidates.sort();
             candidates.dedup();
         }
-        for candidates in index.by_qualified_name.values_mut() {
+        for candidates in index.by_language_qualified_name.values_mut() {
             candidates.sort();
             candidates.dedup();
         }
         index
     }
 
+    fn expand_relative_target(&self, source_file_id: Option<&str>, target: &str) -> String {
+        let leading_dots = target
+            .chars()
+            .take_while(|character| *character == '.')
+            .count();
+        if leading_dots == 0 {
+            return target.to_string();
+        }
+        let Some(module) = source_file_id.and_then(|file| self.module_by_file.get(file)) else {
+            return target.trim_start_matches('.').to_string();
+        };
+        let mut parts = module.split("::").collect::<Vec<_>>();
+        parts.truncate(parts.len().saturating_sub(leading_dots));
+        let suffix = target.trim_start_matches('.').replace(['.', '/'], "::");
+        if !suffix.is_empty() {
+            parts.extend(suffix.split("::").filter(|part| !part.is_empty()));
+        }
+        parts.join("::")
+    }
+
+    fn is_import_target(&self, unit_id: &str) -> bool {
+        self.kind_by_unit.get(unit_id).is_some_and(|kind| {
+            matches!(
+                kind,
+                CodeUnitKind::File
+                    | CodeUnitKind::Module
+                    | CodeUnitKind::Package
+                    | CodeUnitKind::Namespace
+            )
+        })
+    }
+
     fn local_candidates(
         &self,
         source_unit_id: &str,
         source_file_id: Option<&str>,
+        source_language: Option<Language>,
         target: &str,
+        kind: &ReferenceKind,
     ) -> Option<Vec<String>> {
+        let language = source_language?;
         let short_name = target
             .rsplit_once("::")
             .map(|(_, name)| name)
@@ -203,9 +277,16 @@ impl ReferenceResolutionIndex {
         if target.starts_with("self.") || target.starts_with("this.") {
             let parent_id = self.parent_by_unit.get(source_unit_id)?;
             return self
-                .by_parent_name
-                .get(&(parent_id.clone(), short_name))
+                .by_language_parent_name
+                .get(&(language, parent_id.clone(), short_name))
                 .cloned();
+        }
+
+        if !matches!(
+            kind,
+            ReferenceKind::Call | ReferenceKind::Constructs | ReferenceKind::Export
+        ) {
+            return None;
         }
 
         if target.contains("::") || target.contains('/') {
@@ -214,30 +295,52 @@ impl ReferenceResolutionIndex {
 
         let file_id = source_file_id?;
         let candidates = self
-            .by_file_name
-            .get(&(file_id.to_string(), short_name))?
+            .by_language_file_name
+            .get(&(language, file_id.to_string(), short_name))?
             .clone();
         Some(candidates)
     }
 
-    fn candidates(&self, target: &str) -> Vec<String> {
+    fn candidates(
+        &self,
+        source_language: Option<Language>,
+        target: &str,
+        kind: &ReferenceKind,
+    ) -> Vec<String> {
+        let Some(language) = source_language else {
+            return Vec::new();
+        };
+
         // 언어마다 qualified name의 구분자가 다르다. 원본 경로를 먼저
-        // 보존한 뒤 동등한 구분자 표현도 확인하고, 마지막에만 이름 fallback을
-        // 사용해 서로 다른 클래스의 같은 메서드를 잘못 확정하지 않도록 한다.
-        if let Some(exact) = self.by_qualified_name.get(target) {
+        // 보존한 뒤 동등한 구분자 표현도 확인한다. import는 모듈 경로의
+        // 정확한 일치만 허용하고, 호출은 같은 언어의 이름 인덱스만 본다.
+        if let Some(exact) = self
+            .by_language_qualified_name
+            .get(&(language, target.to_string()))
+        {
             return exact.clone();
         }
         for qualified in [target.replace('.', "::"), target.replace('/', "::")] {
-            if let Some(exact) = self.by_qualified_name.get(&qualified) {
+            if let Some(exact) = self.by_language_qualified_name.get(&(language, qualified)) {
                 return exact.clone();
             }
         }
 
+        if !matches!(kind, ReferenceKind::Call | ReferenceKind::Constructs) {
+            return Vec::new();
+        }
+
         let mut candidates = Vec::new();
-        append_candidates(&mut candidates, self.by_name.get(target));
+        append_candidates(
+            &mut candidates,
+            self.by_language_name.get(&(language, target.to_string())),
+        );
         for separator in ["::", ".", "/"] {
             if let Some((_, name)) = target.rsplit_once(separator) {
-                append_candidates(&mut candidates, self.by_name.get(name));
+                append_candidates(
+                    &mut candidates,
+                    self.by_language_name.get(&(language, name.to_string())),
+                );
             }
         }
         candidates

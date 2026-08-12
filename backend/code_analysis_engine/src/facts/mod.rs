@@ -132,6 +132,51 @@ impl FactStore {
     pub fn resolve_references(&mut self) {
         resolution::resolve(self);
     }
+
+    /// 전역 한도 적용 뒤 잘려 나간 유닛을 가리키는 고아 사실을 제거하거나
+    /// 미확정 상태로 낮춘다. 한도 때문에 일부 데이터가 생략되어도 프론트가
+    /// 존재하지 않는 노드 ID를 따라가며 깨지지 않게 하는 무결성 경계다.
+    pub fn repair_integrity(&mut self) {
+        let unit_ids = self
+            .units
+            .keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        self.bindings
+            .retain(|binding| unit_ids.contains(&binding.source_unit_id));
+        self.call_sites
+            .retain(|call| unit_ids.contains(&call.source_unit_id));
+        self.decorators
+            .retain(|decorator| unit_ids.contains(&decorator.unit_id));
+        self.control_flow
+            .retain(|fact| unit_ids.contains(&fact.owner_unit_id));
+        self.resources
+            .retain(|resource| unit_ids.contains(&resource.unit_id));
+        self.entrypoints
+            .retain(|entrypoint| unit_ids.contains(&entrypoint.unit_id));
+        self.references
+            .retain(|reference| unit_ids.contains(&reference.source_unit_id));
+
+        for reference in &mut self.references {
+            reference
+                .candidate_unit_ids
+                .retain(|candidate| unit_ids.contains(candidate));
+            if reference
+                .target_unit_id
+                .as_ref()
+                .is_some_and(|target| !unit_ids.contains(target))
+            {
+                reference.target_unit_id = None;
+                if reference.status != ResolutionStatus::Dynamic {
+                    reference.status = if reference.candidate_unit_ids.is_empty() {
+                        ResolutionStatus::Unknown
+                    } else {
+                        ResolutionStatus::Candidate
+                    };
+                }
+            }
+        }
+    }
 }
 
 fn extend_limited<T>(target: &mut Vec<T>, values: Vec<T>, limit: usize) -> bool {
@@ -157,6 +202,15 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn unit(id: &str, name: &str, qualified_name: &str) -> CodeUnit {
+        unit_with_language(id, name, qualified_name, Language::TypeScript)
+    }
+
+    fn unit_with_language(
+        id: &str,
+        name: &str,
+        qualified_name: &str,
+        language: Language,
+    ) -> CodeUnit {
         CodeUnit {
             id: id.into(),
             kind: CodeUnitKind::Function,
@@ -164,7 +218,7 @@ mod tests {
             qualified_name: qualified_name.into(),
             file_id: "file".into(),
             relative_path: "src/file.ts".into(),
-            language: Language::TypeScript,
+            language,
             parent_id: None,
             span: SourceSpan::new("file", "src/file.ts", 1, 1, 1, 1),
             body_span: None,
@@ -194,6 +248,7 @@ mod tests {
     fn 참조_인덱스가_정확한_이름과_qualified_이름을_해석한다() {
         let mut store = FactStore {
             units: BTreeMap::from([
+                ("source".into(), unit("source", "source", "source")),
                 ("unit_a".into(), unit("unit_a", "login", "Auth::login")),
                 ("unit_b".into(), unit("unit_b", "login", "User::login")),
                 ("unit_c".into(), unit("unit_c", "logout", "Auth::logout")),
@@ -229,5 +284,52 @@ mod tests {
         assert!(store.references[3].target_unit_id.is_none());
         assert_eq!(store.references[4].status, ResolutionStatus::Unknown);
         assert!(store.references[4].target_unit_id.is_none());
+    }
+
+    #[test]
+    fn 참조_해석은_소스_언어가_다른_유닛을_확정하지_않는다() {
+        let mut store = FactStore {
+            units: BTreeMap::from([
+                ("source".into(), unit("source", "source", "source")),
+                (
+                    "typescript_run".into(),
+                    unit("typescript_run", "run", "run"),
+                ),
+                (
+                    "python_run".into(),
+                    unit_with_language("python_run", "run", "run", Language::Python),
+                ),
+            ]),
+            references: vec![reference("ref_1", "run", ResolutionStatus::Confirmed)],
+            ..FactStore::default()
+        };
+
+        store.resolve_references();
+
+        assert_eq!(
+            store.references[0].target_unit_id.as_deref(),
+            Some("typescript_run")
+        );
+        assert_eq!(store.references[0].status, ResolutionStatus::Confirmed);
+    }
+
+    #[test]
+    fn import는_같은_이름의_함수로_전역_fallback하지_않는다() {
+        let mut store = FactStore {
+            units: BTreeMap::from([
+                ("source".into(), unit("source", "source", "source")),
+                ("helper".into(), unit("helper", "helper", "helper")),
+            ]),
+            references: vec![Reference {
+                kind: ReferenceKind::Import,
+                ..reference("ref_1", "helper", ResolutionStatus::Candidate)
+            }],
+            ..FactStore::default()
+        };
+
+        store.resolve_references();
+
+        assert!(store.references[0].target_unit_id.is_none());
+        assert_eq!(store.references[0].status, ResolutionStatus::Unknown);
     }
 }

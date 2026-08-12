@@ -132,6 +132,7 @@ impl DomainAnalysisPipeline {
                 cache_hits
             ),
         );
+        facts.repair_integrity();
 
         let stage_started = Instant::now();
         facts.resolve_references();
@@ -252,20 +253,15 @@ impl DomainAnalysisPipeline {
             &mut profiler,
         )?;
 
-        if matches!(
-            semantic_status,
-            crate::semantic::SemanticStatus::Completed | crate::semantic::SemanticStatus::Partial
-        ) {
-            let stage_started = Instant::now();
-            reaggregate_relations(&facts, &mut domain_analysis);
-            profiler.record(
-                "domain_relation_aggregation",
-                stage_started,
-                format!("relations={}", domain_analysis.relations.len()),
-            );
-        } else {
-            profiler.skipped("domain_relation_aggregation");
-        }
+        // 관계 재집계는 AI 이름 보정과 무관한 정적 단계다. Codex를 끈
+        // 실행에서도 프론트가 사용할 도메인 관계를 항상 만든다.
+        let stage_started = Instant::now();
+        reaggregate_relations(&facts, &mut domain_analysis);
+        profiler.record(
+            "domain_relation_aggregation",
+            stage_started,
+            format!("relations={}", domain_analysis.relations.len()),
+        );
 
         let stage_started = Instant::now();
         let overview = project(

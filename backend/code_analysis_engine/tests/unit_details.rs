@@ -216,6 +216,46 @@ fn 네트워크와_환경변수_접근이_리소스_종류를_보존한다() {
 }
 
 #[test]
+fn websocket_process와_파일_receiver의_접근_모드를_보존한다() {
+    let typescript = analyze_file(
+        &file("src/runtime.ts", Language::TypeScript),
+        r#"
+function run(path: Path) {
+  new WebSocket("wss://example.test");
+  path.read_text();
+  path.write_text(content);
+}
+"#,
+        &AnalysisConfig::default(),
+    );
+    assert!(typescript.resources.iter().any(|resource| {
+        resource.kind == ResourceKind::WebSocket
+            && resource.name == "wss://example.test"
+            && resource.mode == code_analysis_engine::facts::AccessMode::ReadWrite
+    }));
+    assert!(typescript.resources.iter().any(|resource| {
+        resource.kind == ResourceKind::File
+            && resource.name == "path"
+            && resource.mode == code_analysis_engine::facts::AccessMode::Read
+    }));
+    assert!(typescript.resources.iter().any(|resource| {
+        resource.kind == ResourceKind::File
+            && resource.name == "path"
+            && resource.mode == code_analysis_engine::facts::AccessMode::Write
+    }));
+
+    let python = analyze_file(
+        &file("src/process.py", Language::Python),
+        "import subprocess\ndef run():\n    subprocess.run([\"tool\"])\n",
+        &AnalysisConfig::default(),
+    );
+    assert!(python
+        .resources
+        .iter()
+        .any(|resource| resource.kind == ResourceKind::Process));
+}
+
+#[test]
 fn 멀티라인_sql이_테이블과_읽기쓰기_혼합을_보존한다() {
     let source = r#"
 function load() {

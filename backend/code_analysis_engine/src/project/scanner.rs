@@ -132,36 +132,27 @@ impl ProjectScanner {
         // 진단과 최종 경로 정렬의 결정성을 유지한다.
         candidates.sort_by(|left, right| left.0.cmp(&right.0));
         let limits = &self.options.config.limits;
-        let candidate_bytes = candidates.iter().fold(0_u64, |total, (path, _)| {
-            total.saturating_add(
-                fs::metadata(path)
-                    .map(|metadata| metadata.len())
-                    .unwrap_or(0),
-            )
-        });
         let mut limited = false;
-        if candidates.len() > limits.max_files {
-            candidates.truncate(limits.max_files);
-            limited = true;
+        let mut selected = Vec::with_capacity(candidates.len().min(limits.max_files));
+        let mut selected_bytes = 0_u64;
+        for candidate in candidates {
+            if selected.len() >= limits.max_files {
+                limited = true;
+                break;
+            }
+            let size = fs::metadata(&candidate.0)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            if selected_bytes.saturating_add(size) > limits.max_total_bytes {
+                // 정렬상 첫 파일이 크다고 뒤의 작은 파일까지 버리지 않는다.
+                // 한도에 맞는 파일을 계속 찾아 분석 범위를 최대화한다.
+                limited = true;
+                continue;
+            }
+            selected_bytes = selected_bytes.saturating_add(size);
+            selected.push(candidate);
         }
-        if candidate_bytes > limits.max_total_bytes {
-            let mut selected_bytes = 0_u64;
-            let selected_count = candidates
-                .iter()
-                .take_while(|(path, _)| {
-                    let size = fs::metadata(path)
-                        .map(|metadata| metadata.len())
-                        .unwrap_or(0);
-                    let allowed = selected_bytes.saturating_add(size) <= limits.max_total_bytes;
-                    if allowed {
-                        selected_bytes = selected_bytes.saturating_add(size);
-                    }
-                    allowed
-                })
-                .count();
-            candidates.truncate(selected_count);
-            limited = true;
-        }
+        candidates = selected;
         if limited {
             diagnostics.push(Diagnostic::warning(
                 "ANALYSIS_LIMIT_REACHED",

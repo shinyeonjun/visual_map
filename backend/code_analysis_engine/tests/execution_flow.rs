@@ -75,8 +75,150 @@ function loadUser(request: Request) {
         .iter()
         .any(|edge| edge.kind == FlowEdgeKind::FalseBranch));
     assert!(!login.dynamic_boundary_ids.is_empty());
+    let edge_ids = login
+        .edges
+        .iter()
+        .map(|edge| edge.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(edge_ids.len(), login.edges.len());
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}
+
+#[test]
+fn if_else는_서로_다른_분기를_순차_연결하지_않는다() {
+    let root = temporary_project();
+    fs::write(
+        root.join("branches.ts"),
+        r#"
+function thenBranch() { return true; }
+function elseBranch() { return false; }
+export function choose(value: boolean) {
+  if (value) {
+    thenBranch();
+  } else {
+    elseBranch();
+  }
+  afterBranch();
+}
+function afterBranch() { return true; }
+"#,
+    )
+    .expect("분기 fixture를 써야 한다");
+
+    let result = analyze(AnalysisRequest::new(&root)).expect("분석이 성공해야 한다");
+    let overview = result.overview.expect("Overview가 있어야 한다");
+    let choose = overview
+        .execution_flows
+        .flows
+        .iter()
+        .find(|flow| {
+            overview
+                .units
+                .iter()
+                .find(|unit| unit.id == flow.owner_unit_id)
+                .is_some_and(|unit| unit.name == "choose")
+        })
+        .expect("choose 흐름이 있어야 한다");
+    let then_node = choose
+        .nodes
+        .iter()
+        .find(|node| node.label == "thenBranch")
+        .expect("thenBranch 호출이 있어야 한다");
+    let else_node = choose
+        .nodes
+        .iter()
+        .find(|node| node.label == "elseBranch")
+        .expect("elseBranch 호출이 있어야 한다");
+    let after_node = choose
+        .nodes
+        .iter()
+        .find(|node| node.label == "afterBranch")
+        .expect("join 이후 호출이 있어야 한다");
+
+    assert!(!choose.edges.iter().any(|edge| {
+        edge.source_node_id == then_node.id && edge.target_node_id == else_node.id
+    }));
+    assert!(!choose.edges.iter().any(|edge| {
+        edge.source_node_id == else_node.id && edge.target_node_id == then_node.id
+    }));
+    assert!(choose.edges.iter().any(|edge| {
+        edge.source_node_id == then_node.id && edge.target_node_id == after_node.id
+    }));
+    assert!(choose.edges.iter().any(|edge| {
+        edge.source_node_id == else_node.id && edge.target_node_id == after_node.id
+    }));
+
+    let then_flow = overview
+        .execution_flows
+        .flows
+        .iter()
+        .find(|flow| {
+            overview
+                .units
+                .iter()
+                .find(|unit| unit.id == flow.owner_unit_id)
+                .is_some_and(|unit| unit.name == "thenBranch")
+        })
+        .expect("thenBranch flow가 있어야 한다");
+    assert!(overview
+        .execution_flows
+        .links
+        .iter()
+        .any(|link| { link.source_flow_id == choose.id && link.target_flow_id == then_flow.id }));
+
+    fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}
+
+#[test]
+fn return_표현식의_호출은_return_노드_뒤에_도달_가능하다() {
+    let root = temporary_project();
+    fs::write(
+        root.join("return-expression.ts"),
+        r#"
+export function load() {
+  return fetchUser();
+}
+function fetchUser() { return true; }
+"#,
+    )
+    .expect("return fixture를 써야 한다");
+
+    let result = analyze(AnalysisRequest::new(&root)).expect("분석이 성공해야 한다");
+    let overview = result.overview.expect("Overview가 있어야 한다");
+    let load = overview
+        .execution_flows
+        .flows
+        .iter()
+        .find(|flow| {
+            overview
+                .units
+                .iter()
+                .find(|unit| unit.id == flow.owner_unit_id)
+                .is_some_and(|unit| unit.name == "load")
+        })
+        .expect("load 흐름이 있어야 한다");
+    let return_node = load
+        .nodes
+        .iter()
+        .find(|node| node.kind == FlowNodeKind::Return)
+        .expect("return 노드가 있어야 한다");
+    let call_node = load
+        .nodes
+        .iter()
+        .find(|node| node.kind == FlowNodeKind::Call && node.label == "fetchUser")
+        .expect("return 표현식 호출이 있어야 한다");
+
+    assert!(load.edges.iter().any(|edge| {
+        edge.source_node_id == return_node.id && edge.target_node_id == call_node.id
+    }));
+    assert!(load.edges.iter().any(|edge| {
+        edge.source_node_id == call_node.id
+            && edge.target_node_id == load.exit_node_id
+            && edge.kind == FlowEdgeKind::Return
+    }));
+
+    fs::remove_dir_all(root).expect("return fixture를 정리해야 한다");
 }
 
 #[test]

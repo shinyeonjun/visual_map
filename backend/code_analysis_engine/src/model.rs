@@ -5,18 +5,28 @@ use std::path::PathBuf;
 
 /// 현재 엔진이 파일 확장자로 구분할 수 있는 언어다.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "camelCase")]
 pub enum Language {
+    #[serde(rename = "javascript", alias = "javaScript")]
     JavaScript,
+    #[serde(rename = "typescript", alias = "typeScript")]
     TypeScript,
+    #[serde(rename = "python")]
     Python,
+    #[serde(rename = "java")]
     Java,
+    #[serde(rename = "c")]
     C,
+    #[serde(rename = "cpp")]
     Cpp,
+    #[serde(rename = "csharp", alias = "cSharp")]
     CSharp,
+    #[serde(rename = "go")]
     Go,
+    #[serde(rename = "rust")]
     Rust,
+    #[serde(rename = "dart")]
     Dart,
+    #[serde(rename = "unknown")]
     Unknown,
 }
 
