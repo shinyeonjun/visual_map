@@ -10,6 +10,8 @@ use std::collections::HashMap;
 pub struct AggregatedReference {
     pub source_unit_id: String,
     pub target_unit_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_unit_ids: Vec<String>,
     pub target_name: String,
     pub kind: ReferenceKind,
     pub status: ResolutionStatus,
@@ -36,6 +38,7 @@ pub fn aggregate(edges: &[Reference]) -> Vec<AggregatedReference> {
         let entry = result.entry(key).or_insert_with(|| AggregatedReference {
             source_unit_id: edge.source_unit_id.clone(),
             target_unit_id: edge.target_unit_id.clone(),
+            candidate_unit_ids: edge.candidate_unit_ids.clone(),
             target_name: edge.target_name.clone(),
             kind: edge.kind.clone(),
             status: edge.status.clone(),
@@ -44,6 +47,11 @@ pub fn aggregate(edges: &[Reference]) -> Vec<AggregatedReference> {
         });
         entry.weight = entry.weight.saturating_add(1);
         entry.evidence.extend(edge.evidence.clone());
+        entry
+            .candidate_unit_ids
+            .extend(edge.candidate_unit_ids.iter().cloned());
+        entry.candidate_unit_ids.sort();
+        entry.candidate_unit_ids.dedup();
         entry.status = worse_status(&entry.status, &edge.status);
     }
     let mut values: Vec<_> = result.into_values().collect();

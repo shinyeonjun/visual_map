@@ -1,7 +1,8 @@
+mod output;
+
 use code_analysis_engine::{analyze, config::AnalysisConfig, AnalysisRequest};
 use std::env;
 use std::fs;
-use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -94,12 +95,16 @@ fn main() -> ExitCode {
             if no_output {
                 eprintln!("분석 결과 JSON 출력 생략 (--no-output)");
             } else if let Some(path) = output_path {
-                if let Err(error) = write_result_json(&path, &result, compact, max_output_bytes) {
+                if let Err(error) =
+                    output::write_result_json(&path, &result, compact, max_output_bytes)
+                {
                     eprintln!("결과 JSON 저장 실패: {error}");
                     return ExitCode::from(1);
                 }
                 eprintln!("분석 결과 저장 완료: {}", path.display());
-            } else if let Err(error) = write_result_stdout(&result, compact, max_output_bytes) {
+            } else if let Err(error) =
+                output::write_result_stdout(&result, compact, max_output_bytes)
+            {
                 eprintln!("결과 JSON 생성 실패: {error}");
                 return ExitCode::from(1);
             }
@@ -176,7 +181,7 @@ fn run_codex_names_from_result(arguments: &[String]) -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        if let Err(error) = write_pretty_json(&context_path, &artifact) {
+        if let Err(error) = output::write_pretty_json(Path::new(&context_path), &artifact) {
             eprintln!("이름 컨텍스트 저장 실패: {error}");
             return ExitCode::from(1);
         }
@@ -227,78 +232,4 @@ fn option_value(arguments: &[String], name: &str) -> Option<String> {
             .strip_prefix(&format!("{name}="))
             .map(ToOwned::to_owned)
     })
-}
-
-fn write_pretty_json<T: serde::Serialize>(path: &str, value: &T) -> std::io::Result<()> {
-    let json = serde_json::to_string_pretty(value)
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    fs::write(PathBuf::from(path), json)
-}
-
-fn write_result_stdout(
-    result: &code_analysis_engine::AnalysisResult,
-    compact: bool,
-    max_output_bytes: usize,
-) -> serde_json::Result<()> {
-    let stdout = std::io::stdout();
-    let writer = BufWriter::new(stdout.lock());
-    let mut writer = LimitedWriter::new(writer, max_output_bytes);
-    if compact {
-        serde_json::to_writer(&mut writer, result)?;
-    } else {
-        serde_json::to_writer_pretty(&mut writer, result)?;
-    }
-    writer.write_all(b"\n").map_err(serde_json::Error::io)
-}
-
-fn write_result_json(
-    path: &Path,
-    result: &code_analysis_engine::AnalysisResult,
-    compact: bool,
-    max_output_bytes: usize,
-) -> std::io::Result<()> {
-    let file = fs::File::create(path)?;
-    let writer = BufWriter::new(file);
-    let mut writer = LimitedWriter::new(writer, max_output_bytes);
-    if compact {
-        serde_json::to_writer(&mut writer, result).map_err(std::io::Error::other)?;
-    } else {
-        serde_json::to_writer_pretty(&mut writer, result).map_err(std::io::Error::other)?;
-    }
-    writer.write_all(b"\n")
-}
-
-struct LimitedWriter<W> {
-    inner: W,
-    written: usize,
-    limit: usize,
-}
-
-impl<W> LimitedWriter<W> {
-    fn new(inner: W, limit: usize) -> Self {
-        Self {
-            inner,
-            written: 0,
-            limit,
-        }
-    }
-}
-
-impl<W: Write> Write for LimitedWriter<W> {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        if self.written >= self.limit {
-            return Err(std::io::Error::other("OUTPUT_LIMIT_REACHED"));
-        }
-        let allowed = buffer.len().min(self.limit - self.written);
-        let written = self.inner.write(&buffer[..allowed])?;
-        self.written += written;
-        if written < buffer.len() {
-            return Err(std::io::Error::other("OUTPUT_LIMIT_REACHED"));
-        }
-        Ok(written)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
 }

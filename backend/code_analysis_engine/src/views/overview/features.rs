@@ -40,7 +40,8 @@ pub(super) fn build(
             FeatureStatus::Confirmed,
             Some(entrypoint),
             None,
-            units,
+            &units,
+            units.len(),
         ));
     }
 
@@ -68,7 +69,13 @@ pub(super) fn build(
             .insert(flow.owner_unit_id.clone());
     }
     for (operation_root, owners) in operation_owners {
-        let mut units = reachability.reachable_from_many(owners.iter().map(String::as_str));
+        let reachable_units = reachability.reachable_from_many(owners.iter().map(String::as_str));
+        let mut units = owners
+            .iter()
+            .filter_map(|owner| reachability.unit_index(owner))
+            .collect::<Vec<_>>();
+        units.sort_unstable();
+        units.dedup();
         if let Some(root_index) = reachability.unit_index(&operation_root) {
             if units.binary_search(&root_index).is_err() {
                 units.push(root_index);
@@ -82,6 +89,7 @@ pub(super) fn build(
             None,
             Some(operation_root.as_str()),
             &units,
+            reachable_units.len(),
         ));
     }
 
@@ -106,6 +114,7 @@ impl FeatureBuildContext<'_> {
         entrypoint: Option<&Entrypoint>,
         operation_root_id: Option<&str>,
         units: &[usize],
+        reachable_unit_count: usize,
     ) -> FeatureGroup {
         let root_unit_id = operation_root_id
             .or_else(|| {
@@ -217,6 +226,7 @@ impl FeatureBuildContext<'_> {
                 .iter()
                 .map(|index| self.reachability.unit_id(*index).to_string())
                 .collect(),
+            reachable_unit_count,
             entrypoint_ids: entrypoint
                 .map(|value| vec![value.id.clone()])
                 .unwrap_or_default(),

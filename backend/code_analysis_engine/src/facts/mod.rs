@@ -182,6 +182,7 @@ mod tests {
             id: id.into(),
             source_unit_id: "source".into(),
             target_unit_id: None,
+            candidate_unit_ids: Vec::new(),
             target_name: target_name.into(),
             kind: ReferenceKind::Call,
             status,
@@ -220,6 +221,10 @@ mod tests {
             Some("unit_c")
         );
         assert_eq!(store.references[2].status, ResolutionStatus::Candidate);
+        assert_eq!(
+            store.references[2].candidate_unit_ids,
+            ["unit_a".to_string(), "unit_b".to_string()]
+        );
         assert_eq!(store.references[3].status, ResolutionStatus::Dynamic);
         assert!(store.references[3].target_unit_id.is_none());
         assert_eq!(store.references[4].status, ResolutionStatus::Unknown);
