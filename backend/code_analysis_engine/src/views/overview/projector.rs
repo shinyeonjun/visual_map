@@ -121,7 +121,7 @@ pub fn project(
     }
 
     OverviewResponse {
-        schema_version: "domain-overview.v3".into(),
+        schema_version: "domain-overview.v4".into(),
         domains,
         features,
         relations: analysis.relations.clone(),

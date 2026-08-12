@@ -36,6 +36,8 @@ pub struct Reference {
     pub id: String,
     pub source_unit_id: String,
     pub target_unit_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_unit_ids: Vec<String>,
     pub target_name: String,
     pub kind: ReferenceKind,
     pub status: ResolutionStatus,
