@@ -158,21 +158,28 @@ kind = "methodAndPath"
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
-calleePatterns = ["fetch","axios.get","axios.post","axios.put","axios.patch","axios.delete","axios.request","requests.get","requests.post","requests.put","requests.patch","requests.delete","requests.request","urllib.request.urlopen","http.get","http.post","client.get","client.post","client.request","reqwest::get","HttpClient.GetAsync","HttpClient.PostAsync","Dio.get"]
+calleePatterns = ["axios.get","axios.post","axios.put","axios.patch","axios.delete","axios.request","requests.get","requests.post","requests.put","requests.patch","requests.delete","requests.request","urllib.request.urlopen","http.get","http.post","client.get","client.post","client.request","reqwest::get","HttpClient.GetAsync","HttpClient.PostAsync","Dio.get"]
+kind = "externalApi"
+mode = "readwrite"
+argumentIndex = 0
+
+[[parser.resourceRules]]
+languages = ["javascript","typescript"]
+calleePatterns = ["fetch"]
 kind = "externalApi"
 mode = "readwrite"
 argumentIndex = 0
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
-calleePatterns = ["redis.get","redis.set","Redis.get","Redis.set","cache.get","cache.set","cache.delete","Cache.get","Cache.set","hget","hset","getex","setex"]
+calleePatterns = ["redis.get","redis.set","Redis.get","Redis.set","cache.get","cache.set","cache.delete","Cache.get","Cache.set"]
 kind = "cache"
 mode = "readwrite"
 argumentIndex = 0
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
-calleePatterns = ["fs.readFile","fs.readFileSync","fs.writeFile","fs.writeFileSync","readFile","writeFile","open","os.open","Path.read_text","Path.write_text","File.open","File::open","std::fs::read_to_string"]
+calleePatterns = ["fs.readFile","fs.readFileSync","fs.writeFile","fs.writeFileSync","os.open","Path.read_text","Path.write_text","File.open","File::open","std::fs::read_to_string"]
 kind = "file"
 mode = "readwrite"
 argumentIndex = 0
@@ -180,14 +187,14 @@ nameSource = "literalOrReceiver"
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
-calleePatterns = ["publish","emit","send","subscribe","consume","EventBus.publish","eventBus.emit","bus.publish","bus.subscribe"]
+calleePatterns = ["EventBus.publish","eventBus.emit","bus.publish","bus.subscribe"]
 kind = "eventTopic"
 mode = "readwrite"
 argumentIndex = 0
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
-calleePatterns = ["TcpStream::connect","TcpClient.connect","net.Dial","http.Client.Do","Socket.connect","socket.connect","connect","QTcpSocket.connectToHost"]
+calleePatterns = ["TcpStream::connect","TcpClient.connect","net.Dial","http.Client.Do","Socket.connect","socket.connect","QTcpSocket.connectToHost"]
 kind = "network"
 mode = "readwrite"
 argumentIndex = 0

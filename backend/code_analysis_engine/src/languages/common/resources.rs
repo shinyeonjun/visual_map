@@ -75,12 +75,27 @@ fn callee_matches(pattern: &str, callee: &str) -> bool {
     let Some((_, method)) = callee.rsplit_once(['.', ':']) else {
         return false;
     };
-    // `Path.read_text`와 `path.read_text`처럼 타입명과 변수명이 다른
-    // 인스턴스 메서드는 메서드와 알려진 receiver 계열이 일치하면 보존한다.
-    matches!(
-        receiver_pattern.to_ascii_lowercase().as_str(),
-        "path" | "file" | "redis" | "cache"
-    ) && method_pattern.eq_ignore_ascii_case(method)
+    if !method_pattern.eq_ignore_ascii_case(method) {
+        return false;
+    }
+    let receiver = callee
+        .rsplit_once(['.', ':'])
+        .map(|(value, _)| value)
+        .and_then(|value| {
+            value
+                .rsplit_once(['.', ':'])
+                .map(|(_, name)| name)
+                .or(Some(value))
+        })
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match receiver_pattern.to_ascii_lowercase().as_str() {
+        // `Path.read_text`와 `path.read_text`처럼 표준 파일 receiver의
+        // 타입명/변수명만 허용한다. 임의의 `customer.read_text()`를 파일
+        // 자원으로 올리면 일반 도메인 메서드가 자원으로 오인된다.
+        "path" | "file" => matches!(receiver.as_str(), "path" | "file"),
+        _ => false,
+    }
 }
 
 fn resource_name(call: &CallSiteFact, rule: &ResourceRule) -> String {

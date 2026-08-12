@@ -201,6 +201,43 @@ await eventBus.publish("user.created");
 }
 
 #[test]
+fn 일반_메서드는_외부자원으로_오인되지_않고_명시된_receiver만_추출된다() {
+    let source = r#"
+function run(customer, socket, bus) {
+  customer.read_text();
+  connect("not-a-network-resource");
+  publish("not-an-event-resource");
+  socket.connect("localhost");
+  bus.publish("user.created");
+}
+"#;
+    let bundle = analyze_file(
+        &file("src/resources.ts", Language::TypeScript),
+        source,
+        &AnalysisConfig::default(),
+    );
+
+    assert!(!bundle
+        .resources
+        .iter()
+        .any(|resource| resource.name == "not-a-network-resource"));
+    assert!(!bundle
+        .resources
+        .iter()
+        .any(|resource| resource.name == "not-an-event-resource"));
+    assert!(!bundle
+        .resources
+        .iter()
+        .any(|resource| { resource.kind == ResourceKind::File && resource.name == "customer" }));
+    assert!(bundle.resources.iter().any(|resource| {
+        resource.kind == ResourceKind::Network && resource.name == "localhost"
+    }));
+    assert!(bundle.resources.iter().any(|resource| {
+        resource.kind == ResourceKind::EventTopic && resource.name == "user.created"
+    }));
+}
+
+#[test]
 fn 네트워크와_환경변수_접근이_리소스_종류를_보존한다() {
     let python = analyze_file(
         &file("src/config.py", Language::Python),
@@ -270,6 +307,7 @@ function load() {
   `;
   return query + write;
 }
+
 "#;
     let bundle = analyze_file(
         &file("src/sql.ts", Language::TypeScript),
@@ -289,6 +327,35 @@ function load() {
     assert!(bundle.resources.iter().any(|resource| {
         resource.name == "audit_log"
             && resource.mode == code_analysis_engine::facts::AccessMode::Write
+    }));
+}
+
+#[test]
+fn 주석과_일반_import_텍스트는_sql_테이블이_되지_않는다() {
+    let source = r#"
+// SELECT * FROM fake_comment_table;
+/* INSERT INTO fake_block_table VALUES (1); */
+import { fromValue } from "ordinary-module";
+const text = "a value from another source";
+const query = `SELECT * FROM real_users`;
+"#;
+    let bundle = analyze_file(
+        &file("src/sql.ts", Language::TypeScript),
+        source,
+        &AnalysisConfig::default(),
+    );
+    let tables = bundle
+        .resources
+        .iter()
+        .filter(|resource| resource.kind == ResourceKind::Table)
+        .collect::<Vec<_>>();
+
+    assert!(tables.iter().any(|resource| resource.name == "real_users"));
+    assert!(!tables.iter().any(|resource| {
+        matches!(
+            resource.name.as_str(),
+            "fake_comment_table" | "fake_block_table" | "ordinary-module" | "another"
+        )
     }));
 }
 

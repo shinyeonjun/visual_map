@@ -17,34 +17,26 @@ pub(super) fn extract_sql_resources(
     let Some(sql_pattern) = sql_pattern else {
         return;
     };
-    let lines = source.lines().collect::<Vec<_>>();
     let mut seen = HashSet::new();
-    for start in 0..lines.len() {
-        if !looks_like_sql_start(lines[start]) {
-            continue;
-        }
-        let limit = (start + 16).min(lines.len());
-        let mut end = start + 1;
-        while end < limit {
-            let line = lines[end];
-            end += 1;
-            if line.contains(';') || line.contains('`') {
-                break;
-            }
-        }
-        let statement = lines[start..end].join(" ");
+    for fragment in extract_sql_fragments(source, file.language == crate::model::Language::Unknown)
+    {
+        let statement = fragment.text;
         if !looks_like_sql_statement(&statement) {
             continue;
         }
-        let line_number = start as u32 + 1;
+        let line_number = fragment.start_line;
         let unit_id = unit_index.unit_for_line(line_number);
         let span = SourceSpan::new(
             file.file_id.clone(),
             file.relative_path.clone(),
             line_number,
             1,
-            end as u32,
-            lines[end.saturating_sub(1)].chars().count() as u32 + 1,
+            fragment.end_line,
+            source
+                .lines()
+                .nth(fragment.end_line.saturating_sub(1) as usize)
+                .map(|line| line.chars().count() as u32 + 1)
+                .unwrap_or(1),
         );
         for captures in sql_pattern.captures_iter(&statement) {
             let Some(name) = captures.get(1).map(|value| value.as_str().to_string()) else {
@@ -84,6 +76,121 @@ pub(super) fn extract_sql_resources(
             });
         }
     }
+}
+
+struct SqlFragment {
+    text: String,
+    start_line: u32,
+    end_line: u32,
+}
+
+/// SQL은 일반 언어 AST의 문자열 리터럴 안에 들어오는 경우가 많다. 소스
+/// 전체를 SQL처럼 훑으면 주석·import·일반 식별자에 있는 `from`을 테이블로
+/// 오인하므로, 실제 문자열 내용만 후보로 넘긴다.
+fn extract_sql_fragments(source: &str, include_raw_source: bool) -> Vec<SqlFragment> {
+    let bytes = source.as_bytes();
+    let mut fragments = Vec::new();
+    let mut index = 0;
+    let mut line_comment = false;
+    let mut block_comment = false;
+    while index < bytes.len() {
+        if line_comment {
+            if bytes[index] == b'\n' {
+                line_comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if block_comment {
+            if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                block_comment = false;
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            line_comment = true;
+            index += 2;
+            continue;
+        }
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            block_comment = true;
+            index += 2;
+            continue;
+        }
+        if bytes[index] == b'#' {
+            line_comment = true;
+            index += 1;
+            continue;
+        }
+        if !matches!(bytes[index], b'\'' | b'"' | b'`') {
+            index += 1;
+            continue;
+        }
+
+        let quote = bytes[index];
+        let triple = bytes.get(index..index + 3) == Some(&[quote, quote, quote]);
+        let content_start = index + if triple { 3 } else { 1 };
+        let mut cursor = content_start;
+        let mut escaped = false;
+        while cursor < bytes.len() {
+            if !triple && bytes[cursor] == b'\n' && quote != b'`' && !escaped {
+                break;
+            }
+            if escaped {
+                escaped = false;
+                cursor += 1;
+                continue;
+            }
+            if bytes[cursor] == b'\\' {
+                escaped = true;
+                cursor += 1;
+                continue;
+            }
+            if triple {
+                if bytes.get(cursor..cursor + 3) == Some(&[quote, quote, quote]) {
+                    break;
+                }
+            } else if bytes[cursor] == quote {
+                break;
+            }
+            cursor += 1;
+        }
+        let content_end = cursor.min(bytes.len());
+        if let Ok(text) = std::str::from_utf8(&bytes[content_start..content_end]) {
+            let start_line = source[..content_start]
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count() as u32
+                + 1;
+            let end_line = source[..content_end]
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count() as u32
+                + 1;
+            fragments.push(SqlFragment {
+                text: text.to_string(),
+                start_line,
+                end_line,
+            });
+        }
+        index = if cursor < bytes.len() {
+            cursor + if triple { 3 } else { 1 }
+        } else {
+            bytes.len()
+        };
+    }
+
+    if fragments.is_empty() && (include_raw_source || looks_like_sql_start(source)) {
+        fragments.push(SqlFragment {
+            text: source.to_string(),
+            start_line: 1,
+            end_line: source.lines().count().max(1) as u32,
+        });
+    }
+    fragments
 }
 
 fn sql_table_name(statement: &str, match_end: usize, candidate: &str) -> Option<String> {
