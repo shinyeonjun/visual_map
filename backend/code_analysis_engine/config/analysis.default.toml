@@ -1,0 +1,225 @@
+# Visual Map 코드 분석 엔진 기본 설정
+# 이 파일은 실행 파일에 내장되는 기본값이며, --config로 부분 override할 수 있습니다.
+
+[scan]
+computeHashes = true
+includeHidden = false
+maxFileSizeBytes = 10485760
+factCacheMaxEntries = 2048
+frameworkConfigFileNames = ["routes"]
+
+[limits]
+maxFiles = 100000
+maxTotalBytes = 1073741824
+maxUnits = 2000000
+maxReferences = 10000000
+maxBindings = 2000000
+maxDecorators = 2000000
+maxCallSites = 5000000
+maxEntrypoints = 500000
+maxResources = 2000000
+maxControlFlowFacts = 2000000
+maxExecutionFlows = 500000
+maxFlowNodes = 5000000
+maxFlowEdges = 10000000
+maxOutputBytes = 536870912
+
+[languages.extensions]
+javascript = ["js","mjs","cjs","jsx"]
+typescript = ["ts","mts","cts","tsx"]
+python = ["py","pyw"]
+java = ["java"]
+c = ["c","h"]
+cpp = ["cc","cp","cpp","cxx","hh","hpp","hxx"]
+csharp = ["cs"]
+go = ["go"]
+rust = ["rs"]
+dart = ["dart"]
+
+[paths]
+ignoredDirectories = [".git",".idea",".vscode","node_modules","target","dist","build","out","coverage"]
+testDirectoryNames = ["test","tests"]
+testSuffixes = ["_test.go","_test.rs",".test.js",".spec.js",".test.ts",".spec.ts","_test.py","test.java"]
+
+[domains]
+minimumTokenLength = 3
+minimumRepeatedSymbolUnits = 2
+maximumCandidateEvidence = 12
+pathWeight = 4
+symbolWeight = 3
+entrypointWeight = 6
+resourceWeight = 5
+frameworkWeight = 1
+referenceWeight = 2
+confirmedMinimumSignalFamilies = 2
+confirmedMinimumScore = 8
+sharedRatioNumerator = 3
+sharedRatioDenominator = 4
+sharedMinimumScore = 3
+genericTokens = ["src","lib","app","apps","main","index","test","tests","spec","fixture","fixtures","from","adapter","adapters","aggregate","aggregation","analysis","analyze","analyzer","analyzers","access","all","argument","arguments","array","ast","async","attribute","attributes","build","call","callback","candidate","candidates","catalog","codex","bundle","capability","capabilities","class","code","compile","collection","cpp","csharp","context","coverage","declaration","declarations","dependency","dependencies","default","detect","detected","detection","detector","diagnostic","diagnostics","domain","dispatch","dispatcher","dynamic","dart","engine","ecma","entry","entries","entrypoint","entrypoints","error","errors","evidence","extension","extensions","fact","facts","file","files","flow","framework","frameworks","function","functions","generic","go","get","graph","group","groups","grouping","collect","confidence","family","fmt","for","import","imports","input","issue","issues","ids","info","internal","join","key","keys","java","javascript","kind","language","languages","line","lines","map","member","members","membership","metadata","merge","method","methods","module","modules","mod","name","names","naming","new","normalize","normalized","node","nodes","option","options","output","package","packages","python","parameter","parameters","parser","parsers","path","paths","pipeline","project","projects","read","provider","providers","reference","references","relation","relations","resource","resources","result","results","request","route","routes","overview","progress","projector","proposal","registry","resolution","resolve","rust","scan","schema","schemas","semantic","signal","signals","snapshot","source","span","status","stable","stages","store","structure","target","targets","token","tokens","tree","trees","typescript","type","types","suggestion","summarize","summary","temporary","unit","units","unknown","value","values","validate","validated","validator","view","views","warning","warnings","worse","service","services","controller","controllers","handler","handlers","manager","factory","helper","helpers","util","utils","common","shared","base","impl","repository","repositories","model","models","dto","infra","infrastructure","config","configuration","logging","logger","database","transaction","transactions","http","api","apis","com","org","net"]
+crossCuttingKeys = ["common","shared","infra","infrastructure","logging","logger","config","database","transaction","http"]
+
+[parser]
+sqlPattern = '''(?i)\b(?:from|into|update|join|table)\s+[`"']?([a-zA-Z_][a-zA-Z0-9_]*)'''
+defaultHttpMethod = "HTTP"
+defaultHttpPath = "/"
+
+[parser.dynamicCallPatterns]
+javascript = ["require","eval","function("]
+typescript = ["require","eval","function("]
+python = ["getattr","__import__","eval","exec","import_module"]
+java = ["class.forname","method.invoke","proxy"]
+c = ["dlsym","getprocaddress"]
+cpp = ["dlsym","getprocaddress"]
+csharp = ["type.gettype","activator.createinstance","assembly.load"]
+go = ["reflect.","plugin.open"]
+rust = ["libloading","transmute"]
+dart = ["function.apply","dart:mirrors"]
+
+[[parser.routeRules]]
+languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
+pattern = '''(?i)\b(?:app|router|server|r|e|api)\s*\.\s*(?:map)?(get|post|put|patch|delete|options|head)\s*\(\s*["']([^"']+)'''
+kind = "methodAndPath"
+
+[[parser.routeRules]]
+languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
+pattern = '''(?i)(?:handlefunc|handle|route)\s*\(\s*["']([^"']+)'''
+kind = "pathOnly"
+
+[[parser.routeRules]]
+languages = ["java","csharp"]
+pattern = '''(?i)@(?:(get|post|put|patch|delete|head)mapping|requestmapping)\s*\(\s*(?:(?:value|path|url|route)\s*=\s*)?["']([^"']+)'''
+kind = "methodAndPath"
+
+[[parser.routeRules]]
+languages = ["java"]
+pattern = '''(?i)@(?:(get|post|put|patch|delete|options|head)(?:\s*\(\s*(?:(?:value|path|uri|route)\s*=\s*)?["']([^"']+)["']\s*\))?\s*)$'''
+kind = "methodAndPath"
+
+[[parser.routeRules]]
+languages = ["java"]
+pattern = '''(?i)@path\s*\(\s*["']([^"']+)'''
+kind = "pathOnly"
+
+[[parser.routeRules]]
+languages = ["java"]
+pattern = '''(?i)requestpredicates\s*\.\s*(get|post|put|patch|delete|options|head)\s*\(\s*["']([^"']+)'''
+kind = "methodAndPath"
+
+[[parser.routeRules]]
+languages = ["java"]
+pattern = '''(?i)@controller\s*\(\s*["']([^"']+)'''
+kind = "pathOnly"
+
+[[parser.routeRules]]
+languages = ["java","csharp"]
+pattern = '''(?i)\[(httpget|httppost|httpput|httppatch|httpdelete|httphead)(?:\s*\(\s*(?:(?:template|route|path)\s*=\s*)?["']([^"']+))?'''
+kind = "attribute"
+
+[[parser.routeRules]]
+languages = ["csharp"]
+pattern = '''(?i)\[(?:route|routeattribute)\s*\(\s*(?:(?:template|path|route)\s*=\s*)?["']([^"']+)'''
+kind = "pathOnly"
+
+[[parser.routeRules]]
+languages = ["javascript","typescript"]
+pattern = '''(?i)@(?:(get|post|put|patch|delete|head)(?:\s*\(\s*(?:(?:value|path|url|route)\s*=\s*)?["']([^"']+)["']\s*\))?\s*)$'''
+kind = "methodAndPath"
+
+[[parser.routeRules]]
+languages = ["python"]
+pattern = '''(?i)@(?:app|router)\.route\s*\(\s*["']([^"']+)'''
+kind = "pathOnly"
+
+[[parser.routeRules]]
+languages = ["rust"]
+pattern = '''(?i)#\[(get|post|put|patch|delete|head)\s*\(\s*["']([^"']+)'''
+kind = "methodAndPath"
+
+[[parser.routeRules]]
+languages = ["c", "cpp"]
+pattern = '''(?i)crow_route\s*\([^,]+,\s*["']([^"']+)'''
+kind = "pathOnly"
+
+[[parser.routeRules]]
+languages = ["c", "cpp"]
+pattern = '''(?i)add_method_to\s*\([^,]+,\s*["']([^"']+)'''
+kind = "pathOnly"
+
+[[parser.routeRules]]
+languages = ["c", "cpp"]
+pattern = '''(?i)method_add\s*\([^,]+,\s*["']([^"']+)'''
+kind = "pathOnly"
+
+[[parser.routeRules]]
+languages = ["unknown"]
+pattern = '''(?i)^\s*(get|post|put|patch|delete|options|head|connect)\s+(\S+)'''
+kind = "methodAndPath"
+
+[[parser.resourceRules]]
+languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
+calleePatterns = ["fetch","axios.get","axios.post","axios.put","axios.patch","axios.delete","axios.request","requests.get","requests.post","requests.put","requests.patch","requests.delete","requests.request","urllib.request.urlopen","http.get","http.post","client.get","client.post","client.request","reqwest::get","HttpClient.GetAsync","HttpClient.PostAsync","Dio.get"]
+kind = "externalApi"
+mode = "readwrite"
+argumentIndex = 0
+
+[[parser.resourceRules]]
+languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
+calleePatterns = ["redis.get","redis.set","Redis.get","Redis.set","cache.get","cache.set","cache.delete","Cache.get","Cache.set","hget","hset","getex","setex"]
+kind = "cache"
+mode = "readwrite"
+argumentIndex = 0
+
+[[parser.resourceRules]]
+languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
+calleePatterns = ["fs.readFile","fs.readFileSync","fs.writeFile","fs.writeFileSync","readFile","writeFile","open","os.open","Path.read_text","Path.write_text","File.open","File::open","std::fs::read_to_string"]
+kind = "file"
+mode = "readwrite"
+argumentIndex = 0
+
+[[parser.resourceRules]]
+languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
+calleePatterns = ["publish","emit","send","subscribe","consume","EventBus.publish","eventBus.emit","bus.publish","bus.subscribe"]
+kind = "eventTopic"
+mode = "readwrite"
+argumentIndex = 0
+
+[[parser.resourceRules]]
+languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
+calleePatterns = ["TcpStream::connect","TcpClient.connect","net.Dial","http.Client.Do","Socket.connect","socket.connect","connect","QTcpSocket.connectToHost"]
+kind = "network"
+mode = "readwrite"
+argumentIndex = 0
+
+[[parser.resourceRules]]
+languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
+calleePatterns = ["os.getenv","os.environ.get","System.getenv","Environment.GetEnvironmentVariable","getenv","os.Getenv","std::env::var","Platform.environment.get"]
+kind = "environment"
+mode = "read"
+argumentIndex = 0
+
+[frameworks]
+manifests = ["package.json","pom.xml","build.gradle","Cargo.toml","go.mod","requirements.txt","pyproject.toml","pubspec.yaml"]
+initialConfidence = 0.65
+confidenceIncrement = 0.05
+maximumConfidence = 0.99
+internalCatalogMarkers = ["/frameworks/registry/catalog.","/framework-catalog.rs"]
+
+[semantic]
+codexEnabled = false
+codexExecutable = "codex"
+codexTimeoutMs = 0
+codexMaxInputBytes = 700000
+domainUnitLimit = 128
+sharedUnitLimit = 128
+entrypointLimit = 64
+resourceLimit = 64
+domainEvidenceLimit = 12
+relationLimit = 2000
+relationEvidenceLimit = 8
+frameworkEvidenceLimit = 4
+minimumContextBytes = 16000
+promptReserveBytes = 8192
+maximumLabelLength = 120
+maximumSummaryLength = 500
+maximumMergeReasonLength = 500

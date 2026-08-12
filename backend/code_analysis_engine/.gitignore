@@ -1,0 +1,33 @@
+# Rust 빌드 산출물
+/target/
+
+# 로컬 편집기 설정
+/.idea/
+/.vscode/
+
+# 개발 중 생성하는 분석 결과와 프로파일 로그
+/tests/result/*.json
+/tests/result/*.log
+
+# 운영체제·편집기·임시 파일
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.temp
+*.bak
+
+# 로컬 환경 변수와 보안 정보
+.env
+.env.*
+!.env.example
+
+# 커버리지·벤치마크 생성물
+/coverage/
+/reports/
+
+# Rust 및 분석 도구가 생성하는 보조 산출물
+*.profraw
+*.pdb
+*.dSYM/

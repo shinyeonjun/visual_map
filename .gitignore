@@ -1,0 +1,52 @@
+# ── 빌드 산출물 ────────────────────────────────────────────
+# Rust 빌드 캐시. backend/code_analysis_engine/target 는 5GB 이상까지 커진다.
+target/
+*.pdb
+*.profraw
+*.dSYM/
+
+# 프론트엔드(Node / Vite)
+node_modules/
+dist/
+dist-ssr/
+build/
+out/
+.vite/
+*.tsbuildinfo
+
+# Tauri 번들 산출물
+src-tauri/gen/
+*.msi
+*.dmg
+*.AppImage
+*.deb
+
+# ── 분석 실행 결과 ─────────────────────────────────────────
+# 엔진 출력 JSON은 저장소 하나당 수백 MB까지 나오며 언제든 재생성할 수 있다.
+# 벤치마크 요약도 바이너리 변경에 따라 즉시 낡으므로 커밋하지 않는다.
+tests/result/
+
+# ── 로컬 환경 / 비밀정보 ───────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── 개인 메모 ──────────────────────────────────────────────
+memo.txt
+
+# ── 편집기 / 운영체제 ──────────────────────────────────────
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+
+# ── 임시 파일 / 로그 / 커버리지 ────────────────────────────
+*.log
+*.tmp
+*.temp
+*.bak
+coverage/
+AGENTS.md
