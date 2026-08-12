@@ -70,10 +70,17 @@ impl std::error::Error for CodexError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{response::parse_jsonl_proposal, CodexProvider};
+    use super::response::parse_jsonl_proposal;
+
+    #[cfg(windows)]
+    use super::CodexProvider;
+    #[cfg(windows)]
     use crate::semantic::context::SemanticContext;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    #[cfg(windows)]
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn codex_jsonl의_최종_메시지에서_제안을_추출한다() {
