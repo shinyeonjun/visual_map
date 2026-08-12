@@ -141,7 +141,11 @@ impl BindingResolutionIndex {
     fn resolve(&self, reference: &Reference, source_file_id: Option<&str>) -> Option<String> {
         if !matches!(
             reference.kind,
-            ReferenceKind::Call | ReferenceKind::Constructs
+            ReferenceKind::Call
+                | ReferenceKind::Constructs
+                | ReferenceKind::Uses
+                | ReferenceKind::Implements
+                | ReferenceKind::Extends
         ) {
             return None;
         }
@@ -257,7 +261,11 @@ impl ReferenceResolutionIndex {
             return target.to_string();
         }
         let Some(module) = source_file_id.and_then(|file| self.module_by_file.get(file)) else {
-            return target.trim_start_matches('.').to_string();
+            return target
+                .strip_prefix("./")
+                .or_else(|| target.strip_prefix("../"))
+                .unwrap_or(target)
+                .to_string();
         };
         let mut parts = module.split("::").collect::<Vec<_>>();
         parts.truncate(parts.len().saturating_sub(leading_dots));
@@ -307,7 +315,12 @@ impl ReferenceResolutionIndex {
 
         if !matches!(
             kind,
-            ReferenceKind::Call | ReferenceKind::Constructs | ReferenceKind::Export
+            ReferenceKind::Call
+                | ReferenceKind::Constructs
+                | ReferenceKind::Export
+                | ReferenceKind::Uses
+                | ReferenceKind::Implements
+                | ReferenceKind::Extends
         ) {
             return None;
         }
@@ -398,8 +411,6 @@ impl ReferenceResolutionIndex {
 fn normalize_target_name(value: &str) -> String {
     let trimmed = value
         .trim()
-        .trim_matches(|character| matches!(character, '"' | '\'' | '`' | ';'))
-        .trim_start_matches("./")
-        .trim_start_matches("../");
+        .trim_matches(|character| matches!(character, '"' | '\'' | '`' | ';'));
     trimmed.to_string()
 }

@@ -3,7 +3,7 @@ use code_analysis_engine::facts::{
     CodeUnitKind, CodeUnitVisibility, FactStore, ReferenceKind, ResourceKind,
 };
 use code_analysis_engine::languages::analyze_file;
-use code_analysis_engine::model::{FileEntry, Language};
+use code_analysis_engine::model::{FileEntry, Language, ParseStatus};
 use std::collections::HashSet;
 
 fn file(path: &str, language: Language) -> FileEntry {
@@ -65,6 +65,28 @@ export class AuthService {
     assert_eq!(login.visibility, CodeUnitVisibility::Public);
     assert!(login.modifiers.iter().any(|modifier| modifier == "async"));
     assert!(login.body_span.is_some());
+}
+
+#[test]
+fn tsx는_typescript가_아닌_tsx_grammar으로_분석된다() {
+    let source = r#"
+type Props = { name: string };
+export function UserCard(props: Props) {
+  return <div>{props.name}</div>;
+}
+"#;
+    let bundle = analyze_file(
+        &file("src/UserCard.tsx", Language::TypeScript),
+        source,
+        &AnalysisConfig::default(),
+    );
+
+    assert_eq!(bundle.parse_status, ParseStatus::Parsed);
+    assert!(bundle.units.iter().any(|unit| unit.name == "UserCard"));
+    assert!(bundle
+        .units
+        .iter()
+        .any(|unit| unit.kind == CodeUnitKind::TypeAlias && unit.name == "Props"));
 }
 
 #[test]

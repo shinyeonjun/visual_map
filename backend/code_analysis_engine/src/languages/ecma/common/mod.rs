@@ -1,5 +1,5 @@
 use crate::config::ParserPolicy;
-use crate::facts::{DecoratorFact, Evidence};
+use crate::facts::{BindingKind, DecoratorFact, Evidence, SymbolBinding};
 use crate::facts::{FactBundle, Reference, ReferenceKind, ResolutionStatus};
 use crate::languages::common::metadata::{node_span, node_text, stable_id};
 use crate::languages::common::unit_index::UnitSpanIndex;
@@ -29,6 +29,20 @@ pub struct EcmaAnalyzer {
     grammar: fn() -> TreeLanguage,
 }
 
+impl EcmaAnalyzer {
+    fn grammar_for(&self, file: &FileEntry) -> fn() -> TreeLanguage {
+        if self.language == Language::TypeScript
+            && file
+                .relative_path
+                .rsplit_once('.')
+                .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("tsx"))
+        {
+            return || tree_sitter_typescript::LANGUAGE_TSX.into();
+        }
+        self.grammar
+    }
+}
+
 impl LanguageAnalyzer for EcmaAnalyzer {
     fn language(&self) -> Language {
         self.language
@@ -37,7 +51,7 @@ impl LanguageAnalyzer for EcmaAnalyzer {
     fn analyze(&self, file: &FileEntry, source: &str, parser_policy: &ParserPolicy) -> FactBundle {
         analyze_tree_with_hook(
             self.language,
-            self.grammar,
+            self.grammar_for(file),
             file,
             source,
             parser_policy,
@@ -48,7 +62,238 @@ impl LanguageAnalyzer for EcmaAnalyzer {
 
 fn extract_ecma_facts(root: Node<'_>, source: &[u8], file: &FileEntry, bundle: &mut FactBundle) {
     extract_ecma_decorators(root, source, file, bundle);
+    extract_ecma_import_bindings(root, source, file, bundle);
     extract_ecma_exports(root, source, file, bundle);
+    extract_ecma_type_references(root, source, file, bundle);
+}
+
+/// ES module의 imported local 이름을 실제 모듈·심볼 경로에 연결한다.
+///
+/// 공통 walker는 `import_declaration` 자체를 모듈 관계로 보존하지만,
+/// `import { User } from "./models"`의 `User`가 어떤 외부 심볼을 가리키는지는
+/// 알 수 없다. 이 binding이 있으면 호출·생성·타입 참조가 모두 같은
+/// `./models::User` 경로로 해석되어 파일 간 관계가 하나의 계약을 공유한다.
+fn extract_ecma_import_bindings(
+    root: Node<'_>,
+    source: &[u8],
+    file: &FileEntry,
+    bundle: &mut FactBundle,
+) {
+    let file_unit_id = bundle
+        .units
+        .iter()
+        .find(|unit| unit.kind == crate::facts::CodeUnitKind::File)
+        .map(|unit| unit.id.clone())
+        .unwrap_or_else(|| file.file_id.clone());
+    for node in walk_nodes(root) {
+        if !matches!(node.kind(), "import_declaration" | "import_statement") {
+            continue;
+        }
+        let statement = node_text(node, source);
+        let Some((module, specifiers)) = parse_import_statement(&statement) else {
+            continue;
+        };
+        for (local_name, imported_name, kind) in specifiers {
+            let target_name = format!("{module}::{imported_name}");
+            let id = stable_id(
+                "binding",
+                &format!("{}:{}:{}", file.file_id, node.start_byte(), local_name),
+            );
+            if bundle.bindings.iter().any(|binding| binding.id == id) {
+                continue;
+            }
+            bundle.bindings.push(SymbolBinding {
+                id,
+                source_unit_id: file_unit_id.clone(),
+                local_name,
+                target_name,
+                kind,
+                evidence: vec![Evidence::new(
+                    "importBinding",
+                    statement.trim(),
+                    node_span(node, file),
+                )],
+            });
+        }
+    }
+}
+
+type ImportBindingSpec = (String, String, BindingKind);
+
+fn parse_import_statement(statement: &str) -> Option<(String, Vec<ImportBindingSpec>)> {
+    let statement = statement
+        .trim()
+        .trim_start_matches("import")
+        .trim()
+        .trim_end_matches(';')
+        .trim();
+    let (clause, module) = statement.split_once(" from ").unwrap_or(("", statement));
+    let module = module
+        .trim()
+        .trim_matches(['"', '\'', '`'])
+        .trim()
+        .to_string();
+    if module.is_empty() {
+        return None;
+    }
+
+    let mut specifiers = Vec::new();
+    let clause = clause.trim();
+    if clause.is_empty() {
+        return Some((module, specifiers));
+    }
+    if let Some((_, named)) = clause.split_once('{') {
+        let named = named.split('}').next().unwrap_or_default();
+        for item in named.split(',') {
+            let item = item.trim();
+            if item.is_empty() {
+                continue;
+            }
+            let (imported, local) = item
+                .split_once(" as ")
+                .map(|(imported, local)| (imported.trim(), local.trim()))
+                .unwrap_or((item, item));
+            specifiers.push((
+                local.to_string(),
+                imported.trim_start_matches("type ").to_string(),
+                if local == imported {
+                    BindingKind::Import
+                } else {
+                    BindingKind::ImportAlias
+                },
+            ));
+        }
+    }
+    if let Some((_, namespace)) = clause.split_once('*') {
+        if let Some((_, local)) = namespace.split_once(" as ") {
+            specifiers.push((
+                local.trim().to_string(),
+                "*".to_string(),
+                BindingKind::ImportAlias,
+            ));
+        }
+    }
+    let default_name =
+        clause.split(',').next().map(str::trim).filter(|name| {
+            !name.is_empty() && !matches!(name.as_bytes().first(), Some(b'{' | b'*'))
+        });
+    if let Some(local) = default_name {
+        specifiers.push((
+            local.to_string(),
+            "default".to_string(),
+            BindingKind::Import,
+        ));
+    }
+    Some((module, specifiers))
+}
+
+/// TypeScript의 타입 위치를 일반 `Uses` 관계로 보존한다. 타입 이름은
+/// 실행 호출이 아니지만, 도메인·기능 그래프에서 DTO·인터페이스·엔티티 간
+/// 연결을 보여주려면 동일한 참조 해석 계약을 사용해야 한다.
+fn extract_ecma_type_references(
+    root: Node<'_>,
+    source: &[u8],
+    file: &FileEntry,
+    bundle: &mut FactBundle,
+) {
+    if file
+        .relative_path
+        .rsplit_once('.')
+        .is_none_or(|(_, extension)| !matches!(extension, "ts" | "tsx" | "mts" | "cts"))
+    {
+        return;
+    }
+    let unit_index = UnitSpanIndex::build(&bundle.units);
+    for node in walk_nodes(root) {
+        if node.kind() != "type_identifier" || !is_type_reference(node) {
+            continue;
+        }
+        let target_name = node_text(node, source).trim().to_string();
+        if target_name.is_empty() {
+            continue;
+        }
+        let source_unit_id = unit_index.unit_for_line(node.start_position().row as u32 + 1);
+        let id = stable_id(
+            "reference",
+            &format!(
+                "{}:type:{}:{}",
+                file.file_id,
+                node.start_byte(),
+                target_name
+            ),
+        );
+        if bundle.references.iter().any(|reference| reference.id == id) {
+            continue;
+        }
+        bundle.references.push(Reference {
+            id,
+            source_unit_id,
+            target_unit_id: None,
+            candidate_unit_ids: Vec::new(),
+            target_name: target_name.clone(),
+            kind: ReferenceKind::Uses,
+            status: ResolutionStatus::Candidate,
+            evidence: vec![Evidence::new(
+                "typeReference",
+                target_name,
+                node_span(node, file),
+            )],
+        });
+    }
+}
+
+fn is_type_reference(node: Node<'_>) -> bool {
+    if node.parent().is_some_and(|parent| {
+        parent
+            .child_by_field_name("name")
+            .is_some_and(|name| name.id() == node.id())
+    }) {
+        return false;
+    }
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if matches!(
+            parent.kind(),
+            "type_annotation"
+                | "return_type"
+                | "type_arguments"
+                | "type_parameters"
+                | "extends_type_clause"
+                | "implements_type_clause"
+                | "generic_type"
+                | "object_type"
+                | "tuple_type"
+                | "array_type"
+                | "type_predicate"
+        ) {
+            return true;
+        }
+        if matches!(
+            parent.kind(),
+            "function_declaration"
+                | "method_definition"
+                | "class_declaration"
+                | "interface_declaration"
+                | "type_alias_declaration"
+        ) {
+            return false;
+        }
+        current = parent.parent();
+    }
+    false
+}
+
+fn walk_nodes(root: Node<'_>) -> Vec<Node<'_>> {
+    let mut nodes = Vec::new();
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        let mut cursor = node.walk();
+        let mut children = node.named_children(&mut cursor).collect::<Vec<_>>();
+        children.reverse();
+        pending.extend(children);
+        nodes.push(node);
+    }
+    nodes
 }
 
 fn extract_ecma_decorators(
