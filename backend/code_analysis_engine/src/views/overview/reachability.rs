@@ -5,13 +5,14 @@
 //! 축약한 뒤 DAG의 도달 집합을 뒤에서부터 메모이제이션한다.
 
 use crate::facts::{FactStore, ReferenceKind};
+use roaring::RoaringBitmap;
 use std::collections::{HashMap, VecDeque};
 
 pub(super) struct ReachabilityIndex {
     unit_ids: Vec<String>,
     unit_indexes: HashMap<String, usize>,
     component_of: Vec<usize>,
-    reachable_by_component: Vec<Vec<usize>>,
+    reachable_by_component: Vec<RoaringBitmap>,
 }
 
 impl ReachabilityIndex {
@@ -75,12 +76,22 @@ impl ReachabilityIndex {
         }
 
         let topological_order = topological_order(&component_outgoing);
-        let mut reachable_by_component = component_units;
+        let mut reachable_by_component = component_units
+            .into_iter()
+            .map(|units| {
+                let mut reachable = RoaringBitmap::new();
+                for unit in units {
+                    reachable.insert(
+                        u32::try_from(unit)
+                            .expect("코드 유닛 인덱스는 RoaringBitmap 범위 안이어야 한다"),
+                    );
+                }
+                reachable
+            })
+            .collect::<Vec<_>>();
         for &component in topological_order.iter().rev() {
-            let children = component_outgoing[component].clone();
-            for child in children {
-                let child_reachable = reachable_by_component[child].clone();
-                merge_sorted(&mut reachable_by_component[component], &child_reachable);
+            for &child in &component_outgoing[component] {
+                union_component_sets(&mut reachable_by_component, component, child);
             }
         }
 
@@ -100,21 +111,47 @@ impl ReachabilityIndex {
         &self.unit_ids[index]
     }
 
-    pub(super) fn reachable_from(&self, unit_id: &str) -> &[usize] {
-        self.unit_index(unit_id)
-            .map(|index| self.reachable_by_component[self.component_of[index]].as_slice())
-            .unwrap_or(&[])
+    pub(super) fn reachable_from(&self, unit_id: &str) -> Vec<usize> {
+        let Some(index) = self.unit_index(unit_id) else {
+            return Vec::new();
+        };
+        self.reachable_by_component[self.component_of[index]]
+            .iter()
+            .map(|index| index as usize)
+            .collect()
     }
 
     pub(super) fn reachable_from_many<'a, I>(&self, unit_ids: I) -> Vec<usize>
     where
         I: IntoIterator<Item = &'a str>,
     {
-        let mut result = Vec::new();
+        let mut result = RoaringBitmap::new();
         for unit_id in unit_ids {
-            merge_sorted(&mut result, self.reachable_from(unit_id));
+            let Some(index) = self.unit_index(unit_id) else {
+                continue;
+            };
+            result |= &self.reachable_by_component[self.component_of[index]];
         }
-        result
+        result.iter().map(|index| index as usize).collect()
+    }
+}
+
+/// 두 SCC의 도달 집합을 한쪽 복사 없이 합친다.
+///
+/// `RoaringBitmap`은 압축된 집합 union을 제공하므로 긴 DAG에서 매번
+/// 정렬된 `Vec` 전체를 새로 만드는 O(n²) 복사와 할당을 피한다.
+fn union_component_sets(
+    reachable_by_component: &mut [RoaringBitmap],
+    target: usize,
+    source: usize,
+) {
+    debug_assert_ne!(target, source);
+    if target < source {
+        let (left, right) = reachable_by_component.split_at_mut(source);
+        left[target] |= &right[0];
+    } else {
+        let (left, right) = reachable_by_component.split_at_mut(target);
+        right[0] |= &left[source];
     }
 }
 
@@ -201,53 +238,65 @@ fn topological_order(outgoing: &[Vec<usize>]) -> Vec<usize> {
     order
 }
 
-fn merge_sorted(target: &mut Vec<usize>, source: &[usize]) {
-    if source.is_empty() {
-        return;
-    }
-    if target.is_empty() {
-        target.extend_from_slice(source);
-        return;
-    }
-    let mut merged = Vec::with_capacity(target.len() + source.len());
-    let mut left = 0;
-    let mut right = 0;
-    while left < target.len() || right < source.len() {
-        let next = match (target.get(left), source.get(right)) {
-            (Some(&left_value), Some(&right_value)) => {
-                if left_value <= right_value {
-                    left += 1;
-                    left_value
-                } else {
-                    right += 1;
-                    right_value
-                }
-            }
-            (Some(&left_value), None) => {
-                left += 1;
-                left_value
-            }
-            (None, Some(&right_value)) => {
-                right += 1;
-                right_value
-            }
-            (None, None) => break,
-        };
-        if merged.last().copied() != Some(next) {
-            merged.push(next);
-        }
-    }
-    *target = merged;
-}
-
 #[cfg(test)]
 mod tests {
-    use super::merge_sorted;
+    use super::ReachabilityIndex;
+    use crate::facts::SourceSpan;
+    use crate::facts::{
+        CodeUnit, CodeUnitKind, FactStore, Reference, ReferenceKind, ResolutionStatus,
+    };
+    use crate::model::Language;
+    use std::collections::BTreeMap;
 
     #[test]
-    fn 정렬된_도달집합을_중복없이_병합한다() {
-        let mut target = vec![1, 3, 7];
-        merge_sorted(&mut target, &[2, 3, 4, 7, 9]);
-        assert_eq!(target, [1, 2, 3, 4, 7, 9]);
+    fn 긴_호출체인의_도달집합을_정확히_계산한다() {
+        let mut units = BTreeMap::new();
+        let mut references = Vec::new();
+        for index in 0..64 {
+            let id = format!("unit-{index}");
+            units.insert(
+                id.clone(),
+                CodeUnit {
+                    id: id.clone(),
+                    kind: CodeUnitKind::Function,
+                    name: id.clone(),
+                    qualified_name: id.clone(),
+                    file_id: "file".into(),
+                    relative_path: "chain.ts".into(),
+                    language: Language::TypeScript,
+                    parent_id: None,
+                    span: SourceSpan::new("file", "chain.ts", 1, 1, 1, 1),
+                    body_span: None,
+                    signature: None,
+                    parameters: Vec::new(),
+                    return_type: None,
+                    visibility: Default::default(),
+                    modifiers: Vec::new(),
+                    exported: false,
+                },
+            );
+            if index + 1 < 64 {
+                references.push(Reference {
+                    id: format!("reference-{index}"),
+                    source_unit_id: id,
+                    target_unit_id: Some(format!("unit-{}", index + 1)),
+                    candidate_unit_ids: Vec::new(),
+                    target_name: format!("unit-{}", index + 1),
+                    kind: ReferenceKind::Call,
+                    status: ResolutionStatus::Confirmed,
+                    evidence: Vec::new(),
+                });
+            }
+        }
+
+        let index = ReachabilityIndex::build(&FactStore {
+            units,
+            references,
+            ..FactStore::default()
+        });
+        let reachable = index.reachable_from("unit-0");
+        assert_eq!(reachable.len(), 64);
+        assert_eq!(reachable.first(), Some(&0));
+        assert_eq!(reachable.last(), Some(&63));
     }
 }
