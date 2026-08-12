@@ -21,6 +21,10 @@ pub(super) fn extract_line_facts(
         .route_rules
         .iter()
         .filter(|rule| rule.languages.iter().any(|key| key == language_key))
+        // 지원 언어의 route는 AST·framework adapter가 소유한다. 공통
+        // 정규식은 주석·문자열·일반 함수 호출을 route로 오인하기 쉬워서
+        // Unknown DSL과 C/C++의 명시적인 route macro만 보조한다.
+        .filter(|rule| line_route_rule_allowed(language, &rule.pattern))
         .filter_map(|rule| match Regex::new(&rule.pattern) {
             Ok(pattern) => Some((pattern, rule.kind)),
             Err(error) => {
@@ -265,6 +269,13 @@ fn java_annotation_route(line: &str, parser_policy: &ParserPolicy) -> Option<(St
         "putmapping" => Some("PUT"),
         "patchmapping" => Some("PATCH"),
         "deletemapping" => Some("DELETE"),
+        "get" => Some("GET"),
+        "post" => Some("POST"),
+        "put" => Some("PUT"),
+        "patch" => Some("PATCH"),
+        "delete" => Some("DELETE"),
+        "head" => Some("HEAD"),
+        "path" | "controller" => Some(parser_policy.default_http_method.as_str()),
         "requestmapping" => None,
         _ => return None,
     };
@@ -308,6 +319,60 @@ fn java_annotation_route(line: &str, parser_policy: &ParserPolicy) -> Option<(St
         })
         .unwrap_or_else(|| parser_policy.default_http_method.clone());
     Some((method, path))
+}
+
+fn line_route_rule_allowed(language: Language, pattern: &str) -> bool {
+    if language == Language::Unknown {
+        return true;
+    }
+    if language == Language::Java {
+        // Spring WebFlux의 `RequestPredicates.GET("/path")`와 JAX-RS/
+        // Quarkus의 `@GET`·`@Path`는 호출/annotation 조합을 별도 adapter가
+        // 아직 완전히 복원하지 못하는 정적 경계다. 이름이 고정된 Java
+        // annotation/DSL만 보조하고 일반 `route(...)` 정규식은 막는다.
+        let pattern = pattern.to_ascii_lowercase();
+        return pattern.contains("requestpredicates")
+            || pattern.contains("getmapping")
+            || pattern.contains("postmapping")
+            || pattern.contains("putmapping")
+            || pattern.contains("patchmapping")
+            || pattern.contains("deletemapping")
+            || pattern.contains("requestmapping")
+            || pattern.contains("@path")
+            || pattern.contains("@controller")
+            || pattern.contains("@(?:(get|post|put|patch|delete|head)");
+    }
+    if language == Language::CSharp {
+        let pattern = pattern.to_ascii_lowercase();
+        // ASP.NET attribute route는 C# AST의 decorator와 framework
+        // detection이 서로 다른 파일/프로젝트 경계에 있을 수 있어,
+        // 이름이 고정된 attribute 정규식만 보조적으로 허용한다.
+        return [
+            "httpget",
+            "httppost",
+            "httpput",
+            "httppatch",
+            "httpdelete",
+            "httphead",
+            "route",
+        ]
+        .iter()
+        .any(|marker| pattern.contains(marker));
+    }
+    if language == Language::Rust {
+        let pattern = pattern.to_ascii_lowercase();
+        // Rocket/Actix처럼 attribute가 route 자체를 정의하는 경우는
+        // framework detection 없이도 원시 HTTP 경계를 잃지 않도록
+        // 고정된 HTTP attribute 규칙만 허용한다.
+        return pattern.contains("#\\[(get|post|put|patch|delete|head)");
+    }
+    if !matches!(language, Language::C | Language::Cpp) {
+        return false;
+    }
+    let pattern = pattern.to_ascii_lowercase();
+    ["crow_route", "add_method_to", "method_add"]
+        .iter()
+        .any(|marker| pattern.contains(marker))
 }
 
 fn quoted_literal(value: &str) -> Option<String> {

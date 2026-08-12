@@ -49,7 +49,8 @@ pub fn add_call_routes(
         .collect::<HashSet<_>>();
     let calls = facts.call_sites.clone();
     for call in &calls {
-        if !applicability.applies(facts, &call.source_unit_id, rule.framework_id) {
+        let applies = applicability.applies(facts, &call.source_unit_id, rule.framework_id);
+        if !applies {
             continue;
         }
         let call_name = call_method_name(&call.callee);

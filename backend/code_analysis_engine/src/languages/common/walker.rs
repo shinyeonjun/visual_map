@@ -84,7 +84,7 @@ pub(super) fn walk_tree(
                     qualified_names.insert(id.clone(), qualified_name.clone());
                     bundle.units.push(CodeUnit {
                         id: id.clone(),
-                        kind,
+                        kind: kind.clone(),
                         name: name.clone(),
                         qualified_name,
                         file_id: file.file_id.clone(),
@@ -93,7 +93,7 @@ pub(super) fn walk_tree(
                         parent_id,
                         span,
                         body_span,
-                        signature: (!header.is_empty()).then_some(header),
+                        signature: (!header.is_empty()).then_some(header.clone()),
                         parameters,
                         return_type,
                         visibility,
@@ -106,7 +106,14 @@ pub(super) fn walk_tree(
                     flow_owner_for_children = Some(id.clone());
                 }
 
-                if name == "main" {
+                if is_language_main_entrypoint(
+                    file.language,
+                    &kind,
+                    &header,
+                    &current_parent,
+                    &bundle.units,
+                    &name,
+                ) {
                     bundle.entrypoints.push(Entrypoint {
                         id: stable_id("entry", &format!("{}:main", file.file_id)),
                         unit_id: id,
@@ -199,4 +206,57 @@ pub(super) fn walk_tree(
             ));
         }
     }
+}
+
+fn is_language_main_entrypoint(
+    language: crate::model::Language,
+    kind: &CodeUnitKind,
+    header: &str,
+    parent_id: &str,
+    units: &[CodeUnit],
+    name: &str,
+) -> bool {
+    if name != "main"
+        || !matches!(
+            kind,
+            CodeUnitKind::Function | CodeUnitKind::Method | CodeUnitKind::Constructor
+        )
+    {
+        return false;
+    }
+
+    let parent_kind = units
+        .iter()
+        .find(|unit| unit.id == parent_id)
+        .map(|unit| &unit.kind);
+    let top_level = matches!(
+        parent_kind,
+        Some(
+            CodeUnitKind::File
+                | CodeUnitKind::Module
+                | CodeUnitKind::Package
+                | CodeUnitKind::Namespace
+        )
+    );
+
+    match language {
+        crate::model::Language::C
+        | crate::model::Language::Cpp
+        | crate::model::Language::Go
+        | crate::model::Language::Rust
+        | crate::model::Language::Dart => top_level,
+        crate::model::Language::Java | crate::model::Language::CSharp => {
+            !top_level && has_static_modifier(header)
+        }
+        crate::model::Language::JavaScript
+        | crate::model::Language::TypeScript
+        | crate::model::Language::Python
+        | crate::model::Language::Unknown => false,
+    }
+}
+
+fn has_static_modifier(header: &str) -> bool {
+    header
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .any(|token| token.eq_ignore_ascii_case("static"))
 }

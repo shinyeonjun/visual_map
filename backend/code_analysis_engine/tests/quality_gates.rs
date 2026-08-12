@@ -93,6 +93,49 @@ export { createValue as valueFactory };
 }
 
 #[test]
+fn 일반_문자열의_route와_ecma_main은_진입점으로_오인하지_않는다() {
+    let root = temporary_project("entrypoint-negative");
+    fs::write(
+        root.join("plain.ts"),
+        r#"
+const documentation = "app.get('/not-a-route')";
+export function main() { return documentation; }
+"#,
+    )
+    .expect("음성 TypeScript fixture를 써야 한다");
+    fs::write(root.join("real.c"), "int main(void) { return 0; }\n")
+        .expect("C main fixture를 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("분석이 성공해야 한다")
+        .overview
+        .expect("Overview가 있어야 한다");
+
+    assert!(!overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.kind == code_analysis_engine::facts::EntrypointKind::Http
+            && entrypoint.path.as_deref() == Some("/not-a-route")
+    }));
+    assert!(!overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.kind == code_analysis_engine::facts::EntrypointKind::Main
+            && overview
+                .units
+                .iter()
+                .find(|unit| unit.id == entrypoint.unit_id)
+                .is_some_and(|unit| unit.relative_path == "plain.ts")
+    }));
+    assert!(overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.kind == code_analysis_engine::facts::EntrypointKind::Main
+            && overview
+                .units
+                .iter()
+                .find(|unit| unit.id == entrypoint.unit_id)
+                .is_some_and(|unit| unit.relative_path == "real.c")
+    }));
+
+    fs::remove_dir_all(root).expect("음성 fixture를 정리해야 한다");
+}
+
+#[test]
 fn 파일_한도에_도달하면_부분결과와_진단을_반환한다() {
     let root = temporary_project("limits");
     fs::write(root.join("a.ts"), "export function a() { return 1; }\n")
@@ -124,7 +167,6 @@ fn 파일간_호출이_많은_프로젝트도_overview를_완성한다() {
     let result = analyze(AnalysisRequest::new(&root)).expect("대형 결합 fixture를 분석해야 한다");
     let overview = result.overview.expect("Overview가 있어야 한다");
     assert_eq!(overview.coverage.total_files, FILE_COUNT);
-    assert!(overview.coverage.total_entrypoints >= FILE_COUNT);
     assert!(!overview.features.is_empty());
     assert!(overview.features.iter().all(|feature| feature
         .unit_ids
