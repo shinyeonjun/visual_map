@@ -3,12 +3,12 @@
 use crate::domain::membership::DomainMembership;
 use crate::domain::models::{DomainGroup, DomainRelation};
 use crate::facts::FactStore;
-use crate::graph::aggregation::{aggregate as aggregate_graph_edges, AggregatedReference};
+use crate::graph::aggregation::aggregate as aggregate_graph_edges;
 use crate::graph::StaticRelationGraph;
 use std::collections::{HashMap, HashSet};
 
 pub(super) fn aggregate_relations(
-    store: &FactStore,
+    _store: &FactStore,
     graph: &StaticRelationGraph,
     memberships: &[DomainMembership],
     groups: &[DomainGroup],
@@ -20,12 +20,11 @@ pub(super) fn aggregate_relations(
         }
     }
     let group_ids: HashSet<&str> = groups.iter().map(|group| group.id.as_str()).collect();
-    let unit_name_index = UnitNameIndex::new(store);
     let mut aggregated: HashMap<(String, String, String), DomainRelation> = HashMap::new();
     for reference in aggregate_graph_edges(&graph.edges) {
         let source_domain = unit_domains.get(&reference.source_unit_id);
-        let target_unit = resolve_target(&reference, &unit_name_index);
-        let target_domain = target_unit
+        let target_domain = reference
+            .target_unit_id
             .as_deref()
             .and_then(|unit_id| unit_domains.get(unit_id));
         let (Some(source_domain), Some(target_domain)) = (source_domain, target_domain) else {
@@ -62,45 +61,113 @@ pub(super) fn aggregate_relations(
     relations
 }
 
-struct UnitNameIndex {
-    by_name: HashMap<String, Vec<String>>,
-}
-
-impl UnitNameIndex {
-    fn new(store: &FactStore) -> Self {
-        let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
-        for (id, unit) in &store.units {
-            by_name
-                .entry(unit.name.to_ascii_lowercase())
-                .or_default()
-                .push(id.clone());
-        }
-        for ids in by_name.values_mut() {
-            ids.sort();
-        }
-        Self { by_name }
-    }
-}
-
-fn resolve_target(reference: &AggregatedReference, index: &UnitNameIndex) -> Option<String> {
-    if let Some(target_id) = &reference.target_unit_id {
-        return Some(target_id.clone());
-    }
-    let target = reference.target_name.to_ascii_lowercase();
-    let mut best_id: Option<&String> = None;
-    for offset in target.char_indices().map(|(offset, _)| offset) {
-        let suffix = &target[offset..];
-        if let Some(ids) = index.by_name.get(suffix) {
-            for id in ids {
-                if best_id.is_none_or(|best| id < best) {
-                    best_id = Some(id);
-                }
-            }
-        }
-    }
-    best_id.cloned()
-}
-
 fn relation_kind(kind: &crate::facts::ReferenceKind) -> String {
     format!("{kind:?}").to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::aggregate_relations;
+    use crate::domain::confidence::{DomainConfidence, DomainStatus};
+    use crate::domain::membership::{DomainMembership, MembershipKind};
+    use crate::domain::models::{DomainGroup, DomainKind};
+    use crate::facts::{FactStore, Reference, ReferenceKind, ResolutionStatus};
+    use crate::graph::StaticRelationGraph;
+    use std::collections::BTreeSet;
+
+    fn group(id: &str) -> DomainGroup {
+        DomainGroup {
+            id: id.to_string(),
+            key: id.to_string(),
+            label: id.to_string(),
+            kind: DomainKind::Business,
+            status: DomainStatus::Candidate,
+            confidence: DomainConfidence {
+                level: "medium".to_string(),
+                score: 1,
+                signal_families: BTreeSet::new(),
+            },
+            primary_unit_ids: Vec::new(),
+            shared_unit_ids: Vec::new(),
+            entrypoint_ids: Vec::new(),
+            feature_ids: Vec::new(),
+            resource_ids: Vec::new(),
+            evidence: Vec::new(),
+            summary: None,
+        }
+    }
+
+    fn membership(unit_id: &str, domain_id: &str) -> DomainMembership {
+        DomainMembership {
+            unit_id: unit_id.to_string(),
+            domain_id: Some(domain_id.to_string()),
+            domain_ids: vec![domain_id.to_string()],
+            kind: MembershipKind::Primary,
+            score: 1,
+        }
+    }
+
+    #[test]
+    fn unresolved_reference는_이름_suffix로_도메인_관계를_만들지_않는다() {
+        let graph = StaticRelationGraph {
+            node_ids: vec!["source".to_string()],
+            edges: vec![Reference {
+                id: "reference:unresolved".to_string(),
+                source_unit_id: "source".to_string(),
+                target_unit_id: None,
+                candidate_unit_ids: Vec::new(),
+                target_name: "Service.handle".to_string(),
+                kind: ReferenceKind::Call,
+                status: ResolutionStatus::Unknown,
+                evidence: Vec::new(),
+            }],
+            dynamic_edge_ids: Vec::new(),
+            unresolved_edge_ids: vec!["reference:unresolved".to_string()],
+        };
+
+        let relations = aggregate_relations(
+            &FactStore::default(),
+            &graph,
+            &[
+                membership("source", "domain-a"),
+                membership("handle", "domain-b"),
+            ],
+            &[group("domain-a"), group("domain-b")],
+        );
+
+        assert!(relations.is_empty());
+    }
+
+    #[test]
+    fn confirmed_reference만_확정된_도메인_관계가_된다() {
+        let graph = StaticRelationGraph {
+            node_ids: vec!["source".to_string(), "target".to_string()],
+            edges: vec![Reference {
+                id: "reference:confirmed".to_string(),
+                source_unit_id: "source".to_string(),
+                target_unit_id: Some("target".to_string()),
+                candidate_unit_ids: Vec::new(),
+                target_name: "Service.handle".to_string(),
+                kind: ReferenceKind::Call,
+                status: ResolutionStatus::Confirmed,
+                evidence: Vec::new(),
+            }],
+            dynamic_edge_ids: Vec::new(),
+            unresolved_edge_ids: Vec::new(),
+        };
+
+        let relations = aggregate_relations(
+            &FactStore::default(),
+            &graph,
+            &[
+                membership("source", "domain-a"),
+                membership("target", "domain-b"),
+            ],
+            &[group("domain-a"), group("domain-b")],
+        );
+
+        assert_eq!(relations.len(), 1);
+        assert_eq!(relations[0].source_domain_id, "domain-a");
+        assert_eq!(relations[0].target_domain_id, "domain-b");
+    }
 }
