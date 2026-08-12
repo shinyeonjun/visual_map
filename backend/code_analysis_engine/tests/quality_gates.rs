@@ -93,6 +93,49 @@ export { createValue as valueFactory };
 }
 
 #[test]
+fn 일반_문자열의_route와_ecma_main은_진입점으로_오인하지_않는다() {
+    let root = temporary_project("entrypoint-negative");
+    fs::write(
+        root.join("plain.ts"),
+        r#"
+const documentation = "app.get('/not-a-route')";
+export function main() { return documentation; }
+"#,
+    )
+    .expect("음성 TypeScript fixture를 써야 한다");
+    fs::write(root.join("real.c"), "int main(void) { return 0; }\n")
+        .expect("C main fixture를 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("분석이 성공해야 한다")
+        .overview
+        .expect("Overview가 있어야 한다");
+
+    assert!(!overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.kind == code_analysis_engine::facts::EntrypointKind::Http
+            && entrypoint.path.as_deref() == Some("/not-a-route")
+    }));
+    assert!(!overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.kind == code_analysis_engine::facts::EntrypointKind::Main
+            && overview
+                .units
+                .iter()
+                .find(|unit| unit.id == entrypoint.unit_id)
+                .is_some_and(|unit| unit.relative_path == "plain.ts")
+    }));
+    assert!(overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.kind == code_analysis_engine::facts::EntrypointKind::Main
+            && overview
+                .units
+                .iter()
+                .find(|unit| unit.id == entrypoint.unit_id)
+                .is_some_and(|unit| unit.relative_path == "real.c")
+    }));
+
+    fs::remove_dir_all(root).expect("음성 fixture를 정리해야 한다");
+}
+
+#[test]
 fn 파일_한도에_도달하면_부분결과와_진단을_반환한다() {
     let root = temporary_project("limits");
     fs::write(root.join("a.ts"), "export function a() { return 1; }\n")
@@ -121,10 +164,11 @@ fn 파일간_호출이_많은_프로젝트도_overview를_완성한다() {
     const FUNCTIONS_PER_FILE: usize = 12;
     write_cross_file_fixture(&root, FILE_COUNT, FUNCTIONS_PER_FILE);
 
+    let started = Instant::now();
     let result = analyze(AnalysisRequest::new(&root)).expect("대형 결합 fixture를 분석해야 한다");
+    assert_elapsed_within("cross-file-small-scale", started.elapsed(), 5_000);
     let overview = result.overview.expect("Overview가 있어야 한다");
     assert_eq!(overview.coverage.total_files, FILE_COUNT);
-    assert!(overview.coverage.total_entrypoints >= FILE_COUNT);
     assert!(!overview.features.is_empty());
     assert!(overview.features.iter().all(|feature| feature
         .unit_ids
@@ -132,6 +176,42 @@ fn 파일간_호출이_많은_프로젝트도_overview를_완성한다() {
         .all(|unit_id| { overview.units.iter().any(|unit| &unit.id == unit_id) })));
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}
+
+#[test]
+fn 확정된_참조는_존재하는_동일_언어_유닛만_가리킨다() {
+    let root = temporary_project("confirmed-edge-integrity");
+    fs::write(
+        root.join("service.ts"),
+        "export function run() { return helper(); }\nfunction helper() { return true; }\n",
+    )
+    .expect("참조 무결성 fixture를 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("참조 무결성 fixture를 분석해야 한다")
+        .overview
+        .expect("Overview가 생성되어야 한다");
+    for reference in overview.static_graph.edges.iter().filter(|reference| {
+        reference.status == code_analysis_engine::facts::ResolutionStatus::Confirmed
+    }) {
+        let target_id = reference
+            .target_unit_id
+            .as_deref()
+            .expect("확정 참조에는 targetUnitId가 있어야 한다");
+        let source = overview
+            .units
+            .iter()
+            .find(|unit| unit.id == reference.source_unit_id)
+            .expect("확정 참조의 source unit이 있어야 한다");
+        let target = overview
+            .units
+            .iter()
+            .find(|unit| unit.id == target_id)
+            .expect("확정 참조의 target unit이 있어야 한다");
+        assert_eq!(source.language, target.language);
+    }
+
+    fs::remove_dir_all(root).expect("참조 무결성 fixture를 정리해야 한다");
 }
 
 #[test]

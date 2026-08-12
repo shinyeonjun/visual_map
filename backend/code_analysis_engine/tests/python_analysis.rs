@@ -135,6 +135,73 @@ if __name__ == "__main__":
 }
 
 #[test]
+fn fastapi_중첩_router의_부모와_mount_prefix를_합성한다() {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("visual-map-fastapi-nested-router-{suffix}"));
+    fs::create_dir_all(&root).expect("FastAPI 임시 프로젝트를 만들어야 한다");
+    fs::write(
+        root.join("routes.py"),
+        r#"
+from fastapi import APIRouter, FastAPI
+
+app = FastAPI()
+router = APIRouter(prefix="/v1")
+subrouter = APIRouter()
+router.include_router(subrouter)
+app.include_router(router, prefix="/api")
+
+@subrouter.get("/users")
+def users():
+    return {"ok": True}
+"#,
+    )
+    .expect("FastAPI fixture를 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("FastAPI 분석이 성공해야 한다")
+        .overview
+        .expect("Overview가 생성되어야 한다");
+    assert!(overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.framework_id.as_deref() == Some("python.fastapi")
+            && entrypoint.path.as_deref() == Some("/api/v1/users")
+    }));
+
+    fs::remove_dir_all(root).expect("FastAPI fixture를 정리해야 한다");
+}
+
+#[test]
+fn sql_table_추출은_선택_구문을_테이블로_오인하지_않는다() {
+    let source = r#"
+SELECT * FROM users JOIN orders ON orders.user_id = users.id;
+CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER);
+UPDATE users SET active = 1 WHERE id = 1;
+"#;
+    let bundle = analyze_file(&python_file(), source, &AnalysisConfig::default());
+    let tables = bundle
+        .resources
+        .iter()
+        .filter(|resource| resource.kind == ResourceKind::Table)
+        .collect::<Vec<_>>();
+
+    assert!(tables.iter().any(|resource| {
+        resource.name == "users" && resource.mode == code_analysis_engine::facts::AccessMode::Read
+    }));
+    assert!(tables.iter().any(|resource| {
+        resource.name == "orders" && resource.mode == code_analysis_engine::facts::AccessMode::Read
+    }));
+    assert!(tables.iter().any(|resource| {
+        resource.name == "audit_logs"
+            && resource.mode == code_analysis_engine::facts::AccessMode::Write
+    }));
+    assert!(tables
+        .iter()
+        .all(|resource| { !matches!(resource.name.as_str(), "if" | "set" | "skip" | "locked") }));
+}
+
+#[test]
 fn python의_protocol_enum_init을_공통_유닛종류로_정규화한다() {
     let source = r#"from enum import Enum
 from typing import Protocol

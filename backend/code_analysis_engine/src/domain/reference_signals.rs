@@ -1,7 +1,7 @@
 //! 참조 이름을 기존 도메인 후보와 연결하는 신호 생성 책임.
 
 use crate::config::DomainPolicy;
-use crate::facts::FactStore;
+use crate::facts::{FactStore, ResolutionStatus};
 use std::collections::{HashMap, HashSet};
 
 use super::signals::{tokenize, DomainSignal, DomainSignalKind};
@@ -22,6 +22,12 @@ pub(super) fn append(
     }
 
     for reference in &store.references {
+        // 외부·동적·미해결 이름은 프로젝트 도메인을 증명하지 않는다.
+        // 이름만으로 `get`, `helper`, 라이브러리 API가 도메인 점수를
+        // 부풀리지 않도록 내부 확정 참조만 보강 신호로 사용한다.
+        if reference.status != ResolutionStatus::Confirmed || reference.target_unit_id.is_none() {
+            continue;
+        }
         let mut seen_tokens = HashSet::new();
         for token in tokenize(&reference.target_name, domain_policy) {
             if !seen_tokens.insert(token.clone()) {

@@ -72,6 +72,14 @@ pub enum FeatureStatus {
     Unknown,
 }
 
+/// 기능을 기본 Overview에 노출할 때 사용하는 정적 가시성이다.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FeatureVisibility {
+    UserFacing,
+    Internal,
+}
+
 /// 기능의 정적 근거 품질을 수치가 아니라 구성 요소별로 보존한다.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +103,7 @@ pub struct FeatureGroup {
     pub label: String,
     pub kind: FeatureKind,
     pub status: FeatureStatus,
+    pub visibility: FeatureVisibility,
     pub confidence: FeatureConfidence,
     pub domain_ids: Vec<String>,
     /// 응답에 직접 materialize한 유닛이다. 대형 operation은 전체 전이

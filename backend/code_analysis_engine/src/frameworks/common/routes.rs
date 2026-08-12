@@ -49,7 +49,8 @@ pub fn add_call_routes(
         .collect::<HashSet<_>>();
     let calls = facts.call_sites.clone();
     for call in &calls {
-        if !applicability.applies(facts, &call.source_unit_id, rule.framework_id) {
+        let applies = applicability.applies(facts, &call.source_unit_id, rule.framework_id);
+        if !applies {
             continue;
         }
         let call_name = call_method_name(&call.callee);
@@ -117,19 +118,19 @@ pub fn add_call_routes(
             .entrypoints
             .iter()
             .filter(|entrypoint| {
-                entrypoint.framework_id.is_none()
+                (entrypoint.framework_id.is_none()
                     && entrypoint.unit_id == unit_id
                     && entrypoint.kind == rule.kind
                     && entrypoint.path == full_path
-                    && entrypoint.method.as_deref() == Some(method.as_str())
-                    || entrypoint
+                    && entrypoint.method.as_deref() == Some(method.as_str()))
+                    || (entrypoint
                         .evidence
                         .first()
                         .is_some_and(|evidence| evidence.kind == "route")
                         && entrypoint.unit_id == unit_id
                         && entrypoint.kind == rule.kind
                         && entrypoint.path == full_path
-                        && entrypoint.method.as_deref() == Some(method.as_str())
+                        && entrypoint.method.as_deref() == Some(method.as_str()))
             })
             .map(|entrypoint| entrypoint.id.clone())
             .collect::<HashSet<_>>();

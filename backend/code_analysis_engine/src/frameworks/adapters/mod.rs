@@ -29,6 +29,7 @@ pub struct CatalogFrameworkAdapter;
 impl FrameworkFactAdapter for CatalogFrameworkAdapter {
     fn enrich(&self, facts: &mut FactStore, detections: &[FrameworkDetection]) {
         crate::frameworks::common::attach_framework_ids(facts, detections);
+        crate::frameworks::common::events::add_language_callback_events(facts);
         run_profiled("c_family", facts, detections, c_family::enrich);
         run_profiled("csharp", facts, detections, csharp::enrich);
         run_profiled("dart", facts, detections, dart::enrich);

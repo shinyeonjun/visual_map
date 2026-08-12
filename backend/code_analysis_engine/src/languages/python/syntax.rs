@@ -78,6 +78,10 @@ pub(super) fn extract_call_site_facts(
         .child_by_field_name("arguments")
         .map(|arguments| split_arguments(&node_text(arguments, source)))
         .unwrap_or_default();
+    let receiver = callee
+        .rsplit_once('.')
+        .map(|(receiver, _)| receiver.to_string())
+        .filter(|receiver| !receiver.is_empty());
     let assigned_name = node
         .parent()
         .and_then(|parent| {
@@ -101,6 +105,7 @@ pub(super) fn extract_call_site_facts(
         ),
         source_unit_id: unit_for_position(unit_index, node.start_position()),
         callee,
+        receiver,
         arguments,
         assigned_name,
         evidence: vec![Evidence::new("callSite", node_text(node, source), span)],

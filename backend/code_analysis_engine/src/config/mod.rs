@@ -9,7 +9,7 @@ mod policies;
 pub use loader::{AnalysisConfig, ConfigLoadError};
 pub use policies::{
     AnalysisLimits, DomainPolicy, FrameworkPolicy, LanguageRegistry, ParserPolicy, PathPolicy,
-    ResourceRule, RoutePatternKind, RouteRule, ScanPolicy, SemanticPolicy,
+    ResourceNameSource, ResourceRule, RoutePatternKind, RouteRule, ScanPolicy, SemanticPolicy,
 };
 
 #[cfg(test)]

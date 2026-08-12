@@ -35,6 +35,7 @@ mod tests {
             diagnostics: Vec::new(),
             elapsed_ms: 0,
             overview: Some(OverviewResponse::default()),
+            preprocessed_overview: None,
         };
 
         let context = build_context(result.overview.as_ref().expect("overview"));
