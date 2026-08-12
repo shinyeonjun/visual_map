@@ -10,6 +10,8 @@ pub enum ResourceKind {
     Cache,
     ExternalApi,
     Network,
+    WebSocket,
+    Process,
     Environment,
     EventTopic,
     File,

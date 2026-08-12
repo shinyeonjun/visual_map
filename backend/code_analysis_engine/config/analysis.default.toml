@@ -56,7 +56,7 @@ confirmedMinimumScore = 8
 sharedRatioNumerator = 3
 sharedRatioDenominator = 4
 sharedMinimumScore = 3
-genericTokens = ["src","lib","app","apps","main","index","test","tests","spec","fixture","fixtures","from","adapter","adapters","aggregate","aggregation","analysis","analyze","analyzer","analyzers","access","all","argument","arguments","array","ast","async","attribute","attributes","build","call","callback","candidate","candidates","catalog","codex","bundle","capability","capabilities","class","code","compile","collection","cpp","csharp","context","coverage","declaration","declarations","dependency","dependencies","default","detect","detected","detection","detector","diagnostic","diagnostics","domain","dispatch","dispatcher","dynamic","dart","engine","ecma","entry","entries","entrypoint","entrypoints","error","errors","evidence","extension","extensions","fact","facts","file","files","flow","framework","frameworks","function","functions","generic","go","get","graph","group","groups","grouping","collect","confidence","family","fmt","for","import","imports","input","issue","issues","ids","info","internal","join","key","keys","java","javascript","kind","language","languages","line","lines","map","member","members","membership","metadata","merge","method","methods","module","modules","mod","name","names","naming","new","normalize","normalized","node","nodes","option","options","output","package","packages","python","parameter","parameters","parser","parsers","path","paths","pipeline","project","projects","read","provider","providers","reference","references","relation","relations","resource","resources","result","results","request","route","routes","overview","progress","projector","proposal","registry","resolution","resolve","rust","scan","schema","schemas","semantic","signal","signals","snapshot","source","span","status","stable","stages","store","structure","target","targets","token","tokens","tree","trees","typescript","type","types","suggestion","summarize","summary","temporary","unit","units","unknown","value","values","validate","validated","validator","view","views","warning","warnings","worse","service","services","controller","controllers","handler","handlers","manager","factory","helper","helpers","util","utils","common","shared","base","impl","repository","repositories","model","models","dto","infra","infrastructure","config","configuration","logging","logger","database","transaction","transactions","http","api","apis","com","org","net"]
+genericTokens = ["src","lib","app","apps","main","index","test","tests","spec","fixture","fixtures","from","adapter","adapters","aggregate","aggregation","analysis","analyze","analyzer","analyzers","access","all","argument","arguments","array","ast","async","attribute","attributes","build","call","callback","candidate","candidates","catalog","codex","bundle","capability","capabilities","class","code","compile","collection","cpp","csharp","context","coverage","declaration","declarations","dependency","dependencies","default","detect","detected","detection","detector","diagnostic","diagnostics","domain","dispatch","dispatcher","dynamic","dart","engine","ecma","entry","entries","entrypoint","entrypoints","error","errors","evidence","extension","extensions","fact","facts","file","files","flow","framework","frameworks","function","functions","generic","go","get","graph","group","groups","grouping","collect","confidence","family","fmt","for","import","imports","input","issue","issues","ids","info","internal","join","key","keys","java","javascript","kind","language","languages","line","lines","map","member","members","membership","metadata","merge","method","methods","module","modules","mod","name","names","naming","new","normalize","normalized","node","nodes","option","options","output","package","packages","python","parameter","parameters","parser","parsers","path","paths","pipeline","project","projects","read","provider","providers","reference","references","relation","relations","resource","resources","result","results","request","route","routes","overview","progress","projector","proposal","registry","resolution","resolve","rust","scan","schema","schemas","semantic","signal","signals","snapshot","source","span","status","stable","stages","store","structure","target","targets","token","tokens","tree","trees","typescript","type","types","suggestion","summarize","summary","temporary","unit","units","unknown","value","values","validate","validated","validator","view","views","warning","warnings","worse","service","services","controller","controllers","handler","handlers","manager","factory","helper","helpers","util","utils","common","shared","base","impl","repository","repositories","model","models","dto","infra","infrastructure","config","configuration","logging","logger","database","transaction","transactions","http","api","apis","com","org","net","set","skip","with","post","backend","legacy","rstrip","strip","format","parse","run","load","save","put","delete","create","update","list","item","items","data","state","client","server","frontend","runtime","core","web","ui"]
 crossCuttingKeys = ["common","shared","infra","infrastructure","logging","logger","config","database","transaction","http"]
 
 [parser]
@@ -158,36 +158,51 @@ kind = "methodAndPath"
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
-calleePatterns = ["fetch","axios.get","axios.post","axios.put","axios.patch","axios.delete","axios.request","requests.get","requests.post","requests.put","requests.patch","requests.delete","requests.request","urllib.request.urlopen","http.get","http.post","client.get","client.post","client.request","reqwest::get","HttpClient.GetAsync","HttpClient.PostAsync","Dio.get"]
+calleePatterns = ["axios.get","axios.post","axios.put","axios.patch","axios.delete","axios.request","requests.get","requests.post","requests.put","requests.patch","requests.delete","requests.request","urllib.request.urlopen","http.get","http.post","client.get","client.post","client.request","reqwest::get","HttpClient.GetAsync","HttpClient.PostAsync","Dio.get"]
+kind = "externalApi"
+mode = "readwrite"
+argumentIndex = 0
+
+[[parser.resourceRules]]
+languages = ["javascript","typescript"]
+calleePatterns = ["fetch"]
 kind = "externalApi"
 mode = "readwrite"
 argumentIndex = 0
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
-calleePatterns = ["redis.get","redis.set","Redis.get","Redis.set","cache.get","cache.set","cache.delete","Cache.get","Cache.set","hget","hset","getex","setex"]
+calleePatterns = ["redis.get","redis.set","Redis.get","Redis.set","cache.get","cache.set","cache.delete","Cache.get","Cache.set"]
 kind = "cache"
 mode = "readwrite"
 argumentIndex = 0
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
-calleePatterns = ["fs.readFile","fs.readFileSync","fs.writeFile","fs.writeFileSync","readFile","writeFile","open","os.open","Path.read_text","Path.write_text","File.open","File::open","std::fs::read_to_string"]
+calleePatterns = ["fs.readFile","fs.readFileSync","fs.writeFile","fs.writeFileSync","os.open","Path.read_text","Path.write_text","File.open","File::open","std::fs::read_to_string"]
 kind = "file"
 mode = "readwrite"
 argumentIndex = 0
+nameSource = "literalOrReceiver"
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
-calleePatterns = ["publish","emit","send","subscribe","consume","EventBus.publish","eventBus.emit","bus.publish","bus.subscribe"]
+calleePatterns = ["EventBus.publish","eventBus.emit","bus.publish","bus.subscribe"]
 kind = "eventTopic"
 mode = "readwrite"
 argumentIndex = 0
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
-calleePatterns = ["TcpStream::connect","TcpClient.connect","net.Dial","http.Client.Do","Socket.connect","socket.connect","connect","QTcpSocket.connectToHost"]
+calleePatterns = ["TcpStream::connect","TcpClient.connect","net.Dial","http.Client.Do","Socket.connect","socket.connect","QTcpSocket.connectToHost"]
 kind = "network"
+mode = "readwrite"
+argumentIndex = 0
+
+[[parser.resourceRules]]
+languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
+calleePatterns = ["websockets.connect","websocket.connect","WebSocket","WebSocket.connect","ws.connect","WebSocketApp.run_forever"]
+kind = "websocket"
 mode = "readwrite"
 argumentIndex = 0
 
@@ -196,6 +211,13 @@ languages = ["javascript","typescript","python","java","c","cpp","csharp","go","
 calleePatterns = ["os.getenv","os.environ.get","System.getenv","Environment.GetEnvironmentVariable","getenv","os.Getenv","std::env::var","Platform.environment.get"]
 kind = "environment"
 mode = "read"
+argumentIndex = 0
+
+[[parser.resourceRules]]
+languages = ["javascript","typescript","python","java","c","cpp","csharp","go","rust","dart"]
+calleePatterns = ["subprocess.run","subprocess.Popen","Command::new","Command.new","exec.Command","child_process.exec","child_process.spawn","Process.Start"]
+kind = "process"
+mode = "readwrite"
 argumentIndex = 0
 
 [frameworks]

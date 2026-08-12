@@ -35,6 +35,10 @@ pub(super) fn extract(
         let Some(callee) = call_target_name(node, source) else {
             continue;
         };
+        let receiver = callee
+            .rsplit_once('.')
+            .map(|(receiver, _)| receiver.to_string())
+            .filter(|receiver| !receiver.is_empty());
         let arguments = call_arguments(node, source);
         let assigned_name = assigned_name(node, source);
         let span = node_span(node, file);
@@ -45,6 +49,7 @@ pub(super) fn extract(
             ),
             source_unit_id: unit_index.unit_for_line(node.start_position().row as u32 + 1),
             callee,
+            receiver,
             arguments,
             assigned_name,
             evidence: vec![Evidence::new("callSite", node_text(node, source), span)],

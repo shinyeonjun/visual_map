@@ -8,6 +8,7 @@ pub(crate) mod metadata;
 mod normalization;
 mod references;
 mod resources;
+mod sql;
 pub(crate) mod unit_index;
 mod walker;
 

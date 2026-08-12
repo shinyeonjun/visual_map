@@ -82,15 +82,6 @@ impl DomainAnalyzer {
             if candidate_units.is_empty() {
                 continue;
             }
-            let ambiguous = candidate_units
-                .iter()
-                .any(|assignment| assignment.kind == MembershipKind::Shared);
-            let (status, confidence) = calculate(
-                candidate.score,
-                &candidate.signal_families,
-                ambiguous,
-                &self.domain_policy,
-            );
             let primary_unit_ids = candidate_units
                 .iter()
                 .filter(|assignment| {
@@ -98,7 +89,30 @@ impl DomainAnalyzer {
                         && assignment.domain_id.as_deref() == Some(domain_id)
                 })
                 .map(|assignment| assignment.unit_id.clone())
-                .collect();
+                .collect::<Vec<_>>();
+            // 공용 유틸리티 하나가 여러 도메인에 걸친다고 도메인 전체를
+            // Ambiguous로 낮추지 않는다. 해당 후보를 지지하는 primary가
+            // 전혀 없을 때만 경쟁 후보로 간주한다.
+            let has_structural_anchor = candidate
+                .signal_families
+                .contains(&super::signals::DomainSignalKind::Path)
+                || candidate
+                    .signal_families
+                    .contains(&super::signals::DomainSignalKind::Entrypoint)
+                || candidate
+                    .signal_families
+                    .contains(&super::signals::DomainSignalKind::Resource);
+            let ambiguous = primary_unit_ids.is_empty()
+                && !has_structural_anchor
+                && candidate_units
+                    .iter()
+                    .any(|assignment| assignment.kind == MembershipKind::Shared);
+            let (status, confidence) = calculate(
+                candidate.score,
+                &candidate.signal_families,
+                ambiguous,
+                &self.domain_policy,
+            );
             let shared_unit_ids = candidate_units
                 .iter()
                 .filter(|assignment| {
@@ -141,7 +155,12 @@ impl DomainAnalyzer {
         let unassigned_unit_ids = assignments
             .iter()
             .filter(|assignment| assignment.domain_id.is_none())
-            .map(|assignment| assignment.unit_id.clone())
+            .filter_map(|assignment| {
+                store
+                    .unit(&assignment.unit_id)
+                    .filter(|unit| !self.path_policy.is_test_path(&unit.relative_path))
+                    .map(|_| assignment.unit_id.clone())
+            })
             .collect();
 
         DomainAnalysisOutput {

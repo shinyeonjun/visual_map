@@ -1,6 +1,6 @@
 //! 설정 기반 외부 자원 접근 추출기.
 
-use crate::config::ResourceRule;
+use crate::config::{ResourceNameSource, ResourceRule};
 use crate::facts::{AccessMode, CallSiteFact, Evidence, FactBundle, ResourceAccess, ResourceKind};
 use crate::languages::common::metadata::stable_id;
 use crate::model::{FileEntry, Language};
@@ -19,15 +19,11 @@ pub(super) fn extract(
                 && rule
                     .callee_patterns
                     .iter()
-                    .any(|pattern| pattern.eq_ignore_ascii_case(&call.callee))
+                    .any(|pattern| callee_matches(pattern, &call.callee))
         }) else {
             continue;
         };
-        let name = call
-            .arguments
-            .get(rule.argument_index)
-            .and_then(|argument| string_literal(argument))
-            .unwrap_or_else(|| "<dynamic>".to_string());
+        let name = resource_name(call, rule);
         let Some(kind) = parse_kind(&rule.kind) else {
             continue;
         };
@@ -63,9 +59,75 @@ pub(super) fn extract(
             unit_id: call.source_unit_id.clone(),
             kind,
             name,
-            mode: parse_mode(&rule.mode),
+            mode: effective_mode(&rule.mode, &call.callee),
             evidence: vec![evidence],
         });
+    }
+}
+
+fn callee_matches(pattern: &str, callee: &str) -> bool {
+    if pattern.eq_ignore_ascii_case(callee) {
+        return true;
+    }
+    let Some((receiver_pattern, method_pattern)) = pattern.rsplit_once(['.', ':']) else {
+        return false;
+    };
+    let Some((_, method)) = callee.rsplit_once(['.', ':']) else {
+        return false;
+    };
+    if !method_pattern.eq_ignore_ascii_case(method) {
+        return false;
+    }
+    let receiver = callee
+        .rsplit_once(['.', ':'])
+        .map(|(value, _)| value)
+        .and_then(|value| {
+            value
+                .rsplit_once(['.', ':'])
+                .map(|(_, name)| name)
+                .or(Some(value))
+        })
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match receiver_pattern.to_ascii_lowercase().as_str() {
+        // `Path.read_text`와 `path.read_text`처럼 표준 파일 receiver의
+        // 타입명/변수명만 허용한다. 임의의 `customer.read_text()`를 파일
+        // 자원으로 올리면 일반 도메인 메서드가 자원으로 오인된다.
+        "path" | "file" => matches!(receiver.as_str(), "path" | "file"),
+        _ => false,
+    }
+}
+
+fn resource_name(call: &CallSiteFact, rule: &ResourceRule) -> String {
+    let argument_name = call
+        .arguments
+        .get(rule.argument_index)
+        .and_then(|argument| string_literal(argument));
+    match rule.name_source {
+        ResourceNameSource::Argument => argument_name,
+        ResourceNameSource::Receiver => call.receiver.clone(),
+        ResourceNameSource::LiteralOrReceiver => argument_name.or_else(|| call.receiver.clone()),
+    }
+    .filter(|name| !name.trim().is_empty())
+    .unwrap_or_else(|| "<dynamic>".to_string())
+}
+
+fn effective_mode(configured: &str, callee: &str) -> AccessMode {
+    let configured = parse_mode(configured);
+    let method = callee
+        .rsplit_once(['.', ':'])
+        .map(|(_, method)| method)
+        .unwrap_or(callee)
+        .to_ascii_lowercase();
+    match method.as_str() {
+        "get" | "read" | "read_text" | "read_to_string" | "exists" | "head" | "subscribe"
+        | "consume" => AccessMode::Read,
+        "set" | "write" | "write_text" | "save" | "delete" | "remove" | "insert" | "update"
+        | "put" | "post" | "patch" | "publish" | "emit" | "send" | "hset" | "setex" => {
+            AccessMode::Write
+        }
+        "request" | "open" | "connect" | "do" => AccessMode::ReadWrite,
+        _ => configured,
     }
 }
 
@@ -89,6 +151,8 @@ fn parse_kind(value: &str) -> Option<ResourceKind> {
         "cache" => Some(ResourceKind::Cache),
         "externalapi" | "external_api" => Some(ResourceKind::ExternalApi),
         "network" => Some(ResourceKind::Network),
+        "websocket" | "web_socket" => Some(ResourceKind::WebSocket),
+        "process" => Some(ResourceKind::Process),
         "environment" | "env" => Some(ResourceKind::Environment),
         "eventtopic" | "event_topic" => Some(ResourceKind::EventTopic),
         "file" => Some(ResourceKind::File),

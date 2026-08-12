@@ -1,3 +1,4 @@
+use code_analysis_engine::facts::{CodeUnitKind, ReferenceKind};
 use code_analysis_engine::{analyze, AnalysisRequest};
 use std::collections::HashSet;
 use std::fs;
@@ -204,6 +205,25 @@ export function dispatch(name: string, request: Request) {
         overview.static_graph.dynamic_edge_ids.len(),
         overview.dynamic_boundary_ids.len()
     );
+    let prepared = result
+        .preprocessed_overview
+        .as_ref()
+        .expect("정적 전처리 Overview가 생성되어야 한다");
+    let prepared_json = serde_json::to_string(prepared).expect("전처리 결과를 직렬화해야 한다");
+    assert_eq!(prepared.schema_version, "prepared-static-overview.v1");
+    assert!(!prepared_json.contains("staticGraph"));
+    assert!(prepared.features.iter().all(|feature| feature
+        .unit_ids
+        .iter()
+        .all(|unit_id| { prepared.units.iter().any(|unit| &unit.id == unit_id) })));
+    assert!(prepared.features.iter().all(|feature| {
+        feature.domain_ids.iter().all(|domain_id| {
+            prepared
+                .domains
+                .iter()
+                .any(|domain| &domain.id == domain_id)
+        })
+    }));
     assert!(result
         .files
         .iter()
@@ -212,6 +232,39 @@ export function dispatch(name: string, request: Request) {
         overview.semantic_status,
         code_analysis_engine::semantic::SemanticStatus::Disabled
     );
+
+    fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}
+
+#[test]
+fn tsx_import와_type_reference가_실제_유닛으로_연결된다() {
+    let root = temporary_project("tsx-type-relation");
+    fs::create_dir_all(root.join("src")).expect("src 디렉터리를 만들어야 한다");
+    fs::write(
+        root.join("src/models.ts"),
+        "export type UserProps = { name: string };\n",
+    )
+    .expect("타입 모델을 써야 한다");
+    fs::write(
+        root.join("src/view.tsx"),
+        "import type { UserProps as CardProps } from \"./models\";\nexport function Card(props: CardProps) { return <div>{props.name}</div>; }\n",
+    )
+    .expect("TSX 화면을 써야 한다");
+
+    let result = analyze(AnalysisRequest::new(&root)).expect("TSX 분석이 성공해야 한다");
+    let overview = result.overview.expect("Overview가 생성되어야 한다");
+    let type_id = overview
+        .units
+        .iter()
+        .find(|unit| unit.kind == CodeUnitKind::TypeAlias && unit.name == "UserProps")
+        .map(|unit| unit.id.clone())
+        .expect("UserProps 타입 유닛이 있어야 한다");
+
+    assert!(overview.static_graph.edges.iter().any(|reference| {
+        reference.kind == ReferenceKind::Uses
+            && reference.target_unit_id.as_deref() == Some(type_id.as_str())
+            && reference.target_name == "CardProps"
+    }));
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
 }

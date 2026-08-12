@@ -27,9 +27,14 @@ pub(super) fn declaration_kind(
             }
         }
         "constructor_declaration" | "constructor" => CodeUnitKind::Constructor,
-        "lambda_expression" | "arrow_function" | "function_expression" | "lambda" => {
-            CodeUnitKind::Lambda
-        }
+        "lambda_expression"
+        | "arrow_function"
+        | "function_expression"
+        | "lambda"
+        | "func_literal"
+        | "closure_expression"
+        | "closure"
+        | "function_literal" => CodeUnitKind::Lambda,
         "class_declaration"
         | "class_definition"
         | "class_specifier"

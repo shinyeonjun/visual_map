@@ -1,8 +1,10 @@
 //! 정규화된 제어 흐름 사실과 호출 참조를 함수별 흐름 그래프로 만든다.
 
 use super::index::FlowInputIndex;
-use super::local::{build_local_edges, make_edge, Event};
-use super::model::{ExecutionFlow, ExecutionFlowGraph, FlowEdgeKind, FlowNode, FlowNodeKind};
+use super::local::{build_local_edges, Event};
+use super::model::{
+    ExecutionFlow, ExecutionFlowGraph, FlowEdgeKind, FlowLink, FlowNode, FlowNodeKind,
+};
 use crate::config::AnalysisLimits;
 use crate::facts::{
     CodeUnit, CodeUnitKind, ControlFlowFact, ControlFlowKind, FactStore, Reference,
@@ -34,32 +36,62 @@ pub(crate) fn build(facts: &FactStore, limits: &AnalysisLimits) -> (ExecutionFlo
         .iter()
         .map(|flow| (flow.owner_unit_id.clone(), flow.exit_node_id.clone()))
         .collect();
+    let flow_ids: HashMap<_, _> = flows
+        .iter()
+        .map(|flow| (flow.owner_unit_id.clone(), flow.id.clone()))
+        .collect();
 
+    let mut links = Vec::new();
     for flow in &mut flows {
-        add_call_edges(flow, &input_index, &entry_nodes, &exit_nodes);
+        add_call_links(
+            flow,
+            &input_index,
+            &flow_ids,
+            &entry_nodes,
+            &exit_nodes,
+            &mut links,
+        );
         sort_flow(flow);
     }
     flows.sort_by(|left, right| left.owner_unit_id.cmp(&right.owner_unit_id));
     let mut remaining_nodes = limits.max_flow_nodes;
     let mut remaining_edges = limits.max_flow_edges;
     for flow in &mut flows {
-        if flow.nodes.len() > remaining_nodes {
-            truncated = true;
-            flow.nodes.truncate(remaining_nodes);
-        }
-        let node_ids: HashSet<_> = flow.nodes.iter().map(|node| node.id.as_str()).collect();
-        if flow.edges.len() > remaining_edges {
-            truncated = true;
-            flow.edges.truncate(remaining_edges);
-        }
-        flow.edges.retain(|edge| {
-            node_ids.contains(edge.source_node_id.as_str())
-                && node_ids.contains(edge.target_node_id.as_str())
-        });
-        remaining_nodes = remaining_nodes.saturating_sub(flow.nodes.len());
-        remaining_edges = remaining_edges.saturating_sub(flow.edges.len());
+        truncated |= limit_flow(flow, &mut remaining_nodes, &mut remaining_edges);
     }
-    (ExecutionFlowGraph { flows }, truncated)
+    // Entry/exit 노드조차 예산에 들어가지 않는 흐름은 부분 그래프로
+    // 내보내면 안 된다. 존재하지 않는 entryNodeId를 프론트가 따라가게
+    // 하는 대신 해당 flow를 생략하고 한도 도달 상태만 보고한다.
+    flows.retain(|flow| !flow.nodes.is_empty());
+    links.retain(|link| {
+        flows.iter().any(|flow| {
+            flow.id == link.source_flow_id
+                && flow.nodes.iter().any(|node| node.id == link.source_node_id)
+        }) && flows.iter().any(|flow| {
+            flow.id == link.target_flow_id
+                && flow
+                    .nodes
+                    .iter()
+                    .any(|node| node.id == link.target_entry_node_id)
+                && flow
+                    .nodes
+                    .iter()
+                    .any(|node| node.id == link.target_exit_node_id)
+        })
+    });
+    for link in &mut links {
+        let return_node_exists = link.return_node_id.as_ref().is_some_and(|return_node_id| {
+            flows.iter().any(|flow| {
+                flow.id == link.source_flow_id
+                    && flow.nodes.iter().any(|node| node.id == *return_node_id)
+            })
+        });
+        if !return_node_exists {
+            link.return_node_id = None;
+        }
+    }
+    links.sort_by(|left, right| left.id.cmp(&right.id));
+    (ExecutionFlowGraph { flows, links }, truncated)
 }
 
 fn build_flow(unit: &CodeUnit, input_index: &FlowInputIndex<'_>) -> ExecutionFlow {
@@ -110,11 +142,13 @@ fn build_flow(unit: &CodeUnit, input_index: &FlowInputIndex<'_>) -> ExecutionFlo
     }
 }
 
-fn add_call_edges(
+fn add_call_links(
     flow: &mut ExecutionFlow,
     input_index: &FlowInputIndex<'_>,
+    flow_ids: &HashMap<String, String>,
     entry_nodes: &HashMap<String, String>,
     exit_nodes: &HashMap<String, String>,
+    links: &mut Vec<FlowLink>,
 ) {
     let node_by_reference: HashMap<&str, &str> = flow
         .nodes
@@ -142,29 +176,93 @@ fn add_call_edges(
         let Some(target_entry) = entry_nodes.get(target_unit_id) else {
             continue;
         };
-        flow.edges.push(make_edge(
-            call_node_id,
-            target_entry,
-            FlowEdgeKind::Call,
-            reference.status.clone(),
-            None,
-            Some(reference.id.clone()),
-        ));
+        let Some(target_exit) = exit_nodes.get(target_unit_id) else {
+            continue;
+        };
+        let Some(target_flow_id) = flow_ids.get(target_unit_id) else {
+            continue;
+        };
+        let return_target = sequential_successors
+            .get(*call_node_id)
+            .cloned()
+            .unwrap_or_else(|| flow.exit_node_id.clone());
+        links.push(FlowLink {
+            id: stable_id(&flow.id, &format!("link:{}", reference.id)),
+            reference_id: reference.id.clone(),
+            source_flow_id: flow.id.clone(),
+            source_node_id: (*call_node_id).to_string(),
+            target_flow_id: target_flow_id.clone(),
+            target_entry_node_id: target_entry.clone(),
+            target_exit_node_id: target_exit.clone(),
+            return_node_id: Some(return_target),
+            status: reference.status.clone(),
+        });
+    }
+}
 
-        if let Some(target_exit) = exit_nodes.get(target_unit_id) {
-            let return_target = sequential_successors
-                .get(*call_node_id)
-                .cloned()
-                .unwrap_or_else(|| flow.exit_node_id.clone());
-            flow.edges.push(make_edge(
-                target_exit,
-                &return_target,
-                FlowEdgeKind::Return,
-                reference.status.clone(),
-                None,
-                Some(reference.id.clone()),
-            ));
-        }
+fn limit_flow(
+    flow: &mut ExecutionFlow,
+    remaining_nodes: &mut usize,
+    remaining_edges: &mut usize,
+) -> bool {
+    let mut truncated = false;
+    if *remaining_nodes < 2 {
+        let had_nodes = !flow.nodes.is_empty();
+        flow.nodes.clear();
+        flow.edges.clear();
+        flow.dynamic_boundary_ids.clear();
+        return had_nodes;
+    }
+    let node_budget = (*remaining_nodes).min(flow.nodes.len());
+    if flow.nodes.len() > node_budget {
+        truncated = true;
+        let mut selected = HashSet::new();
+        selected.insert(flow.entry_node_id.clone());
+        selected.insert(flow.exit_node_id.clone());
+
+        let mut candidates = flow
+            .nodes
+            .iter()
+            .filter(|node| node.id != flow.entry_node_id && node.id != flow.exit_node_id)
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|node| (node_priority(&node.kind), node.id.clone()));
+        let additional = node_budget.saturating_sub(selected.len());
+        selected.extend(
+            candidates
+                .into_iter()
+                .take(additional)
+                .map(|node| node.id.clone()),
+        );
+        flow.nodes.retain(|node| selected.contains(&node.id));
+        flow.dynamic_boundary_ids.retain(|reference_id| {
+            flow.nodes
+                .iter()
+                .any(|node| node.reference_id.as_deref() == Some(reference_id.as_str()))
+        });
+    }
+
+    let node_ids: HashSet<_> = flow.nodes.iter().map(|node| node.id.as_str()).collect();
+    flow.edges.retain(|edge| {
+        node_ids.contains(edge.source_node_id.as_str())
+            && node_ids.contains(edge.target_node_id.as_str())
+    });
+    if flow.edges.len() > *remaining_edges {
+        truncated = true;
+        flow.edges.truncate(*remaining_edges);
+    }
+    *remaining_nodes = remaining_nodes.saturating_sub(flow.nodes.len());
+    *remaining_edges = remaining_edges.saturating_sub(flow.edges.len());
+    truncated
+}
+
+fn node_priority(kind: &FlowNodeKind) -> u8 {
+    match kind {
+        FlowNodeKind::Condition | FlowNodeKind::Switch => 0,
+        FlowNodeKind::Loop => 1,
+        FlowNodeKind::Call | FlowNodeKind::DynamicBoundary => 2,
+        FlowNodeKind::Return | FlowNodeKind::Throw => 3,
+        FlowNodeKind::Break | FlowNodeKind::Continue | FlowNodeKind::Catch => 4,
+        FlowNodeKind::Entry | FlowNodeKind::Exit => 5,
     }
 }
 
@@ -240,6 +338,7 @@ fn exit_node(unit: &CodeUnit, id: &str) -> FlowNode {
 fn sort_flow(flow: &mut ExecutionFlow) {
     flow.nodes.sort_by(|left, right| left.id.cmp(&right.id));
     flow.edges.sort_by(|left, right| left.id.cmp(&right.id));
+    flow.edges.dedup_by(|left, right| left.id == right.id);
     flow.dynamic_boundary_ids.sort();
 }
 

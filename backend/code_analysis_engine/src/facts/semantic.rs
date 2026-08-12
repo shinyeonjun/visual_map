@@ -48,6 +48,8 @@ pub struct CallSiteFact {
     pub id: String,
     pub source_unit_id: String,
     pub callee: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
     pub arguments: Vec<String>,
     pub assigned_name: Option<String>,
     pub evidence: Vec<Evidence>,

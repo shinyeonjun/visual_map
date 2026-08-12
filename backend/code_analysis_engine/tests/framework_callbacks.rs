@@ -117,3 +117,45 @@ class UserCard extends React.Component {}
             && entrypoint.name == "handle"
     }));
 }
+
+#[test]
+fn 언어_공통_이벤트_등록을_정적_경계로_보존한다() {
+    let root = temporary_project();
+    fs::write(
+        root.join("events.ts"),
+        r#"
+export function bind() {
+  window.addEventListener("click", handleClick);
+}
+function handleClick(event: Event) {}
+"#,
+    )
+    .expect("DOM 이벤트 fixture를 써야 한다");
+    fs::write(
+        root.join("window.rs"),
+        r#"
+fn setup(window: Window) {
+  window.on_window_event(|event| handle_window(event));
+}
+fn handle_window(event: Event) {}
+"#,
+    )
+    .expect("Rust window event fixture를 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("분석이 성공해야 한다")
+        .overview
+        .expect("Overview가 생성되어야 한다");
+
+    assert!(overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.kind == EntrypointKind::Event
+            && entrypoint.name == "click"
+            && entrypoint.method.as_deref() == Some("DOM_EVENT_LISTENER")
+    }));
+    assert!(overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.kind == EntrypointKind::Callback
+            && entrypoint.method.as_deref() == Some("TAURI_WINDOW_EVENT")
+    }));
+
+    fs::remove_dir_all(root).expect("이벤트 fixture를 정리해야 한다");
+}

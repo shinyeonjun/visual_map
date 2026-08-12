@@ -92,51 +92,47 @@ pub(crate) fn file_module_name(relative_path: &str) -> String {
 }
 
 fn first_identifier(node: Node<'_>, source: &[u8]) -> Option<String> {
-    if matches!(
-        node.kind(),
-        "identifier"
-            | "field_identifier"
-            | "type_identifier"
-            | "namespace_identifier"
-            | "property_identifier"
-    ) {
-        let text = node_text(node, source).trim().to_string();
-        if !text.is_empty() {
-            return Some(text);
+    let mut pending = vec![node];
+    while let Some(current) = pending.pop() {
+        if is_identifier_kind(current.kind()) {
+            let text = node_text(current, source).trim().to_string();
+            if !text.is_empty() {
+                return Some(text);
+            }
         }
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if let Some(name) = first_identifier(child, source) {
-            return Some(name);
-        }
+        let mut children = current.children(&mut current.walk()).collect::<Vec<_>>();
+        children.reverse();
+        pending.extend(children);
     }
     None
 }
 
 fn last_identifier(node: Node<'_>, source: &[u8]) -> Option<String> {
     let mut last = None;
-    if matches!(
-        node.kind(),
+    let mut pending = vec![node];
+    while let Some(current) = pending.pop() {
+        if is_identifier_kind(current.kind()) {
+            let text = node_text(current, source).trim().to_string();
+            if !text.is_empty() {
+                last = Some(text);
+            }
+        }
+        let mut children = current.children(&mut current.walk()).collect::<Vec<_>>();
+        children.reverse();
+        pending.extend(children);
+    }
+    last
+}
+
+fn is_identifier_kind(kind: &str) -> bool {
+    matches!(
+        kind,
         "identifier"
             | "field_identifier"
             | "type_identifier"
             | "namespace_identifier"
             | "property_identifier"
-    ) {
-        let text = node_text(node, source).trim().to_string();
-        if !text.is_empty() {
-            last = Some(text);
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if let Some(name) = last_identifier(child, source) {
-            last = Some(name);
-        }
-    }
-    last
+    )
 }
 
 fn declarator_function_name(node: Node<'_>, source: &[u8]) -> Option<String> {

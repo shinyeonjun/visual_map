@@ -11,8 +11,11 @@ pub(super) fn enrich(facts: &mut FactStore, detections: &[FrameworkDetection]) {
         CallRouteRule {
             framework_id: "rust.axum",
             call_names: &["route"],
-            receiver_names: &["app", "router", "api"],
-            receiver_constructors: &["new", "Router"],
+            // Tree-sitter는 `Router::new().route(...)`의 fluent receiver를
+            // 별도 이름으로 보존하지 않고 마지막 `route` callee만 준다.
+            // Axum 감지 결과가 있는 파일 안에서만 route 호출을 허용한다.
+            receiver_names: &[],
+            receiver_constructors: &[],
             route_methods: &[],
             fixed_method: Some("HTTP"),
             path_argument_index: 0,

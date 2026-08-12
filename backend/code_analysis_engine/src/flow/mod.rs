@@ -3,10 +3,11 @@
 mod builder;
 mod index;
 mod local;
+mod local_index;
 mod model;
 
 pub use model::{
-    ExecutionFlow, ExecutionFlowGraph, FlowEdge, FlowEdgeKind, FlowNode, FlowNodeKind,
+    ExecutionFlow, ExecutionFlowGraph, FlowEdge, FlowEdgeKind, FlowLink, FlowNode, FlowNodeKind,
 };
 
 pub(crate) use builder::build;
