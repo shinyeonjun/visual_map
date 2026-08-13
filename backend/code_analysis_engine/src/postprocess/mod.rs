@@ -5,15 +5,20 @@
 //! 남긴다. 원본 결과와 프론트엔드용 Overview는 변경하지 않는다.
 
 mod cards;
+mod context_chunk;
+mod context_metadata;
+mod context_profile;
 mod domains;
 mod features;
 mod flows;
 mod indexes;
 pub mod model;
+mod partition;
+mod selection;
 
 use crate::config::AnalysisConfig;
 use crate::model::AnalysisResult;
-pub use model::CodexSemanticContext;
+pub use model::{CodexContextBundle, CodexSemanticContext};
 
 #[derive(Debug)]
 pub enum PostprocessError {
@@ -33,6 +38,13 @@ impl std::error::Error for PostprocessError {}
 pub fn build_codex_context(
     result: &AnalysisResult,
     config: &AnalysisConfig,
-) -> Result<CodexSemanticContext, PostprocessError> {
-    cards::build(result, config)
+) -> Result<CodexContextBundle, PostprocessError> {
+    cards::build_bundle(result, config)
+}
+
+pub fn build_codex_context_bundle(
+    result: &AnalysisResult,
+    config: &AnalysisConfig,
+) -> Result<CodexContextBundle, PostprocessError> {
+    build_codex_context(result, config)
 }

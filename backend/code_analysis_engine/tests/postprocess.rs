@@ -1,5 +1,7 @@
 use code_analysis_engine::config::AnalysisConfig;
-use code_analysis_engine::postprocess::{build_codex_context, PostprocessError};
+use code_analysis_engine::postprocess::{
+    build_codex_context, build_codex_context_bundle, PostprocessError,
+};
 use code_analysis_engine::{analyze, AnalysisRequest};
 use std::fs;
 use std::path::PathBuf;
@@ -31,8 +33,9 @@ function saveOrder(order: unknown) { return order; }
     .expect("소스 파일을 써야 한다");
 
     let result = analyze(AnalysisRequest::new(&root)).expect("정적 분석이 성공해야 한다");
-    let context = build_codex_context(&result, &AnalysisConfig::default())
+    let bundle = build_codex_context(&result, &AnalysisConfig::default())
         .expect("Codex 컨텍스트가 생성되어야 한다");
+    let context = &bundle.chunks[0];
     let json = serde_json::to_string_pretty(&context).expect("컨텍스트를 직렬화해야 한다");
 
     assert_eq!(context.schema_version, "codex-semantic-context.v1");
@@ -46,7 +49,63 @@ function saveOrder(order: unknown) { return order; }
         .all(|feature| feature
             .flow_ids
             .iter()
-            .all(|flow_id| domain_flow_ids(&context, flow_id))));
+            .all(|flow_id| domain_flow_ids(context, flow_id))));
+
+    fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}
+
+#[test]
+fn 컨텍스트_bundle은_청크_예산과_기능_흐름_관계를_보존한다() {
+    let root = temporary_project("bundle");
+    fs::write(
+        root.join("service.ts"),
+        r#"
+export function createOrder() {
+  return saveOrder(loadOrder());
+}
+function loadOrder() { return fetch("/orders"); }
+function saveOrder(order: unknown) { return order; }
+"#,
+    )
+    .expect("소스 파일을 써야 한다");
+
+    let result = analyze(AnalysisRequest::new(&root)).expect("정적 분석이 성공해야 한다");
+    let config = AnalysisConfig::default();
+    let bundle = build_codex_context_bundle(&result, &config)
+        .expect("Codex 컨텍스트 bundle이 생성되어야 한다");
+
+    assert_eq!(bundle.manifest.schema_version, "codex-context-manifest.v1");
+    assert!(!bundle.chunks.is_empty());
+    for chunk in &bundle.chunks {
+        let bytes = serde_json::to_vec(chunk).expect("청크를 직렬화해야 한다");
+        assert!(bytes.len() <= config.postprocess.target_budget_bytes);
+        assert!(!serde_json::to_string(chunk)
+            .expect("청크를 직렬화해야 한다")
+            .contains("staticGraph"));
+        for domain in &chunk.domains {
+            let feature_ids = domain
+                .features
+                .iter()
+                .map(|feature| feature.id.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            let flow_ids = domain
+                .flows
+                .iter()
+                .map(|flow| flow.id.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            assert!(domain.features.iter().all(|feature| {
+                feature
+                    .flow_ids
+                    .iter()
+                    .all(|flow_id| flow_ids.contains(flow_id.as_str()))
+            }));
+            assert!(domain.flows.iter().all(|flow| {
+                flow.feature_ids
+                    .iter()
+                    .all(|feature_id| feature_ids.contains(feature_id.as_str()))
+            }));
+        }
+    }
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
 }

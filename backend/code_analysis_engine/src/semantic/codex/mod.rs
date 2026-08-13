@@ -70,25 +70,13 @@ impl std::error::Error for CodexError {}
 
 #[cfg(test)]
 mod tests {
-    use super::response::parse_jsonl_proposal;
-
     #[cfg(windows)]
     use super::CodexProvider;
-    #[cfg(windows)]
-    use crate::semantic::context::SemanticContext;
     #[cfg(windows)]
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
-
-    #[test]
-    fn codex_jsonl의_최종_메시지에서_제안을_추출한다() {
-        let output = br#"{"type":"item.completed","item":{"type":"agent_message","text":"{\"domains\":[],\"merges\":[]}"}}"#;
-        let proposal = parse_jsonl_proposal(output).expect("Codex JSONL을 해석해야 한다");
-        assert!(proposal.domains.is_empty());
-        assert!(proposal.merges.is_empty());
-    }
 
     #[cfg(windows)]
     #[test]
@@ -111,18 +99,10 @@ mod tests {
             command_prefix: vec!["/C".into(), script.to_string_lossy().into_owned()],
         };
 
-        let proposal = provider
-            .review(
-                &SemanticContext {
-                    domains: Vec::new(),
-                    relations: Vec::new(),
-                    frameworks: Vec::new(),
-                },
-                &root,
-            )
+        let output = provider
+            .execute_prompt("{}", &root)
             .expect("Codex CLI 출력을 받아야 한다");
-        assert!(proposal.domains.is_empty());
-        assert!(proposal.merges.is_empty());
+        assert!(!output.is_empty());
         fs::remove_file(script).expect("가짜 Codex 스크립트를 정리해야 한다");
     }
 }

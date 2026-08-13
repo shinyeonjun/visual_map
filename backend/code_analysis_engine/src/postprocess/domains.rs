@@ -5,8 +5,8 @@ use super::model::{
     ContextDomain, DomainAlias, DomainCluster, DomainDecision, DomainRole, SuppressedDomain,
 };
 use crate::config::{DomainPolicy, PostprocessPolicy};
-use crate::domain::confidence::DomainStatus;
 use crate::domain::DomainKind;
+use crate::facts::ResolutionStatus;
 use std::collections::{BTreeSet, HashSet};
 
 pub(crate) struct DomainPlan {
@@ -30,25 +30,31 @@ pub(crate) fn build_plan(
             key: domain.key.clone(),
             role: domain_role(domain, domain_policy),
             unit_ids: visible_unit_ids(domain, indexes),
-            status: domain.status,
+            has_business_anchor: has_business_anchor(domain),
+            signal: domain_signal(domain, indexes, domain_policy, policy),
         })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.id.cmp(&right.id));
 
     let mut suppressed = Vec::new();
     candidates.retain(|candidate| {
-        let should_suppress = matches!(candidate.role, DomainRole::Noise)
-            && candidate.unit_ids.len() <= policy.generic_domain_max_units
-            && matches!(
-                candidate.status,
-                DomainStatus::Unknown | DomainStatus::Candidate
-            );
+        let (should_suppress, reason) =
+            if matches!(candidate.role, DomainRole::Noise) && !candidate.has_business_anchor {
+                (true, "generic_without_business_anchor")
+            } else if matches!(candidate.role, DomainRole::CrossCutting)
+                && !policy.include_cross_cutting_domains
+            {
+                (true, "cross_cutting_context_excluded")
+            } else {
+                (false, "")
+            };
         if should_suppress {
             suppressed.push(SuppressedDomain {
                 domain_id: candidate.id.clone(),
                 key: candidate.key.clone(),
-                reason: "generic_low_signal_domain".into(),
+                reason: reason.into(),
                 unit_count: candidate.unit_ids.len(),
+                signal: Some(candidate.signal.clone()),
             });
         }
         !should_suppress
@@ -69,7 +75,7 @@ pub(crate) fn build_plan(
             {
                 return false;
             }
-            normalized_key(&candidate.key) == normalized_key(&representative.key)
+            keys_equivalent(&candidate.key, &representative.key)
                 && overlap_percent(
                     &candidate.unit_ids,
                     &visible_unit_ids(representative, indexes),
@@ -90,6 +96,7 @@ pub(crate) fn build_plan(
                 source_domain_ids: vec![candidate.id],
                 decision: DomainDecision::Original,
                 reason: None,
+                signal: candidate.signal.clone(),
             });
         }
     }
@@ -163,6 +170,7 @@ pub(crate) fn domain_context(
         current_label: domain.label.clone(),
         role: domain_role(domain, domain_policy),
         decision: cluster.decision.clone(),
+        signal: cluster.signal.clone(),
         source_paths,
         entrypoints: Vec::new(),
         resources: Vec::new(),
@@ -179,6 +187,98 @@ fn has_visible_unit(domain: &crate::domain::DomainGroup, indexes: &PostprocessIn
         .iter()
         .chain(&domain.shared_unit_ids)
         .any(|unit_id| indexes.visible_unit_ids.contains(unit_id))
+}
+
+fn has_business_anchor(domain: &crate::domain::DomainGroup) -> bool {
+    !domain.entrypoint_ids.is_empty()
+        || !domain.resource_ids.is_empty()
+        || domain.confidence.signal_families.iter().any(|family| {
+            matches!(
+                family,
+                crate::domain::signals::DomainSignalKind::Entrypoint
+                    | crate::domain::signals::DomainSignalKind::Resource
+            )
+        })
+}
+
+fn domain_signal(
+    domain: &crate::domain::DomainGroup,
+    indexes: &PostprocessIndexes<'_>,
+    domain_policy: &DomainPolicy,
+    policy: &PostprocessPolicy,
+) -> super::model::DomainSignal {
+    let unit_ids = visible_unit_ids(domain, indexes);
+    let unit_set = unit_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    let has_entrypoint = !domain.entrypoint_ids.is_empty();
+    let has_resource = !domain.resource_ids.is_empty();
+    let anchor = match (has_entrypoint, has_resource) {
+        (true, true) => 1.0,
+        (true, false) | (false, true) => 0.6,
+        (false, false) => 0.0,
+    };
+    let touching = indexes
+        .overview
+        .static_graph
+        .edges
+        .iter()
+        .filter(|edge| {
+            unit_set.contains(edge.source_unit_id.as_str())
+                || edge
+                    .target_unit_id
+                    .as_deref()
+                    .map(|id| unit_set.contains(id))
+                    .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    let confirmed = touching
+        .iter()
+        .filter(|edge| edge.status == ResolutionStatus::Confirmed)
+        .count();
+    let density = if touching.is_empty() {
+        0.0
+    } else {
+        confirmed as f64 / touching.len() as f64
+    };
+    let tokens = tokenize(&domain.key);
+    let specificity = if tokens.is_empty() {
+        0.0
+    } else {
+        tokens
+            .iter()
+            .filter(|token| !domain_policy.is_generic(token))
+            .count() as f64
+            / tokens.len() as f64
+    };
+    let confidence = match domain.status {
+        crate::domain::confidence::DomainStatus::Confirmed => 1.0,
+        crate::domain::confidence::DomainStatus::Candidate => 0.5,
+        crate::domain::confidence::DomainStatus::Ambiguous => 0.2,
+        crate::domain::confidence::DomainStatus::Unknown => 0.0,
+    };
+    let weights = [
+        policy.signal_anchor_weight,
+        policy.signal_density_weight,
+        policy.signal_specificity_weight,
+        policy.signal_confidence_weight,
+    ];
+    let weight_total = weights.iter().map(|weight| u64::from(*weight)).sum::<u64>();
+    let weighted = if weight_total == 0 {
+        0.0
+    } else {
+        (anchor * f64::from(policy.signal_anchor_weight)
+            + density * f64::from(policy.signal_density_weight)
+            + specificity * f64::from(policy.signal_specificity_weight)
+            + confidence * f64::from(policy.signal_confidence_weight))
+            / weight_total as f64
+    };
+    super::model::DomainSignal {
+        score: (weighted * 1000.0).round() as u32,
+        anchor,
+        density,
+        specificity,
+        confidence,
+        has_business_anchor: has_business_anchor(domain),
+    }
 }
 
 fn visible_unit_ids(
@@ -225,22 +325,53 @@ fn tokenize(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn normalized_key(value: &str) -> String {
-    tokenize(value)
-        .into_iter()
-        .map(|token| singularize(&token))
-        .collect::<Vec<_>>()
-        .join("::")
+fn keys_equivalent(left: &str, right: &str) -> bool {
+    let left_variants = key_variants(left);
+    let right_variants = key_variants(right);
+    left_variants.intersection(&right_variants).next().is_some()
 }
 
-fn singularize(token: &str) -> String {
+fn key_variants(value: &str) -> BTreeSet<String> {
+    let tokens = tokenize(value);
+    let mut variants = BTreeSet::new();
+    variants.insert(tokens.join("::"));
+    let singular_tokens = tokens
+        .iter()
+        .map(|token| safe_singular_variants(token))
+        .collect::<Vec<_>>();
+    let mut combinations = vec![Vec::<String>::new()];
+    for token_variants in singular_tokens {
+        let mut next = Vec::new();
+        for combination in &combinations {
+            for variant in &token_variants {
+                let mut extended = combination.clone();
+                extended.push(variant.clone());
+                next.push(extended);
+            }
+        }
+        combinations = next;
+    }
+    variants.extend(combinations.into_iter().map(|tokens| tokens.join("::")));
+    variants
+}
+
+fn safe_singular_variants(token: &str) -> Vec<String> {
+    let mut variants = vec![token.to_string()];
     if token.len() > 4 && token.ends_with("ies") {
-        return format!("{}y", &token[..token.len() - 3]);
+        variants.push(format!("{}y", &token[..token.len() - 3]));
     }
-    if token.len() > 3 && token.ends_with('s') && !token.ends_with("ss") {
-        return token[..token.len() - 1].to_string();
+    if token.len() > 3
+        && token.ends_with('s')
+        && !["ss", "us", "is", "as", "os"]
+            .iter()
+            .any(|suffix| token.ends_with(suffix))
+    {
+        variants.push(token[..token.len() - 1].to_string());
     }
-    token.to_string()
+    if token.len() > 4 && token.ends_with("es") {
+        variants.push(token[..token.len() - 2].to_string());
+    }
+    variants
 }
 
 fn overlap_percent(left: &[String], right: &[String]) -> u32 {
@@ -259,5 +390,6 @@ struct DomainCandidate {
     key: String,
     role: DomainRole,
     unit_ids: Vec<String>,
-    status: DomainStatus,
+    has_business_anchor: bool,
+    signal: super::model::DomainSignal,
 }

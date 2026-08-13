@@ -229,23 +229,11 @@ impl Default for FrameworkPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticPolicy {
-    pub codex_enabled: bool,
     pub codex_executable: String,
     pub codex_timeout_ms: u64,
     pub codex_max_input_bytes: usize,
-    pub domain_unit_limit: usize,
-    pub shared_unit_limit: usize,
-    pub entrypoint_limit: usize,
-    pub resource_limit: usize,
-    pub domain_evidence_limit: usize,
-    pub relation_limit: usize,
-    pub relation_evidence_limit: usize,
-    pub framework_evidence_limit: usize,
-    pub minimum_context_bytes: usize,
-    pub prompt_reserve_bytes: usize,
     pub maximum_label_length: usize,
     pub maximum_summary_length: usize,
-    pub maximum_merge_reason_length: usize,
 }
 
 impl Default for SemanticPolicy {
@@ -258,18 +246,22 @@ impl Default for SemanticPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostprocessPolicy {
+    /// Codex에 한 번 전달할 컨텍스트의 직렬화 바이트 예산이다.
+    pub target_budget_bytes: usize,
+    /// 전역 프로젝트 요약에 먼저 예약하는 바이트 예산이다.
+    pub global_summary_reserve_bytes: usize,
+    /// 청크에 함께 표시할 인접 도메인 요약의 최대 개수다.
+    pub max_adjacent_domains: usize,
     pub max_files_per_domain: usize,
     pub max_entrypoints_per_domain: usize,
     pub max_resources_per_domain: usize,
-    pub max_features_per_domain: usize,
-    pub max_internal_features_per_domain: usize,
     pub max_symbols_per_feature: usize,
     pub max_paths_per_feature: usize,
-    pub max_flows_per_domain: usize,
+    pub max_evidence_ids_per_domain: usize,
     pub max_flow_nodes: usize,
     pub max_flow_edges: usize,
-    pub generic_domain_max_units: usize,
     pub domain_overlap_percent: u32,
+    pub include_cross_cutting_domains: bool,
     pub flow_entrypoint_weight: u32,
     pub flow_resource_weight: u32,
     pub flow_dynamic_weight: u32,
@@ -279,6 +271,16 @@ pub struct PostprocessPolicy {
     pub feature_dynamic_weight: u32,
     pub feature_complexity_weight: u32,
     pub feature_complexity_cap: usize,
+    /// 도메인 신호를 계산할 때 사용하는 가중치다. 합계가 100일 필요는
+    /// 없으며, 결과는 내부에서 동일한 기준으로 정규화한다.
+    pub signal_anchor_weight: u32,
+    pub signal_density_weight: u32,
+    pub signal_specificity_weight: u32,
+    pub signal_confidence_weight: u32,
+    /// 청크 분할 시 도메인 관계의 확정도별 가중치다.
+    pub partition_confirmed_weight: u32,
+    pub partition_candidate_weight: u32,
+    pub partition_unknown_weight: u32,
 }
 
 impl Default for PostprocessPolicy {

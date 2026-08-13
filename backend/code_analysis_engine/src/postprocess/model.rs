@@ -10,15 +10,100 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "camelCase")]
 pub struct CodexSemanticContext {
     pub schema_version: &'static str,
+    pub chunk_id: String,
     pub source_analysis_id: String,
     pub source_schema_version: String,
     pub project_id: String,
     pub analysis_status: AnalysisStatus,
     pub policy_version: &'static str,
+    pub project_profile: ContextProjectProfile,
+    pub global_summary: GlobalContextSummary,
+    pub adjacent_domains: Vec<AdjacentDomain>,
     pub domains: Vec<ContextDomain>,
     pub domain_aliases: Vec<DomainAlias>,
     pub suppressed_domains: Vec<SuppressedDomain>,
     pub summary: ContextSummary,
+    pub warnings: Vec<ContextWarning>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CodexContextBundle {
+    pub manifest: CodexContextManifest,
+    pub chunks: Vec<CodexSemanticContext>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextProjectProfile {
+    pub visible_unit_count: usize,
+    pub entrypoint_count: usize,
+    pub resource_count: usize,
+    pub reference_count: usize,
+    pub confirmed_reference_count: usize,
+    pub entrypoint_density: f64,
+    pub resource_density: f64,
+    pub reference_resolution: f64,
+    pub max_domain_unit_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdjacentDomain {
+    pub domain_id: String,
+    pub label: String,
+    pub relation_kinds: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextWarning {
+    pub code: String,
+    pub message: String,
+    pub related_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexContextManifest {
+    pub schema_version: &'static str,
+    pub source_analysis_id: String,
+    pub source_schema_version: String,
+    pub project_id: String,
+    pub project_profile: ContextProjectProfile,
+    pub global_summary: GlobalContextSummary,
+    pub chunks: Vec<ContextChunkDescriptor>,
+    pub domain_coverage: Vec<DomainCoverage>,
+    pub warnings: Vec<ContextWarning>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalContextSummary {
+    pub domain_ids: Vec<String>,
+    pub domain_labels: Vec<String>,
+    pub represented_domain_count: usize,
+    pub language_keys: Vec<String>,
+    pub total_domains: usize,
+    pub total_features: usize,
+    pub total_flows: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextChunkDescriptor {
+    pub chunk_id: String,
+    pub file_name: String,
+    pub domain_ids: Vec<String>,
+    pub used_bytes: usize,
+    pub budget_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainCoverage {
+    pub domain_id: String,
+    pub representation: String,
+    pub chunk_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -29,6 +114,7 @@ pub struct ContextDomain {
     pub current_label: String,
     pub role: DomainRole,
     pub decision: DomainDecision,
+    pub signal: DomainSignal,
     pub source_paths: Vec<String>,
     pub entrypoints: Vec<ContextEntrypoint>,
     pub resources: Vec<ContextResource>,
@@ -54,6 +140,18 @@ pub struct SuppressedDomain {
     pub key: String,
     pub reason: String,
     pub unit_count: usize,
+    pub signal: Option<DomainSignal>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainSignal {
+    pub score: u32,
+    pub anchor: f64,
+    pub density: f64,
+    pub specificity: f64,
+    pub confidence: f64,
+    pub has_business_anchor: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -128,7 +226,7 @@ pub enum FeatureTag {
 #[serde(rename_all = "camelCase")]
 pub struct ContextFlow {
     pub id: String,
-    pub feature_id: Option<String>,
+    pub feature_ids: Vec<String>,
     pub owner_unit_id: String,
     pub owner_name: String,
     pub steps: Vec<ContextFlowStep>,
@@ -163,6 +261,8 @@ pub struct DomainOmission {
     pub total_flows: usize,
     pub included_flows: usize,
     pub reasons: BTreeMap<String, usize>,
+    pub budget_bytes: usize,
+    pub used_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -175,12 +275,8 @@ pub struct ContextSummary {
     pub included_features: usize,
     pub total_flows: usize,
     pub included_flows: usize,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SelectedFlow {
-    pub flow_id: String,
-    pub selection_reason: String,
+    pub budget_bytes: usize,
+    pub used_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -189,4 +285,5 @@ pub(crate) struct DomainCluster {
     pub source_domain_ids: Vec<String>,
     pub decision: DomainDecision,
     pub reason: Option<String>,
+    pub signal: DomainSignal,
 }

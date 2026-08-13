@@ -4,12 +4,13 @@ use super::indexes::PostprocessIndexes;
 use super::model::{ContextFeature, DomainCluster, FeatureTag, FeatureVisibility};
 use crate::config::PostprocessPolicy;
 use crate::views::overview::model::FeatureVisibility as OverviewVisibility;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub(crate) struct FeatureSelection {
     pub features: Vec<ContextFeature>,
     pub included_ids: HashSet<String>,
     pub total_count: usize,
+    pub priorities: HashMap<String, u64>,
 }
 
 pub(crate) fn select_for_domain(
@@ -33,35 +34,23 @@ pub(crate) fn select_for_domain(
     });
 
     let total_count = candidates.len();
-    let mut user_facing_count = 0;
-    let mut internal_count = 0;
-    let mut features = Vec::new();
-    let mut included_ids = HashSet::new();
-    for (feature, _) in candidates {
-        let is_user_facing = matches!(feature.visibility, OverviewVisibility::UserFacing);
-        let limit = if is_user_facing {
-            policy.max_features_per_domain
-        } else {
-            policy.max_internal_features_per_domain
-        };
-        let count = if is_user_facing {
-            &mut user_facing_count
-        } else {
-            &mut internal_count
-        };
-        if *count >= limit {
-            continue;
-        }
-        *count += 1;
-        included_ids.insert(feature.id.clone());
-        features.push(to_context_feature(feature, indexes, policy));
-    }
-    features.sort_by(|left, right| left.id.cmp(&right.id));
-
+    let priorities = candidates
+        .iter()
+        .map(|(feature, priority)| (feature.id.clone(), u64::from(*priority)))
+        .collect::<HashMap<_, _>>();
+    let features = candidates
+        .iter()
+        .map(|(feature, _)| to_context_feature(feature, indexes, policy))
+        .collect::<Vec<_>>();
+    let included_ids = features
+        .iter()
+        .map(|feature| feature.id.clone())
+        .collect::<HashSet<_>>();
     FeatureSelection {
         features,
         included_ids,
         total_count,
+        priorities,
     }
 }
 
@@ -99,7 +88,7 @@ fn to_context_feature(
         .collect::<Vec<_>>();
     source_paths.truncate(policy.max_paths_per_feature);
 
-    let tags = feature_tags(feature);
+    let tags = feature_tags(feature, indexes);
     let mut entrypoint_ids = feature
         .entrypoint_ids
         .iter()
@@ -139,14 +128,30 @@ fn to_context_feature(
     }
 }
 
-fn feature_tags(feature: &crate::views::overview::FeatureGroup) -> Vec<FeatureTag> {
+fn feature_tags(
+    feature: &crate::views::overview::FeatureGroup,
+    indexes: &PostprocessIndexes<'_>,
+) -> Vec<FeatureTag> {
     let mut tags = Vec::new();
     if !feature.entrypoint_ids.is_empty() {
         tags.push(FeatureTag::Endpoint);
     }
     if !feature.resource_ids.is_empty() {
         tags.push(FeatureTag::ResourceAccess);
-        tags.push(FeatureTag::SideEffect);
+        let has_write = feature.resource_ids.iter().any(|resource_id| {
+            indexes
+                .resource(resource_id)
+                .map(|resource| {
+                    matches!(
+                        resource.mode,
+                        crate::facts::AccessMode::Write | crate::facts::AccessMode::ReadWrite
+                    )
+                })
+                .unwrap_or(false)
+        });
+        if has_write {
+            tags.push(FeatureTag::SideEffect);
+        }
     }
     if !feature.dynamic_boundary_ids.is_empty() {
         tags.push(FeatureTag::DynamicBoundary);

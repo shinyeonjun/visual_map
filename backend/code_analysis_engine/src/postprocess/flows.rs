@@ -1,74 +1,61 @@
-//! Codex 카드에 포함할 대표 실행 흐름을 선택한다.
+//! Codex 카드에 포함할 실행 흐름 후보를 만든다.
 
 use super::indexes::PostprocessIndexes;
-use super::model::{ContextFlow, ContextFlowEdge, ContextFlowStep, SelectedFlow};
+use super::model::{ContextFlow, ContextFlowEdge, ContextFlowStep};
 use crate::config::PostprocessPolicy;
-use std::collections::{HashMap, HashSet};
+use crate::views::overview::FeatureGroup;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-pub(crate) fn select_for_domain(
+pub(crate) struct FlowSelection {
+    pub candidates: Vec<FlowCandidate>,
+    pub total_count: usize,
+}
+
+pub(crate) struct FlowCandidate {
+    pub context: ContextFlow,
+    pub score: u64,
+}
+
+pub(crate) fn candidates_for_features(
     feature_ids: &HashSet<String>,
     indexes: &PostprocessIndexes<'_>,
     policy: &PostprocessPolicy,
-) -> (Vec<ContextFlow>, usize, HashMap<String, usize>) {
+) -> FlowSelection {
     let feature_by_flow = feature_flow_index(feature_ids, indexes);
     let mut candidates = feature_by_flow
-        .iter()
-        .filter_map(|(flow_id, feature_id)| {
-            let flow = indexes.flow(flow_id)?;
-            let feature = indexes.feature(feature_id)?;
-            let selected = score_flow(flow, feature, indexes, policy);
-            Some((flow, feature_id.clone(), selected))
+        .into_iter()
+        .filter_map(|(flow_id, feature_ids)| {
+            let flow = indexes.flow(&flow_id)?;
+            let features = feature_ids
+                .iter()
+                .filter_map(|id| indexes.feature(id))
+                .collect::<Vec<_>>();
+            let score = score_flow(flow, &features, indexes, policy);
+            let selection_reason = selection_reason(flow, &features, indexes);
+            Some(FlowCandidate {
+                context: to_context_flow(flow, feature_ids, &selection_reason, indexes, policy),
+                score,
+            })
         })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| {
         right
-            .2
             .score
-            .cmp(&left.2.score)
-            .then_with(|| left.0.id.cmp(&right.0.id))
+            .cmp(&left.score)
+            .then_with(|| left.context.id.cmp(&right.context.id))
     });
-
     let total_count = candidates.len();
-    let selected = candidates
-        .iter()
-        .take(policy.max_flows_per_domain)
-        .map(|(flow, _, selection)| SelectedFlow {
-            flow_id: flow.id.clone(),
-            selection_reason: selection.selection_reason.clone(),
-        })
-        .collect::<Vec<_>>();
-    let reasons = candidates.iter().skip(selected.len()).fold(
-        HashMap::new(),
-        |mut reasons, (_, _, selection)| {
-            *reasons
-                .entry(selection.selection_reason.clone())
-                .or_insert(0) += 1;
-            reasons
-        },
-    );
-    let contexts = selected
-        .iter()
-        .filter_map(|selected| {
-            let feature_id = feature_by_flow.get(&selected.flow_id)?;
-            let flow = indexes.flow(&selected.flow_id)?;
-            Some(to_context_flow(
-                flow,
-                Some(feature_id.as_str()),
-                &selected.selection_reason,
-                indexes,
-                policy,
-            ))
-        })
-        .collect::<Vec<_>>();
-
-    (contexts, total_count, reasons)
+    FlowSelection {
+        candidates,
+        total_count,
+    }
 }
 
 fn feature_flow_index(
     feature_ids: &HashSet<String>,
     indexes: &PostprocessIndexes<'_>,
-) -> HashMap<String, String> {
-    let mut result = HashMap::new();
+) -> HashMap<String, Vec<String>> {
+    let mut result: HashMap<String, BTreeSet<String>> = HashMap::new();
     for feature_id in feature_ids {
         let Some(feature) = indexes.feature(feature_id) else {
             continue;
@@ -77,35 +64,68 @@ fn feature_flow_index(
             if indexes.visible_flow_ids.contains(flow_id) {
                 result
                     .entry(flow_id.clone())
-                    .or_insert_with(|| feature_id.clone());
+                    .or_default()
+                    .insert(feature_id.clone());
             }
         }
     }
     result
+        .into_iter()
+        .map(|(flow_id, feature_ids)| (flow_id, feature_ids.into_iter().collect()))
+        .collect()
 }
 
 fn score_flow(
     flow: &crate::flow::ExecutionFlow,
-    feature: &crate::views::overview::FeatureGroup,
+    features: &[&FeatureGroup],
     indexes: &PostprocessIndexes<'_>,
     policy: &PostprocessPolicy,
-) -> SelectedFlowScore {
-    let has_entrypoint = !feature.entrypoint_ids.is_empty();
-    let has_resource = !feature.resource_ids.is_empty()
+) -> u64 {
+    let has_entrypoint = features
+        .iter()
+        .any(|feature| !feature.entrypoint_ids.is_empty());
+    let has_resource = features
+        .iter()
+        .any(|feature| !feature.resource_ids.is_empty())
         || indexes
             .overview
             .resources
             .iter()
             .filter(|resource| indexes.visible_resource_ids.contains(&resource.id))
             .any(|resource| resource.unit_id == flow.owner_unit_id);
-    let has_dynamic =
-        !flow.dynamic_boundary_ids.is_empty() || !feature.dynamic_boundary_ids.is_empty();
+    let has_dynamic = !flow.dynamic_boundary_ids.is_empty()
+        || features
+            .iter()
+            .any(|feature| !feature.dynamic_boundary_ids.is_empty());
     let complexity = flow.nodes.len().saturating_add(flow.edges.len());
-    let score = u64::from(has_entrypoint) * u64::from(policy.flow_entrypoint_weight)
+    u64::from(has_entrypoint) * u64::from(policy.flow_entrypoint_weight)
         + u64::from(has_resource) * u64::from(policy.flow_resource_weight)
         + u64::from(has_dynamic) * u64::from(policy.flow_dynamic_weight)
-        + complexity as u64 * u64::from(policy.flow_complexity_weight);
-    let selection_reason = if has_entrypoint {
+        + complexity as u64 * u64::from(policy.flow_complexity_weight)
+}
+
+fn selection_reason(
+    flow: &crate::flow::ExecutionFlow,
+    features: &[&FeatureGroup],
+    indexes: &PostprocessIndexes<'_>,
+) -> String {
+    let has_entrypoint = features
+        .iter()
+        .any(|feature| !feature.entrypoint_ids.is_empty());
+    let has_resource = features
+        .iter()
+        .any(|feature| !feature.resource_ids.is_empty())
+        || indexes
+            .overview
+            .resources
+            .iter()
+            .filter(|resource| indexes.visible_resource_ids.contains(&resource.id))
+            .any(|resource| resource.unit_id == flow.owner_unit_id);
+    let has_dynamic = !flow.dynamic_boundary_ids.is_empty()
+        || features
+            .iter()
+            .any(|feature| !feature.dynamic_boundary_ids.is_empty());
+    if has_entrypoint {
         "entrypoint_flow"
     } else if has_resource {
         "resource_access_flow"
@@ -113,20 +133,19 @@ fn score_flow(
         "dynamic_boundary_flow"
     } else {
         "complex_internal_flow"
-    };
-    SelectedFlowScore {
-        score,
-        selection_reason: selection_reason.into(),
     }
+    .into()
 }
 
 fn to_context_flow(
     flow: &crate::flow::ExecutionFlow,
-    feature_id: Option<&str>,
+    mut feature_ids: Vec<String>,
     selection_reason: &str,
     indexes: &PostprocessIndexes<'_>,
     policy: &PostprocessPolicy,
 ) -> ContextFlow {
+    feature_ids.sort();
+    feature_ids.dedup();
     let owner_name = indexes
         .unit(&flow.owner_unit_id)
         .map(|unit| unit.name.clone())
@@ -159,7 +178,7 @@ fn to_context_flow(
 
     ContextFlow {
         id: flow.id.clone(),
-        feature_id: feature_id.map(str::to_owned),
+        feature_ids,
         owner_unit_id: flow.owner_unit_id.clone(),
         owner_name,
         steps,
@@ -167,9 +186,4 @@ fn to_context_flow(
         dynamic_boundary_ids,
         selection_reason: selection_reason.into(),
     }
-}
-
-struct SelectedFlowScore {
-    score: u64,
-    selection_reason: String,
 }

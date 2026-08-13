@@ -1,159 +1,173 @@
-//! 인덱스·도메인 계획·기능·흐름을 하나의 Codex 카드로 조립한다.
+//! 도메인 계획과 청크 조립 모듈을 연결해 Codex context bundle을 만든다.
 
-use super::domains::{build_plan, domain_context};
-use super::features::select_for_domain as select_features;
-use super::flows::select_for_domain as select_flows;
+use super::context_chunk::{build_chunk, fit_context_budget, serialized_bytes, ChunkBuildInput};
+use super::context_metadata::build_shells;
+use super::context_profile::{compact_global_summary, global_summary, project_profile};
+use super::domains::build_plan;
 use super::indexes::PostprocessIndexes;
 use super::model::{
-    CodexSemanticContext, ContextEntrypoint, ContextResource, ContextSummary, DomainOmission,
+    CodexContextBundle, CodexContextManifest, ContextChunkDescriptor, ContextWarning,
+    DomainCoverage,
 };
+use super::partition::partition_domains;
 use super::PostprocessError;
 use crate::config::AnalysisConfig;
 use crate::model::AnalysisResult;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::VecDeque;
 
-pub(crate) fn build(
+pub(crate) fn build_bundle(
     result: &AnalysisResult,
     config: &AnalysisConfig,
-) -> Result<CodexSemanticContext, PostprocessError> {
+) -> Result<CodexContextBundle, PostprocessError> {
     let overview = result
         .overview
         .as_ref()
         .ok_or(PostprocessError::MissingOverview)?;
     let indexes = PostprocessIndexes::build(overview, &result.files);
     let plan = build_plan(&indexes, &config.domains, &config.postprocess);
-    let mut domains = Vec::new();
-    let mut total_features = 0;
-    let mut included_features = 0;
-    let mut total_flows = 0;
-    let mut included_flows = 0;
-
-    for cluster in &plan.clusters {
-        let Some(mut domain) = domain_context(cluster, &indexes, &config.domains) else {
-            continue;
-        };
-        domain
-            .source_paths
-            .truncate(config.postprocess.max_files_per_domain);
-        domain.entrypoints = entrypoints_for_domain(cluster, &indexes, &config.postprocess);
-        domain.resources = resources_for_domain(cluster, &indexes, &config.postprocess);
-
-        let feature_selection = select_features(cluster, &indexes, &config.postprocess);
-        let (flows, flow_count, flow_reasons) = select_flows(
-            &feature_selection.included_ids,
-            &indexes,
-            &config.postprocess,
-        );
-        domain.features = feature_selection.features;
-        domain.flows = flows;
-        let included_flow_ids = domain
-            .flows
-            .iter()
-            .map(|flow| flow.id.as_str())
-            .collect::<std::collections::HashSet<_>>();
-        for feature in &mut domain.features {
-            feature
-                .flow_ids
-                .retain(|flow_id| included_flow_ids.contains(flow_id.as_str()));
-        }
-        domain.omission = DomainOmission {
-            total_features: feature_selection.total_count,
-            included_features: domain.features.len(),
-            total_flows: flow_count,
-            included_flows: domain.flows.len(),
-            reasons: flow_reasons.into_iter().collect::<BTreeMap<_, _>>(),
-        };
-        total_features += domain.omission.total_features;
-        included_features += domain.omission.included_features;
-        total_flows += domain.omission.total_flows;
-        included_flows += domain.omission.included_flows;
-        domains.push(domain);
+    let profile = project_profile(&indexes);
+    let global_summary = compact_global_summary(
+        global_summary(&indexes, &plan),
+        config.postprocess.global_summary_reserve_bytes,
+    );
+    let shells = build_shells(&plan, &indexes, config);
+    let mut partitions = partition_domains(&shells, overview, &config.postprocess);
+    if partitions.is_empty() {
+        partitions.push(Vec::new());
     }
 
-    domains.sort_by(|left, right| left.domain_id.cmp(&right.domain_id));
-    let summary = ContextSummary {
-        total_source_domains: plan
-            .clusters
-            .iter()
-            .map(|cluster| cluster.source_domain_ids.len())
-            .sum::<usize>()
-            + plan.suppressed.len(),
-        included_domains: domains.len(),
-        suppressed_domains: plan.suppressed.len(),
-        total_features,
-        included_features,
-        total_flows,
-        included_flows,
-    };
+    let mut pending_partitions = partitions.into_iter().collect::<VecDeque<_>>();
+    let mut chunks = Vec::new();
+    let mut coverage = Vec::new();
+    let mut warnings = Vec::new();
+    let mut chunk_index = 0;
 
-    Ok(CodexSemanticContext {
-        schema_version: "codex-semantic-context.v1",
+    while let Some(partition) = pending_partitions.pop_front() {
+        let chunk_id = format!("chunk-{chunk_index:04}");
+        let mut context = build_chunk(ChunkBuildInput {
+            chunk_id: &chunk_id,
+            partition: &partition,
+            shells: &shells,
+            plan: &plan,
+            indexes: &indexes,
+            overview,
+            result,
+            config,
+            profile: profile.clone(),
+            global_summary: global_summary.clone(),
+        });
+        fit_context_budget(&mut context, config.postprocess.target_budget_bytes);
+
+        if should_split_empty_content(&context, partition.len()) {
+            let midpoint = partition.len() / 2;
+            pending_partitions.push_front(partition[midpoint..].to_vec());
+            pending_partitions.push_front(partition[..midpoint].to_vec());
+            continue;
+        }
+
+        record_budget_warning(
+            &mut warnings,
+            &context,
+            &partition,
+            config.postprocess.target_budget_bytes,
+        );
+        coverage.extend(partition.into_iter().map(|domain_id| DomainCoverage {
+            domain_id,
+            representation: "full".into(),
+            chunk_id: Some(chunk_id.clone()),
+        }));
+        chunks.push(context);
+        chunk_index += 1;
+    }
+
+    append_suppressed_coverage(&mut coverage, &plan.suppressed);
+    append_alias_coverage(&mut coverage, &plan.aliases);
+    coverage.sort_by(|left, right| left.domain_id.cmp(&right.domain_id));
+    let descriptors = chunk_descriptors(&chunks, config);
+    let manifest = CodexContextManifest {
+        schema_version: "codex-context-manifest.v1",
         source_analysis_id: result.analysis_id.clone(),
         source_schema_version: result.schema_version.clone(),
         project_id: result.project.project_id.clone(),
-        analysis_status: result.status.clone(),
-        policy_version: "codex-semantic-context-policy.v1",
-        domains,
-        domain_aliases: plan.aliases,
-        suppressed_domains: plan.suppressed,
-        summary,
-    })
+        project_profile: profile,
+        global_summary,
+        chunks: descriptors,
+        domain_coverage: coverage,
+        warnings,
+    };
+    Ok(CodexContextBundle { manifest, chunks })
 }
 
-fn entrypoints_for_domain(
-    cluster: &super::model::DomainCluster,
-    indexes: &PostprocessIndexes<'_>,
-    policy: &crate::config::PostprocessPolicy,
-) -> Vec<ContextEntrypoint> {
-    let mut ids = cluster
-        .source_domain_ids
-        .iter()
-        .filter_map(|domain_id| indexes.domains.get(domain_id.as_str()))
-        .flat_map(|domain| domain.entrypoint_ids.iter())
-        .filter(|id| indexes.visible_entrypoint_ids.contains(*id))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    ids.retain(|id| indexes.entrypoint(id).is_some());
-    ids.into_iter()
-        .take(policy.max_entrypoints_per_domain)
-        .filter_map(|id| {
-            let entrypoint = indexes.entrypoint(&id)?;
-            Some(ContextEntrypoint {
-                id: entrypoint.id.clone(),
-                unit_id: entrypoint.unit_id.clone(),
-                kind: entrypoint.kind.clone(),
-                name: entrypoint.name.clone(),
-                method: entrypoint.method.clone(),
-                path: entrypoint.path.clone(),
-            })
-        })
-        .collect()
+fn should_split_empty_content(
+    context: &super::model::CodexSemanticContext,
+    partition_len: usize,
+) -> bool {
+    context.summary.included_features == 0
+        && context.summary.total_features > 0
+        && partition_len > 1
 }
 
-fn resources_for_domain(
-    cluster: &super::model::DomainCluster,
-    indexes: &PostprocessIndexes<'_>,
-    policy: &crate::config::PostprocessPolicy,
-) -> Vec<ContextResource> {
-    let mut ids = cluster
-        .source_domain_ids
+fn record_budget_warning(
+    warnings: &mut Vec<ContextWarning>,
+    context: &super::model::CodexSemanticContext,
+    partition: &[String],
+    budget_bytes: usize,
+) {
+    if serialized_bytes(context) > budget_bytes {
+        warnings.push(ContextWarning {
+            code: "budget_unmet".into(),
+            message: "도메인 shell만으로 Codex 예산을 초과해 degraded context를 생성했습니다."
+                .into(),
+            related_ids: partition.to_vec(),
+        });
+    }
+}
+
+fn append_suppressed_coverage(
+    coverage: &mut Vec<DomainCoverage>,
+    suppressed: &[super::model::SuppressedDomain],
+) {
+    coverage.extend(suppressed.iter().map(|domain| DomainCoverage {
+        domain_id: domain.domain_id.clone(),
+        representation: "suppressed".into(),
+        chunk_id: None,
+    }));
+}
+
+fn append_alias_coverage(
+    coverage: &mut Vec<DomainCoverage>,
+    aliases: &[super::model::DomainAlias],
+) {
+    for alias in aliases {
+        let chunk_id = coverage
+            .iter()
+            .find(|entry| entry.domain_id == alias.to_domain_id)
+            .and_then(|entry| entry.chunk_id.clone());
+        coverage.push(DomainCoverage {
+            domain_id: alias.from_domain_id.clone(),
+            representation: "alias".into(),
+            chunk_id,
+        });
+    }
+}
+
+fn chunk_descriptors(
+    chunks: &[super::model::CodexSemanticContext],
+    config: &AnalysisConfig,
+) -> Vec<ContextChunkDescriptor> {
+    chunks
         .iter()
-        .filter_map(|domain_id| indexes.domains.get(domain_id.as_str()))
-        .flat_map(|domain| domain.resource_ids.iter())
-        .filter(|id| indexes.visible_resource_ids.contains(*id))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    ids.retain(|id| indexes.resource(id).is_some());
-    ids.into_iter()
-        .take(policy.max_resources_per_domain)
-        .filter_map(|id| {
-            let resource = indexes.resource(&id)?;
-            Some(ContextResource {
-                id: resource.id.clone(),
-                kind: resource.kind.clone(),
-                name: resource.name.clone(),
-                mode: resource.mode.clone(),
-            })
+        .enumerate()
+        .map(|(index, chunk)| ContextChunkDescriptor {
+            chunk_id: chunk.chunk_id.clone(),
+            file_name: format!("partition-{index:04}.json"),
+            domain_ids: chunk
+                .domains
+                .iter()
+                .map(|domain| domain.domain_id.clone())
+                .collect(),
+            used_bytes: serialized_bytes(chunk),
+            budget_bytes: config.postprocess.target_budget_bytes,
         })
         .collect()
 }
