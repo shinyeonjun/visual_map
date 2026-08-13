@@ -1,6 +1,8 @@
 //! 도메인 계획과 청크 조립 모듈을 연결해 Codex context bundle을 만든다.
 
-use super::context_chunk::{build_chunk, fit_context_budget, serialized_bytes, ChunkBuildInput};
+use super::context_chunk::{
+    build_chunk, fit_context_budget, required_domain_size, serialized_bytes, ChunkBuildInput,
+};
 use super::context_metadata::build_shells;
 use super::context_profile::{compact_global_summary, global_summary, project_profile};
 use super::domains::build_plan;
@@ -13,7 +15,7 @@ use super::partition::partition_domains;
 use super::PostprocessError;
 use crate::config::AnalysisConfig;
 use crate::model::AnalysisResult;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 pub(crate) fn build_bundle(
     result: &AnalysisResult,
@@ -31,7 +33,16 @@ pub(crate) fn build_bundle(
         config.postprocess.global_summary_reserve_bytes,
     );
     let shells = build_shells(&plan, &indexes, config);
-    let mut partitions = partition_domains(&shells, overview, &config.postprocess);
+    let required_sizes = shells
+        .iter()
+        .map(|domain| {
+            (
+                domain.domain_id.clone(),
+                required_domain_size(domain, &plan, &indexes, config),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut partitions = partition_domains(&shells, overview, &config.postprocess, &required_sizes);
     if partitions.is_empty() {
         partitions.push(Vec::new());
     }
@@ -71,9 +82,9 @@ pub(crate) fn build_bundle(
             &partition,
             config.postprocess.target_budget_bytes,
         );
-        coverage.extend(partition.into_iter().map(|domain_id| DomainCoverage {
-            domain_id,
-            representation: "full".into(),
+        coverage.extend(context.domains.iter().map(|domain| DomainCoverage {
+            domain_id: domain.domain_id.clone(),
+            representation: domain_representation(domain),
             chunk_id: Some(chunk_id.clone()),
         }));
         chunks.push(context);
@@ -96,6 +107,17 @@ pub(crate) fn build_bundle(
         warnings,
     };
     Ok(CodexContextBundle { manifest, chunks })
+}
+
+fn domain_representation(domain: &super::model::ContextDomain) -> String {
+    if domain.omission.required_content_exceeds_budget
+        || domain.omission.included_features < domain.omission.total_features
+        || domain.omission.included_flows < domain.omission.total_flows
+    {
+        "partial".into()
+    } else {
+        "full".into()
+    }
 }
 
 fn should_split_empty_content(

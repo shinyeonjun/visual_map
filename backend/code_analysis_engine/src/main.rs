@@ -244,10 +244,11 @@ fn run_semantic_review(arguments: &[String]) -> ExitCode {
     ) {
         Ok(result) => {
             eprintln!(
-                "Codex 의미 분석 완료: status={} chunks={}/{} domains={} features={} flows={} output={}",
+                "Codex 의미 분석 완료: status={} chunks={}/{} retries={} domains={} features={} flows={} output={}",
                 result.status,
                 result.completed_chunks,
                 result.chunk_count,
+                result.retry_attempts,
                 result.domains.len(),
                 result.features.len(),
                 result.flows.len(),

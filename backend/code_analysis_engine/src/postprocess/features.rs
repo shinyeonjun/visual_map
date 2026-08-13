@@ -9,6 +9,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 pub(crate) struct FeatureSelection {
     pub features: Vec<ContextFeature>,
     pub included_ids: HashSet<String>,
+    pub mandatory_ids: HashSet<String>,
     pub total_count: usize,
     pub priorities: HashMap<String, u64>,
 }
@@ -40,18 +41,41 @@ pub(crate) fn select_for_domain(
         .collect::<HashMap<_, _>>();
     let features = candidates
         .iter()
-        .map(|(feature, _)| to_context_feature(feature, indexes, policy))
+        .map(|(feature, _)| {
+            to_context_feature(feature, indexes, policy, is_required(feature, indexes))
+        })
         .collect::<Vec<_>>();
     let included_ids = features
         .iter()
         .map(|feature| feature.id.clone())
         .collect::<HashSet<_>>();
+    let mandatory_ids = features
+        .iter()
+        .filter(|feature| feature.required)
+        .map(|feature| feature.id.clone())
+        .collect::<HashSet<_>>();
     FeatureSelection {
         features,
         included_ids,
+        mandatory_ids,
         total_count,
         priorities,
     }
+}
+
+pub(crate) fn is_required(
+    feature: &crate::views::overview::FeatureGroup,
+    indexes: &PostprocessIndexes<'_>,
+) -> bool {
+    feature
+        .entrypoint_ids
+        .iter()
+        .any(|id| indexes.visible_entrypoint_ids.contains(id))
+        || feature
+            .resource_ids
+            .iter()
+            .any(|id| indexes.visible_resource_ids.contains(id))
+        || !feature.dynamic_boundary_ids.is_empty()
 }
 
 fn belongs_to_domain(
@@ -68,6 +92,7 @@ fn to_context_feature(
     feature: &crate::views::overview::FeatureGroup,
     indexes: &PostprocessIndexes<'_>,
     policy: &PostprocessPolicy,
+    required: bool,
 ) -> ContextFeature {
     let mut symbols = feature
         .unit_ids
@@ -119,6 +144,7 @@ fn to_context_feature(
         } else {
             FeatureVisibility::Internal
         },
+        required,
         tags,
         symbols,
         source_paths,

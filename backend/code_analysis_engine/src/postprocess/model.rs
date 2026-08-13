@@ -84,8 +84,14 @@ pub struct GlobalContextSummary {
     pub represented_domain_count: usize,
     pub language_keys: Vec<String>,
     pub total_domains: usize,
+    /// 프로젝트 전체에서 중복을 제거한 고유 기능 수다.
     pub total_features: usize,
+    /// 원본 도메인 관계에서 기능이 도메인에 소속된 횟수다. 공유 기능은 여러 번 센다.
+    pub total_feature_memberships: usize,
+    /// 프로젝트 전체에서 중복을 제거한 고유 실행 흐름 수다.
     pub total_flows: usize,
+    /// 원본 도메인 관계에서 실행 흐름이 도메인에 소속된 횟수다. 공유 흐름은 여러 번 센다.
+    pub total_flow_memberships: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -197,6 +203,8 @@ pub struct ContextFeature {
     pub id: String,
     pub current_label: String,
     pub visibility: FeatureVisibility,
+    /// 진입점·자원·동적 경계가 있어 Codex 컨텍스트에서 반드시 보존해야 하는지다.
+    pub required: bool,
     pub tags: Vec<FeatureTag>,
     pub symbols: Vec<String>,
     pub source_paths: Vec<String>,
@@ -229,6 +237,8 @@ pub struct ContextFlow {
     pub feature_ids: Vec<String>,
     pub owner_unit_id: String,
     pub owner_name: String,
+    /// 진입점·자원·동적 경계와 직접 연결되어 반드시 보존해야 하는지다.
+    pub required: bool,
     pub steps: Vec<ContextFlowStep>,
     pub edges: Vec<ContextFlowEdge>,
     pub dynamic_boundary_ids: Vec<String>,
@@ -263,6 +273,8 @@ pub struct DomainOmission {
     pub reasons: BTreeMap<String, usize>,
     pub budget_bytes: usize,
     pub used_bytes: usize,
+    /// 필수 항목을 보존한 결과 도메인 예산을 초과했는지다.
+    pub required_content_exceeds_budget: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -271,10 +283,26 @@ pub struct ContextSummary {
     pub total_source_domains: usize,
     pub included_domains: usize,
     pub suppressed_domains: usize,
+    /// 아래 `total_features`·`total_flows`는 기존 schema 호환을 위한
+    /// membership alias다. 고유 개수는 `total_unique_*`를 사용한다.
     pub total_features: usize,
+    /// 이 청크에 포함될 수 있었던 고유 기능 수다.
+    pub total_unique_features: usize,
+    /// 이 청크에서 기능이 도메인에 소속된 횟수다.
+    pub total_feature_memberships: usize,
     pub included_features: usize,
+    pub included_unique_features: usize,
+    pub included_feature_memberships: usize,
+    pub omitted_unique_features: usize,
+    pub omitted_feature_memberships: usize,
     pub total_flows: usize,
+    pub total_unique_flows: usize,
+    pub total_flow_memberships: usize,
     pub included_flows: usize,
+    pub included_unique_flows: usize,
+    pub included_flow_memberships: usize,
+    pub omitted_unique_flows: usize,
+    pub omitted_flow_memberships: usize,
     pub budget_bytes: usize,
     pub used_bytes: usize,
 }

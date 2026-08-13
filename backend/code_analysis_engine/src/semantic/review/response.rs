@@ -12,6 +12,36 @@ pub struct ReviewProposal {
     pub flows: Vec<FlowSuggestion>,
 }
 
+impl ReviewProposal {
+    pub fn merge_missing(&mut self, supplement: Self) {
+        merge_by_id(&mut self.domains, supplement.domains, |item| {
+            item.domain_id.as_str()
+        });
+        merge_by_id(&mut self.features, supplement.features, |item| {
+            item.feature_id.as_str()
+        });
+        merge_by_id(&mut self.flows, supplement.flows, |item| {
+            item.flow_id.as_str()
+        });
+    }
+}
+
+fn merge_by_id<T, F>(destination: &mut Vec<T>, supplement: Vec<T>, id: F)
+where
+    F: Fn(&T) -> &str,
+{
+    for item in supplement {
+        if let Some(current) = destination
+            .iter_mut()
+            .find(|current| id(current) == id(&item))
+        {
+            *current = item;
+        } else {
+            destination.push(item);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DomainSuggestion {

@@ -47,7 +47,11 @@ pub struct ReviewGlobalSummary {
     pub language_keys: Vec<String>,
     pub total_domains: usize,
     pub total_features: usize,
+    #[serde(default)]
+    pub total_feature_memberships: usize,
     pub total_flows: usize,
+    #[serde(default)]
+    pub total_flow_memberships: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +113,8 @@ pub struct ReviewFeature {
     pub current_label: String,
     pub visibility: Value,
     #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
     pub tags: Vec<Value>,
     #[serde(default)]
     pub symbols: Vec<String>,
@@ -130,6 +136,8 @@ pub struct ReviewFlow {
     pub feature_ids: Vec<String>,
     pub owner_unit_id: String,
     pub owner_name: String,
+    #[serde(default)]
+    pub required: bool,
     #[serde(default)]
     pub steps: Vec<ReviewFlowStep>,
     #[serde(default)]

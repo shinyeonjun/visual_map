@@ -1,5 +1,6 @@
 //! Codex 카드에 포함할 실행 흐름 후보를 만든다.
 
+use super::features::is_required as feature_is_required;
 use super::indexes::PostprocessIndexes;
 use super::model::{ContextFlow, ContextFlowEdge, ContextFlowStep};
 use crate::config::PostprocessPolicy;
@@ -14,6 +15,7 @@ pub(crate) struct FlowSelection {
 pub(crate) struct FlowCandidate {
     pub context: ContextFlow,
     pub score: u64,
+    pub required: bool,
 }
 
 pub(crate) fn candidates_for_features(
@@ -32,9 +34,18 @@ pub(crate) fn candidates_for_features(
                 .collect::<Vec<_>>();
             let score = score_flow(flow, &features, indexes, policy);
             let selection_reason = selection_reason(flow, &features, indexes);
+            let required = flow_is_required(flow, &features, indexes);
             Some(FlowCandidate {
-                context: to_context_flow(flow, feature_ids, &selection_reason, indexes, policy),
+                context: to_context_flow(
+                    flow,
+                    feature_ids,
+                    &selection_reason,
+                    required,
+                    indexes,
+                    policy,
+                ),
                 score,
+                required,
             })
         })
         .collect::<Vec<_>>();
@@ -56,6 +67,15 @@ fn feature_flow_index(
     indexes: &PostprocessIndexes<'_>,
 ) -> HashMap<String, Vec<String>> {
     let mut result: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut flows_by_owner: HashMap<&str, Vec<&str>> = HashMap::new();
+    for flow in &indexes.overview.execution_flows.flows {
+        if indexes.visible_flow_ids.contains(&flow.id) {
+            flows_by_owner
+                .entry(flow.owner_unit_id.as_str())
+                .or_default()
+                .push(flow.id.as_str());
+        }
+    }
     for feature_id in feature_ids {
         let Some(feature) = indexes.feature(feature_id) else {
             continue;
@@ -66,6 +86,19 @@ fn feature_flow_index(
                     .entry(flow_id.clone())
                     .or_default()
                     .insert(feature_id.clone());
+            }
+        }
+        // `FeatureGroup.flow_ids`는 분석 단계의 materialized 관계다. 누락된
+        // 관계가 있어도 소유 유닛과 flow의 구조적 관계로 복구해 resource·entrypoint
+        // flow가 후처리에서 사라지지 않게 한다.
+        for unit_id in &feature.unit_ids {
+            if let Some(flow_ids) = flows_by_owner.get(unit_id.as_str()) {
+                for flow_id in flow_ids {
+                    result
+                        .entry((*flow_id).to_string())
+                        .or_default()
+                        .insert(feature_id.clone());
+                }
             }
         }
     }
@@ -102,6 +135,23 @@ fn score_flow(
         + u64::from(has_resource) * u64::from(policy.flow_resource_weight)
         + u64::from(has_dynamic) * u64::from(policy.flow_dynamic_weight)
         + complexity as u64 * u64::from(policy.flow_complexity_weight)
+}
+
+fn flow_is_required(
+    flow: &crate::flow::ExecutionFlow,
+    features: &[&FeatureGroup],
+    indexes: &PostprocessIndexes<'_>,
+) -> bool {
+    !flow.dynamic_boundary_ids.is_empty()
+        || features
+            .iter()
+            .any(|feature| feature_is_required(feature, indexes))
+        || indexes
+            .overview
+            .resources
+            .iter()
+            .filter(|resource| indexes.visible_resource_ids.contains(&resource.id))
+            .any(|resource| resource.unit_id == flow.owner_unit_id)
 }
 
 fn selection_reason(
@@ -141,6 +191,7 @@ fn to_context_flow(
     flow: &crate::flow::ExecutionFlow,
     mut feature_ids: Vec<String>,
     selection_reason: &str,
+    required: bool,
     indexes: &PostprocessIndexes<'_>,
     policy: &PostprocessPolicy,
 ) -> ContextFlow {
@@ -181,6 +232,7 @@ fn to_context_flow(
         feature_ids,
         owner_unit_id: flow.owner_unit_id.clone(),
         owner_name,
+        required,
         steps,
         edges,
         dynamic_boundary_ids,

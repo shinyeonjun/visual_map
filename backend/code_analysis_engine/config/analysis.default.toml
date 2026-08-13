@@ -231,6 +231,7 @@ internalCatalogMarkers = ["/frameworks/registry/catalog.","/framework-catalog.rs
 codexExecutable = "codex"
 codexTimeoutMs = 0
 codexMaxInputBytes = 700000
+missingItemRetries = 1
 maximumLabelLength = 120
 maximumSummaryLength = 500
 
