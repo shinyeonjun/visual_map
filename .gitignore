@@ -1,5 +1,5 @@
 # ── 빌드 산출물 ────────────────────────────────────────────
-# Rust 빌드 캐시. backend/code_analysis_engine/target 는 5GB 이상까지 커진다.
+# Rust 빌드 캐시. 대형 분석 프로젝트의 target은 수 GB까지 커질 수 있다.
 target/
 *.pdb
 *.profraw

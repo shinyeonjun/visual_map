@@ -118,10 +118,10 @@ pub(crate) fn storage_root() -> Result<PathBuf, String> {
     }
 
     if cfg!(debug_assertions) {
-        let relative = Path::new("backend/code_analysis_engine/tests/dev");
+        let relative = Path::new("tests/dev");
         for root in search_roots() {
             let candidate = root.join(relative);
-            if root.join("backend/code_analysis_engine").is_dir() {
+            if root.join("Cargo.toml").is_file() && root.join("src").is_dir() {
                 fs::create_dir_all(&candidate)
                     .map_err(|error| format!("개발 데이터 폴더를 만들지 못했습니다: {error}"))?;
                 return Ok(candidate);
@@ -209,7 +209,7 @@ pub(crate) fn resolve_executable(value: &str, environment_key: &str, file_name: 
     };
     for root in search_roots() {
         let candidate = root
-            .join("backend/code_analysis_engine/target/release")
+            .join("target/release")
             .join(&executable);
         if candidate.is_file() {
             return candidate;
@@ -229,7 +229,7 @@ pub(crate) fn resolve_config(value: &str, resource_dir: Option<&Path>) -> PathBu
         }
     }
     for root in search_roots() {
-        let candidate = root.join("backend/code_analysis_engine/config/analysis.default.toml");
+        let candidate = root.join("config/analysis.default.toml");
         if candidate.is_file() {
             return candidate;
         }

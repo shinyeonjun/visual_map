@@ -27,7 +27,7 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../../backend/code_analysis_engine/config/analysis.default.toml": "config/analysis.default.toml"
+      "../../config/analysis.default.toml": "config/analysis.default.toml"
     },
     "icon": [
       "icons/icon.ico",
