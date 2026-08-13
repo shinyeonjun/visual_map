@@ -138,6 +138,8 @@ fn to_context_feature(
 
     ContextFeature {
         id: feature.id.clone(),
+        domain_ids: feature.domain_ids.clone(),
+        shared: feature.domain_ids.len() > 1,
         current_label: feature.label.clone(),
         visibility: if matches!(feature.visibility, OverviewVisibility::UserFacing) {
             FeatureVisibility::UserFacing

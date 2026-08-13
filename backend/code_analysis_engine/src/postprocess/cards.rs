@@ -1,8 +1,6 @@
 //! 도메인 계획과 청크 조립 모듈을 연결해 Codex context bundle을 만든다.
 
-use super::context_chunk::{
-    build_chunk, fit_context_budget, required_domain_size, serialized_bytes, ChunkBuildInput,
-};
+use super::context_chunk::{build_chunk, fit_context_budget, serialized_bytes, ChunkBuildInput};
 use super::context_metadata::build_shells;
 use super::context_profile::{compact_global_summary, global_summary, project_profile};
 use super::domains::build_plan;
@@ -33,14 +31,12 @@ pub(crate) fn build_bundle(
         config.postprocess.global_summary_reserve_bytes,
     );
     let shells = build_shells(&plan, &indexes, config);
+    // 분할 단계에서는 도메인 shell만 비용으로 계산한다. 기능·흐름을
+    // 도메인별로 미리 합산하면 공유 흐름이 분할 전부터 반복 계산되어
+    // 실제 전역 정규화 결과보다 훨씬 많은 청크가 만들어진다.
     let required_sizes = shells
         .iter()
-        .map(|domain| {
-            (
-                domain.domain_id.clone(),
-                required_domain_size(domain, &plan, &indexes, config),
-            )
-        })
+        .map(|domain| (domain.domain_id.clone(), serialized_bytes(domain)))
         .collect::<HashMap<_, _>>();
     let mut partitions = partition_domains(&shells, overview, &config.postprocess, &required_sizes);
     if partitions.is_empty() {

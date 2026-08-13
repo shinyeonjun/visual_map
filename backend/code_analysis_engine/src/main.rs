@@ -39,7 +39,7 @@ fn run_command(arguments: Vec<String>) -> ExitCode {
     let Some(root_path) = arguments.first() else {
         eprintln!("사용법: code-analysis-engine <프로젝트-경로> [--compact] [--profile] [--no-cache] [--no-output] [--output=<경로>] [--prepared-output=<경로>] [--config=<경로>]");
         eprintln!("       code-analysis-engine postprocess codex-context --input=<분석결과.json> --output=<컨텍스트.json> [--config=<경로>] [--pretty] [--profile]");
-        eprintln!("       code-analysis-engine semantic review --input=<codex-context.json> --output=<semantic-result.json> --project-root=<프로젝트-경로> [--config=<경로>] [--profile]");
+        eprintln!("       code-analysis-engine semantic review --input=<codex-context.json> --output=<semantic-result.json> --project-root=<프로젝트-경로> [--config=<경로>] [--model=<모델>] [--profile]");
         return ExitCode::from(2);
     };
 
@@ -154,14 +154,13 @@ fn run_codex_context_postprocess(arguments: &[String]) -> ExitCode {
         None => AnalysisConfig::default(),
     };
     let pretty = arguments.iter().any(|argument| argument == "--pretty");
-    let bundle =
-        match code_analysis_engine::postprocess::build_codex_context_bundle(&result, &config) {
-            Ok(context) => context,
-            Err(error) => {
-                eprintln!("Codex 컨텍스트 후보정 실패: {error}");
-                return ExitCode::from(1);
-            }
-        };
+    let bundle = match code_analysis_engine::postprocess::build_codex_context(&result, &config) {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("Codex 컨텍스트 후보정 실패: {error}");
+            return ExitCode::from(1);
+        }
+    };
     if bundle.chunks.len() == 1 {
         if let Err(error) = write_context_json(Path::new(&output_path), &bundle.chunks[0], pretty) {
             eprintln!("Codex 컨텍스트 저장 실패: {error}");
@@ -235,25 +234,43 @@ fn run_semantic_review(arguments: &[String]) -> ExitCode {
         },
         None => AnalysisConfig::default(),
     };
+    let mut semantic_policy = config.semantic;
+    if let Some(model) = option_value(arguments, "--model") {
+        semantic_policy.codex_model = Some(model);
+    }
     let started = Instant::now();
     match code_analysis_engine::semantic::review::run(
         Path::new(&input_path),
         Path::new(&output_path),
         Path::new(&project_root),
-        &config.semantic,
+        &semantic_policy,
     ) {
         Ok(result) => {
             eprintln!(
-                "Codex 의미 분석 완료: status={} chunks={}/{} retries={} domains={} features={} flows={} output={}",
+                "Codex 의미 분석 완료: status={} stages={} chunks={}/{} domainFeatureChunks={} flowChunks={} retries={} domains={} features={} flows={} output={}",
                 result.status,
+                result.semantic_stage_count,
                 result.completed_chunks,
                 result.chunk_count,
+                result.domain_feature_completed_chunks,
+                result.flow_completed_chunks,
                 result.retry_attempts,
                 result.domains.len(),
                 result.features.len(),
                 result.flows.len(),
                 output_path
             );
+            for warning in result
+                .warnings
+                .iter()
+                .filter(|warning| warning.code.ends_with("CHUNK_FAILED"))
+            {
+                eprintln!(
+                    "[semantic] chunk_failed id={} message={}",
+                    warning.item_id.as_deref().unwrap_or("unknown"),
+                    warning.message
+                );
+            }
             if arguments.iter().any(|argument| argument == "--profile") {
                 eprintln!(
                     "[profile] semantic_review_process_elapsed_ms={}",

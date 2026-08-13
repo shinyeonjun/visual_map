@@ -19,6 +19,10 @@ pub struct ReviewContext {
     #[serde(default)]
     pub adjacent_domains: Vec<ReviewAdjacentDomain>,
     pub domains: Vec<ReviewDomain>,
+    #[serde(default)]
+    pub features: Vec<ReviewFeature>,
+    #[serde(default)]
+    pub flows: Vec<ReviewFlow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -81,9 +85,9 @@ pub struct ReviewDomain {
     #[serde(default)]
     pub resources: Vec<ReviewResource>,
     #[serde(default)]
-    pub features: Vec<ReviewFeature>,
+    pub feature_ids: Vec<String>,
     #[serde(default)]
-    pub flows: Vec<ReviewFlow>,
+    pub flow_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +114,8 @@ pub struct ReviewResource {
 #[serde(rename_all = "camelCase")]
 pub struct ReviewFeature {
     pub id: String,
+    #[serde(default)]
+    pub domain_ids: Vec<String>,
     pub current_label: String,
     pub visibility: Value,
     #[serde(default)]
@@ -133,6 +139,8 @@ pub struct ReviewFeature {
 pub struct ReviewFlow {
     pub id: String,
     #[serde(default)]
+    pub domain_ids: Vec<String>,
+    #[serde(default)]
     pub feature_ids: Vec<String>,
     pub owner_unit_id: String,
     pub owner_name: String,
@@ -141,29 +149,16 @@ pub struct ReviewFlow {
     #[serde(default)]
     pub steps: Vec<ReviewFlowStep>,
     #[serde(default)]
-    pub edges: Vec<ReviewFlowEdge>,
-    #[serde(default)]
     pub dynamic_boundary_ids: Vec<String>,
     #[serde(default)]
     pub selection_reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewFlowStep {
-    pub id: String,
     pub kind: Value,
     pub label: String,
-    pub target_unit_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewFlowEdge {
-    pub source_node_id: String,
-    pub target_node_id: String,
-    pub kind: Value,
-    pub status: Value,
 }
 
 #[derive(Debug, Clone)]

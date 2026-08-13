@@ -5,8 +5,8 @@ use super::features::select_for_domain as select_features;
 use super::flows::candidates_for_features;
 use super::indexes::PostprocessIndexes;
 use super::model::{
-    AdjacentDomain, CodexSemanticContext, ContextDomain, ContextProjectProfile, ContextSummary,
-    ContextWarning, GlobalContextSummary,
+    AdjacentDomain, CodexSemanticContext, ContextDomain, ContextFeature, ContextFlow,
+    ContextProjectProfile, ContextSummary, ContextWarning, GlobalContextSummary,
 };
 use super::selection::{fill_domain, promote_required_relationships, required_domain_bytes};
 use crate::config::AnalysisConfig;
@@ -24,23 +24,6 @@ pub(super) struct ChunkBuildInput<'a> {
     pub(super) config: &'a AnalysisConfig,
     pub(super) profile: ContextProjectProfile,
     pub(super) global_summary: GlobalContextSummary,
-}
-
-pub(super) fn required_domain_size(
-    domain: &ContextDomain,
-    plan: &DomainPlan,
-    indexes: &PostprocessIndexes<'_>,
-    config: &AnalysisConfig,
-) -> usize {
-    let cluster = plan
-        .clusters
-        .iter()
-        .find(|cluster| cluster.representative_id == domain.domain_id)
-        .expect("domain shell에 대응하는 cluster가 있어야 한다");
-    let mut features = select_features(cluster, indexes, &config.postprocess);
-    let flows = candidates_for_features(&features.included_ids, indexes, &config.postprocess);
-    promote_required_relationships(&mut features, &flows);
-    required_domain_bytes(domain, &features, &flows)
 }
 
 pub(super) fn build_chunk(input: ChunkBuildInput<'_>) -> CodexSemanticContext {
@@ -170,6 +153,8 @@ pub(super) fn build_chunk(input: ChunkBuildInput<'_>) -> CodexSemanticContext {
         global_summary,
         adjacent_domains,
         domains,
+        features: Vec::new(),
+        flows: Vec::new(),
         domain_aliases: plan.aliases.clone(),
         suppressed_domains: plan.suppressed.clone(),
         summary: ContextSummary {
@@ -197,40 +182,14 @@ pub(super) fn build_chunk(input: ChunkBuildInput<'_>) -> CodexSemanticContext {
         },
         warnings: Vec::new(),
     };
+    normalize_context_items(&mut context);
     update_summary(&mut context);
     context
 }
 
 pub(super) fn fit_context_budget(context: &mut CodexSemanticContext, budget: usize) {
     while serialized_bytes(context) > budget {
-        let Some(domain_index) = context
-            .domains
-            .iter()
-            .enumerate()
-            .filter(|(_, domain)| {
-                domain.features.iter().any(|feature| !feature.required)
-                    || domain.flows.iter().any(|flow| !flow.required)
-            })
-            .min_by(|(_, left), (_, right)| {
-                optional_domain_score(left)
-                    .cmp(&optional_domain_score(right))
-                    .then_with(|| right.domain_id.cmp(&left.domain_id))
-            })
-            .map(|(index, _)| index)
-        else {
-            context.warnings.push(ContextWarning {
-                code: "required_content_exceeds_budget".into(),
-                message: "필수 기능·실행 흐름을 보존하면 byte budget을 초과합니다.".into(),
-                related_ids: context
-                    .domains
-                    .iter()
-                    .map(|domain| domain.domain_id.clone())
-                    .collect(),
-            });
-            break;
-        };
-        let domain = &mut context.domains[domain_index];
-        let optional_feature_index = domain
+        let optional_feature = context
             .features
             .iter()
             .enumerate()
@@ -241,43 +200,54 @@ pub(super) fn fit_context_budget(context: &mut CodexSemanticContext, budget: usi
                     .then_with(|| right.id.cmp(&left.id))
             })
             .map(|(index, _)| index);
-        if let Some(feature_index) = optional_feature_index {
-            let feature = domain.features.remove(feature_index);
-            let feature_id = feature.id;
-            for flow in &mut domain.flows {
+        let optional_flow = context
+            .flows
+            .iter()
+            .enumerate()
+            .filter(|(_, flow)| !flow.required)
+            .min_by(|(_, left), (_, right)| {
+                flow_optional_score(left)
+                    .cmp(&flow_optional_score(right))
+                    .then_with(|| right.id.cmp(&left.id))
+            })
+            .map(|(index, _)| index);
+
+        if let Some(feature_index) = optional_feature {
+            let feature_id = context.features.remove(feature_index).id;
+            for domain in &mut context.domains {
+                domain.feature_ids.retain(|id| id != &feature_id);
+            }
+            for flow in &mut context.flows {
                 if !flow.required {
                     flow.feature_ids.retain(|id| id != &feature_id);
                 }
             }
-            domain
+            context
                 .flows
                 .retain(|flow| flow.required || !flow.feature_ids.is_empty());
-            *domain
-                .omission
-                .reasons
-                .entry("global_budget_exceeded".into())
-                .or_insert(0) += 1;
-        } else {
-            if let Some(flow_index) = domain
-                .flows
-                .iter()
-                .enumerate()
-                .filter(|(_, flow)| !flow.required)
-                .min_by(|(_, left), (_, right)| {
-                    flow_optional_score(left)
-                        .cmp(&flow_optional_score(right))
-                        .then_with(|| right.id.cmp(&left.id))
-                })
-                .map(|(index, _)| index)
-            {
-                domain.flows.remove(flow_index);
+            record_budget_omission(context);
+        } else if let Some(flow_index) = optional_flow {
+            let flow_id = context.flows.remove(flow_index).id;
+            for domain in &mut context.domains {
+                domain.flow_ids.retain(|id| id != &flow_id);
             }
-            *domain
-                .omission
-                .reasons
-                .entry("global_budget_exceeded".into())
-                .or_insert(0) += 1;
+            for feature in &mut context.features {
+                feature.flow_ids.retain(|id| id != &flow_id);
+            }
+            record_budget_omission(context);
+        } else {
+            context.warnings.push(ContextWarning {
+                code: "required_content_exceeds_budget".into(),
+                message: "필수 기능·실행 흐름을 보존하면 byte budget을 초과합니다.".into(),
+                related_ids: context
+                    .domains
+                    .iter()
+                    .map(|domain| domain.domain_id.clone())
+                    .collect(),
+            });
+            break;
         }
+        sync_item_domain_links(context);
         update_summary(context);
     }
     context.summary.used_bytes = serialized_bytes(context);
@@ -286,26 +256,174 @@ pub(super) fn fit_context_budget(context: &mut CodexSemanticContext, budget: usi
     }
 }
 
+/// 도메인별 bundle을 Codex 입력용 전역 인덱스로 정규화한다.
+///
+/// 원본 overview에서는 하나의 기능이나 흐름이 여러 도메인에 걸쳐 보일 수
+/// 있다. 이를 도메인 안에 매번 직렬화하면 같은 객체와 실행 단계가 청크마다
+/// 반복되어 컨텍스트 크기와 AI 호출 수가 함께 증가한다. 도메인은 ID 목록만
+/// 유지하고 실제 객체는 context 전역 배열에 한 번만 둔다.
+fn normalize_context_items(context: &mut CodexSemanticContext) {
+    let mut features = BTreeMap::<String, ContextFeature>::new();
+    let mut flows = BTreeMap::<String, ContextFlow>::new();
+    let mut feature_domains = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut flow_domains = BTreeMap::<String, BTreeSet<String>>::new();
+
+    context.features.clear();
+    context.flows.clear();
+
+    for domain in &mut context.domains {
+        domain.feature_ids = domain
+            .features
+            .iter()
+            .map(|feature| feature.id.clone())
+            .collect();
+        domain.feature_ids.sort();
+        domain.feature_ids.dedup();
+        domain.flow_ids = domain.flows.iter().map(|flow| flow.id.clone()).collect();
+        domain.flow_ids.sort();
+        domain.flow_ids.dedup();
+
+        for feature in &domain.features {
+            feature_domains
+                .entry(feature.id.clone())
+                .or_default()
+                .insert(domain.domain_id.clone());
+            features
+                .entry(feature.id.clone())
+                .or_insert_with(|| feature.clone());
+        }
+        for flow in &domain.flows {
+            flow_domains
+                .entry(flow.id.clone())
+                .or_default()
+                .insert(domain.domain_id.clone());
+            flows.entry(flow.id.clone()).or_insert_with(|| flow.clone());
+        }
+
+        domain.features.clear();
+        domain.flows.clear();
+    }
+
+    for (feature_id, mut feature) in features {
+        feature.domain_ids = feature_domains
+            .remove(&feature_id)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        feature.shared = feature.domain_ids.len() > 1;
+        context.features.push(feature);
+    }
+
+    // 하나의 실행 흐름이 여러 도메인에 걸쳐 보이는 것은 정적 관계상
+    // 유효하지만, Codex 입력에는 같은 흐름을 도메인마다 반복해서 넣을
+    // 이유가 없다. 신호가 가장 강한 도메인을 대표 소유자로 정하고,
+    // shared 플래그로 원래의 공유 관계만 보존한다.
+    let domain_scores = context
+        .domains
+        .iter()
+        .map(|domain| (domain.domain_id.clone(), domain.signal.score))
+        .collect::<BTreeMap<_, _>>();
+    let flow_primary_domains = flow_domains
+        .iter()
+        .filter_map(|(flow_id, domains)| {
+            domains
+                .iter()
+                .max_by(|left, right| {
+                    domain_scores
+                        .get(*left)
+                        .cmp(&domain_scores.get(*right))
+                        .then_with(|| right.cmp(left))
+                })
+                .map(|domain_id| (flow_id.clone(), domain_id.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for domain in &mut context.domains {
+        domain.flow_ids.retain(|flow_id| {
+            flow_primary_domains
+                .get(flow_id)
+                .is_some_and(|primary| primary == &domain.domain_id)
+        });
+    }
+    for (flow_id, mut flow) in flows {
+        let original_domains = flow_domains.get(&flow_id).cloned().unwrap_or_default();
+        flow.shared = original_domains.len() > 1;
+        flow.domain_ids = flow_primary_domains
+            .get(&flow_id)
+            .cloned()
+            .into_iter()
+            .collect();
+        context.flows.push(flow);
+    }
+}
+
+fn record_budget_omission(context: &mut CodexSemanticContext) {
+    for domain in &mut context.domains {
+        *domain
+            .omission
+            .reasons
+            .entry("global_budget_exceeded".into())
+            .or_insert(0) += 1;
+    }
+}
+
+/// 정규화된 전역 항목과 도메인 ID 참조를 서로 일치시킨다.
+fn sync_item_domain_links(context: &mut CodexSemanticContext) {
+    let feature_domains = context
+        .domains
+        .iter()
+        .map(|domain| {
+            (
+                domain.domain_id.as_str(),
+                domain.feature_ids.iter().collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let flow_domains = context
+        .domains
+        .iter()
+        .map(|domain| {
+            (
+                domain.domain_id.as_str(),
+                domain.flow_ids.iter().collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for feature in &mut context.features {
+        feature.domain_ids.retain(|domain_id| {
+            feature_domains
+                .get(domain_id.as_str())
+                .is_some_and(|ids| ids.contains(&&feature.id))
+        });
+    }
+    for flow in &mut context.flows {
+        flow.domain_ids.retain(|domain_id| {
+            flow_domains
+                .get(domain_id.as_str())
+                .is_some_and(|ids| ids.contains(&&flow.id))
+        });
+    }
+}
+
 fn update_summary(context: &mut CodexSemanticContext) {
     let feature_memberships = context
         .domains
         .iter()
-        .map(|domain| domain.features.len())
+        .map(|domain| domain.feature_ids.len())
         .sum::<usize>();
     let flow_memberships = context
         .domains
         .iter()
-        .map(|domain| domain.flows.len())
+        .map(|domain| domain.flow_ids.len())
         .sum::<usize>();
     let feature_ids = context
-        .domains
+        .features
         .iter()
-        .flat_map(|domain| domain.features.iter().map(|feature| feature.id.clone()))
+        .map(|feature| feature.id.clone())
         .collect::<BTreeSet<_>>();
     let flow_ids = context
-        .domains
+        .flows
         .iter()
-        .flat_map(|domain| domain.flows.iter().map(|flow| flow.id.clone()))
+        .map(|flow| flow.id.clone())
         .collect::<BTreeSet<_>>();
     context.summary.included_features = feature_memberships;
     context.summary.included_unique_features = feature_ids.len();
@@ -331,27 +449,10 @@ fn update_summary(context: &mut CodexSemanticContext) {
         .saturating_sub(flow_memberships);
     context.summary.used_bytes = serialized_bytes(context);
     for domain in &mut context.domains {
-        domain.omission.included_features = domain.features.len();
-        domain.omission.included_flows = domain.flows.len();
+        domain.omission.included_features = domain.feature_ids.len();
+        domain.omission.included_flows = domain.flow_ids.len();
         domain.omission.used_bytes = serialized_bytes(domain);
     }
-}
-
-fn optional_domain_score(domain: &ContextDomain) -> usize {
-    domain
-        .features
-        .iter()
-        .filter(|feature| !feature.required)
-        .map(feature_optional_score)
-        .chain(
-            domain
-                .flows
-                .iter()
-                .filter(|flow| !flow.required)
-                .map(flow_optional_score),
-        )
-        .min()
-        .unwrap_or(usize::MAX)
 }
 
 fn feature_optional_score(feature: &super::model::ContextFeature) -> usize {
@@ -362,7 +463,7 @@ fn feature_optional_score(feature: &super::model::ContextFeature) -> usize {
 }
 
 fn flow_optional_score(flow: &super::model::ContextFlow) -> usize {
-    flow.feature_ids.len() + flow.steps.len() + flow.edges.len()
+    flow.feature_ids.len() + flow.steps.len()
 }
 
 fn adjacent_domains(

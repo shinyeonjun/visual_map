@@ -4,4 +4,4 @@ pub mod overview;
 pub mod preprocessed;
 
 pub use overview::OverviewResponse;
-pub use preprocessed::{PreparedStaticOverview, PreprocessedOverview};
+pub use preprocessed::PreparedStaticOverview;

@@ -174,6 +174,8 @@ pub(crate) fn domain_context(
         source_paths,
         entrypoints: Vec::new(),
         resources: Vec::new(),
+        feature_ids: Vec::new(),
+        flow_ids: Vec::new(),
         features: Vec::new(),
         flows: Vec::new(),
         evidence_ids,

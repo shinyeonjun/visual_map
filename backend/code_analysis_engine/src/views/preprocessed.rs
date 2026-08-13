@@ -13,9 +13,6 @@ use crate::views::overview::{AnalysisCoverage, FeatureGroup, OverviewResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-/// 의미 분석 이전의 정적 전처리 결과라는 이름을 함께 제공한다.
-pub type PreprocessedOverview = PreparedStaticOverview;
-
 /// raw Overview에서 중복 그래프와 테스트 전용 사실을 걷어낸 정적 화면 계약이다.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
