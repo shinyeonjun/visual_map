@@ -1,10 +1,9 @@
-use crate::facts::{CodeUnitKind, FactBundle};
+use crate::facts::CodeUnitKind;
 
 /// Tree-sitter 선언 노드를 공통 코드 유닛 종류로 변환한다.
 pub(super) fn declaration_kind(
     node_kind: &str,
-    current_parent: &str,
-    bundle: &FactBundle,
+    parent_kind: Option<&CodeUnitKind>,
 ) -> Option<CodeUnitKind> {
     let kind = match node_kind {
         "function_declaration"
@@ -13,20 +12,32 @@ pub(super) fn declaration_kind(
         | "function_definition_statement"
         | "method_declaration"
         | "method_definition"
-        | "method_signature"
-        | "function_signature_item"
-        | "function_signature" => {
-            if bundle
-                .units
-                .iter()
-                .any(|unit| unit.id == current_parent && is_type_container(&unit.kind))
-            {
+        | "method_elem"
+        | "function_signature_item" => {
+            if parent_kind.is_some_and(is_type_container) {
                 CodeUnitKind::Method
             } else {
                 CodeUnitKind::Function
             }
         }
+        "method_signature" | "abstract_method_signature" => {
+            if parent_kind.is_some_and(is_type_container) {
+                CodeUnitKind::Method
+            } else {
+                return None;
+            }
+        }
         "constructor_declaration" | "constructor" => CodeUnitKind::Constructor,
+        "constructor_signature"
+        | "constant_constructor_signature"
+        | "factory_constructor_signature"
+        | "redirecting_factory_constructor_signature" => {
+            if parent_kind.is_some_and(is_type_container) {
+                CodeUnitKind::Constructor
+            } else {
+                return None;
+            }
+        }
         "lambda_expression"
         | "arrow_function"
         | "function_expression"
@@ -50,11 +61,21 @@ pub(super) fn declaration_kind(
         "record_declaration" | "record_definition" => CodeUnitKind::Record,
         "mixin_declaration" | "mixin" => CodeUnitKind::Mixin,
         "extension_declaration" | "extension_declaration_statement" => CodeUnitKind::Extension,
-        "namespace_definition" | "namespace_declaration" => CodeUnitKind::Namespace,
+        "namespace_definition" | "namespace_declaration" | "file_scoped_namespace_declaration" => {
+            CodeUnitKind::Namespace
+        }
         "package_declaration" => CodeUnitKind::Package,
         "module_declaration" | "internal_module" | "mod_item" => CodeUnitKind::Module,
         "type_declaration" => CodeUnitKind::Record,
-        "property_declaration" | "property_definition" => CodeUnitKind::Property,
+        "property_declaration"
+        | "property_definition"
+        | "field_definition"
+        | "public_field_definition"
+        | "property_signature"
+        | "getter_declaration"
+        | "setter_declaration"
+        | "external_getter_declaration"
+        | "external_setter_declaration" => CodeUnitKind::Property,
         "type_alias_declaration" | "type_alias" | "type_item" => CodeUnitKind::TypeAlias,
         _ => return None,
     };

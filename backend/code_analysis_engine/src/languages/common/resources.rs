@@ -1,7 +1,9 @@
 //! 설정 기반 외부 자원 접근 추출기.
 
 use crate::config::{ResourceNameSource, ResourceRule};
-use crate::facts::{AccessMode, CallSiteFact, Evidence, FactBundle, ResourceAccess, ResourceKind};
+use crate::facts::{
+    AccessMode, BindingKind, CallSiteFact, Evidence, FactBundle, ResourceAccess, ResourceKind,
+};
 use crate::languages::common::metadata::stable_id;
 use crate::model::{FileEntry, Language};
 
@@ -14,12 +16,15 @@ pub(super) fn extract(
 ) {
     let language_key = language.key();
     for call in call_sites {
+        let resolved_callee = resolve_imported_callee(bundle, call);
         let Some(rule) = rules.iter().find(|rule| {
             rule.languages.iter().any(|key| key == language_key)
-                && rule
-                    .callee_patterns
-                    .iter()
-                    .any(|pattern| callee_matches(pattern, &call.callee))
+                && rule.callee_patterns.iter().any(|pattern| {
+                    callee_matches(pattern, &resolved_callee.value)
+                        && (!rule.requires_import
+                            || is_unqualified_pattern(pattern)
+                            || resolved_callee.imported)
+                })
         }) else {
             continue;
         };
@@ -59,10 +64,87 @@ pub(super) fn extract(
             unit_id: call.source_unit_id.clone(),
             kind,
             name,
-            mode: effective_mode(&rule.mode, &call.callee),
+            mode: effective_mode(&rule.mode, &resolved_callee.value),
             evidence: vec![evidence],
         });
     }
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedCallee {
+    value: String,
+    imported: bool,
+}
+
+/// 호출 receiver 또는 함수 이름의 import binding을 적용한다.
+///
+/// `disk.readFile()`와 `slurp()`처럼 로컬 alias로 호출된 표준 API도
+/// 원래 모듈의 resource 규칙에 연결한다. 반대로 import 근거가 없는
+/// `fs.readFile()`은 사용자 객체일 수 있으므로 qualified resource로
+/// 확정하지 않는다.
+fn resolve_imported_callee(bundle: &FactBundle, call: &CallSiteFact) -> ResolvedCallee {
+    let head = call_head(&call.callee);
+    let Some(target) = unique_import_target(bundle, &call.source_unit_id, head) else {
+        return ResolvedCallee {
+            value: call.callee.clone(),
+            imported: false,
+        };
+    };
+    let suffix = call.callee.strip_prefix(head).unwrap_or_default();
+    let target = target.replace("::", ".").trim_end_matches(".*").to_string();
+    let target = target
+        .strip_suffix(".default")
+        .unwrap_or(&target)
+        .to_string();
+    ResolvedCallee {
+        value: format!("{target}{suffix}"),
+        imported: true,
+    }
+}
+
+fn unique_import_target(
+    bundle: &FactBundle,
+    source_unit_id: &str,
+    local_name: &str,
+) -> Option<String> {
+    let source_file_id = bundle
+        .units
+        .iter()
+        .find(|unit| unit.id == source_unit_id)
+        .map(|unit| unit.file_id.as_str());
+    let mut targets = bundle
+        .bindings
+        .iter()
+        .filter(|binding| {
+            matches!(binding.kind, BindingKind::Import | BindingKind::ImportAlias)
+                && binding.local_name == local_name
+                && (binding.source_unit_id == source_unit_id
+                    || source_file_id.is_some_and(|file_id| {
+                        bundle
+                            .units
+                            .iter()
+                            .find(|unit| unit.id == binding.source_unit_id)
+                            .is_some_and(|unit| unit.file_id == file_id)
+                    }))
+        })
+        .map(|binding| binding.target_name.clone())
+        .collect::<Vec<_>>();
+    targets.sort();
+    targets.dedup();
+    (targets.len() == 1).then(|| targets.remove(0))
+}
+
+fn call_head(callee: &str) -> &str {
+    callee
+        .split_once('.')
+        .map(|(head, _)| head)
+        .or_else(|| callee.split_once("::").map(|(head, _)| head))
+        .or_else(|| callee.split_once("->").map(|(head, _)| head))
+        .unwrap_or(callee)
+}
+
+fn is_unqualified_pattern(pattern: &str) -> bool {
+    !pattern.contains('.') && !pattern.contains("::") && !pattern.contains("->")
 }
 
 fn callee_matches(pattern: &str, callee: &str) -> bool {
@@ -167,5 +249,93 @@ fn parse_mode(value: &str) -> AccessMode {
         "write" => AccessMode::Write,
         "readwrite" | "read_write" => AccessMode::ReadWrite,
         _ => AccessMode::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract;
+    use crate::config::{ResourceNameSource, ResourceRule};
+    use crate::facts::{BindingKind, CallSiteFact, FactBundle, SymbolBinding};
+    use crate::model::{FileEntry, Language, ParseStatus};
+
+    fn file() -> FileEntry {
+        FileEntry {
+            file_id: "file".to_string(),
+            relative_path: "src/file.ts".to_string(),
+            language: Language::TypeScript,
+            size_bytes: 1,
+            line_count: 1,
+            modified_unix_ms: None,
+            content_hash: None,
+            is_test: false,
+            parse_status: ParseStatus::NotAnalyzed,
+        }
+    }
+
+    fn call(callee: &str) -> CallSiteFact {
+        CallSiteFact {
+            id: format!("call-{callee}"),
+            source_unit_id: "source".to_string(),
+            callee: callee.to_string(),
+            receiver: callee
+                .rsplit_once('.')
+                .map(|(receiver, _)| receiver.to_string()),
+            arguments: vec!["\"data.txt\"".to_string()],
+            assigned_name: None,
+            evidence: Vec::new(),
+        }
+    }
+
+    fn file_rule(pattern: &str) -> ResourceRule {
+        ResourceRule {
+            languages: vec!["typescript".to_string()],
+            callee_patterns: vec![pattern.to_string()],
+            kind: "file".to_string(),
+            mode: "read".to_string(),
+            argument_index: 0,
+            name_source: ResourceNameSource::Argument,
+            requires_import: true,
+        }
+    }
+
+    #[test]
+    fn import_alias의_파일_api는_원래_모듈로_정규화된다() {
+        let mut bundle = FactBundle {
+            bindings: vec![SymbolBinding {
+                id: "binding-disk".to_string(),
+                source_unit_id: "source".to_string(),
+                local_name: "disk".to_string(),
+                target_name: "fs::*".to_string(),
+                kind: BindingKind::ImportAlias,
+                evidence: Vec::new(),
+            }],
+            ..FactBundle::default()
+        };
+
+        extract(
+            Language::TypeScript,
+            &[call("disk.readFile")],
+            &file(),
+            &mut bundle,
+            &[file_rule("fs.readFile")],
+        );
+
+        assert_eq!(bundle.resources.len(), 1);
+    }
+
+    #[test]
+    fn import_근거가_없는_가짜_fs_receiver는_파일로_오인하지_않는다() {
+        let mut bundle = FactBundle::default();
+
+        extract(
+            Language::TypeScript,
+            &[call("fs.readFile")],
+            &file(),
+            &mut bundle,
+            &[file_rule("fs.readFile")],
+        );
+
+        assert!(bundle.resources.is_empty());
     }
 }

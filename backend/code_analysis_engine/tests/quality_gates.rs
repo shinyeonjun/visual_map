@@ -31,9 +31,17 @@ fn assert_elapsed_within(name: &str, elapsed: Duration, default_max_ms: u128) {
 
 fn write_cross_file_fixture(root: &Path, file_count: usize, functions_per_file: usize) {
     for file_index in 0..file_count {
-        let mut source = format!("export function main() {{ return f_{file_index}_0(); }}\n");
+        let target_file = (file_index + 1) % file_count;
+        let imported_names = (0..functions_per_file)
+            .map(|function_index| format!("f_{target_file}_{function_index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut source =
+            format!("import {{ {imported_names} }} from \"./module_{target_file}\";\n");
+        source.push_str(&format!(
+            "export function main() {{ return f_{file_index}_0(); }}\n"
+        ));
         for function_index in 0..functions_per_file {
-            let target_file = (file_index + 1) % file_count;
             let target = format!("f_{target_file}_{function_index}");
             source.push_str(&format!(
                 "export function f_{file_index}_{function_index}() {{ return {target}(); }}\n"

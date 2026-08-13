@@ -12,19 +12,27 @@ pub(super) fn extract(
     owner_unit_id: Option<&str>,
 ) -> Option<ControlFlowFact> {
     let owner_unit_id = owner_unit_id?;
-    let kind = kind_for(node.kind())?;
+    let condition_operator = logical_operator(node, source);
+    let kind = kind_for(node.kind(), condition_operator.as_deref())?;
     let span = node_span(node, file);
-    let body_span = child_span(node, file, &["body", "consequence", "then"]);
+    let body_span = condition_operator
+        .as_deref()
+        .and_then(|_| child_span(node, file, &["right", "rhs"]))
+        .or_else(|| child_span(node, file, &["body", "consequence", "then"]));
     let alternative_span = child_span(
         node,
         file,
         &["alternative", "else", "catch", "handler", "handlers"],
     );
+    let finally_span = child_span(node, file, &["finally", "finally_clause", "finalizer"]);
+    let condition_span = child_span(node, file, &["condition", "test"]);
     let condition = child_text(
         node,
         source,
         &["condition", "test", "scrutinee", "selector"],
-    );
+    )
+    .or_else(|| condition_operator.as_ref().map(|_| node_text(node, source)));
+    let post_test = matches!(node.kind(), "do_statement" | "do_expression");
 
     Some(ControlFlowFact {
         id: stable_id(
@@ -43,12 +51,18 @@ pub(super) fn extract(
         condition,
         body_span,
         alternative_span,
+        finally_span,
+        condition_operator,
+        condition_span,
+        post_test,
     })
 }
 
-fn kind_for(node_kind: &str) -> Option<ControlFlowKind> {
+fn kind_for(node_kind: &str, condition_operator: Option<&str>) -> Option<ControlFlowKind> {
     Some(match node_kind {
         "if_statement" | "if_expression" | "conditional_expression" => ControlFlowKind::Condition,
+        "logical_expression" => ControlFlowKind::Condition,
+        "binary_expression" if condition_operator.is_some() => ControlFlowKind::Condition,
         "switch_statement" | "switch_expression" | "match_expression" => ControlFlowKind::Switch,
         "for_statement"
         | "for_in_statement"
@@ -65,6 +79,18 @@ fn kind_for(node_kind: &str) -> Option<ControlFlowKind> {
         "catch_clause" | "except_clause" => ControlFlowKind::Catch,
         _ => return None,
     })
+}
+
+fn logical_operator(node: Node<'_>, source: &[u8]) -> Option<String> {
+    if !matches!(node.kind(), "logical_expression" | "binary_expression") {
+        return None;
+    }
+    let mut cursor = node.walk();
+    let operator = node.children(&mut cursor).find_map(|child| {
+        let text = node_text(child, source);
+        matches!(text.trim(), "&&" | "||").then(|| text.trim().to_string())
+    });
+    operator
 }
 
 fn child_span(

@@ -102,7 +102,7 @@ fn build_flow(unit: &CodeUnit, input_index: &FlowInputIndex<'_>) -> ExecutionFlo
     for fact in input_index.control_for(&unit.id) {
         events.push(Event::Control {
             node: control_node(unit, fact),
-            fact: (*fact).clone(),
+            fact: Box::new((**fact).clone()),
         });
     }
     for reference in input_index.calls_for(&unit.id) {
@@ -111,7 +111,25 @@ fn build_flow(unit: &CodeUnit, input_index: &FlowInputIndex<'_>) -> ExecutionFlo
             reference: (*reference).clone(),
         });
     }
-    events.sort_by_key(Event::start_position);
+    // 호출식의 span은 인자 전체를 포함한다. 단순한 시작 위치 정렬을
+    // 사용하면 `combine(first(), second())`가 `combine → first → second`로
+    // 보이므로, 중첩된 호출은 내부 인자를 먼저 평가하는 순서로 정렬한다.
+    events.sort_by(|left, right| {
+        if matches!(
+            (left, right),
+            (Event::Reference { .. }, Event::Reference { .. })
+        ) {
+            if spans_contain(left.span(), right.span()) {
+                return std::cmp::Ordering::Greater;
+            }
+            if spans_contain(right.span(), left.span()) {
+                return std::cmp::Ordering::Less;
+            }
+        }
+        left.start_position()
+            .cmp(&right.start_position())
+            .then_with(|| left.end_position().cmp(&right.end_position()))
+    });
 
     let mut nodes = vec![
         entry_node(unit, &entry_node_id),
@@ -140,6 +158,20 @@ fn build_flow(unit: &CodeUnit, input_index: &FlowInputIndex<'_>) -> ExecutionFlo
         edges,
         dynamic_boundary_ids,
     }
+}
+
+fn spans_contain(
+    container: Option<&crate::facts::SourceSpan>,
+    nested: Option<&crate::facts::SourceSpan>,
+) -> bool {
+    let (Some(container), Some(nested)) = (container, nested) else {
+        return false;
+    };
+    container.file_id == nested.file_id
+        && (nested.start_line, nested.start_column)
+            >= (container.start_line, container.start_column)
+        && (nested.end_line, nested.end_column) <= (container.end_line, container.end_column)
+        && container != nested
 }
 
 fn add_call_links(
@@ -336,7 +368,10 @@ fn exit_node(unit: &CodeUnit, id: &str) -> FlowNode {
 }
 
 fn sort_flow(flow: &mut ExecutionFlow) {
-    flow.nodes.sort_by(|left, right| left.id.cmp(&right.id));
+    // 노드 배열 자체가 실행 순서다. ID로 재정렬하면 안정적인 JSON은 만들 수
+    // 있지만 `first() -> second() -> combine()` 같은 흐름의 의미를 잃는다.
+    // 이벤트는 build_flow에서 소스 위치와 중첩 관계로 이미 결정적으로
+    // 정렬했으므로 그 순서를 유지한다.
     flow.edges.sort_by(|left, right| left.id.cmp(&right.id));
     flow.edges.dedup_by(|left, right| left.id == right.id);
     flow.dynamic_boundary_ids.sort();

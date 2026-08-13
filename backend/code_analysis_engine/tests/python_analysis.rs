@@ -1,6 +1,6 @@
 use code_analysis_engine::config::AnalysisConfig;
 use code_analysis_engine::facts::{
-    CodeUnitKind, EntrypointKind, FactStore, ReferenceKind, ResourceKind,
+    CodeUnitKind, EntrypointKind, FactStore, ReferenceKind, ResolutionStatus, ResourceKind,
 };
 use code_analysis_engine::languages::analyze_file;
 use code_analysis_engine::model::{FileEntry, Language, ParseStatus};
@@ -100,15 +100,11 @@ def create_user():
     let mut store = FactStore::default();
     store.merge(bundle.clone());
     store.resolve_references();
-    let service_id = store
-        .units
-        .iter()
-        .find(|(_, unit)| unit.name == "UserService")
-        .map(|(id, _)| id.as_str());
     assert!(store.references.iter().any(|reference| {
         reference.kind == ReferenceKind::Call
             && reference.target_name == "Service"
-            && reference.target_unit_id.as_deref() == service_id
+            && reference.target_unit_id.is_none()
+            && reference.status == ResolutionStatus::Unknown
     }));
 
     assert!(bundle

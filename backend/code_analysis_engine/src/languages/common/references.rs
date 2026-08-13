@@ -55,6 +55,11 @@ pub(super) fn call_target_name(node: Node<'_>, source: &[u8]) -> Option<String> 
     } else if let Some(function) = node.child_by_field_name("function") {
         callee_expression_name(function, source)
             .or_else(|| fallback_call_target_name(&node_text(function, source)))
+    } else if let (Some(object), Some(name)) = (
+        node.child_by_field_name("object"),
+        node.child_by_field_name("name"),
+    ) {
+        invocation_target_name(object, name, source)
     } else if let Some(name) = node.child_by_field_name("name") {
         compact_node_text(name, source)
             .or_else(|| fallback_call_target_name(&node_text(node, source)))
@@ -66,12 +71,28 @@ pub(super) fn call_target_name(node: Node<'_>, source: &[u8]) -> Option<String> 
     target.or_else(|| Some(format!("[unknown:{}@{}]", node.kind(), node.start_byte())))
 }
 
+fn invocation_target_name(object: Node<'_>, name: Node<'_>, source: &[u8]) -> Option<String> {
+    let method = compact_node_text(name, source)?;
+    let receiver = callee_expression_name(object, source)?;
+    // Java의 `target.getClass().getMethod(...).invoke(...)`처럼 이미 호출된
+    // 객체가 receiver인 경우에도 마지막 메서드만 남기면 reflection 경계가
+    // `invoke`라는 일반 이름으로 축약된다. receiver의 짧은 경로를 보존해야
+    // `getMethod.invoke`처럼 정적 분석 결과와 동적 경계를 함께 추적할 수 있다.
+    if receiver.is_empty() {
+        return Some(method);
+    }
+    Some(format!("{receiver}.{method}"))
+}
+
 pub(super) fn call_resolution_status(target_name: &str) -> ResolutionStatus {
+    // 이름만으로는 동적 호출을 확정하지 않는다. `eval`·`getattr`라는
+    // 이름의 로컬 함수도 정상적인 정적 호출일 수 있으며, 실제 reflection
+    // API 여부는 파일의 import/binding 정보와 함께 정규화 단계에서
+    // 판정해야 한다. AST에서 이미 계산 대상임을 알 수 있는 표현식만
+    // 여기서 동적 경계로 남긴다.
     if target_name.contains('[')
         || target_name.contains(']')
-        || ["eval", "getattr", "reflect", "invoke"]
-            .iter()
-            .any(|pattern| matches_dynamic_pattern(target_name, pattern))
+        || matches!(target_name, "[anonymous]" | "[dynamic]")
     {
         ResolutionStatus::Dynamic
     } else if target_name.contains('.') || target_name.contains("::") {
@@ -110,6 +131,11 @@ fn callee_expression_name(node: Node<'_>, source: &[u8]) -> Option<String> {
         | "lambda"
         | "lambda_expression"
         | "closure_expression" => Some("[anonymous]".to_string()),
+        // 문자열·숫자·리터럴을 호출 대상 이름으로 보존하면 인자나 문자열
+        // 값이 정적 그래프의 가짜 노드가 된다. 이런 호출은 대상이 실행 중
+        // 결정되는 경계로만 남기고 원문을 이름으로 사용하지 않는다.
+        "string" | "template_string" | "number" | "integer" | "float" | "true" | "false"
+        | "null" | "undefined" | "regex" => Some("[dynamic]".to_string()),
         "generic_function" | "generic_name" | "template_method" => node
             .child_by_field_name("function")
             .or_else(|| node.child_by_field_name("name"))
@@ -347,6 +373,17 @@ mod tests {
     }
 
     #[test]
+    fn 리터럴_호출은_문자열_본문이_아닌_동적_표식으로_남긴다() {
+        let language = tree_sitter_javascript::LANGUAGE.into();
+        let target = first_call_target(language, "(\"runtimeName\")();");
+        assert_eq!(target.as_deref(), Some("[dynamic]"));
+        assert_eq!(
+            call_resolution_status("[dynamic]"),
+            ResolutionStatus::Dynamic
+        );
+    }
+
+    #[test]
     fn 동적_패턴은_식별자_경계를_지킨다() {
         assert!(matches_dynamic_pattern("eval", "eval"));
         assert!(matches_dynamic_pattern("reflect.ValueOf", "reflect."));
@@ -362,7 +399,7 @@ mod tests {
 
     #[test]
     fn 기본_동적_호출_판정이_오분류를_만들지_않는다() {
-        assert_eq!(call_resolution_status("eval"), ResolutionStatus::Dynamic);
+        assert_eq!(call_resolution_status("eval"), ResolutionStatus::Confirmed);
         assert_eq!(
             call_resolution_status("retrieval.search"),
             ResolutionStatus::Candidate

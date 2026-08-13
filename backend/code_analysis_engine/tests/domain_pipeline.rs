@@ -237,6 +237,44 @@ export function dispatch(name: string, request: Request) {
 }
 
 #[test]
+fn 반복되는_generic_심볼은_프로젝트_개념_후보로_보존된다() {
+    let root = temporary_project("domain-generic-symbol");
+    for concept in ["analysis", "model", "transaction", "inventory", "결제"] {
+        let directory = root.join("src").join(concept);
+        fs::create_dir_all(&directory).expect("개념 디렉터리를 만들어야 한다");
+        let (first_name, second_name) = if concept == "결제" {
+            ("create_결제".to_string(), "load_결제".to_string())
+        } else {
+            let pascal = format!("{}{}", concept[..1].to_ascii_uppercase(), &concept[1..]);
+            (format!("create{pascal}"), format!("load{pascal}"))
+        };
+        fs::write(
+            directory.join("service.ts"),
+            format!(
+                "export function {first_name}(input: string) {{ return input; }}\nexport function {second_name}(id: string) {{ return id; }}\n"
+            ),
+        )
+        .expect("반복되는 개념 심볼을 써야 한다");
+    }
+
+    let result = analyze(AnalysisRequest::new(&root)).expect("도메인 분석이 성공해야 한다");
+    let overview = result.overview.expect("Overview가 생성되어야 한다");
+    let domain_keys = overview
+        .domains
+        .iter()
+        .map(|domain| domain.key.as_str())
+        .collect::<HashSet<_>>();
+    for concept in ["analysis", "model", "transaction", "inventory", "결제"] {
+        assert!(
+            domain_keys.contains(concept),
+            "반복되는 {concept} 개념이 도메인 후보에서 사라졌다: {domain_keys:?}"
+        );
+    }
+
+    fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}
+
+#[test]
 fn tsx_import와_type_reference가_실제_유닛으로_연결된다() {
     let root = temporary_project("tsx-type-relation");
     fs::create_dir_all(root.join("src")).expect("src 디렉터리를 만들어야 한다");

@@ -16,7 +16,11 @@ pub struct DomainCandidate {
     signal_unit_ids: BTreeMap<DomainSignalKind, BTreeSet<String>>,
 }
 
-pub fn build(signals: &[DomainSignal], maximum_evidence: usize) -> Vec<DomainCandidate> {
+pub fn build(
+    signals: &[DomainSignal],
+    maximum_evidence: usize,
+    minimum_repeated_symbol_units: usize,
+) -> Vec<DomainCandidate> {
     let mut candidates: BTreeMap<String, DomainCandidate> = BTreeMap::new();
     for signal in signals {
         let candidate = candidates
@@ -60,6 +64,10 @@ pub fn build(signals: &[DomainSignal], maximum_evidence: usize) -> Vec<DomainCan
                     .signal_unit_ids
                     .get(&DomainSignalKind::Path)
                     .is_some_and(|units| units.len() >= 2)
+                || candidate
+                    .signal_unit_ids
+                    .get(&DomainSignalKind::Symbol)
+                    .is_some_and(|units| units.len() >= minimum_repeated_symbol_units)
         })
         .collect();
     values.sort_by(|left, right| right.score.cmp(&left.score).then(left.key.cmp(&right.key)));

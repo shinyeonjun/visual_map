@@ -63,8 +63,76 @@ impl LanguageAnalyzer for EcmaAnalyzer {
 fn extract_ecma_facts(root: Node<'_>, source: &[u8], file: &FileEntry, bundle: &mut FactBundle) {
     extract_ecma_decorators(root, source, file, bundle);
     extract_ecma_import_bindings(root, source, file, bundle);
+    extract_ecma_assignment_bindings(root, source, file, bundle);
     extract_ecma_exports(root, source, file, bundle);
     extract_ecma_type_references(root, source, file, bundle);
+}
+
+/// 단순한 식별자 alias를 보존한다.
+///
+/// `const runtimeRequire = require`나 `const run = eval`처럼 호출 가능한
+/// 동적 API를 다른 이름으로 대입하면 import 목록만으로는 원래 대상을
+/// 복원할 수 없다. 복합 표현식·호출 결과는 추측하지 않고 식별자 경로만
+/// Assignment binding으로 기록한다.
+fn extract_ecma_assignment_bindings(
+    root: Node<'_>,
+    source: &[u8],
+    file: &FileEntry,
+    bundle: &mut FactBundle,
+) {
+    let file_unit_id = bundle
+        .units
+        .iter()
+        .find(|unit| unit.kind == crate::facts::CodeUnitKind::File)
+        .map(|unit| unit.id.clone())
+        .unwrap_or_else(|| file.file_id.clone());
+    for node in walk_nodes(root) {
+        if node.kind() != "variable_declarator" {
+            continue;
+        }
+        let Some(local) = node.child_by_field_name("name") else {
+            continue;
+        };
+        let Some(value) = node.child_by_field_name("value") else {
+            continue;
+        };
+        let local_name = node_text(local, source).trim().to_string();
+        let target_name = node_text(value, source).trim().to_string();
+        if !is_simple_alias(&local_name) || !is_simple_alias(&target_name) {
+            continue;
+        }
+        let id = stable_id(
+            "binding",
+            &format!(
+                "{}:assignment:{}:{}",
+                file.file_id,
+                node.start_byte(),
+                local_name
+            ),
+        );
+        if bundle.bindings.iter().any(|binding| binding.id == id) {
+            continue;
+        }
+        bundle.bindings.push(SymbolBinding {
+            id,
+            source_unit_id: file_unit_id.clone(),
+            local_name,
+            target_name,
+            kind: BindingKind::Assignment,
+            evidence: vec![Evidence::new(
+                "assignmentBinding",
+                node_text(node, source),
+                node_span(node, file),
+            )],
+        });
+    }
+}
+
+fn is_simple_alias(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '$' | '.' | ':' | '-')
+        })
 }
 
 /// ES module의 imported local 이름을 실제 모듈·심볼 경로에 연결한다.

@@ -12,8 +12,9 @@ use super::FrameworkApplicabilityIndex;
 pub struct CallRouteRule {
     pub framework_id: &'static str,
     pub call_names: &'static [&'static str],
-    /// Route 호출의 수신 객체를 제한한다. 빈 배열이면 프레임워크가 모든
-    /// 수신 객체를 허용하는 legacy/전역 등록 API로 취급한다.
+    /// 생성자 근거가 없는 legacy/전역 등록 API에서만 이름 기반 receiver
+    /// 힌트를 사용한다. 생성자 근거가 있는 프레임워크는 실제 binding을
+    /// 통해 receiver를 확정한다.
     pub receiver_names: &'static [&'static str],
     pub receiver_constructors: &'static [&'static str],
     pub route_methods: &'static [&'static str],
@@ -166,28 +167,61 @@ fn collect_allowed_receivers(facts: &FactStore, rule: &CallRouteRule) -> HashSet
         return HashSet::new();
     }
 
-    let mut allowed = facts
-        .call_sites
-        .iter()
-        .filter_map(|call| {
-            let receiver = call_receiver(&call.callee)?;
-            rule.receiver_names
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(receiver))
-                .then(|| (call.source_unit_id.clone(), receiver.to_string()))
-        })
-        .collect::<HashSet<_>>();
+    let mut allowed = if rule.receiver_constructors.is_empty() {
+        facts
+            .call_sites
+            .iter()
+            .filter_map(|call| {
+                let receiver = call_receiver(&call.callee)?;
+                rule.receiver_names
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(receiver))
+                    .then(|| (call.source_unit_id.clone(), receiver.to_string()))
+            })
+            .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
 
     for call in &facts.call_sites {
         if call.assigned_name.is_none() {
+            let receiver = call_receiver(&call.callee);
+            if let Some(receiver) = receiver {
+                if let Some(unit) = facts.unit(&call.source_unit_id) {
+                    let parameter_type_matches = unit.parameters.iter().any(|parameter| {
+                        parameter.name == receiver
+                            && parameter
+                                .type_annotation
+                                .as_deref()
+                                .is_some_and(|type_name| {
+                                    rule.receiver_constructors.iter().any(|constructor| {
+                                        type_name_matches(type_name, constructor)
+                                    })
+                                })
+                    });
+                    let signature_type_matches =
+                        unit.signature.as_deref().is_some_and(|signature| {
+                            signature_has_typed_parameter(
+                                signature,
+                                receiver,
+                                rule.receiver_constructors,
+                            )
+                        });
+                    if parameter_type_matches || signature_type_matches {
+                        allowed.insert((call.source_unit_id.clone(), receiver.to_string()));
+                    }
+                }
+            }
             continue;
         }
         let method = call_method_name(&call.callee);
-        if rule
-            .receiver_constructors
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(method))
-        {
+        let imported_method = imported_call_method(facts, call);
+        if rule.receiver_constructors.iter().any(|name| {
+            name.eq_ignore_ascii_case(method)
+                || imported_method
+                    .as_deref()
+                    .is_some_and(|candidate| name.eq_ignore_ascii_case(candidate))
+        }) {
             allowed.insert((
                 call.source_unit_id.clone(),
                 call.assigned_name.clone().unwrap_or_default(),
@@ -223,6 +257,80 @@ fn collect_allowed_receivers(facts: &FactStore, rule: &CallRouteRule) -> HashSet
         }
     }
     allowed
+}
+
+fn type_name_matches(type_name: &str, expected: &str) -> bool {
+    type_name
+        .rsplit(['.', ':'])
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case(expected))
+}
+
+fn signature_has_typed_parameter(
+    signature: &str,
+    parameter_name: &str,
+    expected_types: &[&str],
+) -> bool {
+    let tokens = signature
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    tokens.windows(2).any(|window| {
+        let parameter_first = window[0].eq_ignore_ascii_case(parameter_name)
+            && expected_types
+                .iter()
+                .any(|expected| window[1].eq_ignore_ascii_case(expected));
+        let type_first = expected_types
+            .iter()
+            .any(|expected| window[0].eq_ignore_ascii_case(expected))
+            && window[1].eq_ignore_ascii_case(parameter_name);
+        parameter_first || type_first
+    })
+}
+
+fn imported_call_method(facts: &FactStore, call: &crate::facts::CallSiteFact) -> Option<String> {
+    let head = call_head(&call.callee);
+    let source_file_id = facts
+        .unit(&call.source_unit_id)
+        .map(|unit| unit.file_id.as_str());
+    let mut targets = facts
+        .bindings
+        .iter()
+        .filter(|binding| {
+            matches!(
+                binding.kind,
+                crate::facts::BindingKind::Import | crate::facts::BindingKind::ImportAlias
+            ) && binding.local_name == head
+                && (binding.source_unit_id == call.source_unit_id
+                    || source_file_id.is_some_and(|file_id| {
+                        facts
+                            .unit(&binding.source_unit_id)
+                            .is_some_and(|unit| unit.file_id == file_id)
+                    }))
+        })
+        .map(|binding| binding.target_name.clone())
+        .collect::<Vec<_>>();
+    targets.sort();
+    targets.dedup();
+    let target = (targets.len() == 1).then(|| targets.remove(0))?;
+    let normalized_target = target.replace("::", ".");
+    let target = normalized_target
+        .trim_end_matches(".*")
+        .trim_end_matches("::*");
+    let target = target
+        .strip_suffix(".default")
+        .or_else(|| target.strip_suffix("::default"))
+        .unwrap_or(target);
+    Some(call_method_name(target).to_string())
+}
+
+fn call_head(callee: &str) -> &str {
+    callee
+        .split_once('.')
+        .map(|(head, _)| head)
+        .or_else(|| callee.split_once("::").map(|(head, _)| head))
+        .or_else(|| callee.split_once("->").map(|(head, _)| head))
+        .unwrap_or(callee)
 }
 
 fn collect_prefixes(

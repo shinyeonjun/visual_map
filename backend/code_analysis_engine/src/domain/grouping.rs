@@ -55,7 +55,11 @@ impl DomainAnalyzer {
     ) -> DomainAnalysisOutput {
         let signals = collect(store, &self.domain_policy, &self.path_policy);
         let signal_count = signals.len();
-        let candidates = build(&signals, self.domain_policy.maximum_candidate_evidence);
+        let candidates = build(
+            &signals,
+            self.domain_policy.maximum_candidate_evidence,
+            self.domain_policy.minimum_repeated_symbol_units,
+        );
         let signal_scores = score_by_unit(&signals);
         let domain_ids: std::collections::HashMap<&str, String> = candidates
             .iter()
