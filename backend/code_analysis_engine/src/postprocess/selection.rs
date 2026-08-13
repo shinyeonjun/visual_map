@@ -57,7 +57,7 @@ pub(crate) fn fill_domain(
                 candidate_domain.flows.push((*flow).clone());
             }
         }
-        let candidate_bytes = serialized_bytes(&candidate_domain);
+        let candidate_bytes = serialized_domain_bytes(&candidate_domain);
         if candidate_bytes <= budget_bytes || required {
             selected_feature_ids.insert(feature.id.clone());
             domain.features.push(feature);
@@ -87,10 +87,16 @@ pub(crate) fn fill_domain(
         .features
         .sort_by(|left, right| left.id.cmp(&right.id));
     domain.flows.sort_by(|left, right| left.id.cmp(&right.id));
+    domain.feature_ids = domain
+        .features
+        .iter()
+        .map(|feature| feature.id.clone())
+        .collect();
+    domain.flow_ids = domain.flows.iter().map(|flow| flow.id.clone()).collect();
     domain.omission.included_features = domain.features.len();
     domain.omission.included_flows = domain.flows.len();
     domain.omission.reasons = reasons;
-    domain.omission.used_bytes = serialized_bytes(&domain);
+    domain.omission.used_bytes = serialized_domain_bytes(&domain);
     domain
 }
 
@@ -135,7 +141,7 @@ pub(crate) fn required_domain_bytes(
             .flow_ids
             .retain(|flow_id| required_domain.flows.iter().any(|flow| &flow.id == flow_id));
     }
-    serialized_bytes(&required_domain)
+    serialized_domain_bytes(&required_domain)
 }
 
 /// 필수 flow가 연결된 feature도 필수로 승격한다.
@@ -188,10 +194,17 @@ fn serialized_bundle_bytes(feature: &ContextFeature, flows: &[&ContextFlow]) -> 
     .unwrap_or(usize::MAX)
 }
 
-fn serialized_bytes<T: Serialize>(value: &T) -> usize {
-    serde_json::to_vec(value)
-        .map(|bytes| bytes.len())
-        .unwrap_or(usize::MAX)
+/// 임시로 도메인에 담긴 항목까지 포함해 선택 예산을 계산한다.
+/// 실제 JSON에서는 항목이 context 전역 배열로 정규화되지만, 이 함수는
+/// 정규화 전 feature+flow bundle의 크기를 측정한다.
+fn serialized_domain_bytes(domain: &ContextDomain) -> usize {
+    serde_json::to_vec(&DomainPackage {
+        domain,
+        features: &domain.features,
+        flows: &domain.flows,
+    })
+    .map(|bytes| bytes.len())
+    .unwrap_or(usize::MAX)
 }
 
 #[derive(Serialize)]
@@ -200,10 +213,17 @@ struct FeatureBundle<'a> {
     flows: Vec<&'a ContextFlow>,
 }
 
+#[derive(Serialize)]
+struct DomainPackage<'a> {
+    domain: &'a ContextDomain,
+    features: &'a [ContextFeature],
+    flows: &'a [ContextFlow],
+}
+
 #[cfg(test)]
 mod tests {
     use super::fill_domain;
-    use crate::flow::{FlowEdgeKind, FlowNodeKind};
+    use crate::flow::FlowNodeKind;
     use crate::postprocess::features::FeatureSelection;
     use crate::postprocess::flows::{FlowCandidate, FlowSelection};
     use crate::postprocess::model::{
@@ -223,6 +243,8 @@ mod tests {
             source_paths: Vec::new(),
             entrypoints: Vec::new(),
             resources: Vec::new(),
+            feature_ids: Vec::new(),
+            flow_ids: Vec::new(),
             features: Vec::new(),
             flows: Vec::new(),
             evidence_ids: Vec::new(),
@@ -233,6 +255,8 @@ mod tests {
     fn required_feature() -> ContextFeature {
         ContextFeature {
             id: "feature-create-order".into(),
+            domain_ids: vec!["domain-orders".into()],
+            shared: false,
             current_label: "createOrder".into(),
             visibility: FeatureVisibility::UserFacing,
             required: true,
@@ -248,21 +272,15 @@ mod tests {
     fn required_flow() -> ContextFlow {
         ContextFlow {
             id: "flow-create-order".into(),
+            domain_ids: vec!["domain-orders".into()],
+            shared: false,
             feature_ids: vec!["feature-create-order".into()],
             owner_unit_id: "unit-create-order".into(),
             owner_name: "createOrder".into(),
             required: true,
             steps: vec![crate::postprocess::model::ContextFlowStep {
-                id: "node-entry".into(),
                 kind: FlowNodeKind::Entry,
                 label: "createOrder".into(),
-                target_unit_id: None,
-            }],
-            edges: vec![crate::postprocess::model::ContextFlowEdge {
-                source_node_id: "node-entry".into(),
-                target_node_id: "node-exit".into(),
-                kind: FlowEdgeKind::Sequential,
-                status: crate::facts::ResolutionStatus::Confirmed,
             }],
             dynamic_boundary_ids: Vec::new(),
             selection_reason: "entrypoint_flow".into(),

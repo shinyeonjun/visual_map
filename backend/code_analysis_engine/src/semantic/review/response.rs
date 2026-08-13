@@ -46,6 +46,10 @@ where
 #[serde(rename_all = "camelCase")]
 pub struct DomainSuggestion {
     pub domain_id: String,
+    /// 여러 기술 도메인을 하나의 비즈니스 도메인으로 묶을 때 사용하는
+    /// 대표 원본 domain ID다. 새 ID는 허용하지 않는다.
+    #[serde(default)]
+    pub canonical_domain_id: Option<String>,
     pub name: String,
     pub summary: Option<String>,
 }

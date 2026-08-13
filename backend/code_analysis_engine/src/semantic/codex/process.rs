@@ -38,6 +38,13 @@ impl CodexProvider {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(model) = self
+            .model
+            .as_deref()
+            .filter(|model| !model.trim().is_empty())
+        {
+            command.arg("--model").arg(model);
+        }
         let mut child = command
             .spawn()
             .map_err(|error| CodexError::Spawn(error.to_string()))?;

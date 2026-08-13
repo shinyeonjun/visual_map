@@ -529,9 +529,6 @@ pub fn normalize(bundle: &mut FactBundle) {
     }
 }
 
-#[allow(dead_code)]
-fn _language_type(_: TreeLanguage) {}
-
 #[cfg(test)]
 mod tests {
     use super::export_targets;

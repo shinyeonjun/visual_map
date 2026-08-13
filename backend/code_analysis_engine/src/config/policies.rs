@@ -230,6 +230,8 @@ impl Default for FrameworkPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct SemanticPolicy {
     pub codex_executable: String,
+    /// Codex CLI에 전달할 모델이다. 비어 있으면 CLI 기본 모델을 사용한다.
+    pub codex_model: Option<String>,
     pub codex_timeout_ms: u64,
     pub codex_max_input_bytes: usize,
     /// 누락된 의미 항목을 작은 재요청으로 보완할 최대 횟수다.
