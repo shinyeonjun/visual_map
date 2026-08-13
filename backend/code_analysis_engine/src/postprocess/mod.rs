@@ -41,10 +41,3 @@ pub fn build_codex_context(
 ) -> Result<CodexContextBundle, PostprocessError> {
     cards::build_bundle(result, config)
 }
-
-pub fn build_codex_context_bundle(
-    result: &AnalysisResult,
-    config: &AnalysisConfig,
-) -> Result<CodexContextBundle, PostprocessError> {
-    build_codex_context(result, config)
-}

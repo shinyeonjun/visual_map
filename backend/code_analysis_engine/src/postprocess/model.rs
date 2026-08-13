@@ -1,7 +1,7 @@
 //! Codex에 전달할 정적 분석 후보정 결과의 출력 계약.
 
-use crate::facts::{AccessMode, EntrypointKind, ResolutionStatus, ResourceKind};
-use crate::flow::{FlowEdgeKind, FlowNodeKind};
+use crate::facts::{AccessMode, EntrypointKind, ResourceKind};
+use crate::flow::FlowNodeKind;
 use crate::model::AnalysisStatus;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -20,6 +20,10 @@ pub struct CodexSemanticContext {
     pub global_summary: GlobalContextSummary,
     pub adjacent_domains: Vec<AdjacentDomain>,
     pub domains: Vec<ContextDomain>,
+    /// 도메인 간 공유를 포함해 컨텍스트 전체에서 한 번만 저장하는 기능 목록이다.
+    pub features: Vec<ContextFeature>,
+    /// 도메인 간 공유를 포함해 컨텍스트 전체에서 한 번만 저장하는 흐름 목록이다.
+    pub flows: Vec<ContextFlow>,
     pub domain_aliases: Vec<DomainAlias>,
     pub suppressed_domains: Vec<SuppressedDomain>,
     pub summary: ContextSummary,
@@ -124,8 +128,16 @@ pub struct ContextDomain {
     pub source_paths: Vec<String>,
     pub entrypoints: Vec<ContextEntrypoint>,
     pub resources: Vec<ContextResource>,
-    pub features: Vec<ContextFeature>,
-    pub flows: Vec<ContextFlow>,
+    /// 전역 `features`에서 이 도메인이 사용하는 기능 ID다.
+    pub feature_ids: Vec<String>,
+    /// 전역 `flows`에서 이 도메인이 사용하는 흐름 ID다.
+    pub flow_ids: Vec<String>,
+    /// 예산 계산과 정규화 중에만 사용하는 임시 기능 목록이다.
+    #[serde(skip)]
+    pub(crate) features: Vec<ContextFeature>,
+    /// 예산 계산과 정규화 중에만 사용하는 임시 흐름 목록이다.
+    #[serde(skip)]
+    pub(crate) flows: Vec<ContextFlow>,
     pub evidence_ids: Vec<String>,
     pub omission: DomainOmission,
 }
@@ -201,6 +213,10 @@ pub struct ContextResource {
 #[serde(rename_all = "camelCase")]
 pub struct ContextFeature {
     pub id: String,
+    /// 이 기능이 정적으로 속한 canonical 도메인 ID 목록이다.
+    pub domain_ids: Vec<String>,
+    /// 여러 도메인에 걸친 공유 기능인지다.
+    pub shared: bool,
     pub current_label: String,
     pub visibility: FeatureVisibility,
     /// 진입점·자원·동적 경계가 있어 Codex 컨텍스트에서 반드시 보존해야 하는지다.
@@ -234,13 +250,16 @@ pub enum FeatureTag {
 #[serde(rename_all = "camelCase")]
 pub struct ContextFlow {
     pub id: String,
+    /// 이 흐름이 정적으로 속한 canonical 도메인 ID 목록이다.
+    pub domain_ids: Vec<String>,
+    /// 여러 도메인에 걸친 공유 흐름인지다.
+    pub shared: bool,
     pub feature_ids: Vec<String>,
     pub owner_unit_id: String,
     pub owner_name: String,
     /// 진입점·자원·동적 경계와 직접 연결되어 반드시 보존해야 하는지다.
     pub required: bool,
     pub steps: Vec<ContextFlowStep>,
-    pub edges: Vec<ContextFlowEdge>,
     pub dynamic_boundary_ids: Vec<String>,
     pub selection_reason: String,
 }
@@ -248,19 +267,8 @@ pub struct ContextFlow {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextFlowStep {
-    pub id: String,
     pub kind: FlowNodeKind,
     pub label: String,
-    pub target_unit_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextFlowEdge {
-    pub source_node_id: String,
-    pub target_node_id: String,
-    pub kind: FlowEdgeKind,
-    pub status: ResolutionStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

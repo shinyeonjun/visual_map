@@ -2,7 +2,7 @@
 
 use super::features::is_required as feature_is_required;
 use super::indexes::PostprocessIndexes;
-use super::model::{ContextFlow, ContextFlowEdge, ContextFlowStep};
+use super::model::{ContextFlow, ContextFlowStep};
 use crate::config::PostprocessPolicy;
 use crate::views::overview::FeatureGroup;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -201,41 +201,42 @@ fn to_context_flow(
         .unit(&flow.owner_unit_id)
         .map(|unit| unit.name.clone())
         .unwrap_or_else(|| flow.owner_unit_id.clone());
-    let steps = flow
-        .nodes
-        .iter()
-        .take(policy.max_flow_nodes)
-        .map(|node| ContextFlowStep {
-            id: node.id.clone(),
-            kind: node.kind.clone(),
-            label: node.label.clone(),
-            target_unit_id: node.target_unit_id.clone(),
-        })
-        .collect();
-    let edges = flow
-        .edges
-        .iter()
-        .take(policy.max_flow_edges)
-        .map(|edge| ContextFlowEdge {
-            source_node_id: edge.source_node_id.clone(),
-            target_node_id: edge.target_node_id.clone(),
-            kind: edge.kind.clone(),
-            status: edge.status.clone(),
-        })
-        .collect();
+    let steps = meaningful_steps(flow, policy.max_flow_nodes);
     let mut dynamic_boundary_ids = flow.dynamic_boundary_ids.clone();
     dynamic_boundary_ids.sort();
     dynamic_boundary_ids.dedup();
 
     ContextFlow {
         id: flow.id.clone(),
+        domain_ids: Vec::new(),
+        shared: false,
         feature_ids,
         owner_unit_id: flow.owner_unit_id.clone(),
         owner_name,
         required,
         steps,
-        edges,
         dynamic_boundary_ids,
         selection_reason: selection_reason.into(),
     }
+}
+
+/// Codex에는 실행 그래프의 전체 ID와 엣지를 보내지 않고, 사람이 읽을 수 있는
+/// 대표 단계 label만 보낸다. 완전한 그래프는 정적 분석 결과에 그대로 남아 있다.
+fn meaningful_steps(flow: &crate::flow::ExecutionFlow, limit: usize) -> Vec<ContextFlowStep> {
+    let mut steps = Vec::new();
+    for node in flow.nodes.iter().take(limit) {
+        let label = node.label.trim();
+        if label.is_empty()
+            || steps
+                .iter()
+                .any(|step: &ContextFlowStep| step.label == label)
+        {
+            continue;
+        }
+        steps.push(ContextFlowStep {
+            kind: node.kind.clone(),
+            label: label.to_string(),
+        });
+    }
+    steps
 }

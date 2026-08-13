@@ -229,6 +229,7 @@ internalCatalogMarkers = ["/frameworks/registry/catalog.","/framework-catalog.rs
 
 [semantic]
 codexExecutable = "codex"
+codexModel = "gpt-5-codex"
 codexTimeoutMs = 0
 codexMaxInputBytes = 700000
 missingItemRetries = 1

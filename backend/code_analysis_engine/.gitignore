@@ -26,6 +26,7 @@ Thumbs.db
 # 커버리지·벤치마크 생성물
 /coverage/
 /reports/
+tests/*
 
 # Rust 및 분석 도구가 생성하는 보조 산출물
 *.profraw

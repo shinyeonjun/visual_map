@@ -1,7 +1,5 @@
 use code_analysis_engine::config::AnalysisConfig;
-use code_analysis_engine::postprocess::{
-    build_codex_context, build_codex_context_bundle, PostprocessError,
-};
+use code_analysis_engine::postprocess::{build_codex_context, PostprocessError};
 use code_analysis_engine::{analyze, AnalysisRequest};
 use std::fs;
 use std::path::PathBuf;
@@ -42,14 +40,10 @@ function saveOrder(order: unknown) { return order; }
     assert_eq!(context.source_analysis_id, result.analysis_id);
     assert!(!json.contains("staticGraph"));
     assert!(!json.contains("semanticAnalysis"));
-    assert!(context
-        .domains
+    assert!(context.features.iter().all(|feature| feature
+        .flow_ids
         .iter()
-        .flat_map(|domain| domain.features.iter())
-        .all(|feature| feature
-            .flow_ids
-            .iter()
-            .all(|flow_id| domain_flow_ids(context, flow_id))));
+        .all(|flow_id| domain_flow_ids(context, flow_id))));
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
 }
@@ -71,8 +65,8 @@ function saveOrder(order: unknown) { return order; }
 
     let result = analyze(AnalysisRequest::new(&root)).expect("정적 분석이 성공해야 한다");
     let config = AnalysisConfig::default();
-    let bundle = build_codex_context_bundle(&result, &config)
-        .expect("Codex 컨텍스트 bundle이 생성되어야 한다");
+    let bundle =
+        build_codex_context(&result, &config).expect("Codex 컨텍스트 bundle이 생성되어야 한다");
 
     assert_eq!(bundle.manifest.schema_version, "codex-context-manifest.v1");
     assert!(!bundle.chunks.is_empty());
@@ -82,29 +76,24 @@ function saveOrder(order: unknown) { return order; }
         assert!(!serde_json::to_string(chunk)
             .expect("청크를 직렬화해야 한다")
             .contains("staticGraph"));
-        for domain in &chunk.domains {
-            let feature_ids = domain
-                .features
-                .iter()
-                .map(|feature| feature.id.as_str())
-                .collect::<std::collections::HashSet<_>>();
-            let flow_ids = domain
-                .flows
-                .iter()
-                .map(|flow| flow.id.as_str())
-                .collect::<std::collections::HashSet<_>>();
-            assert!(domain.features.iter().all(|feature| {
-                feature
-                    .flow_ids
-                    .iter()
-                    .all(|flow_id| flow_ids.contains(flow_id.as_str()))
-            }));
-            assert!(domain.flows.iter().all(|flow| {
-                flow.feature_ids
-                    .iter()
-                    .all(|feature_id| feature_ids.contains(feature_id.as_str()))
-            }));
-        }
+        let feature_ids = chunk
+            .features
+            .iter()
+            .map(|feature| feature.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let flow_ids = chunk
+            .flows
+            .iter()
+            .map(|flow| flow.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert!(chunk.features.iter().all(|feature| feature
+            .flow_ids
+            .iter()
+            .all(|flow_id| flow_ids.contains(flow_id.as_str()))));
+        assert!(chunk.flows.iter().all(|flow| flow
+            .feature_ids
+            .iter()
+            .all(|feature_id| feature_ids.contains(feature_id.as_str()))));
     }
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
@@ -142,6 +131,6 @@ fn domain_flow_ids(
     context
         .domains
         .iter()
-        .flat_map(|domain| domain.flows.iter())
-        .any(|flow| flow.id == flow_id)
+        .flat_map(|domain| domain.flow_ids.iter())
+        .any(|id| id == flow_id)
 }

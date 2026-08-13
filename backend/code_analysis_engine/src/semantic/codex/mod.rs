@@ -7,6 +7,7 @@ mod response;
 #[derive(Debug, Clone)]
 pub struct CodexProvider {
     pub executable: String,
+    pub model: Option<String>,
     pub timeout_ms: u64,
     /// Codex CLI stdin에 넣을 수 있는 최대 프롬프트 바이트 수다.
     pub max_input_bytes: usize,
@@ -19,6 +20,7 @@ impl Default for CodexProvider {
         let policy = crate::config::SemanticPolicy::default();
         Self {
             executable: policy.codex_executable,
+            model: policy.codex_model,
             timeout_ms: policy.codex_timeout_ms,
             max_input_bytes: policy.codex_max_input_bytes,
             command_prefix: Vec::new(),
@@ -94,6 +96,7 @@ mod tests {
         let root = std::env::temp_dir();
         let provider = CodexProvider {
             executable: "cmd.exe".into(),
+            model: None,
             timeout_ms: 5_000,
             max_input_bytes: 1_000_000,
             command_prefix: vec!["/C".into(), script.to_string_lossy().into_owned()],

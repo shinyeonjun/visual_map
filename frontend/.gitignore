@@ -1,0 +1,39 @@
+# Build and generated output
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.tsbuildinfo
+src-tauri/target/
+src-tauri/gen/
+src-tauri/*.msi
+src-tauri/*.dmg
+src-tauri/*.AppImage
+src-tauri/*.deb
+
+# Logs and local reports
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+coverage/
+
+# Local environment
+.env
+.env.*
+!.env.example
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

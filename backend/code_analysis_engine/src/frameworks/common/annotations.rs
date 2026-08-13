@@ -1,7 +1,6 @@
 //! 클래스/컨트롤러 레벨 route prefix를 자식 endpoint에 합성한다.
 
-use crate::facts::{CodeUnitKind, Entrypoint, FactStore};
-use crate::languages::common::metadata::stable_id;
+use crate::facts::{CodeUnitKind, FactStore};
 use std::collections::HashSet;
 
 /// Java `@RequestMapping`·ASP.NET `[Route]`처럼 타입에 붙은 경로를
@@ -134,9 +133,4 @@ fn join_paths(prefix: &str, path: &str) -> String {
     } else {
         format!("/{prefix}/{path}")
     }
-}
-
-#[allow(dead_code)]
-fn _stable_route_id(entrypoint: &Entrypoint) -> String {
-    stable_id("entry", &entrypoint.id)
 }
