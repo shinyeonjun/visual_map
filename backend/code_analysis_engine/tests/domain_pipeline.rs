@@ -268,32 +268,3 @@ fn tsx_import와_type_reference가_실제_유닛으로_연결된다() {
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
 }
-
-#[test]
-fn codex를_활성화하면_실패해도_정적_결과를_보존한다() {
-    let root = temporary_project("codex-fallback");
-    fs::write(
-        root.join("main.ts"),
-        "export function main() { return 1; }\n",
-    )
-    .expect("소스 파일을 써야 한다");
-    let mut request = AnalysisRequest::new(&root);
-    request.options.config.semantic.codex_enabled = true;
-    request.options.config.semantic.codex_executable =
-        "visual-map-command-that-does-not-exist".into();
-    request.options.config.semantic.codex_timeout_ms = 100;
-
-    let result = analyze(request).expect("Codex 실패가 전체 분석 실패가 되면 안 된다");
-    let overview = result.overview.expect("Overview가 생성되어야 한다");
-    assert_eq!(
-        overview.semantic_status,
-        code_analysis_engine::semantic::SemanticStatus::Failed
-    );
-    assert!(overview.coverage.total_files == 1);
-    assert!(result
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "CODEX_REVIEW_FAILED"));
-
-    fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
-}

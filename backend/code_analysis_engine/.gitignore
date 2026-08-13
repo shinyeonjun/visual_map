@@ -6,8 +6,8 @@
 /.vscode/
 
 # 개발 중 생성하는 분석 결과와 프로파일 로그
-/tests/result/*.json
-/tests/result/*.log
+/tests/result/**/*.json
+/tests/result/**/*.log
 
 # 운영체제·편집기·임시 파일
 .DS_Store

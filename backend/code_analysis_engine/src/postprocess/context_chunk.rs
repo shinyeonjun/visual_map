@@ -1,0 +1,249 @@
+//! 도메인별 feature·flow bundle을 실제 byte budget에 맞춰 조립한다.
+
+use super::domains::DomainPlan;
+use super::features::select_for_domain as select_features;
+use super::flows::candidates_for_features;
+use super::indexes::PostprocessIndexes;
+use super::model::{
+    AdjacentDomain, CodexSemanticContext, ContextDomain, ContextProjectProfile, ContextSummary,
+    ContextWarning, GlobalContextSummary,
+};
+use super::selection::fill_domain;
+use crate::config::AnalysisConfig;
+use crate::model::AnalysisResult;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub(super) struct ChunkBuildInput<'a> {
+    pub(super) chunk_id: &'a str,
+    pub(super) partition: &'a [String],
+    pub(super) shells: &'a [ContextDomain],
+    pub(super) plan: &'a DomainPlan,
+    pub(super) indexes: &'a PostprocessIndexes<'a>,
+    pub(super) overview: &'a crate::views::overview::OverviewResponse,
+    pub(super) result: &'a AnalysisResult,
+    pub(super) config: &'a AnalysisConfig,
+    pub(super) profile: ContextProjectProfile,
+    pub(super) global_summary: GlobalContextSummary,
+}
+
+pub(super) fn build_chunk(input: ChunkBuildInput<'_>) -> CodexSemanticContext {
+    let ChunkBuildInput {
+        chunk_id,
+        partition,
+        shells,
+        plan,
+        indexes,
+        overview,
+        result,
+        config,
+        profile,
+        global_summary,
+    } = input;
+    let mut domains = partition
+        .iter()
+        .filter_map(|domain_id| shells.iter().find(|domain| &domain.domain_id == domain_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let base_bytes = serialized_bytes(&ChunkShell {
+        chunk_id,
+        source_analysis_id: &result.analysis_id,
+        project_id: &result.project.project_id,
+        project_profile: &profile,
+        global_summary: &global_summary,
+        adjacent_domains: &[],
+        domains: &domains,
+    });
+    let total_signal = domains
+        .iter()
+        .map(|domain| u64::from(domain.signal.score.max(1)))
+        .sum::<u64>();
+    let remaining = config
+        .postprocess
+        .target_budget_bytes
+        .saturating_sub(base_bytes);
+    let mut feature_total = 0;
+    let mut flow_total = 0;
+    for domain in &mut domains {
+        let shell_bytes = serialized_bytes(domain);
+        let allocation = if total_signal == 0 {
+            0
+        } else {
+            remaining.saturating_mul(domain.signal.score.max(1) as usize) / total_signal as usize
+        };
+        let feature_selection = select_features(
+            plan.clusters
+                .iter()
+                .find(|cluster| cluster.representative_id == domain.domain_id)
+                .expect("domain shell에 대응하는 cluster가 있어야 한다"),
+            indexes,
+            &config.postprocess,
+        );
+        let flow_selection = candidates_for_features(
+            &feature_selection.included_ids,
+            indexes,
+            &config.postprocess,
+        );
+        feature_total += feature_selection.total_count;
+        flow_total += flow_selection.total_count;
+        *domain = fill_domain(
+            domain.clone(),
+            feature_selection,
+            flow_selection,
+            shell_bytes.saturating_add(allocation),
+        );
+    }
+    let adjacent_domains = adjacent_domains(partition, overview, shells, config);
+    let mut context = CodexSemanticContext {
+        schema_version: "codex-semantic-context.v1",
+        chunk_id: chunk_id.into(),
+        source_analysis_id: result.analysis_id.clone(),
+        source_schema_version: result.schema_version.clone(),
+        project_id: result.project.project_id.clone(),
+        analysis_status: result.status.clone(),
+        policy_version: "codex-semantic-context-policy.v2",
+        project_profile: profile,
+        global_summary,
+        adjacent_domains,
+        domains,
+        domain_aliases: plan.aliases.clone(),
+        suppressed_domains: plan.suppressed.clone(),
+        summary: ContextSummary {
+            total_source_domains: partition.len(),
+            included_domains: partition.len(),
+            suppressed_domains: plan.suppressed.len(),
+            total_features: feature_total,
+            included_features: 0,
+            total_flows: flow_total,
+            included_flows: 0,
+            budget_bytes: config.postprocess.target_budget_bytes,
+            used_bytes: 0,
+        },
+        warnings: Vec::new(),
+    };
+    update_summary(&mut context);
+    context
+}
+
+pub(super) fn fit_context_budget(context: &mut CodexSemanticContext, budget: usize) {
+    while serialized_bytes(context) > budget {
+        let Some(domain) = context
+            .domains
+            .iter_mut()
+            .filter(|domain| !domain.features.is_empty() || !domain.flows.is_empty())
+            .min_by(|left, right| {
+                left.signal
+                    .score
+                    .cmp(&right.signal.score)
+                    .then_with(|| right.domain_id.cmp(&left.domain_id))
+            })
+        else {
+            context.warnings.push(ContextWarning {
+                code: "budget_unmet".into(),
+                message: "domain shell만으로도 byte budget을 초과했습니다.".into(),
+                related_ids: context
+                    .domains
+                    .iter()
+                    .map(|domain| domain.domain_id.clone())
+                    .collect(),
+            });
+            break;
+        };
+        if let Some(feature) = domain.features.pop() {
+            let feature_id = feature.id;
+            for flow in &mut domain.flows {
+                flow.feature_ids.retain(|id| id != &feature_id);
+            }
+            domain.flows.retain(|flow| !flow.feature_ids.is_empty());
+            *domain
+                .omission
+                .reasons
+                .entry("global_budget_exceeded".into())
+                .or_insert(0) += 1;
+        } else {
+            domain.flows.pop();
+            *domain
+                .omission
+                .reasons
+                .entry("global_budget_exceeded".into())
+                .or_insert(0) += 1;
+        }
+        update_summary(context);
+    }
+    context.summary.used_bytes = serialized_bytes(context);
+    for domain in &mut context.domains {
+        domain.omission.used_bytes = serialized_bytes(domain);
+    }
+}
+
+fn update_summary(context: &mut CodexSemanticContext) {
+    context.summary.included_features = context
+        .domains
+        .iter()
+        .map(|domain| domain.features.len())
+        .sum();
+    context.summary.included_flows = context
+        .domains
+        .iter()
+        .map(|domain| domain.flows.len())
+        .sum();
+    context.summary.used_bytes = serialized_bytes(context);
+    for domain in &mut context.domains {
+        domain.omission.included_features = domain.features.len();
+        domain.omission.included_flows = domain.flows.len();
+        domain.omission.used_bytes = serialized_bytes(domain);
+    }
+}
+
+fn adjacent_domains(
+    partition: &[String],
+    overview: &crate::views::overview::OverviewResponse,
+    shells: &[ContextDomain],
+    config: &AnalysisConfig,
+) -> Vec<AdjacentDomain> {
+    let mut relation_kinds: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for relation in &overview.relations {
+        let inside_source = partition.contains(&relation.source_domain_id);
+        let inside_target = partition.contains(&relation.target_domain_id);
+        if inside_source == inside_target {
+            continue;
+        }
+        let outside = if inside_source {
+            &relation.target_domain_id
+        } else {
+            &relation.source_domain_id
+        };
+        relation_kinds
+            .entry(outside.clone())
+            .or_default()
+            .insert(relation.kind.clone());
+    }
+    relation_kinds
+        .into_iter()
+        .filter_map(|(domain_id, kinds)| {
+            let domain = shells.iter().find(|domain| domain.domain_id == domain_id)?;
+            Some(AdjacentDomain {
+                domain_id,
+                label: domain.current_label.clone(),
+                relation_kinds: kinds.into_iter().collect(),
+            })
+        })
+        .take(config.postprocess.max_adjacent_domains)
+        .collect()
+}
+
+pub(super) fn serialized_bytes<T: serde::Serialize>(value: &T) -> usize {
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+}
+
+#[derive(serde::Serialize)]
+struct ChunkShell<'a> {
+    chunk_id: &'a str,
+    source_analysis_id: &'a str,
+    project_id: &'a str,
+    project_profile: &'a ContextProjectProfile,
+    global_summary: &'a GlobalContextSummary,
+    adjacent_domains: &'a [AdjacentDomain],
+    domains: &'a [ContextDomain],
+}

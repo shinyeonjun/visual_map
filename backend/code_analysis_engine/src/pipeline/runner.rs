@@ -16,8 +16,9 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use super::semantic_stage;
 use super::{cache, profile, DomainAnalysisPipeline};
+use crate::semantic::SemanticStatus;
+use crate::views::overview::model::SemanticAnalysisSummary;
 use std::sync::Arc;
 
 impl DomainAnalysisPipeline {
@@ -36,12 +37,20 @@ impl DomainAnalysisPipeline {
         let root = Path::new(&scan.context.root_path);
         let mut facts = FactStore::default();
         let mut diagnostics = scan.diagnostics.clone();
-        let config_fingerprint = cache::config_fingerprint(&request.options.config);
+        let use_fact_cache = request.options.use_fact_cache
+            && request.options.config.scan.fact_cache_max_entries > 0;
+        let config_fingerprint = if use_fact_cache {
+            cache::config_fingerprint(&request.options.config)
+        } else {
+            String::new()
+        };
         let fact_cache = Arc::clone(&self.fact_cache);
-        fact_cache
-            .lock()
-            .expect("Facts 캐시가 poisoned되지 않아야 한다")
-            .ensure_capacity(request.options.config.scan.fact_cache_max_entries);
+        if use_fact_cache {
+            fact_cache
+                .lock()
+                .expect("Facts 캐시가 poisoned되지 않아야 한다")
+                .ensure_capacity(request.options.config.scan.fact_cache_max_entries);
+        }
 
         let stage_started = Instant::now();
         let analyzed_files: Vec<_> = scan
@@ -49,14 +58,16 @@ impl DomainAnalysisPipeline {
             .par_iter()
             .map(|file| {
                 let path = root.join(&file.relative_path);
-                let cache_key = cache::FactCacheKey::new(
-                    scan.context.project_id.as_str(),
-                    file.file_id.as_str(),
-                    file.language.key(),
-                    file.content_hash.as_deref(),
-                    &config_fingerprint,
-                );
-                if let Some(key) = cache_key.as_ref() {
+                let cache_key = use_fact_cache.then(|| {
+                    cache::FactCacheKey::new(
+                        scan.context.project_id.as_str(),
+                        file.file_id.as_str(),
+                        file.language.key(),
+                        file.content_hash.as_deref(),
+                        &config_fingerprint,
+                    )
+                });
+                if let Some(Some(key)) = cache_key.as_ref() {
                     if let Some(bundle) = fact_cache
                         .lock()
                         .expect("Facts 캐시가 poisoned되지 않아야 한다")
@@ -68,7 +79,7 @@ impl DomainAnalysisPipeline {
                 match fs::read_to_string(&path) {
                     Ok(source) => {
                         let bundle = analyze_file(file, &source, &request.options.config);
-                        if let Some(key) = cache_key {
+                        if let Some(Some(key)) = cache_key {
                             fact_cache
                                 .lock()
                                 .expect("Facts 캐시가 poisoned되지 않아야 한다")
@@ -244,18 +255,8 @@ impl DomainAnalysisPipeline {
             ),
         );
 
-        let (semantic_status, semantic_analysis) = semantic_stage::run(
-            &request.options,
-            root,
-            started,
-            &mut domain_analysis,
-            &framework_detections,
-            &mut diagnostics,
-            &mut profiler,
-        )?;
-
-        // 관계 재집계는 AI 이름 보정과 무관한 정적 단계다. Codex를 끈
-        // 실행에서도 프론트가 사용할 도메인 관계를 항상 만든다.
+        // 관계 재집계는 의미 리뷰와 무관한 정적 단계다. Codex 리뷰는
+        // 이 결과를 저장한 뒤 별도의 `semantic review` 명령으로 실행한다.
         let stage_started = Instant::now();
         reaggregate_relations(&facts, &mut domain_analysis);
         profiler.record(
@@ -271,8 +272,8 @@ impl DomainAnalysisPipeline {
             &files,
             framework_detections,
             execution_flows,
-            semantic_status,
-            semantic_analysis,
+            SemanticStatus::Disabled,
+            SemanticAnalysisSummary::default(),
         );
         let preprocessed_overview = prepare(&overview, &files);
         profiler.record(

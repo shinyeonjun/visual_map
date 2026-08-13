@@ -9,7 +9,8 @@ mod policies;
 pub use loader::{AnalysisConfig, ConfigLoadError};
 pub use policies::{
     AnalysisLimits, DomainPolicy, FrameworkPolicy, LanguageRegistry, ParserPolicy, PathPolicy,
-    ResourceNameSource, ResourceRule, RoutePatternKind, RouteRule, ScanPolicy, SemanticPolicy,
+    PostprocessPolicy, ResourceNameSource, ResourceRule, RoutePatternKind, RouteRule, ScanPolicy,
+    SemanticPolicy,
 };
 
 #[cfg(test)]
@@ -21,13 +22,13 @@ mod tests {
         let config = AnalysisConfig::from_json_str(
             r#"{
                 "domains": {"confirmedMinimumScore": 99},
-                "semantic": {"codexEnabled": true}
+                "semantic": {"maximumLabelLength": 90}
             }"#,
         )
         .expect("부분 설정 JSON은 해석되어야 한다");
 
         assert_eq!(config.domains.confirmed_minimum_score, 99);
-        assert!(config.semantic.codex_enabled);
+        assert_eq!(config.semantic.maximum_label_length, 90);
         assert_eq!(config.semantic.codex_executable, "codex");
         assert!(config.languages.from_extension("ts").is_some());
         assert!(!config.paths.ignored_directories.is_empty());
@@ -37,12 +38,12 @@ mod tests {
     #[test]
     fn toml_설정은_부분_override하고_기본값과_병합된다() {
         let config = AnalysisConfig::from_toml_str(
-            "[domains]\nconfirmedMinimumScore = 42\n[semantic]\ncodexEnabled = true\n",
+            "[domains]\nconfirmedMinimumScore = 42\n[semantic]\nmaximumSummaryLength = 400\n",
         )
         .expect("부분 설정 TOML은 해석되어야 한다");
 
         assert_eq!(config.domains.confirmed_minimum_score, 42);
-        assert!(config.semantic.codex_enabled);
+        assert_eq!(config.semantic.maximum_summary_length, 400);
         assert_eq!(config.semantic.codex_executable, "codex");
         assert!(config.languages.from_extension("rs").is_some());
     }

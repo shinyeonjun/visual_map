@@ -3,14 +3,21 @@ use code_analysis_engine::flow::{FlowEdgeKind, FlowNodeKind};
 use code_analysis_engine::AnalysisRequest;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMPORARY_PROJECT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn temporary_project() -> PathBuf {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("visual-map-flow-{suffix}"));
+    let sequence = TEMPORARY_PROJECT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "visual-map-flow-{}-{sequence}-{suffix}",
+        std::process::id()
+    ));
     fs::create_dir_all(&path).expect("임시 프로젝트를 만들어야 한다");
     path
 }

@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 pub struct PipelineProfiler {
     enabled: bool,
     measured: Duration,
-    codex_context_measured: Duration,
 }
 
 impl PipelineProfiler {
@@ -15,7 +14,6 @@ impl PipelineProfiler {
         Self {
             enabled,
             measured: Duration::ZERO,
-            codex_context_measured: Duration::ZERO,
         }
     }
 
@@ -44,43 +42,12 @@ impl PipelineProfiler {
         }
     }
 
-    /// Codex CLI에 넘기기 전 후보정 컨텍스트 단계의 시간을 기록한다.
-    /// 정적 파이프라인 누적 시간에는 포함하지 않아 두 시간을 분리해서 볼 수 있다.
-    pub fn record_context_millis(&mut self, stage: &str, elapsed_ms: u64, details: String) {
-        if !self.enabled {
-            return;
-        }
-        let elapsed = Duration::from_millis(elapsed_ms);
-        self.codex_context_measured += elapsed;
-        eprintln!(
-            "[profile] stage={stage} elapsed_ms={} codex_context_measured_ms={} {details}",
-            elapsed.as_millis(),
-            self.codex_context_measured.as_millis()
-        );
-    }
-
-    /// 입력부터 Codex 후보정 JSON이 준비된 시점까지의 벽시계 시간을 기록한다.
-    pub fn context_ready(&self, started: Instant) {
-        if self.enabled {
-            eprintln!(
-                "[profile] codex_context_ready_elapsed_ms={} (input_to_codex_context)",
-                started.elapsed().as_millis()
-            );
-        }
-    }
-
     pub fn finish(&self) {
         if self.enabled {
             eprintln!(
                 "[profile] static_pipeline_measured_ms={} (codex excluded)",
                 self.measured.as_millis()
             );
-            if self.codex_context_measured > Duration::ZERO {
-                eprintln!(
-                    "[profile] codex_context_postprocess_measured_ms={}",
-                    self.codex_context_measured.as_millis()
-                );
-            }
         }
     }
 }

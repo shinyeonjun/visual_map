@@ -4,12 +4,8 @@
 //! 않으며, 기존 코드 단위·관계·증거를 참조하는 제안만 반환한다.
 
 pub mod codex;
-mod codex_prompt;
-pub mod context;
-pub mod names;
-pub mod proposal;
 pub mod provider;
-pub mod validator;
+pub mod review;
 
 pub use codex::CodexProvider;
 pub use provider::{SemanticProvider, SemanticStatus};
