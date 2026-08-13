@@ -10,15 +10,21 @@ pub(crate) fn partition_domains(
     domains: &[ContextDomain],
     overview: &OverviewResponse,
     policy: &PostprocessPolicy,
+    required_sizes: &HashMap<String, usize>,
 ) -> Vec<Vec<String>> {
-    let mut shells = domains
+    let mut packages = domains
         .iter()
         .map(|domain| {
             (
                 domain.domain_id.clone(),
-                serde_json::to_vec(domain)
-                    .map(|bytes| bytes.len())
-                    .unwrap_or(usize::MAX),
+                required_sizes
+                    .get(&domain.domain_id)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        serde_json::to_vec(domain)
+                            .map(|bytes| bytes.len())
+                            .unwrap_or(usize::MAX)
+                    }),
             )
         })
         .collect::<HashMap<_, _>>();
@@ -44,19 +50,20 @@ pub(crate) fn partition_domains(
             .expect("남은 도메인에는 shell이 존재해야 한다");
         remaining.remove(&seed);
         let mut partition = vec![seed.clone()];
-        let mut used = shells.remove(&seed).unwrap_or(usize::MAX);
+        let mut used = packages.remove(&seed).unwrap_or(usize::MAX);
 
         while let Some(next) = remaining
             .iter()
             .filter_map(|id| domains.iter().find(|domain| &domain.domain_id == id))
             .map(|domain| {
                 let connection = connection_weight(&partition, &domain.domain_id, overview, policy);
-                let shell_bytes = shells.get(&domain.domain_id).copied().unwrap_or(usize::MAX);
-                (domain, connection, shell_bytes)
+                let package_bytes = packages
+                    .get(&domain.domain_id)
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                (domain, connection, package_bytes)
             })
-            .filter(|(_, _, shell_bytes)| {
-                used.saturating_add(*shell_bytes) <= available || partition.len() == 1
-            })
+            .filter(|(_, _, package_bytes)| used.saturating_add(*package_bytes) <= available)
             .max_by(|left, right| {
                 left.1
                     .cmp(&right.1)

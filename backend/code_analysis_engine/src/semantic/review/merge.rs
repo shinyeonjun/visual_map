@@ -14,6 +14,7 @@ pub struct SemanticReviewResult {
     pub chunk_count: usize,
     pub completed_chunks: usize,
     pub failed_chunks: usize,
+    pub retry_attempts: usize,
     pub domains: Vec<DomainResult>,
     pub features: Vec<FeatureResult>,
     pub flows: Vec<FlowResult>,
@@ -60,6 +61,7 @@ pub fn merge(
     proposals: &[ReviewProposal],
     source_context: String,
     failed_chunks: usize,
+    retry_attempts: usize,
     maximum_name_length: usize,
     maximum_summary_length: usize,
 ) -> SemanticReviewResult {
@@ -159,6 +161,7 @@ pub fn merge(
         chunk_count: contexts.len(),
         completed_chunks: proposals.len(),
         failed_chunks,
+        retry_attempts,
         domains,
         features,
         flows,
@@ -200,6 +203,7 @@ mod tests {
                     id: "feature-a".into(),
                     current_label: "login".into(),
                     visibility: Value::Null,
+                    required: true,
                     tags: Vec::new(),
                     symbols: Vec::new(),
                     source_paths: Vec::new(),
@@ -212,6 +216,7 @@ mod tests {
                     feature_ids: vec!["feature-a".into()],
                     owner_unit_id: "unit-a".into(),
                     owner_name: "Login".into(),
+                    required: true,
                     steps: Vec::new(),
                     edges: Vec::new(),
                     dynamic_boundary_ids: Vec::new(),
@@ -239,6 +244,7 @@ mod tests {
                 flows: Vec::new(),
             }],
             "context.json".into(),
+            0,
             0,
             120,
             500,
@@ -274,6 +280,7 @@ mod tests {
                 flows: Vec::new(),
             }],
             "context.json".into(),
+            0,
             0,
             120,
             500,
@@ -402,6 +409,7 @@ fn merge_suggestion<T: Suggestion>(
         return;
     }
     if !valid_text(suggestion.name(), maximum_name_length)
+        || suggestion.name().contains(['\r', '\n'])
         || suggestion.summary().as_ref().is_some_and(|value| {
             !valid_text(value, maximum_summary_length) || value.contains(['\r', '\n'])
         })

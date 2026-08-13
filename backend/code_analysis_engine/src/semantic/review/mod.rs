@@ -71,6 +71,7 @@ pub fn run(
     };
     let mut proposals = Vec::new();
     let mut failed_chunks = 0;
+    let mut retry_attempts = 0;
     for (index, context) in input.contexts.iter().enumerate() {
         let prompt = prompt::build(
             context,
@@ -80,12 +81,70 @@ pub fn run(
             policy.maximum_summary_length,
         )
         .map_err(ReviewError::Serialize)?;
-        match provider.execute_prompt(&prompt, project_root) {
-            Ok(stdout) => match response::parse_jsonl(&stdout) {
-                Ok(proposal) => proposals.push(proposal),
-                Err(_) => failed_chunks += 1,
-            },
-            Err(_) => failed_chunks += 1,
+        let mut proposal = match provider.execute_prompt(&prompt, project_root) {
+            Ok(stdout) => response::parse_jsonl(&stdout).ok(),
+            Err(_) => None,
+        };
+        let mut missing = proposal
+            .as_ref()
+            .map(|proposal| {
+                prompt::missing_items(
+                    context,
+                    proposal,
+                    policy.maximum_label_length,
+                    policy.maximum_summary_length,
+                )
+            })
+            .unwrap_or_else(|| {
+                prompt::missing_items(
+                    context,
+                    &response::ReviewProposal::default(),
+                    policy.maximum_label_length,
+                    policy.maximum_summary_length,
+                )
+            });
+
+        for _ in 0..policy.missing_item_retries {
+            if missing.is_empty() {
+                break;
+            }
+            retry_attempts += 1;
+            let retry_prompt = prompt::build_missing(
+                context,
+                &missing,
+                index,
+                input.contexts.len(),
+                policy.maximum_label_length,
+                policy.maximum_summary_length,
+            )
+            .map_err(ReviewError::Serialize)?;
+            let Ok(stdout) = provider.execute_prompt(&retry_prompt, project_root) else {
+                continue;
+            };
+            let Ok(retry_proposal) = response::parse_jsonl(&stdout) else {
+                continue;
+            };
+            if let Some(current) = proposal.as_mut() {
+                current.merge_missing(retry_proposal);
+            } else {
+                proposal = Some(retry_proposal);
+            }
+            missing = prompt::missing_items(
+                context,
+                proposal
+                    .as_ref()
+                    .expect("재시도 성공 시 proposal이 존재해야 한다"),
+                policy.maximum_label_length,
+                policy.maximum_summary_length,
+            );
+        }
+
+        if let Some(proposal) = proposal {
+            // 일부 항목이 계속 누락된 경우에도 부분 proposal을 merge에 전달한다.
+            // merge가 누락된 각 ID에 대해 명시적인 warning을 생성한다.
+            proposals.push(proposal);
+        } else {
+            failed_chunks += 1;
         }
     }
 
@@ -94,6 +153,7 @@ pub fn run(
         &proposals,
         input.source_path.display().to_string(),
         failed_chunks,
+        retry_attempts,
         policy.maximum_label_length,
         policy.maximum_summary_length,
     );

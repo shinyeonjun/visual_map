@@ -232,6 +232,8 @@ pub struct SemanticPolicy {
     pub codex_executable: String,
     pub codex_timeout_ms: u64,
     pub codex_max_input_bytes: usize,
+    /// 누락된 의미 항목을 작은 재요청으로 보완할 최대 횟수다.
+    pub missing_item_retries: usize,
     pub maximum_label_length: usize,
     pub maximum_summary_length: usize,
 }
