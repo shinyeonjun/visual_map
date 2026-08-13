@@ -229,6 +229,135 @@ function fetchUser() { return true; }
 }
 
 #[test]
+fn 중첩된_호출_인자는_안쪽부터_바깥쪽_호출순으로_정렬된다() {
+    let root = temporary_project();
+    fs::write(
+        root.join("nested-calls.ts"),
+        r#"
+export function combineFlow() {
+  return combine(first(), second());
+}
+function first() { return 1; }
+function second() { return 2; }
+function combine(left: number, right: number) { return left + right; }
+"#,
+    )
+    .expect("중첩 호출 fixture를 써야 한다");
+
+    let result = analyze(AnalysisRequest::new(&root)).expect("분석이 성공해야 한다");
+    let overview = result.overview.expect("Overview가 있어야 한다");
+    let flow = overview
+        .execution_flows
+        .flows
+        .iter()
+        .find(|flow| {
+            overview
+                .units
+                .iter()
+                .find(|unit| unit.id == flow.owner_unit_id)
+                .is_some_and(|unit| unit.name == "combineFlow")
+        })
+        .expect("combineFlow 흐름이 있어야 한다");
+
+    let calls = flow
+        .nodes
+        .iter()
+        .filter(|node| node.kind == FlowNodeKind::Call)
+        .map(|node| node.label.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(calls, ["first", "second", "combine"]);
+
+    fs::remove_dir_all(root).expect("중첩 호출 fixture를 정리해야 한다");
+}
+
+#[test]
+fn do_while는_본문을_먼저_실행하고_조건에서_분기한다() {
+    let root = temporary_project();
+    fs::write(
+        root.join("do-while.ts"),
+        r#"
+export function doFlow() {
+  do {
+    tick();
+  } while (check());
+  after();
+}
+function tick() {}
+function check() { return true; }
+function after() {}
+"#,
+    )
+    .expect("do while fixture를 써야 한다");
+
+    let result = analyze(AnalysisRequest::new(&root)).expect("분석이 성공해야 한다");
+    let overview = result.overview.expect("Overview가 있어야 한다");
+    let flow = overview
+        .execution_flows
+        .flows
+        .iter()
+        .find(|flow| {
+            overview
+                .units
+                .iter()
+                .find(|unit| unit.id == flow.owner_unit_id)
+                .is_some_and(|unit| unit.name == "doFlow")
+        })
+        .expect("doFlow 흐름이 있어야 한다");
+    let entry = flow
+        .nodes
+        .iter()
+        .find(|node| node.kind == FlowNodeKind::Entry)
+        .expect("entry 노드가 있어야 한다");
+    let loop_node = flow
+        .nodes
+        .iter()
+        .find(|node| node.kind == FlowNodeKind::Loop)
+        .expect("do while loop 노드가 있어야 한다");
+    let tick = flow
+        .nodes
+        .iter()
+        .find(|node| node.label == "tick")
+        .expect("tick 호출이 있어야 한다");
+    let check = flow
+        .nodes
+        .iter()
+        .find(|node| node.label == "check")
+        .expect("check 호출이 있어야 한다");
+    let after = flow
+        .nodes
+        .iter()
+        .find(|node| node.label == "after")
+        .expect("after 호출이 있어야 한다");
+
+    assert!(flow
+        .edges
+        .iter()
+        .any(|edge| edge.source_node_id == entry.id && edge.target_node_id == tick.id));
+    assert!(flow.edges.iter().any(|edge| {
+        edge.source_node_id == tick.id
+            && edge.target_node_id == loop_node.id
+            && edge.kind == FlowEdgeKind::LoopBack
+    }));
+    assert!(flow.edges.iter().any(|edge| {
+        edge.source_node_id == loop_node.id
+            && edge.target_node_id == check.id
+            && edge.label.as_deref() == Some("condition")
+    }));
+    assert!(flow.edges.iter().any(|edge| {
+        edge.source_node_id == check.id
+            && edge.target_node_id == tick.id
+            && edge.kind == FlowEdgeKind::LoopBody
+    }));
+    assert!(flow.edges.iter().any(|edge| {
+        edge.source_node_id == check.id
+            && edge.target_node_id == after.id
+            && edge.kind == FlowEdgeKind::FalseBranch
+    }));
+
+    fs::remove_dir_all(root).expect("do while fixture를 정리해야 한다");
+}
+
+#[test]
 fn 객체_생성도_실행흐름의_구성_호출로_보존된다() {
     let root = temporary_project();
     fs::write(
@@ -281,6 +410,7 @@ export function recover(items: Request[]) {
     return fallback(error);
   }
 }
+
 function load(item: Request) { return item; }
 function fallback(error: unknown) { return error; }
 "#,
@@ -320,6 +450,107 @@ function fallback(error: unknown) { return error; }
         .any(|edge| edge.kind == FlowEdgeKind::LoopBack));
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}
+
+#[test]
+fn short_circuit와_ternary는_조건부_평가_경계를_보존한다() {
+    let root = temporary_project();
+    fs::write(
+        root.join("short-circuit.ts"),
+        r#"
+export function choose(left: boolean, right: boolean) {
+  return left && load() || fallback();
+}
+function load() { return true; }
+function fallback() { return false; }
+"#,
+    )
+    .expect("short-circuit fixture를 써야 한다");
+
+    let result = analyze(AnalysisRequest::new(&root)).expect("분석이 성공해야 한다");
+    let overview = result.overview.expect("Overview가 있어야 한다");
+    let choose = overview
+        .execution_flows
+        .flows
+        .iter()
+        .find(|flow| {
+            overview
+                .units
+                .iter()
+                .find(|unit| unit.id == flow.owner_unit_id)
+                .is_some_and(|unit| unit.name == "choose")
+        })
+        .expect("choose 실행 흐름이 있어야 한다");
+
+    let conditions = choose
+        .nodes
+        .iter()
+        .filter(|node| node.kind == FlowNodeKind::Condition)
+        .count();
+    assert!(
+        conditions >= 2,
+        "&&와 ||가 각각 조건 노드로 보존되어야 한다"
+    );
+    assert!(choose.nodes.iter().any(|node| node.label == "load"));
+    assert!(choose.nodes.iter().any(|node| node.label == "fallback"));
+    assert!(choose
+        .edges
+        .iter()
+        .any(|edge| edge.kind == FlowEdgeKind::TrueBranch));
+    assert!(choose
+        .edges
+        .iter()
+        .any(|edge| edge.kind == FlowEdgeKind::FalseBranch));
+
+    fs::remove_dir_all(root).expect("short-circuit fixture를 정리해야 한다");
+}
+
+#[test]
+fn finally는_try와_분기된_실행경계를_보존한다() {
+    let root = temporary_project();
+    fs::write(
+        root.join("finally.ts"),
+        r#"
+export function recover() {
+  try {
+    risky();
+  } catch (error) {
+    fallback(error);
+  } finally {
+    cleanup();
+  }
+}
+function risky() { return true; }
+function fallback(error: unknown) { return error; }
+function cleanup() { return true; }
+"#,
+    )
+    .expect("finally fixture를 써야 한다");
+
+    let result = analyze(AnalysisRequest::new(&root)).expect("분석이 성공해야 한다");
+    let overview = result.overview.expect("Overview가 있어야 한다");
+    let recover = overview
+        .execution_flows
+        .flows
+        .iter()
+        .find(|flow| {
+            overview
+                .units
+                .iter()
+                .find(|unit| unit.id == flow.owner_unit_id)
+                .is_some_and(|unit| unit.name == "recover")
+        })
+        .expect("recover 실행 흐름이 있어야 한다");
+    let cleanup = recover
+        .nodes
+        .iter()
+        .find(|node| node.label == "cleanup")
+        .expect("finally 내부 호출이 있어야 한다");
+    assert!(recover.edges.iter().any(|edge| {
+        edge.target_node_id == cleanup.id && edge.label.as_deref() == Some("finally")
+    }));
+
+    fs::remove_dir_all(root).expect("finally fixture를 정리해야 한다");
 }
 
 #[test]

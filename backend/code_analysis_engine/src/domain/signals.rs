@@ -50,7 +50,10 @@ pub fn collect(
         let symbol_tokens = if unit.kind == CodeUnitKind::Lambda {
             Vec::new()
         } else {
-            tokenize(&unit.name, domain_policy)
+            // 일반 심볼에서는 generic token을 즉시 버리지 않는다. 같은
+            // generic token이 여러 유닛에 반복되면 프로젝트의 실제 개념일
+            // 수 있으므로, 반복성으로 승격 여부를 판단할 수 있게 보존한다.
+            tokenize_with_generic(&unit.name, domain_policy)
         };
 
         for token in path_tokens {
@@ -100,7 +103,7 @@ pub fn collect(
             entrypoint.path.as_deref().unwrap_or_default(),
             entrypoint.method.as_deref().unwrap_or_default()
         );
-        for token in tokenize(&tokens, domain_policy) {
+        for token in tokenize_with_generic(&tokens, domain_policy) {
             anchor_keys.insert(token.clone());
             signals.push(DomainSignal {
                 domain_key: token,
@@ -120,7 +123,7 @@ pub fn collect(
         {
             continue;
         }
-        for token in tokenize(&resource.name, domain_policy) {
+        for token in tokenize_with_generic(&resource.name, domain_policy) {
             anchor_keys.insert(token.clone());
             signals.push(DomainSignal {
                 domain_key: token,
@@ -173,19 +176,51 @@ pub fn collect(
             *map.entry(signal.domain_key.clone()).or_insert(0) += 1;
             map
         });
+    let anchored_generic_keys: BTreeSet<String> = signals
+        .iter()
+        .filter(|signal| {
+            matches!(
+                signal.kind,
+                DomainSignalKind::Entrypoint | DomainSignalKind::Resource
+            )
+        })
+        .map(|signal| signal.domain_key.clone())
+        .collect();
+    let repeated_generic_keys: BTreeSet<String> = symbol_units
+        .iter()
+        .filter(|(_, units)| units.len() >= domain_policy.minimum_repeated_symbol_units)
+        .map(|(key, _)| key.clone())
+        .filter(|key| domain_policy.is_generic(key))
+        .collect();
+    let retained_generic_keys = anchored_generic_keys
+        .union(&repeated_generic_keys)
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let known_keys: Vec<String> = candidate_keys
         .into_iter()
-        .filter(|(key, count)| *count >= 1 && !domain_policy.is_generic(key))
+        .filter(|(key, count)| {
+            *count >= 1 && (!domain_policy.is_generic(key) || retained_generic_keys.contains(key))
+        })
         .map(|(key, _)| key)
         .collect();
 
     super::reference_signals::append(store, domain_policy, &known_keys, &mut signals);
 
-    signals.retain(|signal| !domain_policy.is_generic(&signal.domain_key));
+    signals.retain(|signal| {
+        !domain_policy.is_generic(&signal.domain_key)
+            || retained_generic_keys.contains(&signal.domain_key)
+    });
     signals
 }
 
 pub fn tokenize(value: &str, domain_policy: &DomainPolicy) -> Vec<String> {
+    tokenize_with_generic(value, domain_policy)
+        .into_iter()
+        .filter(|token| !domain_policy.is_generic(token))
+        .collect()
+}
+
+fn tokenize_with_generic(value: &str, domain_policy: &DomainPolicy) -> Vec<String> {
     let mut normalized = String::with_capacity(value.len() + 8);
     let mut previous_is_lower = false;
     for character in value.chars() {
@@ -202,9 +237,7 @@ pub fn tokenize(value: &str, domain_policy: &DomainPolicy) -> Vec<String> {
 
     normalized
         .split_whitespace()
-        .filter(|token| {
-            token.len() >= domain_policy.minimum_token_length && !domain_policy.is_generic(token)
-        })
+        .filter(|token| token.len() >= domain_policy.minimum_token_length)
         .map(str::to_string)
         .collect()
 }

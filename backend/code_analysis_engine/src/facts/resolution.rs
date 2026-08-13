@@ -55,29 +55,6 @@ pub(super) fn resolve(store: &mut FactStore) {
         candidates.sort();
         candidates.dedup();
 
-        // Explicit import alias가 프로젝트에 포함되지 않은 모듈 경로를
-        // 가리키지만, 동일한 파일 안에 그 imported symbol의 선언이 있는
-        // 부분 fixture도 있다. 이 경우에만 binding이 제공한 마지막
-        // symbol을 같은 lexical scope에서 보조 확인한다. 일반 bare name
-        // 전역 검색은 여전히 금지한다.
-        if candidates.is_empty() {
-            if let Some(binding_target) = binding_target.as_deref() {
-                if let Some(imported_name) = last_path_segment(binding_target) {
-                    candidates = index
-                        .local_candidates(
-                            &reference.source_unit_id,
-                            source_file_id.map(String::as_str),
-                            source_language,
-                            imported_name,
-                            &reference.kind,
-                        )
-                        .unwrap_or_default();
-                    candidates.sort();
-                    candidates.dedup();
-                }
-            }
-        }
-
         reference.candidate_unit_ids.clear();
         match candidates.len() {
             1 => {
@@ -189,16 +166,6 @@ fn split_head(value: &str) -> (&str, &str) {
         Some(index) => (&value[..index], &value[index..]),
         None => (value, ""),
     }
-}
-
-fn last_path_segment(value: &str) -> Option<&str> {
-    value
-        .rsplit_once("::")
-        .map(|(_, name)| name)
-        .or_else(|| value.rsplit_once('.').map(|(_, name)| name))
-        .or_else(|| value.rsplit_once('/').map(|(_, name)| name))
-        .or_else(|| (!value.is_empty()).then_some(value))
-        .filter(|name| !name.is_empty() && *name != "*")
 }
 
 fn unique(values: &[String]) -> Option<&str> {

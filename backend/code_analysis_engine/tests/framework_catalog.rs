@@ -41,7 +41,7 @@ fn registry의_모든_프레임워크가_지원언어에서_감지된다() {
         let file_name = format!("marker.{}", extension(language));
         // marker가 주석에만 존재해도 감지되는 회귀를 막기 위해 실제
         // import 문맥으로 fixture를 만든다.
-        let source = format!("import {}\n", spec.markers[0]);
+        let source = fixture_source(language, &spec.markers[0]);
         fs::write(root.join(file_name), source).expect("framework marker fixture를 써야 한다");
 
         let result = analyze(AnalysisRequest::new(&root))
@@ -85,6 +85,92 @@ function plain() { return note; }
         .any(|framework| framework.id == "javascript.react"));
 
     fs::remove_dir_all(root).expect("음성 fixture를 정리해야 한다");
+}
+
+fn fixture_source(language: &str, marker: &str) -> String {
+    match language {
+        "javascript" | "typescript" => {
+            format!("import framework from \"{marker}\"; framework;\n")
+        }
+        "python" => format!("from {marker} import value\nvalue = None\n"),
+        "java" => {
+            if marker
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "._".contains(character))
+            {
+                format!("import {marker}.Marker; class App {{}}\n")
+            } else {
+                format!("@{marker} class App {{}}\n")
+            }
+        }
+        "c" | "cpp" => format!("#include <{marker}>\nint main() {{ return 0; }}\n"),
+        "csharp" => format!("using {marker}; class App {{}}\n"),
+        "go" => format!("package main\nimport _ \"{marker}\"\nfunc main() {{}}\n"),
+        "rust" => format!("use {marker}::Marker; fn main() {{}}\n"),
+        "dart" => {
+            if marker.starts_with("package:") {
+                format!("import '{marker}/marker.dart'; void main() {{}}\n")
+            } else {
+                format!("class {marker} {{}}\n")
+            }
+        }
+        other => panic!("지원 언어가 아닌 framework catalog 언어: {other}"),
+    }
+}
+
+#[test]
+fn 사용자_프로젝트의_framework_catalog_파일도_실제_import를_감지한다() {
+    let root = temporary_project("user-named-framework-catalog");
+    fs::create_dir_all(root.join("src")).expect("소스 디렉터리를 만들어야 한다");
+    fs::write(
+        root.join("src/framework-catalog.rs"),
+        "use axum::Router;\nfn build_router() -> Router { Router::new() }\n",
+    )
+    .expect("사용자 framework catalog 파일을 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("분석이 성공해야 한다")
+        .overview
+        .expect("Overview가 생성되어야 한다");
+    assert!(overview
+        .detected_frameworks
+        .iter()
+        .any(|framework| framework.id == "rust.axum"));
+
+    fs::remove_dir_all(root).expect("fixture를 정리해야 한다");
+}
+
+#[test]
+fn manifest_설명과_주석은_의존성으로_오인하지_않는다() {
+    let root = temporary_project("manifest-documentation");
+    fs::write(
+        root.join("pom.xml"),
+        "<project><description>spring-boot is documented here</description></project>",
+    )
+    .expect("Maven manifest를 써야 한다");
+    fs::write(
+        root.join("build.gradle"),
+        "// implementation 'org.springframework.boot:spring-boot-starter-web'\ndescription = 'spring-boot'\n",
+    )
+    .expect("Gradle manifest를 써야 한다");
+    fs::write(
+        root.join("go.mod"),
+        "module example.com/docs\n// github.com/gin-gonic/gin is documented here\n",
+    )
+    .expect("Go manifest를 써야 한다");
+    fs::write(
+        root.join("pubspec.yaml"),
+        "name: docs\ndescription: package:flutter is documented here\n",
+    )
+    .expect("Dart manifest를 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("분석이 성공해야 한다")
+        .overview
+        .expect("Overview가 생성되어야 한다");
+    assert!(overview.detected_frameworks.is_empty());
+
+    fs::remove_dir_all(root).expect("fixture를 정리해야 한다");
 }
 
 #[test]

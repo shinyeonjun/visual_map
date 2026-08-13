@@ -197,7 +197,10 @@ fn extend_limited<T>(target: &mut Vec<T>, values: Vec<T>, limit: usize) -> bool 
 mod tests {
     use super::FactStore;
     use crate::facts::SourceSpan;
-    use crate::facts::{CodeUnit, CodeUnitKind, Reference, ReferenceKind, ResolutionStatus};
+    use crate::facts::{
+        BindingKind, CodeUnit, CodeUnitKind, Reference, ReferenceKind, ResolutionStatus,
+        SymbolBinding,
+    };
     use crate::model::Language;
     use std::collections::BTreeMap;
 
@@ -334,6 +337,47 @@ mod tests {
 
         assert!(store.references[0].target_unit_id.is_none());
         assert_eq!(store.references[0].status, ResolutionStatus::Unknown);
+    }
+
+    #[test]
+    fn 외부_import_alias는_같은_파일의_동명이인으로_fallback하지_않는다() {
+        let mut file = unit("file", "file", "file");
+        file.kind = CodeUnitKind::File;
+        file.parent_id = None;
+
+        let mut source = unit("source", "invokeExternal", "file::invokeExternal");
+        source.parent_id = Some("file".into());
+
+        let mut local = unit("local", "remote", "file::remote");
+        local.parent_id = Some("file".into());
+
+        let mut store = FactStore {
+            units: BTreeMap::from([
+                ("file".into(), file),
+                ("source".into(), source),
+                ("local".into(), local),
+            ]),
+            bindings: vec![SymbolBinding {
+                id: "binding-prism".into(),
+                source_unit_id: "source".into(),
+                local_name: "prism".into(),
+                target_name: "external::remote".into(),
+                kind: BindingKind::ImportAlias,
+                evidence: Vec::new(),
+            }],
+            references: vec![Reference {
+                source_unit_id: "source".into(),
+                target_name: "prism".into(),
+                kind: ReferenceKind::Call,
+                ..reference("ref_external", "prism", ResolutionStatus::Confirmed)
+            }],
+            ..FactStore::default()
+        };
+
+        store.resolve_references();
+
+        assert_eq!(store.references[0].status, ResolutionStatus::Unknown);
+        assert!(store.references[0].target_unit_id.is_none());
     }
 
     #[test]

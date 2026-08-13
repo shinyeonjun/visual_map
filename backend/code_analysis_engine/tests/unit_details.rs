@@ -190,6 +190,7 @@ fn 호출_기반_외부자원이_언어_공통_사실로_정규화된다() {
     let source = r#"
 import fs from "fs";
 import axios from "axios";
+import redis from "redis";
 async function load() {
   const response = await axios.get("https://example.test/users");
   const data = await fs.readFile("./data.json");
@@ -197,6 +198,7 @@ async function load() {
 await eventBus.publish("user.created");
   return response + data;
 }
+
 "#;
     let bundle = analyze_file(
         &file("src/resources.ts", Language::TypeScript),
@@ -219,6 +221,37 @@ await eventBus.publish("user.created");
         .any(|resource| resource.kind == ResourceKind::Cache && resource.name == "session:1"));
     assert!(bundle.resources.iter().any(|resource| {
         resource.kind == ResourceKind::EventTopic && resource.name == "user.created"
+    }));
+}
+
+#[test]
+fn import_alias가_변수명과_무관하게_파일_캐시_환경자원을_복원한다() {
+    let bundle = analyze_file(
+        &file("src/aliased-resources.ts", Language::TypeScript),
+        r#"
+import { readFile as slurp } from "fs";
+import { get as cacheGet } from "redis";
+import { getenv as readEnv } from "os";
+
+function load() {
+  slurp("./data.json");
+  cacheGet("session");
+  readEnv("API_KEY");
+}
+"#,
+        &AnalysisConfig::default(),
+    );
+
+    assert!(bundle
+        .resources
+        .iter()
+        .any(|resource| { resource.kind == ResourceKind::File && resource.name == "./data.json" }));
+    assert!(bundle
+        .resources
+        .iter()
+        .any(|resource| { resource.kind == ResourceKind::Cache && resource.name == "session" }));
+    assert!(bundle.resources.iter().any(|resource| {
+        resource.kind == ResourceKind::Environment && resource.name == "API_KEY"
     }));
 }
 
@@ -312,6 +345,20 @@ function run(path: Path) {
         .resources
         .iter()
         .any(|resource| resource.kind == ResourceKind::Process));
+}
+
+#[test]
+fn ecma_동적_api의_식별자_alias를_동적_경계로_보존한다() {
+    let bundle = analyze_file(
+        &file("src/dynamic.ts", Language::TypeScript),
+        "const runtimeRequire = require;\nfunction load() { return runtimeRequire('module'); }\n",
+        &AnalysisConfig::default(),
+    );
+
+    assert!(bundle.references.iter().any(|reference| {
+        reference.target_name == "runtimeRequire"
+            && reference.status == code_analysis_engine::facts::ResolutionStatus::Dynamic
+    }));
 }
 
 #[test]
@@ -417,5 +464,192 @@ export { User } from "./models";
         reference.kind == ReferenceKind::Export
             && reference.target_name == "login"
             && reference.target_unit_id.as_deref() == Some(login_id.as_str())
+    }));
+}
+
+#[test]
+fn 열_개_언어의_공통_유닛_계약이_계층과_종류를_보존한다() {
+    let javascript = analyze_file(
+        &file("src/service.js", Language::JavaScript),
+        "class Service { constructor() {} #secret = 1; run() {} }",
+        &AnalysisConfig::default(),
+    );
+    assert!(javascript
+        .units
+        .iter()
+        .any(|unit| unit.kind == CodeUnitKind::Constructor && unit.name == "constructor"));
+    assert!(javascript
+        .units
+        .iter()
+        .any(|unit| unit.kind == CodeUnitKind::Property && unit.name == "#secret"));
+
+    let typescript = analyze_file(
+        &file("src/service.ts", Language::TypeScript),
+        "abstract class Service { abstract run(value: string): void; }",
+        &AnalysisConfig::default(),
+    );
+    assert!(typescript
+        .units
+        .iter()
+        .any(|unit| unit.kind == CodeUnitKind::Method && unit.name == "run"));
+
+    let java = analyze_file(
+        &file("src/Main.java", Language::Java),
+        "package qa.variant.deep; class Service { Service() {} }",
+        &AnalysisConfig::default(),
+    );
+    assert!(java
+        .units
+        .iter()
+        .any(|unit| unit.kind == CodeUnitKind::Package && unit.name == "qa.variant.deep"));
+
+    let go = analyze_file(
+        &file("src/service.go", Language::Go),
+        "package api\ntype Service interface { Run() error }\ntype Impl struct{}\nfunc (Impl) Run() error { return nil }",
+        &AnalysisConfig::default(),
+    );
+    assert!(go
+        .units
+        .iter()
+        .any(|unit| unit.kind == CodeUnitKind::Interface && unit.name == "Service"));
+    assert!(
+        go.units
+            .iter()
+            .filter(|unit| unit.kind == CodeUnitKind::Method && unit.name == "Run")
+            .count()
+            >= 2
+    );
+
+    let rust = analyze_file(
+        &file("src/service.rs", Language::Rust),
+        "trait Service { fn run(&self); } impl Service for Worker { fn run(&self) {} } struct Worker;",
+        &AnalysisConfig::default(),
+    );
+    let rust_methods = rust
+        .units
+        .iter()
+        .filter(|unit| unit.kind == CodeUnitKind::Method && unit.name == "run")
+        .map(|unit| unit.qualified_name.as_str())
+        .collect::<HashSet<_>>();
+    assert_eq!(rust_methods.len(), 2);
+
+    let csharp = analyze_file(
+        &file("src/Service.cs", Language::CSharp),
+        "namespace qa.variant.deep; class Service { void Run() {} }",
+        &AnalysisConfig::default(),
+    );
+    assert!(csharp
+        .units
+        .iter()
+        .any(|unit| unit.kind == CodeUnitKind::Namespace && unit.name == "qa.variant.deep"));
+
+    let dart = analyze_file(
+        &file("src/service.dart", Language::Dart),
+        "class Service { Service(); Service.named(); factory Service.from() => Service(); int get value => 1; set value(int value) {} }",
+        &AnalysisConfig::default(),
+    );
+    assert!(dart
+        .units
+        .iter()
+        .any(|unit| unit.kind == CodeUnitKind::Constructor && unit.name == "Service.named"));
+    assert!(dart
+        .units
+        .iter()
+        .any(|unit| unit.kind == CodeUnitKind::Property && unit.name == "value"));
+}
+
+#[test]
+fn 비정형_람다와_csharp_primary_constructor의_정보를_보존한다() {
+    let python = analyze_file(
+        &file("src/lambda.py", Language::Python),
+        "handler = lambda value: value + 1\n",
+        &AnalysisConfig::default(),
+    );
+    let python_lambdas = python
+        .units
+        .iter()
+        .filter(|unit| unit.kind == CodeUnitKind::Lambda)
+        .collect::<Vec<_>>();
+    assert_eq!(python_lambdas.len(), 1);
+
+    let cpp = analyze_file(
+        &file("src/lambda.cpp", Language::Cpp),
+        "int run() { return [value](int input) { return input + value; }(1); }\n",
+        &AnalysisConfig::default(),
+    );
+    assert!(cpp
+        .units
+        .iter()
+        .any(|unit| { unit.kind == CodeUnitKind::Lambda && unit.name.starts_with("<lambda@") }));
+    assert!(!cpp
+        .units
+        .iter()
+        .any(|unit| { unit.kind == CodeUnitKind::Lambda && unit.name == "value" }));
+
+    let csharp = analyze_file(
+        &file("src/Service.cs", Language::CSharp),
+        "public class Service(string connection) { public void Run() {} }\n",
+        &AnalysisConfig::default(),
+    );
+    let service = csharp
+        .units
+        .iter()
+        .find(|unit| unit.name == "Service")
+        .expect("primary constructor를 가진 클래스가 있어야 한다");
+    assert!(service
+        .signature
+        .as_deref()
+        .is_some_and(|signature| signature.contains("connection")));
+    assert_eq!(service.parameters.len(), 1);
+    assert_eq!(service.parameters[0].name, "connection");
+}
+
+#[test]
+fn csharp의_대문자_main도_정적_프로그램_진입점으로_보존한다() {
+    let bundle = analyze_file(
+        &file("src/Program.cs", Language::CSharp),
+        "class Program { static void Main(string[] args) {} }\n",
+        &AnalysisConfig::default(),
+    );
+    assert!(bundle.entrypoints.iter().any(|entrypoint| {
+        entrypoint.kind == code_analysis_engine::facts::EntrypointKind::Main
+            && bundle
+                .units
+                .iter()
+                .find(|unit| unit.id == entrypoint.unit_id)
+                .is_some_and(|unit| unit.name == "Main")
+    }));
+}
+
+#[test]
+fn java_reflection_호출은_동적_경계로_표시되고_일반_이름은_오탐하지_않는다() {
+    let bundle = analyze_file(
+        &file("src/Reflection.java", Language::Java),
+        r#"
+class Reflection {
+  void evaluate() {}
+  void run(String name, Object target) throws Exception {
+    evaluate();
+    Class.forName(name);
+    target.getClass().getMethod("run").invoke(target);
+  }
+}
+"#,
+        &AnalysisConfig::default(),
+    );
+
+    let dynamic_targets = bundle
+        .references
+        .iter()
+        .filter(|reference| {
+            reference.status == code_analysis_engine::facts::ResolutionStatus::Dynamic
+        })
+        .map(|reference| reference.target_name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(dynamic_targets.contains("Class.forName"));
+    assert!(dynamic_targets.contains("getMethod.invoke"));
+    assert!(!bundle.references.iter().any(|reference| {
+        reference.target_name == "evaluate"
+            && reference.status == code_analysis_engine::facts::ResolutionStatus::Dynamic
     }));
 }
