@@ -160,18 +160,37 @@ fn next_route_segments(path: &str) -> Option<Vec<String>> {
         .map(|segment| segment.to_string_lossy().to_string())
         .collect::<Vec<_>>();
     let file = segments.last()?.as_str();
-    let is_route_file =
-        file == "route.ts" || file == "route.tsx" || file == "route.js" || file == "route.jsx";
-    if !is_route_file {
-        return None;
-    }
     let marker = segments
         .iter()
         .position(|segment| segment == "app" || segment == "pages")?;
-    let mut route = segments[marker + 1..segments.len() - 1].to_vec();
-    if segments[marker] == "pages" {
-        route.retain(|segment| segment != "index.ts" && segment != "index.js");
+
+    if segments[marker] == "app" {
+        let is_route_file = matches!(file, "route.ts" | "route.tsx" | "route.js" | "route.jsx");
+        if !is_route_file {
+            return None;
+        }
+        return Some(segments[marker + 1..segments.len() - 1].to_vec());
     }
+
+    // Pages Router는 route.ts라는 고정 파일명이 아니라 pages 아래의
+    // 모듈 파일 자체가 route다. 특히 pages/api/*.ts는 API 진입점이므로
+    // App Router 규칙만 적용하면 정상적인 API가 조용히 누락된다.
+    let is_page_module = [".js", ".jsx", ".ts", ".tsx"]
+        .iter()
+        .any(|suffix| file.ends_with(suffix));
+    if !is_page_module || file.starts_with('_') {
+        return None;
+    }
+    let mut route = segments[marker + 1..].to_vec();
+    if let Some(last) = route.last_mut() {
+        for suffix in [".tsx", ".jsx", ".ts", ".js"] {
+            if let Some(stem) = last.strip_suffix(suffix) {
+                *last = stem.to_string();
+                break;
+            }
+        }
+    }
+    route.retain(|segment| segment != "index");
     Some(route)
 }
 

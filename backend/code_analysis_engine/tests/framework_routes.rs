@@ -197,20 +197,37 @@ func listUsers(c *gin.Context) {}
         root.join("express.ts"),
         r#"
 import express from "express";
+import { Router as createRouter } from "express";
 const app = express();
 app.get("/health", health);
 app.ws("/socket", socketHandler);
+    const forge = express();
+    forge.get("/nebula", health);
+const aliasedRouter = createRouter();
+aliasedRouter.get("/aliased", health);
+const catalog = { get: (_path: string, _handler: unknown) => undefined };
+    catalog.get("/nebula", health);
 const apiRouter = express.Router();
 app.use("/api", apiRouter);
 apiRouter.get("/mounted", health);
 function health(request: Request, response: Response) {}
-function socketHandler(socket: WebSocket) {}
+    function socketHandler(socket: WebSocket) {}
 
 @DeleteDateColumn()
 class SoftDeleteMarker {}
 "#,
     )
     .expect("Express fixture를 써야 한다");
+    fs::write(
+        root.join("express-alias-only.ts"),
+        r#"
+import express from "express";
+const nebula = express();
+nebula.get("/alias-only", health);
+function health(request: Request, response: Response) {}
+"#,
+    )
+    .expect("Express alias-only fixture를 써야 한다");
     fs::write(
         root.join("mounted-router.ts"),
         r#"
@@ -253,6 +270,12 @@ export async function GET() { return NextResponse.json({ ok: true }); }
 "#,
     )
     .expect("Next route fixture를 써야 한다");
+    fs::create_dir_all(root.join("pages/api")).expect("Next Pages API 디렉터리를 만들어야 한다");
+    fs::write(
+        root.join("pages/api/legacy.ts"),
+        "export default function legacy(request: Request, response: Response) { response.end(); }\n",
+    )
+    .expect("Next Pages API fixture를 써야 한다");
     fs::write(
         root.join("shelf.dart"),
         r#"
@@ -288,7 +311,6 @@ Future<Response> onRequest(RequestContext context) async => Response(body: "ok")
         .iter()
         .filter_map(|entrypoint| entrypoint.path.as_deref())
         .collect();
-
     for path in [
         "/python",
         "/api/csharp",
@@ -303,11 +325,15 @@ Future<Response> onRequest(RequestContext context) async => Response(body: "ok")
         "/go",
         "/api/java",
         "/health",
+        "/nebula",
+        "/aliased",
+        "/alias-only",
         "/users/:id",
         "/play",
         "/play/orders",
         "/v1/users",
         "/api/health",
+        "/api/legacy",
         "/dart",
         "/users/:id",
     ] {
@@ -316,6 +342,13 @@ Future<Response> onRequest(RequestContext context) async => Response(body: "ok")
             "진입점이 없어: {path}, 실제={paths:?}"
         );
     }
+    assert!(!overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.path.as_deref() == Some("/nebula")
+            && entrypoint
+                .evidence
+                .iter()
+                .any(|evidence| evidence.value.contains("catalog.get"))
+    }));
 
     assert!(overview.entrypoints.iter().any(|entrypoint| {
         entrypoint.framework_id.as_deref() == Some("rust.actix_web")

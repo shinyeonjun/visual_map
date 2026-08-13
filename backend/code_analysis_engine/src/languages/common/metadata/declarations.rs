@@ -33,7 +33,13 @@ pub(crate) fn declaration_body(node: Node<'_>) -> Option<Node<'_>> {
 pub(crate) fn extract_parameters(node: Node<'_>, source: &[u8]) -> Vec<CodeParameter> {
     let parameter_node = ["parameters", "formal_parameters", "parameter_list"]
         .iter()
-        .find_map(|field| node.child_by_field_name(field));
+        .find_map(|field| node.child_by_field_name(field))
+        .or_else(|| {
+            // C# primary constructor의 `parameter_list`는 class_declaration의
+            // named child이지만 field로 노출되지 않는다.
+            node.named_children(&mut node.walk())
+                .find(|child| child.kind() == "parameter_list")
+        });
     let Some(parameter_node) = parameter_node else {
         return Vec::new();
     };

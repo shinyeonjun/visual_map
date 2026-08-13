@@ -1,6 +1,6 @@
 //! 함수 내부 이벤트의 위치와 구조적 중첩 관계를 인덱싱한다.
 
-use crate::facts::{ControlFlowKind, SourceSpan};
+use crate::facts::{ControlFlowFact, ControlFlowKind, SourceSpan};
 
 use super::local::Event;
 
@@ -72,22 +72,60 @@ impl<'a> FlowEventIndex<'a> {
         }
     }
 
-    pub(super) fn first_in_region(&self, region: Option<EventRegion>) -> Option<&Event> {
-        self.events
-            .iter()
-            .enumerate()
-            .find(|(index, _)| self.regions[*index] == region)
-            .map(|(_, event)| event)
-    }
-
-    pub(super) fn next_in_region(&self, index: usize) -> Option<&Event> {
-        let region = *self.regions.get(index)?;
-        self.events
+    /// 다음 이벤트가 post-test loop의 제어 노드라면 본문 첫 이벤트를
+    /// 반환한다. `do { body } while (condition)`은 첫 진입에서 condition을
+    /// 평가하지 않고 body부터 실행해야 한다.
+    pub(super) fn next_executable(&self, index: usize) -> Option<&Event> {
+        let next_index = self
+            .events
             .iter()
             .enumerate()
             .skip(index + 1)
-            .find(|(candidate, _)| self.regions[*candidate] == region)
-            .map(|(_, event)| event)
+            .find(|(candidate, _)| self.regions[*candidate] == self.regions[index])
+            .map(|(candidate, _)| candidate)?;
+        if let Event::Control { fact, .. } = &self.events[next_index] {
+            if fact.post_test {
+                return self
+                    .first_in_span(next_index, fact.body_span.as_ref())
+                    .or_else(|| self.events.get(next_index));
+            }
+        }
+        self.events.get(next_index)
+    }
+
+    /// 함수 진입 시 첫 이벤트가 post-test loop라면 loop 본문으로 진입한다.
+    pub(super) fn first_executable_in_region(&self, region: Option<EventRegion>) -> Option<&Event> {
+        let (index, event) = self
+            .events
+            .iter()
+            .enumerate()
+            .find(|(index, _)| self.regions[*index] == region)?;
+        if let Event::Control { fact, .. } = event {
+            if fact.post_test {
+                return self
+                    .first_in_span(index, fact.body_span.as_ref())
+                    .or(Some(event));
+            }
+        }
+        Some(event)
+    }
+
+    pub(super) fn post_test_loop_for(&self, index: usize) -> Option<(usize, &ControlFlowFact)> {
+        let event_span = self.events.get(index)?.span()?;
+        self.events
+            .iter()
+            .enumerate()
+            .find_map(|(loop_index, event)| {
+                let Event::Control { fact, .. } = event else {
+                    return None;
+                };
+                (fact.post_test
+                    && fact
+                        .condition_span
+                        .as_ref()
+                        .is_some_and(|condition| contains(condition, event_span)))
+                .then_some((loop_index, fact.as_ref()))
+            })
     }
 
     /// 현재 body/alternative의 끝에서 제어문 다음 join으로 이동한다.
@@ -135,6 +173,29 @@ impl<'a> FlowEventIndex<'a> {
             .partition_point(|position| *position <= (span.end_line, span.end_column))
             .max(index + 1);
         self.events.get(candidate)
+    }
+
+    /// catch/finally처럼 try의 alternative 영역에 있는 이벤트가 진입해야
+    /// 하는 finally 이벤트를 찾는다.
+    pub(super) fn finally_after_alternative(&self, index: usize) -> Option<&Event> {
+        let event_span = self.events.get(index)?.span()?;
+        self.events
+            .iter()
+            .enumerate()
+            .find_map(|(try_index, event)| {
+                let Event::Control { fact, .. } = event else {
+                    return None;
+                };
+                if fact.kind != ControlFlowKind::Try
+                    || !fact
+                        .alternative_span
+                        .as_ref()
+                        .is_some_and(|alternative| contains(alternative, event_span))
+                {
+                    return None;
+                }
+                self.first_in_span(try_index, fact.finally_span.as_ref())
+            })
     }
 
     pub(super) fn range_in_span(
@@ -189,6 +250,12 @@ fn smallest_enclosing_region(
                 .is_some_and(|alternative| contains(alternative, event_span))
             {
                 (fact.alternative_span.as_ref()?, true)
+            } else if fact
+                .finally_span
+                .as_ref()
+                .is_some_and(|finally| contains(finally, event_span))
+            {
+                (fact.finally_span.as_ref()?, true)
             } else {
                 return None;
             };

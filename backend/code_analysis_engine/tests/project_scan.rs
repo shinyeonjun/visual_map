@@ -38,6 +38,29 @@ fn 프로젝트를_스캔하고_파일_메타데이터를_반환한다() {
 }
 
 #[test]
+fn 다양한_언어의_테스트_파일명_규칙을_판별한다() {
+    let root = temporary_project();
+    fs::create_dir_all(root.join("__tests__/nested")).expect("테스트 디렉터리를 만들어야 한다");
+    for path in [
+        "test_prefix.py",
+        "AlphaTests.java",
+        "__tests__/nested/widget.test.jsx",
+        "__tests__/nested/widget.spec.tsx",
+    ] {
+        let path = root.join(path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("fixture 부모 디렉터리를 만들어야 한다");
+        }
+        fs::write(path, "function testFixture() {}\n").expect("테스트 fixture를 써야 한다");
+    }
+
+    let output = analyze(AnalysisRequest::new(&root)).expect("프로젝트를 스캔해야 한다");
+    assert!(output.files.iter().all(|file| file.is_test));
+
+    fs::remove_dir_all(root).expect("fixture를 정리해야 한다");
+}
+
+#[test]
 fn 해시를_끄면_파일_내용은_반환하지_않는다() {
     let root = temporary_project();
     fs::write(root.join("main.rs"), "fn main() {}\n").expect("Rust 파일을 써야 한다");

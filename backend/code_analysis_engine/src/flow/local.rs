@@ -25,7 +25,7 @@ pub(super) fn build_local_edges(
     }
 
     let entry_target = event_index
-        .first_in_region(None)
+        .first_executable_in_region(None)
         .map(|event| event.node().id.clone())
         .unwrap_or_else(|| exit_node_id.to_string());
     edges.push(make_edge(
@@ -40,7 +40,26 @@ pub(super) fn build_local_edges(
     for (index, event) in events.iter().enumerate() {
         match event {
             Event::Reference { node, reference } => {
-                add_reference_successor(&event_index, index, node, reference, exit_node_id, edges)
+                if let Some((loop_index, loop_fact)) = event_index.post_test_loop_for(index) {
+                    add_post_test_condition_edges(
+                        &event_index,
+                        loop_index,
+                        loop_fact,
+                        node,
+                        reference,
+                        exit_node_id,
+                        edges,
+                    );
+                } else {
+                    add_reference_successor(
+                        &event_index,
+                        index,
+                        node,
+                        reference,
+                        exit_node_id,
+                        edges,
+                    );
+                }
             }
             Event::Control { node, fact } => match fact.kind {
                 ControlFlowKind::Return => {
@@ -103,6 +122,16 @@ pub(super) fn build_local_edges(
                         Some("catch".into()),
                         None,
                     ));
+                    if let Some(finally_target) = event_index.finally_after_alternative(index) {
+                        edges.push(make_edge(
+                            &node.id,
+                            &finally_target.node().id,
+                            FlowEdgeKind::Sequential,
+                            ResolutionStatus::Confirmed,
+                            Some("finally".into()),
+                            None,
+                        ));
+                    }
                 }
                 ControlFlowKind::Break => {
                     let target = enclosing_loop(&event_index, index)
@@ -165,6 +194,36 @@ pub(super) fn build_local_edges(
                             None,
                         ));
                     }
+                    if let Some(finally_target) =
+                        event_index.first_in_span(index, fact.finally_span.as_ref())
+                    {
+                        edges.push(make_edge(
+                            &node.id,
+                            &finally_target.node().id,
+                            FlowEdgeKind::Sequential,
+                            ResolutionStatus::Confirmed,
+                            Some("finally".into()),
+                            None,
+                        ));
+                        if let Some(body_range) =
+                            event_index.range_in_span(index, fact.body_span.as_ref())
+                        {
+                            if let Some(last_body) = body_range
+                                .rev()
+                                .map(|body_index| &event_index.events[body_index])
+                                .find(|event| !is_abrupt_event(event))
+                            {
+                                edges.push(make_edge(
+                                    &last_body.node().id,
+                                    &finally_target.node().id,
+                                    FlowEdgeKind::Sequential,
+                                    ResolutionStatus::Confirmed,
+                                    Some("finally".into()),
+                                    None,
+                                ));
+                            }
+                        }
+                    }
                 }
             },
         }
@@ -180,7 +239,7 @@ fn add_reference_successor(
     edges: &mut Vec<FlowEdge>,
 ) {
     let target = event_index
-        .next_in_region(index)
+        .next_executable(index)
         .or_else(|| event_index.next_after_region(index))
         .map(|event| event.node().id.clone())
         .unwrap_or_else(|| exit_node_id.to_string());
@@ -205,7 +264,7 @@ fn enclosing_loop<'a>(
 ) -> Option<(usize, &'a FlowNode, &'a ControlFlowFact)> {
     let candidate_index = event_index.enclosing_loop.get(index).copied().flatten()?;
     match event_index.events.get(candidate_index)? {
-        Event::Control { node, fact } => Some((candidate_index, node, fact)),
+        Event::Control { node, fact } => Some((candidate_index, node, fact.as_ref())),
         Event::Reference { .. } => None,
     }
 }
@@ -242,9 +301,17 @@ fn add_branch_edges(
         .map(|event| event.node().id.clone())
         .unwrap_or_else(|| exit_node_id.to_string());
 
+    let (true_target, false_target) = match fact.condition_operator.as_deref() {
+        // `&&`: 우변은 좌변이 참일 때만 평가된다.
+        Some("&&") => (body_target, alternative_target),
+        // `||`: 우변은 좌변이 거짓일 때만 평가된다.
+        Some("||") => (alternative_target, body_target),
+        _ => (body_target, alternative_target),
+    };
+
     edges.push(make_edge(
         &node.id,
-        &body_target,
+        &true_target,
         FlowEdgeKind::TrueBranch,
         ResolutionStatus::Confirmed,
         Some("true".into()),
@@ -252,7 +319,7 @@ fn add_branch_edges(
     ));
     edges.push(make_edge(
         &node.id,
-        &alternative_target,
+        &false_target,
         FlowEdgeKind::FalseBranch,
         ResolutionStatus::Confirmed,
         Some("false".into()),
@@ -282,22 +349,58 @@ fn add_loop_edges(
         .map(|event| event.node().id.clone())
         .unwrap_or_else(|| exit_node_id.to_string());
 
-    edges.push(make_edge(
-        &node.id,
-        &body_target,
-        FlowEdgeKind::LoopBody,
-        ResolutionStatus::Confirmed,
-        Some("repeat".into()),
-        None,
-    ));
-    edges.push(make_edge(
-        &node.id,
-        &exit_target,
-        FlowEdgeKind::FalseBranch,
-        ResolutionStatus::Confirmed,
-        Some("exit".into()),
-        None,
-    ));
+    if fact.post_test {
+        if let Some(condition_target) = event_index
+            .first_in_span(index, fact.condition_span.as_ref())
+            .map(|event| event.node().id.clone())
+        {
+            // 본문을 한 번 실행한 뒤 조건식 이벤트를 거쳐 다음 반복 또는
+            // loop 이후로 이동한다. 조건 호출 자체의 두 분기 엣지는
+            // `add_post_test_condition_edges`가 생성한다.
+            edges.push(make_edge(
+                &node.id,
+                &condition_target,
+                FlowEdgeKind::Sequential,
+                ResolutionStatus::Confirmed,
+                Some("condition".into()),
+                None,
+            ));
+        } else {
+            edges.push(make_edge(
+                &node.id,
+                &body_target,
+                FlowEdgeKind::LoopBody,
+                ResolutionStatus::Confirmed,
+                Some("repeat".into()),
+                None,
+            ));
+            edges.push(make_edge(
+                &node.id,
+                &exit_target,
+                FlowEdgeKind::FalseBranch,
+                ResolutionStatus::Confirmed,
+                Some("exit".into()),
+                None,
+            ));
+        }
+    } else {
+        edges.push(make_edge(
+            &node.id,
+            &body_target,
+            FlowEdgeKind::LoopBody,
+            ResolutionStatus::Confirmed,
+            Some("repeat".into()),
+            None,
+        ));
+        edges.push(make_edge(
+            &node.id,
+            &exit_target,
+            FlowEdgeKind::FalseBranch,
+            ResolutionStatus::Confirmed,
+            Some("exit".into()),
+            None,
+        ));
+    }
     if let Some(last) = body_events
         .iter()
         .rev()
@@ -320,19 +423,13 @@ fn add_loop_edges(
 }
 
 fn is_abrupt_event(event: &Event) -> bool {
-    matches!(
-        event,
-        Event::Control {
-            fact: ControlFlowFact {
-                kind: ControlFlowKind::Return
-                    | ControlFlowKind::Throw
-                    | ControlFlowKind::Break
-                    | ControlFlowKind::Continue,
-                ..
-            },
-            ..
-        }
-    )
+    matches!(event, Event::Control { fact, .. } if matches!(
+        fact.kind,
+        ControlFlowKind::Return
+            | ControlFlowKind::Throw
+            | ControlFlowKind::Break
+            | ControlFlowKind::Continue
+    ))
 }
 
 pub(super) fn make_edge(
@@ -365,7 +462,7 @@ pub(super) fn make_edge(
 pub(super) enum Event {
     Control {
         node: FlowNode,
-        fact: ControlFlowFact,
+        fact: Box<ControlFlowFact>,
     },
     Reference {
         node: FlowNode,
@@ -389,4 +486,49 @@ impl Event {
             .map(|span| (span.start_line, span.start_column))
             .unwrap_or((u32::MAX, u32::MAX))
     }
+
+    pub(super) fn end_position(&self) -> (u32, u32) {
+        self.span()
+            .map(|span| (span.end_line, span.end_column))
+            .unwrap_or((u32::MAX, u32::MAX))
+    }
+}
+
+fn add_post_test_condition_edges(
+    event_index: &FlowEventIndex<'_>,
+    loop_index: usize,
+    loop_fact: &ControlFlowFact,
+    node: &FlowNode,
+    reference: &crate::facts::Reference,
+    exit_node_id: &str,
+    edges: &mut Vec<FlowEdge>,
+) {
+    let body_target = event_index
+        .first_in_span(loop_index, loop_fact.body_span.as_ref())
+        .map(|event| event.node().id.clone())
+        .unwrap_or_else(|| exit_node_id.to_string());
+    let exit_target = event_index
+        .first_after(loop_index, &loop_fact.span)
+        .map(|event| event.node().id.clone())
+        .unwrap_or_else(|| exit_node_id.to_string());
+    edges.push(make_edge(
+        &node.id,
+        &body_target,
+        FlowEdgeKind::LoopBody,
+        reference.status.clone(),
+        Some("repeat".into()),
+        Some(reference.id.clone()),
+    ));
+    edges.push(make_edge(
+        &node.id,
+        &exit_target,
+        if reference.status == ResolutionStatus::Dynamic {
+            FlowEdgeKind::Dynamic
+        } else {
+            FlowEdgeKind::FalseBranch
+        },
+        reference.status.clone(),
+        Some("exit".into()),
+        Some(reference.id.clone()),
+    ));
 }

@@ -87,6 +87,7 @@ impl LanguageRegistry {
 pub struct PathPolicy {
     pub ignored_directories: Vec<String>,
     pub test_directory_names: Vec<String>,
+    pub test_file_prefixes: Vec<String>,
     pub test_suffixes: Vec<String>,
 }
 
@@ -102,6 +103,11 @@ impl PathPolicy {
         normalized
             .split('/')
             .any(|part| self.test_directory_names.iter().any(|name| name == part))
+            || normalized.rsplit('/').next().is_some_and(|file_name| {
+                self.test_file_prefixes
+                    .iter()
+                    .any(|prefix| file_name.starts_with(prefix))
+            })
             || self
                 .test_suffixes
                 .iter()
@@ -190,6 +196,10 @@ pub struct ResourceRule {
     pub argument_index: usize,
     #[serde(default)]
     pub name_source: ResourceNameSource,
+    /// qualified callee를 외부 모듈/API로 확정하려면 import binding이
+    /// 실제로 존재해야 하는지 정한다.
+    #[serde(default)]
+    pub requires_import: bool,
 }
 
 /// 자원 이름을 호출 인자에서 읽을지 수신 객체에서 읽을지 정한다.
@@ -216,7 +226,6 @@ pub struct FrameworkPolicy {
     pub initial_confidence: f32,
     pub confidence_increment: f32,
     pub maximum_confidence: f32,
-    pub internal_catalog_markers: Vec<String>,
 }
 
 impl Default for FrameworkPolicy {

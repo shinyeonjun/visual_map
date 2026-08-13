@@ -33,11 +33,16 @@ pub(super) fn walk_tree(
         current_parent.to_string(),
         current_flow_owner.map(str::to_owned),
     )];
-    // 선언이 많을수록 `bundle.units.iter().any(...)`와 부모 유닛 검색이
-    // 이차 시간으로 증가한다. 파일 분석 중에는 ID와 qualified name을
-    // 별도 인덱스로 유지해 두 조회 모두 평균 O(1)로 처리한다.
+    // 선언이 많을수록 부모 유닛을 전체 목록에서 검색하면 이차 시간으로
+    // 증가한다. 파일 분석 중에는 ID와 부모 kind·qualified name을 별도
+    // 인덱스로 유지해 두 조회를 모두 평균 O(1)로 처리한다.
     let mut seen_unit_ids: HashSet<String> =
         bundle.units.iter().map(|unit| unit.id.clone()).collect();
+    let mut unit_kinds: HashMap<String, CodeUnitKind> = bundle
+        .units
+        .iter()
+        .map(|unit| (unit.id.clone(), unit.kind.clone()))
+        .collect();
     let mut qualified_names: HashMap<String, String> = bundle
         .units
         .iter()
@@ -48,7 +53,11 @@ pub(super) fn walk_tree(
         let mut parent_for_children = current_parent.clone();
         let mut flow_owner_for_children = current_flow_owner.clone();
 
-        if let Some(kind) = declaration_kind(node.kind(), &current_parent, bundle) {
+        let declaration = node
+            .is_named()
+            .then(|| declaration_kind(node.kind(), unit_kinds.get(&current_parent)))
+            .flatten();
+        if let Some(kind) = declaration {
             if let Some(name) = node_name(node, source, &kind) {
                 let is_flow_unit = matches!(
                     kind,
@@ -81,6 +90,7 @@ pub(super) fn walk_tree(
                 let modifiers = extract_modifiers(&header);
                 let exported = is_exported(node, &header, &visibility);
                 if seen_unit_ids.insert(id.clone()) {
+                    unit_kinds.insert(id.clone(), kind.clone());
                     qualified_names.insert(id.clone(), qualified_name.clone());
                     bundle.units.push(CodeUnit {
                         id: id.clone(),
@@ -216,7 +226,11 @@ fn is_language_main_entrypoint(
     units: &[CodeUnit],
     name: &str,
 ) -> bool {
-    if name != "main"
+    let is_main_name = match language {
+        crate::model::Language::CSharp => name.eq_ignore_ascii_case("main"),
+        _ => name == "main",
+    };
+    if !is_main_name
         || !matches!(
             kind,
             CodeUnitKind::Function | CodeUnitKind::Method | CodeUnitKind::Constructor
@@ -245,8 +259,9 @@ fn is_language_main_entrypoint(
         | crate::model::Language::Go
         | crate::model::Language::Rust
         | crate::model::Language::Dart => top_level,
-        crate::model::Language::Java | crate::model::Language::CSharp => {
-            !top_level && has_static_modifier(header)
+        crate::model::Language::Java => !top_level && name == "main" && has_static_modifier(header),
+        crate::model::Language::CSharp => {
+            !top_level && name.eq_ignore_ascii_case("main") && has_static_modifier(header)
         }
         crate::model::Language::JavaScript
         | crate::model::Language::TypeScript

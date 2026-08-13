@@ -6,6 +6,35 @@ use sha2::{Digest, Sha256};
 use tree_sitter::Node;
 
 pub(crate) fn node_name(node: Node<'_>, source: &[u8], kind: &CodeUnitKind) -> Option<String> {
+    if *kind == CodeUnitKind::Impl {
+        if let Some(target) = first_identifier(node, source) {
+            return Some(format!("impl {target}"));
+        }
+    }
+
+    // C++ 람다의 capture 목록은 `name`처럼 보이는 자식 노드를 가질 수
+    // 있다. 이를 선언 이름으로 사용하면 `[value](...) { ... }`가
+    // `value` 함수로 오인된다. 람다는 항상 위치 기반 합성 이름을 쓴다.
+    if *kind == CodeUnitKind::Lambda {
+        return Some(format!(
+            "<lambda@{}:{}>",
+            node.start_position().row + 1,
+            node.start_position().column + 1
+        ));
+    }
+
+    if matches!(kind, CodeUnitKind::Package | CodeUnitKind::Namespace) {
+        if let Some(path) = declared_path(node, source, kind) {
+            return Some(path);
+        }
+    }
+
+    if matches!(kind, CodeUnitKind::Constructor) && node.kind().contains("constructor_signature") {
+        if let Some(name) = signature_declaration_name(node, source) {
+            return Some(name);
+        }
+    }
+
     if let Some(name) = node.child_by_field_name("name") {
         let text = node_text(name, source).trim().to_string();
         if !text.is_empty() {
@@ -31,12 +60,28 @@ pub(crate) fn node_name(node: Node<'_>, source: &[u8], kind: &CodeUnitKind) -> O
         }
     }
 
-    if matches!(kind, CodeUnitKind::Lambda) {
-        return Some(format!(
-            "<lambda@{}:{}>",
-            node.start_position().row + 1,
-            node.start_position().column + 1
-        ));
+    if let Some(signature) = node.child_by_field_name("signature") {
+        if let Some(name) = signature_declaration_name(signature, source) {
+            return Some(name);
+        }
+    }
+
+    // Dart의 `method_signature`는 반환 타입·get/set 키워드·이름을 하나의
+    // 노드에 담고 name field를 노출하지 않는다. 첫 식별자를 고르면
+    // `int get value`가 `int`로 기록되므로 괄호 앞의 마지막 토큰을
+    // 선언 이름으로 사용한다. TypeScript처럼 name field가 있는 문법은
+    // 위 경로에서 이미 반환된다.
+    if node.kind() == "method_signature" {
+        if let Some(name) = signature_declaration_name(node, source) {
+            return Some(name);
+        }
+    }
+
+    if matches!(
+        kind,
+        CodeUnitKind::Function | CodeUnitKind::Method | CodeUnitKind::Constructor
+    ) {
+        return first_identifier(node, source);
     }
 
     if matches!(
@@ -132,7 +177,40 @@ fn is_identifier_kind(kind: &str) -> bool {
             | "type_identifier"
             | "namespace_identifier"
             | "property_identifier"
+            | "private_property_identifier"
     )
+}
+
+fn signature_declaration_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let text = node_text(node, source);
+    let before_parameters = text.split('(').next().unwrap_or(text.as_str());
+    let token = before_parameters
+        .split_whitespace()
+        .last()?
+        .trim_matches(|character: char| {
+            !character.is_ascii_alphanumeric() && character != '_' && character != '.'
+        });
+    if token.is_empty() {
+        return None;
+    }
+    Some(token.to_string())
+}
+
+fn declared_path(node: Node<'_>, source: &[u8], kind: &CodeUnitKind) -> Option<String> {
+    let keyword = match kind {
+        CodeUnitKind::Package => "package",
+        CodeUnitKind::Namespace => "namespace",
+        _ => return None,
+    };
+    let text = node_text(node, source);
+    let (_, remainder) = text.split_once(keyword)?;
+    let path = remainder
+        .trim()
+        .trim_end_matches([';', '{', '}'])
+        .split_whitespace()
+        .next()?
+        .trim();
+    (!path.is_empty()).then(|| path.to_string())
 }
 
 fn declarator_function_name(node: Node<'_>, source: &[u8]) -> Option<String> {
