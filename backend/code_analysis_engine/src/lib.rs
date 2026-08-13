@@ -15,6 +15,7 @@ pub mod graph;
 pub mod languages;
 pub mod model;
 pub mod pipeline;
+pub mod postprocess;
 pub mod project;
 pub mod semantic;
 pub mod views;

@@ -93,12 +93,8 @@ impl AnalysisRequest {
 pub struct AnalysisOptions {
     pub config: crate::config::AnalysisConfig,
     pub profile: bool,
-    /// [DEV ONLY] Codex에 전달하기 직전의 축약 컨텍스트 청크를 저장할 선택 경로다.
-    ///
-    /// 제품 완성 단계에서는 이 필드와 CLI 옵션을 제거하거나, 별도의 명시적
-    /// 디버그/진단 기능으로 분리해야 한다. 프론트엔드 결과 계약에 포함시키지 않는다.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub codex_context_output: Option<PathBuf>,
+    /// 파일 Facts 캐시를 사용하지 않고 매 파일을 다시 분석할지 정한다.
+    pub use_fact_cache: bool,
 }
 
 impl Default for AnalysisOptions {
@@ -107,7 +103,7 @@ impl Default for AnalysisOptions {
         Self {
             config,
             profile: false,
-            codex_context_output: None,
+            use_fact_cache: true,
         }
     }
 }

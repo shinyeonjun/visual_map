@@ -2,7 +2,7 @@
 
 use super::policies::{
     AnalysisLimits, DomainPolicy, FrameworkPolicy, LanguageRegistry, ParserPolicy, PathPolicy,
-    ScanPolicy, SemanticPolicy,
+    PostprocessPolicy, ScanPolicy, SemanticPolicy,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
@@ -19,6 +19,7 @@ pub struct AnalysisConfig {
     pub parser: ParserPolicy,
     pub frameworks: FrameworkPolicy,
     pub semantic: SemanticPolicy,
+    pub postprocess: PostprocessPolicy,
 }
 
 impl Default for AnalysisConfig {
