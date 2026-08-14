@@ -13,7 +13,7 @@ use crate::languages::common::metadata::stable_id;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// entrypoint 중심으로 호출 그래프를 묶어 정적 기능 그룹을 만든다.
-pub(super) fn build(
+pub(crate) fn build(
     analysis: &DomainAnalysisOutput,
     facts: &FactStore,
     flows: &ExecutionFlowGraph,
@@ -31,70 +31,41 @@ pub(super) fn build(
         resources_by_unit: &resources_by_unit,
         reachability: &reachability,
     };
+    let file_units = file_units_by_file(facts);
     let mut features = Vec::new();
-    let mut covered_units = HashSet::new();
 
     for entrypoint in &facts.entrypoints {
-        let units = reachability.reachable_from(&entrypoint.unit_id);
-        covered_units.extend(units.iter().copied());
-        features.push(context.build_feature(FeatureBuildInput {
+        let scope_units = reachability.reachable_from(&entrypoint.unit_id);
+        let owner_units = owner_units_for_entrypoint(
+            &entrypoint.unit_id,
+            facts,
+            &file_units,
+            &reachability,
+        );
+        let feature = context.build_feature(FeatureBuildInput {
             kind: FeatureKind::Endpoint,
             base_status: FeatureStatus::Confirmed,
             visibility: FeatureVisibility::UserFacing,
             entrypoint: Some(entrypoint),
             operation_root_id: None,
-            units: &units,
-            reachable_unit_count: units.len(),
-        }));
+            owner_units: &owner_units,
+            scope_units: &scope_units,
+            reachable_unit_count: scope_units.len(),
+        });
+        features.push(feature);
     }
 
-    // 진입점이 없는 CLI·배치·라이브러리 함수도 2단계에서 사라지지 않도록
-    // 아직 어떤 기능에도 포함되지 않은 실행 흐름 단위를 operation으로 보존한다.
-    //
-    // 함수마다 operation을 만들면 대형 프로젝트에서 기능 수가 함수 수와
-    // 거의 같아져 Overview가 불필요하게 폭발한다. 가장 가까운 비실행 구조
-    // 유닛(클래스·모듈·파일)을 operation의 경계로 삼고, 그 경계 안의 모든
-    // 실행 흐름과 호출 유닛은 하나의 후보 기능에 합친다. 상세 함수와 CFG는
-    // 각각 `units`와 `executionFlows`에 그대로 남기므로 정보 손실은 없다.
-    let file_units = file_units_by_file(facts);
-    let mut operation_owners: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for flow in &flows.flows {
-        let Some(owner_index) = reachability.unit_index(&flow.owner_unit_id) else {
-            continue;
-        };
-        if covered_units.contains(&owner_index) {
-            continue;
-        }
-        let operation_root = operation_root(&flow.owner_unit_id, facts, &file_units);
-        operation_owners
-            .entry(operation_root)
-            .or_default()
-            .insert(flow.owner_unit_id.clone());
-    }
-    for (operation_root, owners) in operation_owners {
-        let reachable_units = reachability.reachable_from_many(owners.iter().map(String::as_str));
-        let mut units = owners
-            .iter()
-            .filter_map(|owner| reachability.unit_index(owner))
-            .collect::<Vec<_>>();
-        units.sort_unstable();
-        units.dedup();
-        if let Some(root_index) = reachability.unit_index(&operation_root) {
-            if units.binary_search(&root_index).is_err() {
-                units.push(root_index);
-                units.sort_unstable();
-            }
-            covered_units.extend(units.iter().copied());
-        }
-        features.push(context.build_feature(FeatureBuildInput {
-            kind: FeatureKind::Operation,
-            base_status: FeatureStatus::Candidate,
-            visibility: FeatureVisibility::Internal,
-            entrypoint: None,
-            operation_root_id: Some(operation_root.as_str()),
-            units: &units,
-            reachable_unit_count: reachable_units.len(),
-        }));
+    if facts.entrypoints.is_empty() {
+        append_operation_features(
+            &mut features,
+            flows,
+            facts,
+            &file_units,
+            &reachability,
+            &context,
+        );
+    } else {
+        assign_orphan_flows_to_nearest_endpoint(&mut features, flows, facts, &reachability);
     }
 
     features.sort_by(|left, right| left.key.cmp(&right.key));
@@ -116,7 +87,8 @@ struct FeatureBuildInput<'a> {
     visibility: FeatureVisibility,
     entrypoint: Option<&'a Entrypoint>,
     operation_root_id: Option<&'a str>,
-    units: &'a [usize],
+    owner_units: &'a [usize],
+    scope_units: &'a [usize],
     reachable_unit_count: usize,
 }
 
@@ -125,15 +97,12 @@ impl FeatureBuildContext<'_> {
         let root_unit_id = input
             .operation_root_id
             .or_else(|| {
-                input
-                    .entrypoint
-                    .map(|value| value.unit_id.as_str())
-                    .or_else(|| {
-                        input
-                            .units
-                            .first()
-                            .map(|index| self.reachability.unit_id(*index))
-                    })
+                input.entrypoint.map(|value| value.unit_id.as_str()).or_else(|| {
+                    input
+                        .owner_units
+                        .first()
+                        .map(|index| self.reachability.unit_id(*index))
+                })
             })
             .unwrap_or_default();
         let key = input
@@ -144,7 +113,7 @@ impl FeatureBuildContext<'_> {
         let root_unit = self.facts.unit(root_unit_id);
 
         let mut domain_ids = BTreeSet::new();
-        for &unit_index in input.units {
+        for &unit_index in input.owner_units {
             let unit_id = self.reachability.unit_id(unit_index);
             if let Some(ids) = self.domains_by_unit.get(unit_id) {
                 domain_ids.extend(ids.iter().cloned());
@@ -167,7 +136,7 @@ impl FeatureBuildContext<'_> {
             evidence.extend(entrypoint.evidence.clone());
         }
 
-        for &unit_index in input.units {
+        for &unit_index in input.scope_units {
             let unit_id = self.reachability.unit_id(unit_index);
             for reference in self.outgoing.get(unit_id).into_iter().flatten() {
                 match reference.status {
@@ -189,14 +158,14 @@ impl FeatureBuildContext<'_> {
         dynamic_boundary_ids.dedup();
 
         let flow_ids = input
-            .units
+            .scope_units
             .iter()
             .filter_map(|index| self.flows_by_owner.get(self.reachability.unit_id(*index)))
             .flatten()
             .map(|flow| flow.id.clone())
             .collect::<Vec<_>>();
         let resource_ids = input
-            .units
+            .scope_units
             .iter()
             .filter_map(|index| {
                 self.resources_by_unit
@@ -241,7 +210,7 @@ impl FeatureBuildContext<'_> {
             },
             domain_ids: domain_ids.into_iter().collect(),
             unit_ids: input
-                .units
+                .owner_units
                 .iter()
                 .map(|index| self.reachability.unit_id(*index).to_string())
                 .collect(),
@@ -311,6 +280,132 @@ fn resources_by_unit(facts: &FactStore) -> HashMap<String, Vec<&ResourceAccess>>
             .push(resource);
     }
     result
+}
+
+fn append_operation_features(
+    features: &mut Vec<FeatureGroup>,
+    flows: &ExecutionFlowGraph,
+    facts: &FactStore,
+    file_units: &HashMap<String, String>,
+    reachability: &ReachabilityIndex,
+    context: &FeatureBuildContext<'_>,
+) {
+    let mut covered_units = HashSet::new();
+    let mut operation_owners: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for flow in &flows.flows {
+        let Some(owner_index) = reachability.unit_index(&flow.owner_unit_id) else {
+            continue;
+        };
+        if covered_units.contains(&owner_index) {
+            continue;
+        }
+        let operation_root = operation_root(&flow.owner_unit_id, facts, file_units);
+        operation_owners
+            .entry(operation_root)
+            .or_default()
+            .insert(flow.owner_unit_id.clone());
+    }
+    for (operation_root, owners) in operation_owners {
+        let scope_units = reachability.reachable_from_many(owners.iter().map(String::as_str));
+        let mut owner_units = owners
+            .iter()
+            .filter_map(|owner| reachability.unit_index(owner))
+            .collect::<Vec<_>>();
+        owner_units.sort_unstable();
+        owner_units.dedup();
+        if let Some(root_index) = reachability.unit_index(&operation_root) {
+            if owner_units.binary_search(&root_index).is_err() {
+                owner_units.push(root_index);
+                owner_units.sort_unstable();
+            }
+            covered_units.extend(owner_units.iter().copied());
+        }
+        features.push(context.build_feature(FeatureBuildInput {
+            kind: FeatureKind::Operation,
+            base_status: FeatureStatus::Candidate,
+            visibility: FeatureVisibility::Internal,
+            entrypoint: None,
+            operation_root_id: Some(operation_root.as_str()),
+            owner_units: &owner_units,
+            scope_units: &scope_units,
+            reachable_unit_count: scope_units.len(),
+        }));
+    }
+}
+
+fn owner_units_for_entrypoint(
+    entrypoint_unit_id: &str,
+    facts: &FactStore,
+    file_units: &HashMap<String, String>,
+    reachability: &ReachabilityIndex,
+) -> Vec<usize> {
+    let mut owner_units = Vec::new();
+    if let Some(index) = reachability.unit_index(entrypoint_unit_id) {
+        owner_units.push(index);
+    }
+    let operation_root = operation_root(entrypoint_unit_id, facts, file_units);
+    if let Some(index) = reachability.unit_index(&operation_root) {
+        if !owner_units.contains(&index) {
+            owner_units.push(index);
+        }
+    }
+    owner_units.sort_unstable();
+    owner_units
+}
+
+fn assign_orphan_flows_to_nearest_endpoint(
+    features: &mut [FeatureGroup],
+    flows: &ExecutionFlowGraph,
+    facts: &FactStore,
+    reachability: &ReachabilityIndex,
+) {
+    if features.is_empty() {
+        return;
+    }
+    let mut assigned_flow_ids: HashSet<String> = features
+        .iter()
+        .flat_map(|feature| feature.flow_ids.iter().cloned())
+        .collect();
+    for flow in &flows.flows {
+        if assigned_flow_ids.contains(&flow.id) {
+            continue;
+        }
+        let Some(target) = nearest_endpoint_feature_index(flow, features, facts, reachability) else {
+            continue;
+        };
+        features[target].flow_ids.push(flow.id.clone());
+        assigned_flow_ids.insert(flow.id.clone());
+    }
+    for feature in features {
+        feature.flow_ids.sort();
+        feature.flow_ids.dedup();
+    }
+}
+
+fn nearest_endpoint_feature_index(
+    flow: &ExecutionFlow,
+    features: &[FeatureGroup],
+    facts: &FactStore,
+    _reachability: &ReachabilityIndex,
+) -> Option<usize> {
+    let flow_owner = facts.unit(&flow.owner_unit_id)?;
+    let flow_file_id = &flow_owner.file_id;
+    for (index, feature) in features.iter().enumerate() {
+        if !matches!(feature.kind, FeatureKind::Endpoint) {
+            continue;
+        }
+        let shares_file = feature.unit_ids.iter().any(|unit_id| {
+            facts
+                .unit(unit_id)
+                .is_some_and(|unit| unit.file_id == *flow_file_id)
+        });
+        if shares_file {
+            return Some(index);
+        }
+    }
+    features
+        .iter()
+        .position(|feature| matches!(feature.kind, FeatureKind::Endpoint))
 }
 
 fn file_units_by_file(facts: &FactStore) -> HashMap<String, String> {

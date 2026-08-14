@@ -57,6 +57,14 @@ confirmedMinimumScore = 8
 sharedRatioNumerator = 3
 sharedRatioDenominator = 4
 sharedMinimumScore = 3
+featureCallWeight = 0.15
+featureFlowWeight = 0.20
+featureResourceWeight = 0.25
+featurePathWeight = 0.25
+featureLexicalWeight = 0.15
+domainClusterMin = 6
+domainClusterMax = 20
+domainClusterMergeThreshold = 0.08
 genericTokens = ["src","lib","app","apps","main","index","test","tests","spec","fixture","fixtures","from","adapter","adapters","aggregate","aggregation","analysis","analyze","analyzer","analyzers","access","all","argument","arguments","array","ast","async","attribute","attributes","build","call","callback","candidate","candidates","catalog","codex","bundle","capability","capabilities","class","code","compile","collection","cpp","csharp","context","coverage","declaration","declarations","dependency","dependencies","default","detect","detected","detection","detector","diagnostic","diagnostics","domain","dispatch","dispatcher","dynamic","dart","engine","ecma","entry","entries","entrypoint","entrypoints","error","errors","evidence","extension","extensions","fact","facts","file","files","flow","framework","frameworks","function","functions","generic","go","get","graph","group","groups","grouping","collect","confidence","family","fmt","for","import","imports","input","issue","issues","ids","info","internal","join","key","keys","java","javascript","kind","language","languages","line","lines","map","member","members","membership","metadata","merge","method","methods","module","modules","mod","name","names","naming","new","normalize","normalized","node","nodes","option","options","output","package","packages","python","parameter","parameters","parser","parsers","path","paths","pipeline","project","projects","read","provider","providers","reference","references","relation","relations","resource","resources","result","results","request","route","routes","overview","progress","projector","proposal","registry","resolution","resolve","rust","scan","schema","schemas","semantic","signal","signals","snapshot","source","span","status","stable","stages","store","structure","target","targets","token","tokens","tree","trees","typescript","type","types","suggestion","summarize","summary","temporary","unit","units","unknown","value","values","validate","validated","validator","view","views","warning","warnings","worse","service","services","controller","controllers","handler","handlers","manager","factory","helper","helpers","util","utils","common","shared","base","impl","repository","repositories","model","models","dto","infra","infrastructure","config","configuration","logging","logger","database","transaction","transactions","http","api","apis","com","org","net","set","skip","with","post","backend","legacy","rstrip","strip","format","parse","run","load","save","put","delete","create","update","list","item","items","data","state","client","server","frontend","runtime","core","web","ui"]
 crossCuttingKeys = ["common","shared","infra","infrastructure","logging","logger","config","database","transaction","http"]
 
@@ -241,8 +249,11 @@ confidenceIncrement = 0.05
 maximumConfidence = 0.99
 
 [semantic]
+provider = "codex"
 codexExecutable = "codex"
 codexModel = "gpt-5-codex"
+claudeExecutable = "claude"
+claudeModel = "claude-sonnet-4-20250514"
 codexTimeoutMs = 0
 codexMaxInputBytes = 700000
 missingItemRetries = 1
@@ -250,16 +261,16 @@ maximumLabelLength = 120
 maximumSummaryLength = 500
 
 [postprocess]
-targetBudgetBytes = 200000
+targetBudgetBytes = 450000
 globalSummaryReserveBytes = 12000
 maxAdjacentDomains = 8
 maxFilesPerDomain = 24
 maxEntrypointsPerDomain = 24
 maxResourcesPerDomain = 32
-maxSymbolsPerFeature = 16
-maxPathsPerFeature = 8
+maxSymbolsPerFeature = 5
+maxPathsPerFeature = 3
 maxEvidenceIdsPerDomain = 12
-maxFlowNodes = 48
+maxFlowNodes = 15
 maxFlowEdges = 72
 domainOverlapPercent = 80
 includeCrossCuttingDomains = false
@@ -279,3 +290,6 @@ signalConfidenceWeight = 25
 partitionConfirmedWeight = 4
 partitionCandidateWeight = 1
 partitionUnknownWeight = 0
+
+[clean]
+partTargetBytes = 1000000

@@ -2,31 +2,11 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-pub(crate) fn run_engine<const N: usize>(
-    engine: &Path,
-    args: [&std::ffi::OsStr; N],
-) -> Result<(), String> {
-    let output = Command::new(engine).args(args).output().map_err(|error| {
-        format!(
-            "분석 엔진을 실행하지 못했습니다 ({}): {error}",
-            engine.display()
-        )
-    })?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(format!(
-        "분석 단계가 실패했습니다 ({}): {}",
-        engine.display(),
-        command_output(&output)
-    ))
-}
-
 pub(crate) fn run_engine_with_progress<const N: usize, F>(
     engine: &Path,
     args: [&std::ffi::OsStr; N],
     mut on_line: F,
-) -> Result<(), String>
+) -> Result<Vec<String>, String>
 where
     F: FnMut(&str),
 {
@@ -47,9 +27,11 @@ where
         .ok_or_else(|| "분석 엔진의 진행 출력을 읽지 못했습니다.".to_string())?;
     let reader = BufReader::new(stderr);
     let mut stderr_text = String::new();
+    let mut lines = Vec::new();
     for line in reader.lines() {
         let line = line.map_err(|error| format!("분석 엔진 출력을 읽지 못했습니다: {error}"))?;
         on_line(&line);
+        lines.push(line.clone());
         stderr_text.push_str(&line);
         stderr_text.push('\n');
     }
@@ -57,7 +39,7 @@ where
         .wait()
         .map_err(|error| format!("분석 엔진 종료 상태를 확인하지 못했습니다: {error}"))?;
     if status.success() {
-        return Ok(());
+        return Ok(lines);
     }
     Err(format!(
         "분석 단계가 실패했습니다 ({}): {}",
@@ -66,21 +48,52 @@ where
     ))
 }
 
-pub(crate) fn parse_semantic_progress(line: &str) -> Option<(usize, usize)> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SemanticProgressEvent {
+    pub stage: Option<String>,
+    pub chunk: Option<usize>,
+    pub completed: Option<usize>,
+    pub total: Option<usize>,
+    pub status: Option<String>,
+}
+
+pub(crate) fn parse_semantic_progress(line: &str) -> Option<SemanticProgressEvent> {
     if !line.contains("[semantic] progress") {
         return None;
     }
-    let mut completed = None;
-    let mut total = None;
+    let mut event = SemanticProgressEvent {
+        stage: None,
+        chunk: None,
+        completed: None,
+        total: None,
+        status: None,
+    };
     for token in line.split_whitespace() {
+        if let Some(value) = token.strip_prefix("stage=") {
+            event.stage = Some(value.to_string());
+        }
+        if let Some(value) = token.strip_prefix("chunk=") {
+            event.chunk = value.parse::<usize>().ok();
+        }
         if let Some(value) = token.strip_prefix("completed=") {
-            completed = value.parse::<usize>().ok();
+            event.completed = value.parse::<usize>().ok();
         }
         if let Some(value) = token.strip_prefix("total=") {
-            total = value.parse::<usize>().ok();
+            event.total = value.parse::<usize>().ok();
+        }
+        if let Some(value) = token.strip_prefix("status=") {
+            event.status = Some(value.to_string());
         }
     }
-    Some((completed.unwrap_or(0), total.unwrap_or(0)))
+    if event.status.is_some()
+        || event.total.is_some()
+        || event.chunk.is_some()
+        || event.completed.is_some()
+    {
+        Some(event)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn command_output(output: &Output) -> String {
@@ -89,5 +102,38 @@ pub(crate) fn command_output(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     } else {
         stderr
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_semantic_progress, SemanticProgressEvent};
+
+    #[test]
+    fn parses_chunk_started_event() {
+        let event = parse_semantic_progress(
+            "[semantic] progress stage=feature chunk=2 total=5 status=started",
+        )
+        .expect("started event");
+        assert_eq!(
+            event,
+            SemanticProgressEvent {
+                stage: Some("feature".into()),
+                chunk: Some(2),
+                completed: None,
+                total: Some(5),
+                status: Some("started".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_chunk_completed_event() {
+        let event = parse_semantic_progress(
+            "[semantic] progress stage=flow chunk=1 total=3 status=completed",
+        )
+        .expect("completed event");
+        assert_eq!(event.status.as_deref(), Some("completed"));
+        assert_eq!(event.chunk, Some(1));
     }
 }

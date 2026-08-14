@@ -182,9 +182,4 @@ pub struct AnalysisResult {
     pub elapsed_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overview: Option<crate::views::overview::OverviewResponse>,
-    /// raw Overview와 분리된 정적 전처리 결과다. 기본 JSON에는 중복을
-    /// 만들지 않도록 직렬화하지 않고, API 호출자와 `--prepared-output`이
-    /// 선택적으로 사용한다.
-    #[serde(skip)]
-    pub preprocessed_overview: Option<crate::views::preprocessed::PreparedStaticOverview>,
 }

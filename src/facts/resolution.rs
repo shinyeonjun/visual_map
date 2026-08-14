@@ -379,6 +379,24 @@ impl ReferenceResolutionIndex {
             }
         }
 
+        // exact match 실패 시 suffix matching: import 경로에 패키지 루트
+        // 접두사가 빠진 경우(예: services::X vs backend::services::X)를 처리한다.
+        let normalized = target.replace('.', "::").replace('/', "::");
+        if normalized.contains("::") {
+            let suffix = format!("::{normalized}");
+            let mut suffix_matches: Vec<String> = self
+                .by_language_qualified_name
+                .iter()
+                .filter(|((lang, qn), _)| *lang == language && qn.ends_with(&suffix))
+                .flat_map(|(_, ids)| ids.clone())
+                .collect();
+            suffix_matches.sort();
+            suffix_matches.dedup();
+            if !suffix_matches.is_empty() {
+                return suffix_matches;
+            }
+        }
+
         if matches!(kind, ReferenceKind::Call | ReferenceKind::Constructs)
             && !target.contains(['.', ':', '/'])
         {

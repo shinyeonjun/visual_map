@@ -84,9 +84,9 @@ cargo run --release -- <프로젝트-경로>
 Codex 입력 컨텍스트는 정적 결과에서 별도로 생성할 수 있습니다.
 
 ```bash
-cargo run --release -- postprocess codex-context \
+cargo run --release -- postprocess ai-context \
   --input=<static-result.json> \
-  --output=<codex-context.json> \
+  --output=<ai-context.json> \
   --config=config/analysis.default.toml \
   --pretty
 ```
@@ -95,7 +95,7 @@ Codex 의미 분석까지 실행하려면:
 
 ```bash
 cargo run --release -- semantic review \
-  --input=<codex-context.json> \
+  --input=<ai-context.json> \
   --output=<semantic-result.json> \
   --project-root=<프로젝트-경로> \
   --config=config/analysis.default.toml \

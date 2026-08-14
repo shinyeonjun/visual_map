@@ -1,8 +1,8 @@
 //! 기본 설정 로딩과 TOML/JSON 부분 병합을 담당한다.
 
 use super::policies::{
-    AnalysisLimits, DomainPolicy, FrameworkPolicy, LanguageRegistry, ParserPolicy, PathPolicy,
-    PostprocessPolicy, ScanPolicy, SemanticPolicy,
+    AnalysisLimits, CleanPolicy, DomainPolicy, FrameworkPolicy, LanguageRegistry, ParserPolicy,
+    PathPolicy, PostprocessPolicy, ScanPolicy, SemanticPolicy,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
@@ -20,6 +20,7 @@ pub struct AnalysisConfig {
     pub frameworks: FrameworkPolicy,
     pub semantic: SemanticPolicy,
     pub postprocess: PostprocessPolicy,
+    pub clean: CleanPolicy,
 }
 
 impl Default for AnalysisConfig {

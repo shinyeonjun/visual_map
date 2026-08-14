@@ -1,21 +1,14 @@
-//! Facts를 도메인 후보와 그룹으로 변환하는 오케스트레이션 계층.
+//! Facts를 feature-first 도메인 분석으로 변환하는 오케스트레이션 계층.
 
 use crate::config::{DomainPolicy, PathPolicy};
-use crate::domain::assignments::{
-    assign_units, index_assignments_by_domain, index_domains_by_unit, index_entrypoints_by_domain,
-    index_resources_by_domain, score_by_unit,
-};
-use crate::domain::candidates::build;
-use crate::domain::confidence::calculate;
-use crate::domain::membership::MembershipKind;
-use crate::domain::naming::label;
-use crate::domain::signals::collect;
-use crate::facts::{FactStore, ResolutionStatus};
+use crate::facts::FactStore;
+use crate::flow::ExecutionFlowGraph;
 use crate::graph::StaticRelationGraph;
 use sha2::{Digest, Sha256};
 
 use super::aggregation::aggregate_relations;
 
+pub use super::formation::FeatureFirstResult;
 pub use super::models::{DomainAnalysisOutput, DomainGroup, DomainKind, DomainRelation};
 
 /// 공통 Facts에서 도메인을 생성한다.
@@ -43,143 +36,24 @@ impl DomainAnalyzer {
         }
     }
 
-    pub fn analyze(&self, store: &FactStore) -> DomainAnalysisOutput {
-        let graph = crate::graph::build(store);
-        self.analyze_with_graph(store, &graph)
-    }
-
-    pub fn analyze_with_graph(
+    /// Feature를 먼저 만들고 Multi-view 유사도로 클러스터링해 도메인을 형성한다.
+    pub fn analyze_feature_first(
         &self,
         store: &FactStore,
         graph: &StaticRelationGraph,
-    ) -> DomainAnalysisOutput {
-        let signals = collect(store, &self.domain_policy, &self.path_policy);
-        let signal_count = signals.len();
-        let candidates = build(
-            &signals,
-            self.domain_policy.maximum_candidate_evidence,
-            self.domain_policy.minimum_repeated_symbol_units,
-        );
-        let signal_scores = score_by_unit(&signals);
-        let domain_ids: std::collections::HashMap<&str, String> = candidates
-            .iter()
-            .map(|candidate| (candidate.key.as_str(), stable_domain_id(&candidate.key)))
-            .collect();
-        let assignments = assign_units(store, &candidates, &signal_scores, &self.domain_policy);
-
-        // 도메인별 멤버십을 미리 역색인해 두면 도메인마다 전체 멤버십을 다시
-        // 순회하지 않아도 된다.
-        let assignments_by_domain = index_assignments_by_domain(&assignments);
-        let domains_by_unit = index_domains_by_unit(&assignments);
-        let entrypoints_by_domain = index_entrypoints_by_domain(store, &domains_by_unit);
-        let resources_by_domain = index_resources_by_domain(store, &domains_by_unit);
-
-        let mut groups = Vec::new();
-        for candidate in &candidates {
-            let Some(domain_id) = domain_ids.get(candidate.key.as_str()) else {
-                continue;
-            };
-            let candidate_units = assignments_by_domain
-                .get(domain_id.as_str())
-                .cloned()
-                .unwrap_or_default();
-            if candidate_units.is_empty() {
-                continue;
-            }
-            let primary_unit_ids = candidate_units
-                .iter()
-                .filter(|assignment| {
-                    assignment.kind == MembershipKind::Primary
-                        && assignment.domain_id.as_deref() == Some(domain_id)
-                })
-                .map(|assignment| assignment.unit_id.clone())
-                .collect::<Vec<_>>();
-            // 공용 유틸리티 하나가 여러 도메인에 걸친다고 도메인 전체를
-            // Ambiguous로 낮추지 않는다. 해당 후보를 지지하는 primary가
-            // 전혀 없을 때만 경쟁 후보로 간주한다.
-            let has_structural_anchor = candidate
-                .signal_families
-                .contains(&super::signals::DomainSignalKind::Path)
-                || candidate
-                    .signal_families
-                    .contains(&super::signals::DomainSignalKind::Entrypoint)
-                || candidate
-                    .signal_families
-                    .contains(&super::signals::DomainSignalKind::Resource);
-            let ambiguous = primary_unit_ids.is_empty()
-                && !has_structural_anchor
-                && candidate_units
-                    .iter()
-                    .any(|assignment| assignment.kind == MembershipKind::Shared);
-            let (status, confidence) = calculate(
-                candidate.score,
-                &candidate.signal_families,
-                ambiguous,
-                &self.domain_policy,
-            );
-            let shared_unit_ids = candidate_units
-                .iter()
-                .filter(|assignment| {
-                    assignment.kind == MembershipKind::Shared
-                        || assignment.domain_id.as_deref() != Some(domain_id)
-                })
-                .map(|assignment| assignment.unit_id.clone())
-                .collect();
-            groups.push(DomainGroup {
-                id: domain_id.clone(),
-                key: candidate.key.clone(),
-                label: label(&candidate.key),
-                kind: domain_kind(&candidate.key, &self.domain_policy),
-                status,
-                confidence,
-                primary_unit_ids,
-                shared_unit_ids,
-                entrypoint_ids: entrypoints_by_domain
-                    .get(domain_id.as_str())
-                    .cloned()
-                    .unwrap_or_default(),
-                feature_ids: Vec::new(),
-                resource_ids: resources_by_domain
-                    .get(domain_id.as_str())
-                    .cloned()
-                    .unwrap_or_default(),
-                evidence: candidate.evidence.clone(),
-                summary: None,
-            });
-        }
-        groups.sort_by(|left, right| left.key.cmp(&right.key));
-
-        let relations = aggregate_relations(store, graph, &assignments, &groups);
-        let dynamic_reference_ids = graph
-            .edges
-            .iter()
-            .filter(|reference| reference.status == ResolutionStatus::Dynamic)
-            .map(|reference| reference.id.clone())
-            .collect();
-        let unassigned_unit_ids = assignments
-            .iter()
-            .filter(|assignment| assignment.domain_id.is_none())
-            .filter_map(|assignment| {
-                store
-                    .unit(&assignment.unit_id)
-                    .filter(|unit| !self.path_policy.is_test_path(&unit.relative_path))
-                    .map(|_| assignment.unit_id.clone())
-            })
-            .collect();
-
-        DomainAnalysisOutput {
-            static_graph: graph.clone(),
-            groups,
-            relations,
-            memberships: assignments,
-            unassigned_unit_ids,
-            dynamic_reference_ids,
-            signal_count,
-        }
+        execution_flows: &ExecutionFlowGraph,
+    ) -> FeatureFirstResult {
+        super::formation::analyze_feature_first(
+            store,
+            graph,
+            execution_flows,
+            &self.domain_policy,
+            &self.path_policy,
+        )
     }
 }
 
-/// Codex 병합 이후 최종 도메인 관계를 다시 집계한다.
+/// 의미 리뷰 병합 이후 최종 도메인 관계를 다시 집계한다.
 pub fn reaggregate_relations(store: &FactStore, analysis: &mut DomainAnalysisOutput) {
     analysis.relations = aggregate_relations(
         store,
@@ -187,14 +61,6 @@ pub fn reaggregate_relations(store: &FactStore, analysis: &mut DomainAnalysisOut
         &analysis.memberships,
         &analysis.groups,
     );
-}
-
-fn domain_kind(key: &str, policy: &DomainPolicy) -> DomainKind {
-    if policy.cross_cutting_keys.contains(key) {
-        DomainKind::CrossCutting
-    } else {
-        DomainKind::Business
-    }
 }
 
 pub(super) fn stable_domain_id(key: &str) -> String {

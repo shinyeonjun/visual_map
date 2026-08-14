@@ -1,4 +1,5 @@
-use crate::models::{CodexSettings, WorkspaceMetadata, WorkspacePaths};
+use crate::models::{AiSettings, CodexModelOption, WorkspaceMetadata, WorkspacePaths};
+use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn prepare_workspace(
     project_path: &Path,
+    provider: &str,
     model: &str,
     source_config: &Path,
 ) -> Result<WorkspacePaths, String> {
@@ -38,13 +40,18 @@ pub(crate) fn prepare_workspace(
             .map_err(|error| format!("워크스페이스 설정을 복사하지 못했습니다: {error}"))?;
     }
 
-    let existing_codex_settings = load_codex_settings().unwrap_or_default();
-    write_codex_settings(&CodexSettings {
-        executable: existing_codex_settings.executable,
-        model: model.to_string(),
-        cli_version: existing_codex_settings.cli_version,
-        catalog_source: existing_codex_settings.catalog_source,
-    })?;
+    let ai_directory = analysis_directory.join("ai");
+    fs::create_dir_all(&ai_directory)
+        .map_err(|error| format!("워크스페이스 AI 분석 폴더를 만들지 못했습니다: {error}"))?;
+
+    let mut settings = load_ai_settings().unwrap_or_default();
+    settings.provider = provider.to_string();
+    if provider == "claude" {
+        settings.claude_model = model.to_string();
+    } else {
+        settings.model = model.to_string();
+    }
+    write_ai_settings(&settings)?;
 
     let metadata = WorkspaceMetadata {
         project_path: project_path.display().to_string(),
@@ -61,16 +68,21 @@ pub(crate) fn prepare_workspace(
     fs::write(directory.join("workspace.json"), metadata_json)
         .map_err(|error| format!("워크스페이스 메타데이터를 저장하지 못했습니다: {error}"))?;
 
+    let clean_directory = analysis_directory.join("clean");
+    fs::create_dir_all(&clean_directory)
+        .map_err(|error| format!("워크스페이스 clean 폴더를 만들지 못했습니다: {error}"))?;
+
     Ok(WorkspacePaths {
         directory,
         config: workspace_config,
         static_output: analysis_directory.join("static-result.json"),
-        context_output: analysis_directory.join("codex-context.json"),
-        semantic_output: analysis_directory.join("semantic-result.json"),
+        clean_output: clean_directory,
+        context_output: ai_directory.join("context.json"),
+        semantic_output: ai_directory.join("semantic-result.json"),
     })
 }
 
-pub(crate) fn resolve_codex_cli(settings: &CodexSettings) -> String {
+pub(crate) fn resolve_codex_cli(settings: &AiSettings) -> String {
     env::var("CODEX_CLI_PATH")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -80,31 +92,37 @@ pub(crate) fn resolve_codex_cli(settings: &CodexSettings) -> String {
         .unwrap_or_else(|| "codex".to_string())
 }
 
-pub(crate) fn codex_settings_path() -> Result<PathBuf, String> {
+pub(crate) fn ai_settings_path() -> Result<PathBuf, String> {
     let root = storage_root()?;
     let directory = root.join("config");
     fs::create_dir_all(&directory)
-        .map_err(|error| format!("Codex 설정 폴더를 만들지 못했습니다: {error}"))?;
-    Ok(directory.join("codex.toml"))
+        .map_err(|error| format!("AI 설정 폴더를 만들지 못했습니다: {error}"))?;
+    let path = directory.join("ai-settings.toml");
+    let legacy = directory.join("codex.toml");
+    if !path.is_file() && legacy.is_file() {
+        fs::rename(&legacy, &path).or_else(|_| fs::copy(&legacy, &path).map(|_| ()))
+            .map_err(|error| format!("이전 Codex 설정을 AI 설정으로 옮기지 못했습니다: {error}"))?;
+    }
+    Ok(path)
 }
 
-pub(crate) fn load_codex_settings() -> Result<CodexSettings, String> {
-    let path = codex_settings_path()?;
+pub(crate) fn load_ai_settings() -> Result<AiSettings, String> {
+    let path = ai_settings_path()?;
     if !path.is_file() {
-        return Ok(CodexSettings::default());
+        return Ok(AiSettings::default());
     }
     let contents = fs::read_to_string(&path)
-        .map_err(|error| format!("VisualMap Codex 설정을 읽지 못했습니다: {error}"))?;
+        .map_err(|error| format!("VisualMap AI 설정을 읽지 못했습니다: {error}"))?;
     toml::from_str(&contents)
-        .map_err(|error| format!("VisualMap Codex 설정 형식이 올바르지 않습니다: {error}"))
+        .map_err(|error| format!("VisualMap AI 설정 형식이 올바르지 않습니다: {error}"))
 }
 
-pub(crate) fn write_codex_settings(settings: &CodexSettings) -> Result<(), String> {
-    let path = codex_settings_path()?;
+pub(crate) fn write_ai_settings(settings: &AiSettings) -> Result<(), String> {
+    let path = ai_settings_path()?;
     let contents = toml::to_string_pretty(settings)
-        .map_err(|error| format!("VisualMap Codex 설정을 만들지 못했습니다: {error}"))?;
+        .map_err(|error| format!("VisualMap AI 설정을 만들지 못했습니다: {error}"))?;
     fs::write(path, contents)
-        .map_err(|error| format!("VisualMap Codex 설정을 저장하지 못했습니다: {error}"))
+        .map_err(|error| format!("VisualMap AI 설정을 저장하지 못했습니다: {error}"))
 }
 
 pub(crate) fn storage_root() -> Result<PathBuf, String> {
@@ -193,7 +211,12 @@ fn environment_name() -> &'static str {
     }
 }
 
-pub(crate) fn resolve_executable(value: &str, environment_key: &str, file_name: &str) -> PathBuf {
+pub(crate) fn resolve_executable(
+    value: &str,
+    environment_key: &str,
+    file_name: &str,
+    resource_dir: Option<&Path>,
+) -> PathBuf {
     if !value.trim().is_empty() {
         return PathBuf::from(value);
     }
@@ -207,15 +230,43 @@ pub(crate) fn resolve_executable(value: &str, environment_key: &str, file_name: 
     } else {
         file_name.to_string()
     };
-    for root in search_roots() {
-        let candidate = root
-            .join("target/release")
-            .join(&executable);
-        if candidate.is_file() {
+    let profiles = if cfg!(debug_assertions) {
+        ["release", "debug"]
+    } else {
+        ["release", "debug"]
+    };
+    // dev에서는 워크스페이스에 방금 빌드한 엔진을 번들 복사본보다 우선한다.
+    if cfg!(debug_assertions) {
+        if let Some(candidate) = find_engine_in_roots(&executable, profiles) {
             return candidate;
         }
     }
+    if let Some(resource_dir) = resource_dir {
+        let windows_candidate = resource_dir.join(&executable);
+        if windows_candidate.is_file() {
+            return windows_candidate;
+        }
+        let unix_candidate = resource_dir.join(file_name);
+        if unix_candidate.is_file() {
+            return unix_candidate;
+        }
+    }
+    if let Some(candidate) = find_engine_in_roots(&executable, profiles) {
+        return candidate;
+    }
     PathBuf::from(executable)
+}
+
+fn find_engine_in_roots(executable: &str, profiles: [&str; 2]) -> Option<PathBuf> {
+    for root in search_roots() {
+        for profile in profiles {
+            let candidate = root.join("target").join(profile).join(executable);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn resolve_config(value: &str, resource_dir: Option<&Path>) -> PathBuf {
@@ -235,6 +286,52 @@ pub(crate) fn resolve_config(value: &str, resource_dir: Option<&Path>) -> PathBu
         }
     }
     PathBuf::from("analysis.default.toml")
+}
+
+pub(crate) fn resolve_claude_models(source_path: &Path) -> Result<Vec<CodexModelOption>, String> {
+    #[derive(Deserialize)]
+    struct ClaudeModelCatalog {
+        models: Vec<ClaudeModelEntry>,
+    }
+
+    #[derive(Deserialize)]
+    struct ClaudeModelEntry {
+        slug: String,
+        #[serde(rename = "displayName")]
+        display_name: String,
+    }
+
+    let contents = fs::read_to_string(source_path)
+        .map_err(|error| format!("Claude 모델 목록을 읽지 못했습니다: {error}"))?;
+    let catalog: ClaudeModelCatalog = toml::from_str(&contents)
+        .map_err(|error| format!("Claude 모델 목록 형식이 올바르지 않습니다: {error}"))?;
+    Ok(catalog
+        .models
+        .into_iter()
+        .map(|model| CodexModelOption {
+            slug: model.slug,
+            display_name: model.display_name,
+            description: String::new(),
+            default_reasoning_level: None,
+            supported_reasoning_levels: Vec::new(),
+        })
+        .collect())
+}
+
+pub(crate) fn resolve_claude_models_path(resource_dir: Option<&Path>) -> PathBuf {
+    if let Some(resource_dir) = resource_dir {
+        let candidate = resource_dir.join("config/models/claude.toml");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    for root in search_roots() {
+        let candidate = root.join("config/models/claude.toml");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from("config/models/claude.toml")
 }
 
 fn search_roots() -> Vec<PathBuf> {

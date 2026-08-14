@@ -27,7 +27,9 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../../config/analysis.default.toml": "config/analysis.default.toml"
+      "../../config/analysis.default.toml": "config/analysis.default.toml",
+      "../../config/models/claude.toml": "config/models/claude.toml",
+      "binaries/code-analysis-engine.exe": "code-analysis-engine.exe"
     },
     "icon": [
       "icons/icon.ico",

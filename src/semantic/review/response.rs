@@ -1,6 +1,5 @@
 //! Codex JSONL 응답에서 의미 이름 제안만 추출한다.
 
-use crate::semantic::codex::CodexError;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -70,7 +69,7 @@ pub struct FlowSuggestion {
     pub summary: Option<String>,
 }
 
-pub fn parse_jsonl(stdout: &[u8]) -> Result<ReviewProposal, CodexError> {
+pub fn parse_response(stdout: &[u8]) -> Result<ReviewProposal, String> {
     let text = String::from_utf8_lossy(stdout);
     let mut candidates = Vec::new();
     if let Ok(value) = serde_json::from_str::<Value>(&text) {
@@ -112,9 +111,7 @@ pub fn parse_jsonl(stdout: &[u8]) -> Result<ReviewProposal, CodexError> {
         }
     }
 
-    Err(CodexError::InvalidResponse(
-        "도메인·기능·실행 흐름 JSON을 찾지 못했습니다.".into(),
-    ))
+    Err("AI 응답에서 도메인 이름 JSON을 찾지 못했습니다.".into())
 }
 
 fn collect_strings(value: &Value, output: &mut Vec<String>) {
@@ -132,7 +129,7 @@ fn collect_strings(value: &Value, output: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_jsonl;
+    use super::parse_response;
 
     #[test]
     fn 의미_응답에서_도메인_기능_흐름을_읽는다() {
@@ -146,7 +143,7 @@ mod tests {
             "item": {"type": "agent_message", "text": payload.to_string()}
         })
         .to_string();
-        let proposal = parse_jsonl(output.as_bytes()).expect("의미 응답을 읽어야 한다");
+        let proposal = parse_response(output.as_bytes()).expect("의미 응답을 읽어야 한다");
         assert_eq!(proposal.domains[0].domain_id, "domain_a");
         assert_eq!(proposal.features[0].feature_id, "feature_a");
         assert_eq!(proposal.flows[0].flow_id, "flow_a");

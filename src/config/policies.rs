@@ -135,6 +135,22 @@ pub struct DomainPolicy {
     pub shared_minimum_score: u32,
     pub generic_tokens: BTreeSet<String>,
     pub cross_cutting_keys: BTreeSet<String>,
+    #[serde(default = "default_feature_call_weight")]
+    pub feature_call_weight: f64,
+    #[serde(default = "default_feature_flow_weight")]
+    pub feature_flow_weight: f64,
+    #[serde(default = "default_feature_resource_weight")]
+    pub feature_resource_weight: f64,
+    #[serde(default = "default_feature_path_weight")]
+    pub feature_path_weight: f64,
+    #[serde(default = "default_feature_lexical_weight")]
+    pub feature_lexical_weight: f64,
+    #[serde(default = "default_domain_cluster_min")]
+    pub domain_cluster_min: usize,
+    #[serde(default = "default_domain_cluster_max")]
+    pub domain_cluster_max: usize,
+    #[serde(default = "default_domain_cluster_merge_threshold")]
+    pub domain_cluster_merge_threshold: f64,
 }
 
 impl Default for DomainPolicy {
@@ -155,6 +171,38 @@ impl DomainPolicy {
             .unwrap_or(0))
         .max(self.shared_minimum_score)
     }
+}
+
+fn default_feature_call_weight() -> f64 {
+    0.15
+}
+
+fn default_feature_flow_weight() -> f64 {
+    0.20
+}
+
+fn default_feature_resource_weight() -> f64 {
+    0.25
+}
+
+fn default_feature_path_weight() -> f64 {
+    0.25
+}
+
+fn default_feature_lexical_weight() -> f64 {
+    0.15
+}
+
+fn default_domain_cluster_min() -> usize {
+    6
+}
+
+fn default_domain_cluster_max() -> usize {
+    20
+}
+
+fn default_domain_cluster_merge_threshold() -> f64 {
+    0.08
 }
 
 /// 언어 공통 line fact 추출 규칙이다.
@@ -238,15 +286,30 @@ impl Default for FrameworkPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticPolicy {
+    /// 의미 분석에 사용할 provider다. "codex" 또는 "claude".
+    #[serde(default = "default_provider")]
+    pub provider: String,
     pub codex_executable: String,
     /// Codex CLI에 전달할 모델이다. 비어 있으면 CLI 기본 모델을 사용한다.
     pub codex_model: Option<String>,
+    #[serde(default = "default_claude_executable")]
+    pub claude_executable: String,
+    #[serde(default)]
+    pub claude_model: Option<String>,
     pub codex_timeout_ms: u64,
     pub codex_max_input_bytes: usize,
     /// 누락된 의미 항목을 작은 재요청으로 보완할 최대 횟수다.
     pub missing_item_retries: usize,
     pub maximum_label_length: usize,
     pub maximum_summary_length: usize,
+}
+
+fn default_provider() -> String {
+    "codex".into()
+}
+
+fn default_claude_executable() -> String {
+    "claude".into()
 }
 
 impl Default for SemanticPolicy {
@@ -299,5 +362,23 @@ pub struct PostprocessPolicy {
 impl Default for PostprocessPolicy {
     fn default() -> Self {
         default_section("postprocess")
+    }
+}
+
+/// 정적 Clean bundle의 저장 단위와 분할 정책이다.
+///
+/// 이 값은 의미 데이터를 제거하는 기준이 아니라 파일을 나누는 기준이다.
+/// 따라서 part 크기가 바뀌어도 Clean 모델의 내용과 ID는 바뀌지 않는다.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanPolicy {
+    /// 각 dataset part의 목표 바이트다. 하나의 레코드가 이보다 크면
+    /// 레코드를 쪼개지 않고 해당 part 하나에 그대로 저장한다.
+    pub part_target_bytes: usize,
+}
+
+impl Default for CleanPolicy {
+    fn default() -> Self {
+        default_section("clean")
     }
 }

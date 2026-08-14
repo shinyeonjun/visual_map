@@ -13,43 +13,53 @@ pub(super) fn aggregate_relations(
     memberships: &[DomainMembership],
     groups: &[DomainGroup],
 ) -> Vec<DomainRelation> {
-    let mut unit_domains = HashMap::new();
+    let mut unit_domains: HashMap<String, HashSet<String>> = HashMap::new();
     for membership in memberships {
-        if let Some(domain_id) = &membership.domain_id {
-            unit_domains.insert(membership.unit_id.clone(), domain_id.clone());
+        let domain_ids = membership_domain_ids(membership);
+        if domain_ids.is_empty() {
+            continue;
         }
+        unit_domains
+            .entry(membership.unit_id.clone())
+            .or_default()
+            .extend(domain_ids);
     }
     let group_ids: HashSet<&str> = groups.iter().map(|group| group.id.as_str()).collect();
     let mut aggregated: HashMap<(String, String, String), DomainRelation> = HashMap::new();
     for reference in aggregate_graph_edges(&graph.edges) {
-        let source_domain = unit_domains.get(&reference.source_unit_id);
-        let target_domain = reference
-            .target_unit_id
-            .as_deref()
-            .and_then(|unit_id| unit_domains.get(unit_id));
-        let (Some(source_domain), Some(target_domain)) = (source_domain, target_domain) else {
+        let Some(source_domains) = unit_domains.get(&reference.source_unit_id) else {
             continue;
         };
-        if source_domain == target_domain {
+        let Some(target_unit_id) = reference.target_unit_id.as_deref() else {
             continue;
-        }
-        if !group_ids.contains(source_domain.as_str())
-            || !group_ids.contains(target_domain.as_str())
-        {
+        };
+        let Some(target_domains) = unit_domains.get(target_unit_id) else {
             continue;
+        };
+        for source_domain in source_domains {
+            for target_domain in target_domains {
+                if source_domain == target_domain {
+                    continue;
+                }
+                if !group_ids.contains(source_domain.as_str())
+                    || !group_ids.contains(target_domain.as_str())
+                {
+                    continue;
+                }
+                let kind = relation_kind(&reference.kind);
+                let key = (source_domain.clone(), target_domain.clone(), kind.clone());
+                let relation = aggregated.entry(key).or_insert_with(|| DomainRelation {
+                    source_domain_id: source_domain.clone(),
+                    target_domain_id: target_domain.clone(),
+                    kind,
+                    status: reference.status.clone(),
+                    weight: 0,
+                    evidence: Vec::new(),
+                });
+                relation.weight += reference.weight;
+                relation.evidence.extend(reference.evidence.clone());
+            }
         }
-        let kind = relation_kind(&reference.kind);
-        let key = (source_domain.clone(), target_domain.clone(), kind.clone());
-        let relation = aggregated.entry(key).or_insert_with(|| DomainRelation {
-            source_domain_id: source_domain.clone(),
-            target_domain_id: target_domain.clone(),
-            kind,
-            status: reference.status.clone(),
-            weight: 0,
-            evidence: Vec::new(),
-        });
-        relation.weight += reference.weight;
-        relation.evidence.extend(reference.evidence.clone());
     }
     let mut relations: Vec<_> = aggregated.into_values().collect();
     relations.sort_by(|left, right| {
@@ -59,6 +69,17 @@ pub(super) fn aggregate_relations(
             .then(left.kind.cmp(&right.kind))
     });
     relations
+}
+
+fn membership_domain_ids(membership: &DomainMembership) -> Vec<String> {
+    if !membership.domain_ids.is_empty() {
+        return membership.domain_ids.clone();
+    }
+    membership
+        .domain_id
+        .clone()
+        .map(|domain_id| vec![domain_id])
+        .unwrap_or_default()
 }
 
 fn relation_kind(kind: &crate::facts::ReferenceKind) -> String {
@@ -86,6 +107,10 @@ mod tests {
                 level: "medium".to_string(),
                 score: 1,
                 signal_families: BTreeSet::new(),
+                cohesion: 0.0,
+                separation: 0.0,
+                evidence_diversity: 0.0,
+                overall: 0.0,
             },
             primary_unit_ids: Vec::new(),
             shared_unit_ids: Vec::new(),

@@ -1,5 +1,5 @@
 use code_analysis_engine::config::AnalysisConfig;
-use code_analysis_engine::postprocess::{build_codex_context, PostprocessError};
+use code_analysis_engine::postprocess::{build_ai_context, PostprocessError};
 use code_analysis_engine::{analyze, AnalysisRequest};
 use std::fs;
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ fn temporary_project(name: &str) -> PathBuf {
 }
 
 #[test]
-fn 분석결과에서_codex_컨텍스트를_재분석없이_생성한다() {
+fn 분석결과에서_ai_컨텍스트를_재분석없이_생성한다() {
     let root = temporary_project("context");
     fs::write(
         root.join("service.ts"),
@@ -31,12 +31,12 @@ function saveOrder(order: unknown) { return order; }
     .expect("소스 파일을 써야 한다");
 
     let result = analyze(AnalysisRequest::new(&root)).expect("정적 분석이 성공해야 한다");
-    let bundle = build_codex_context(&result, &AnalysisConfig::default())
-        .expect("Codex 컨텍스트가 생성되어야 한다");
+    let bundle = build_ai_context(&result, &AnalysisConfig::default())
+        .expect("AI 컨텍스트가 생성되어야 한다");
     let context = &bundle.chunks[0];
     let json = serde_json::to_string_pretty(&context).expect("컨텍스트를 직렬화해야 한다");
 
-    assert_eq!(context.schema_version, "codex-semantic-context.v1");
+    assert_eq!(context.schema_version, "ai-semantic-context.v1");
     assert_eq!(context.source_analysis_id, result.analysis_id);
     assert!(!json.contains("staticGraph"));
     assert!(!json.contains("semanticAnalysis"));
@@ -66,9 +66,9 @@ function saveOrder(order: unknown) { return order; }
     let result = analyze(AnalysisRequest::new(&root)).expect("정적 분석이 성공해야 한다");
     let config = AnalysisConfig::default();
     let bundle =
-        build_codex_context(&result, &config).expect("Codex 컨텍스트 bundle이 생성되어야 한다");
+        build_ai_context(&result, &config).expect("AI 컨텍스트 bundle이 생성되어야 한다");
 
-    assert_eq!(bundle.manifest.schema_version, "codex-context-manifest.v1");
+    assert_eq!(bundle.manifest.schema_version, "ai-context-manifest.v1");
     assert!(!bundle.chunks.is_empty());
     for chunk in &bundle.chunks {
         let bytes = serde_json::to_vec(chunk).expect("청크를 직렬화해야 한다");
@@ -115,17 +115,16 @@ fn overview가_없는_결과는_조용히_빈_컨텍스트가_되지_않는다()
         diagnostics: Vec::new(),
         elapsed_ms: 0,
         overview: None,
-        preprocessed_overview: None,
     };
 
     assert!(matches!(
-        build_codex_context(&result, &AnalysisConfig::default()),
+        build_ai_context(&result, &AnalysisConfig::default()),
         Err(PostprocessError::MissingOverview)
     ));
 }
 
 fn domain_flow_ids(
-    context: &code_analysis_engine::postprocess::CodexSemanticContext,
+    context: &code_analysis_engine::postprocess::AiSemanticContext,
     flow_id: &str,
 ) -> bool {
     context

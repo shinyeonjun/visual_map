@@ -1,13 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
-import { analyzeProject, createProject, isDesktopRuntime, loadCodexModels, saveCodexSettings, selectProjectFolder } from './services/analysis'
-import type { AnalysisProgress, CodexModel, CodexModelCatalog, Project } from './domain'
+import { analyzeProject, checkClaudeCli, createProject, isDesktopRuntime, loadClaudeModels, loadCodexModels, saveAiSettings, selectProjectFolder } from './services/analysis'
+import type { AiProvider, AnalysisProgress, ClaudeModel, CodexModel, CodexModelCatalog, DomainNode, MapDomain, Project } from './domain'
 import { domainPalette } from './domain'
 import { useCanvasViewport } from './hooks/useCanvasViewport'
 import { AnalysisProgressPanel, Icon, SetupScreen } from './components/ui'
 import { DomainCard } from './components/domain-card'
-import { featureLabel } from './components/domain-label'
 import './styles.css'
+
+function featureKindLabel(kind: string): string {
+  if (kind === 'endpoint') return 'API'
+  if (kind === 'operation') return 'FUNC'
+  return kind.toUpperCase()
+}
+
+function mapDomainToNode(mapDomain: MapDomain, index: number, existing?: DomainNode): DomainNode {
+  return {
+    id: mapDomain.domainId,
+    name: mapDomain.name,
+    summary: mapDomain.summary,
+    color: existing?.color ?? domainPalette[index % domainPalette.length],
+    x: existing?.x ?? 70 + (index % 3) * 320,
+    y: existing?.y ?? 70 + Math.floor(index / 3) * 220,
+    units: mapDomain.units,
+    features: mapDomain.features,
+    entrypoints: mapDomain.entrypoints,
+    confidence: mapDomain.confidence,
+    status: mapDomain.status,
+    dependencies: mapDomain.dependencies,
+    signals: mapDomain.signals,
+    featureItems: mapDomain.featureItems,
+  }
+}
 
 function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error) return error.message
@@ -31,14 +55,19 @@ function App() {
   const [selectedId, setSelectedId] = useState('')
   const [model, setModel] = useState('')
   const [models, setModels] = useState<CodexModel[]>([])
+  const [claudeModels, setClaudeModels] = useState<ClaudeModel[]>([])
   const [query, setQuery] = useState('')
   const [isProjectMenuOpen, setProjectMenuOpen] = useState(false)
+  const [provider, setProvider] = useState<AiProvider>('codex')
   const [isAnalyzing, setAnalyzing] = useState(false)
   const [notice, setNotice] = useState('')
   const [isCodexChecking, setCodexChecking] = useState(false)
   const [codexVersion, setCodexVersion] = useState('')
   const [codexExecutable, setCodexExecutable] = useState('codex')
   const [codexError, setCodexError] = useState('')
+  const [isClaudeChecking, setClaudeChecking] = useState(false)
+  const [claudeVersion, setClaudeVersion] = useState('')
+  const [claudeError, setClaudeError] = useState('')
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null)
   const [activeView, setActiveView] = useState<'setup' | 'map'>('setup')
   const codexCheckingRef = useRef(false)
@@ -75,6 +104,31 @@ function App() {
     setNotice('프로젝트가 추가되었습니다. 분석을 시작해 도메인을 찾아보세요.')
   }
 
+  const savedClaudeModelRef = useRef('')
+
+  const handleClaudeConnection = useCallback(async () => {
+    setClaudeChecking(true)
+    setClaudeError('')
+    try {
+      const [status, catalog] = await Promise.all([checkClaudeCli(), loadClaudeModels()])
+      setClaudeVersion(status.version)
+      setClaudeModels(catalog.models)
+      const nextModel = catalog.selectedModel && catalog.models.some((item) => item.slug === catalog.selectedModel)
+        ? catalog.selectedModel
+        : catalog.models[0]?.slug ?? ''
+      if (nextModel) {
+        setModel(nextModel)
+        selectedModelRef.current = nextModel
+        savedClaudeModelRef.current = nextModel
+      }
+    } catch (error) {
+      setClaudeVersion('')
+      setClaudeError(getErrorMessage(error, 'Claude CLI를 확인하지 못했습니다.'))
+    } finally {
+      setClaudeChecking(false)
+    }
+  }, [])
+
   const handleCodexConnection = useCallback(async () => {
     if (codexCheckingRef.current) return
     codexCheckingRef.current = true
@@ -85,15 +139,18 @@ function App() {
       setModels(catalog.models)
       setCodexVersion(catalog.version)
       setCodexExecutable(catalog.executable)
-      const nextModel = resolveSelectedModel(selectedModelRef.current, catalog)
-      setModel(nextModel)
-      selectedModelRef.current = nextModel
-      if (nextModel) {
-        try {
-          await saveCodexSettings({ model: nextModel, cliVersion: catalog.version, executable: catalog.executable })
-        } catch (error) {
-          setNotice(getErrorMessage(error, 'Codex CLI는 확인했지만 설정을 저장하지 못했습니다.'))
-        }
+
+      const savedProvider = (catalog.savedProvider === 'claude' ? 'claude' : 'codex') as AiProvider
+      savedClaudeModelRef.current = catalog.savedClaudeModel || ''
+
+      if (savedProvider === 'claude') {
+        setProvider('claude')
+        void handleClaudeConnection()
+      } else {
+        setProvider('codex')
+        const nextModel = resolveSelectedModel(selectedModelRef.current, catalog)
+        setModel(nextModel)
+        selectedModelRef.current = nextModel
       }
     } catch (error) {
       setCodexVersion('')
@@ -102,7 +159,7 @@ function App() {
       codexCheckingRef.current = false
       setCodexChecking(false)
     }
-  }, [])
+  }, [handleClaudeConnection])
 
   useEffect(() => {
     void handleCodexConnection()
@@ -124,9 +181,12 @@ function App() {
     }
   }, [])
 
+  const cliReady = provider === 'claude' ? Boolean(claudeVersion) : Boolean(codexVersion)
+
   async function handleAnalysis() {
-    if (!project?.path || isAnalyzing || !codexVersion || !model) return
+    if (!project?.path || isAnalyzing || !cliReady || !model) return
     setAnalyzing(true)
+    const providerLabel = provider === 'claude' ? 'Claude' : 'Codex'
     setAnalysisProgress({
       phase: 'preparing',
       label: '분석을 준비하는 중입니다',
@@ -137,38 +197,32 @@ function App() {
       indeterminate: true,
       elapsedMs: 0,
     })
-    setNotice(`${model}로 ${project.name}을 분석하는 중입니다…`)
+    setNotice(`${providerLabel} ${model}로 ${project.name}을 분석하는 중입니다…`)
     setProjects((current) => current.map((item) => item.id === project.id ? { ...item, state: 'running' } : item))
     try {
-      await saveCodexSettings({ model, cliVersion: codexVersion, executable: codexExecutable })
-      const response = await analyzeProject({ projectPath: project.path, enginePath: '', configPath: '', model })
-      if (response.domains.length > 0) {
-        setProjects((current) => current.map((item) => {
-          if (item.id !== project.id) return item
-          const domains = response.domains.map((suggestion, index) => {
-            const existing = item.domains.find((domain) => domain.id === suggestion.domainId)
-            if (existing) return { ...existing, name: suggestion.name, summary: suggestion.summary ?? existing.summary }
-            return {
-              id: suggestion.domainId,
-              name: suggestion.name,
-              summary: suggestion.summary ?? 'Codex가 코드 구조에서 식별한 비즈니스 책임입니다.',
-              color: domainPalette[index % domainPalette.length],
-              x: 70 + (index % 3) * 320,
-              y: 70 + Math.floor(index / 3) * 220,
-              units: 0,
-              features: 0,
-              entrypoints: 0,
-              confidence: 0,
-              status: 'candidate' as const,
-              dependencies: [],
-              signals: ['Codex semantic review'],
-            }
-          })
-          return { ...item, state: 'ready', domains }
-        }))
+      if (provider === 'codex') {
+        await saveAiSettings({ model, cliVersion: codexVersion, executable: codexExecutable, provider: 'codex' })
       } else {
-        setProjects((current) => current.map((item) => item.id === project.id ? { ...item, state: 'ready' } : item))
+        await saveAiSettings({
+          model: selectedModelRef.current || models[0]?.slug || '',
+          cliVersion: codexVersion,
+          executable: codexExecutable,
+          provider: 'claude',
+          claudeModel: model,
+        })
       }
+      const response = await analyzeProject({ projectPath: project.path, enginePath: '', configPath: '', model, provider })
+      if (response.domains.length === 0) {
+        throw new Error('분석 결과에서 도메인을 찾지 못했습니다.')
+      }
+      setProjects((current) => current.map((item) => {
+        if (item.id !== project.id) return item
+        const domains = response.domains.map((mapDomain, index) => {
+          const existing = item.domains.find((domain) => domain.id === mapDomain.domainId)
+          return mapDomainToNode(mapDomain, index, existing)
+        })
+        return { ...item, state: 'ready', stats: response.stats, domains }
+      }))
       setNotice(response.workspacePath ? `분석이 끝났습니다. 워크스페이스에 저장했습니다.` : '분석이 끝났습니다. 캔버스의 도메인 지도를 확인하세요.')
       setActiveView('map')
     } catch (error) {
@@ -181,12 +235,43 @@ function App() {
     }
   }
 
+  function handleProviderChange(next: AiProvider) {
+    setProvider(next)
+    if (next === 'claude') {
+      const claudeModel = savedClaudeModelRef.current || claudeModels[0]?.slug || ''
+      setModel(claudeModel)
+      if (!claudeVersion || claudeModels.length === 0) void handleClaudeConnection()
+      void saveAiSettings({
+        model: selectedModelRef.current || '',
+        cliVersion: codexVersion,
+        executable: codexExecutable,
+        provider: 'claude',
+        claudeModel,
+      }).catch(() => {})
+    } else {
+      const nextModel = models.length > 0 ? (models.find((m) => m.slug === selectedModelRef.current)?.slug ?? models[0]?.slug ?? '') : ''
+      setModel(nextModel)
+      selectedModelRef.current = nextModel
+      void saveAiSettings({
+        model: nextModel,
+        cliVersion: codexVersion,
+        executable: codexExecutable,
+        provider: 'codex',
+      }).catch(() => {})
+    }
+  }
+
   async function handleModelChange(nextModel: string) {
     setModel(nextModel)
     selectedModelRef.current = nextModel
-    if (!codexVersion || !nextModel) return
     try {
-      await saveCodexSettings({ model: nextModel, cliVersion: codexVersion, executable: codexExecutable })
+      if (provider === 'codex') {
+        if (!codexVersion || !nextModel) return
+        await saveAiSettings({ model: nextModel, cliVersion: codexVersion, executable: codexExecutable, provider: 'codex' })
+      } else {
+        savedClaudeModelRef.current = nextModel
+        await saveAiSettings({ model: '', cliVersion: codexVersion, executable: codexExecutable, provider: 'claude', claudeModel: nextModel })
+      }
       setNotice(`${nextModel} 모델을 VisualMap 설정에 저장했습니다.`)
     } catch (error) {
       setNotice(getErrorMessage(error, '모델 설정을 저장하지 못했습니다.'))
@@ -196,17 +281,24 @@ function App() {
   if (activeView === 'setup' || !project) {
     return <SetupScreen
       project={project}
+      provider={provider}
+      onProviderChange={handleProviderChange}
       onModelChange={handleModelChange}
       isAnalyzing={isAnalyzing}
       analysisProgress={analysisProgress}
       isCodexChecking={isCodexChecking}
       codexVersion={codexVersion}
       models={models}
+      claudeModels={claudeModels}
       model={model}
       codexError={codexError}
+      isClaudeChecking={isClaudeChecking}
+      claudeVersion={claudeVersion}
+      claudeError={claudeError}
       notice={notice}
       onConnectProject={handleAddProject}
       onCheckCodex={handleCodexConnection}
+      onCheckClaude={handleClaudeConnection}
       onAnalyze={handleAnalysis}
     />
   }
@@ -223,13 +315,14 @@ function App() {
         {isProjectMenuOpen && <div className="project-menu">{projects.map((item) => <button key={item.id} onClick={() => switchProject(item.id)}><span className="project-dot" /><span><b>{item.name}</b><small>{item.path}</small></span></button>)}</div>}
         <nav className="nav-group" aria-label="주요 메뉴">
           <p>MAP</p>
-          <button className="nav-item active"><Icon name="grid" /><span>도메인 지도</span><kbd>⌘ 1</kbd></button>
-          <button className="nav-item"><Icon name="route" /><span>실행 흐름</span><kbd>⌘ 2</kbd></button>
-          <button className="nav-item"><Icon name="layers" /><span>코드 탐색기</span><kbd>⌘ 3</kbd></button>
-          <button className="nav-item"><Icon name="database" /><span>리소스</span><kbd>⌘ 4</kbd></button>
+          <button className="nav-item active" type="button" aria-current="page"><Icon name="grid" /><span>도메인 지도</span></button>
         </nav>
+        <div className="project-stats">
+          <p>프로젝트 요약</p>
+          <span>{project.stats.units} units · {project.stats.features} features · {project.stats.flows} flows</span>
+        </div>
         <div className="sidebar-bottom">
-          <div className="engine-card"><div className="engine-status"><i /> CODEX CLI</div><strong>의미 분석 엔진</strong><label className="engine-model"><span>MODEL</span><select value={model} onChange={(event) => void handleModelChange(event.target.value)}>{models.map((item) => <option key={item.slug} value={item.slug}>{item.displayName}</option>)}</select></label><small>{notice || '분석 결과는 캔버스에 표시됩니다.'}</small><button className="engine-run" onClick={handleAnalysis} disabled={isAnalyzing}><Icon name="spark" size={13} />{isAnalyzing ? '분석 중…' : 'Codex로 분석'}<span>↗</span></button></div>
+          <div className="engine-card"><div className="engine-status"><i /> {provider === 'claude' ? 'CLAUDE CLI' : 'CODEX CLI'}</div><strong>의미 분석 엔진</strong><label className="engine-model"><span>PROVIDER</span><select value={provider} onChange={(event) => handleProviderChange(event.target.value as AiProvider)}><option value="codex">Codex</option><option value="claude">Claude</option></select></label><label className="engine-model"><span>MODEL</span><select value={model} onChange={(event) => void handleModelChange(event.target.value)}>{provider === 'claude' ? claudeModels.map((item) => <option key={item.slug} value={item.slug}>{item.displayName}</option>) : models.map((item) => <option key={item.slug} value={item.slug}>{item.displayName}</option>)}</select></label><small>{notice || '분석 결과는 캔버스에 표시됩니다.'}</small><button className="engine-run" onClick={handleAnalysis} disabled={isAnalyzing || !cliReady}><Icon name="spark" size={13} />{isAnalyzing ? '분석 중…' : `${provider === 'claude' ? 'Claude' : 'Codex'}로 분석`}<span>↗</span></button></div>
           <div className="sidebar-foot"><span>Visual Map</span><span>v0.1.0</span></div>
         </div>
       </aside>
@@ -252,7 +345,70 @@ function App() {
         </div>
       </main>
 
-      <aside className="inspector"><div className="inspector-head"><div><span className="eyebrow">SELECTED DOMAIN</span><h2>{selectedDomain?.name ?? '도메인 선택'}</h2></div><button className="icon-button" onClick={() => setSelectedId('')} aria-label="선택 해제"><Icon name="close" size={18} /></button></div>{selectedDomain ? <><p className="inspector-summary">{selectedDomain.summary}</p><div className="confidence"><div><span>분석 신뢰도</span><strong>{selectedDomain.confidence}%</strong></div><div className="confidence-track"><span style={{ width: `${selectedDomain.confidence}%`, background: selectedDomain.color }} /></div><small>정적 근거 {selectedDomain.status === 'verified' ? '확인됨' : '후보'} · {selectedDomain.units} units</small></div><div className="inspector-section"><div className="section-title"><span>구성된 기능</span><b>{selectedDomain.features}</b></div><div className="fake-list">{Array.from({ length: Math.min(4, selectedDomain.features) }, (_, index) => <div className="fake-row" key={index}><span className="mini-icon" style={{ color: selectedDomain.color }}>↗</span><span><strong>{featureLabel(selectedDomain, index)}</strong><small>{index % 2 === 0 ? '외부 진입점' : '내부 서비스 로직'}</small></span><em>{index % 2 === 0 ? 'API' : 'FUNC'}</em></div>)}</div></div><div className="inspector-section"><div className="section-title"><span>연결된 도메인</span><b>{selectedDomain.dependencies.length}</b></div>{selectedDomain.dependencies.length > 0 ? <div className="linked-domains">{selectedDomain.dependencies.map((id) => { const linked = project.domains.find((item) => item.id === id); return linked ? <button key={id} onClick={() => setSelectedId(id)}><span className="linked-dot" style={{ background: linked.color }} />{linked.name}<span>↗</span></button> : null })}</div> : <p className="muted-copy">직접 연결된 도메인이 없습니다.</p>}</div><div className="inspector-section evidence"><div className="section-title"><span>분석 근거</span><b>{selectedDomain.signals.length}</b></div><div className="tag-list">{selectedDomain.signals.map((signal) => <span key={signal}>{signal}</span>)}</div></div><button className="open-code-button"><Icon name="layers" size={16} />관련 코드 열기 <span>⌘ ↗</span></button></> : <div className="inspector-empty"><div className="empty-ring">+</div><strong>지도를 탐색해보세요</strong><span>도메인 카드를 선택하면 코드 구조와 연결 관계를 확인할 수 있습니다.</span></div>}</aside>
+      <aside className="inspector">
+        <div className="inspector-head">
+          <div><span className="eyebrow">SELECTED DOMAIN</span><h2>{selectedDomain?.name ?? '도메인 선택'}</h2></div>
+          <button className="icon-button" onClick={() => setSelectedId('')} aria-label="선택 해제"><Icon name="close" size={18} /></button>
+        </div>
+        {selectedDomain ? (
+          <>
+            <p className="inspector-summary">{selectedDomain.summary}</p>
+            <div className="confidence">
+              <div><span>분석 신뢰도</span><strong>{selectedDomain.confidence}%</strong></div>
+              <div className="confidence-track"><span style={{ width: `${selectedDomain.confidence}%`, background: selectedDomain.color }} /></div>
+              <small>정적 근거 {selectedDomain.status === 'verified' ? '확인됨' : selectedDomain.status === 'shared' ? '공유 경계' : '후보'} · {selectedDomain.units} units</small>
+            </div>
+            <div className="inspector-section">
+              <div className="section-title"><span>구성된 기능</span><b>{selectedDomain.features}</b></div>
+              {selectedDomain.featureItems.length > 0 ? (
+                <div className="fake-list">
+                  {selectedDomain.featureItems.slice(0, 8).map((feature) => (
+                    <div className="fake-row" key={feature.id}>
+                      <span className="mini-icon" style={{ color: selectedDomain.color }}>↗</span>
+                      <span>
+                        <strong>{feature.name}</strong>
+                        <small>{feature.summary?.trim() || (feature.entrypoints > 0 ? '외부 진입점' : '내부 서비스 로직')}</small>
+                      </span>
+                      <em>{featureKindLabel(feature.kind)}</em>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted-copy">구성된 기능이 없습니다.</p>
+              )}
+            </div>
+            <div className="inspector-section">
+              <div className="section-title"><span>연결된 도메인</span><b>{selectedDomain.dependencies.length}</b></div>
+              {selectedDomain.dependencies.length > 0 ? (
+                <div className="linked-domains">
+                  {selectedDomain.dependencies.map((id) => {
+                    const linked = project.domains.find((item) => item.id === id)
+                    return linked ? (
+                      <button key={id} onClick={() => setSelectedId(id)}>
+                        <span className="linked-dot" style={{ background: linked.color }} />
+                        {linked.name}
+                        <span>↗</span>
+                      </button>
+                    ) : null
+                  })}
+                </div>
+              ) : (
+                <p className="muted-copy">직접 연결된 도메인이 없습니다.</p>
+              )}
+            </div>
+            <div className="inspector-section evidence">
+              <div className="section-title"><span>분석 근거</span><b>{selectedDomain.signals.length}</b></div>
+              <div className="tag-list">{selectedDomain.signals.map((signal) => <span key={signal}>{signal}</span>)}</div>
+            </div>
+          </>
+        ) : (
+          <div className="inspector-empty">
+            <div className="empty-ring">+</div>
+            <strong>지도를 탐색해보세요</strong>
+            <span>도메인 카드를 선택하면 코드 구조와 연결 관계를 확인할 수 있습니다.</span>
+          </div>
+        )}
+      </aside>
     </div>
   )
 }

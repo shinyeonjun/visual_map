@@ -1,43 +1,40 @@
-//! 1단계 도메인 파이프라인의 고정 실행 순서.
+//! 정적 분석 파이프라인의 실행 단계.
 
-/// 각 단계는 이전 단계가 만든 사실을 소비하고 다음 단계의 입력을 만든다.
+/// `pipeline::runner`가 실제로 수행하는 정적 분석 단계다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DomainAnalysisStage {
-    ProjectConnection,
-    FileInventory,
-    LanguageDetection,
-    AstFacts,
-    LanguageFamilyFacts,
-    LanguageSpecificFacts,
+pub enum StaticAnalysisStage {
+    ProjectScan,
+    FactExtraction,
     FrameworkDetection,
-    FrameworkFacts,
-    FactsMerge,
     StaticRelationGraph,
-    DomainCandidates,
-    DomainGrouping,
-    CodexSemanticReview,
-    AiValidationAndMerge,
+    ExecutionFlows,
+    FeatureFirstDomainFormation,
     DomainRelationAggregation,
     OverviewProjection,
 }
 
-impl DomainAnalysisStage {
-    pub const ORDER: [Self; 16] = [
-        Self::ProjectConnection,
-        Self::FileInventory,
-        Self::LanguageDetection,
-        Self::AstFacts,
-        Self::LanguageFamilyFacts,
-        Self::LanguageSpecificFacts,
+impl StaticAnalysisStage {
+    pub const ORDER: [Self; 8] = [
+        Self::ProjectScan,
+        Self::FactExtraction,
         Self::FrameworkDetection,
-        Self::FrameworkFacts,
-        Self::FactsMerge,
         Self::StaticRelationGraph,
-        Self::DomainCandidates,
-        Self::DomainGrouping,
-        Self::CodexSemanticReview,
-        Self::AiValidationAndMerge,
+        Self::ExecutionFlows,
+        Self::FeatureFirstDomainFormation,
         Self::DomainRelationAggregation,
         Self::OverviewProjection,
     ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ProjectScan => "project_scan",
+            Self::FactExtraction => "fact_extraction",
+            Self::FrameworkDetection => "framework_detection",
+            Self::StaticRelationGraph => "static_relation_graph",
+            Self::ExecutionFlows => "execution_flows",
+            Self::FeatureFirstDomainFormation => "feature_first_domain_formation",
+            Self::DomainRelationAggregation => "domain_relation_aggregation",
+            Self::OverviewProjection => "overview_projection",
+        }
+    }
 }

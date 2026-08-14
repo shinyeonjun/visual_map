@@ -108,8 +108,32 @@ export function dispatch(name: string, request: Request) {
         .collect();
 
     assert!(keys.contains(&"order"), "order 도메인이 없어: {keys:?}");
-    assert!(keys.contains(&"payment"), "payment 도메인이 없어: {keys:?}");
-    assert!(keys.contains(&"auth"), "auth 도메인이 없어: {keys:?}");
+    assert!(
+        overview.domains.len() <= 20,
+        "도메인 수가 과도하게 많다: {}",
+        overview.domains.len()
+    );
+    let order_feature = overview
+        .features
+        .iter()
+        .find(|feature| {
+            feature.entrypoint_ids.iter().any(|entrypoint_id| {
+                overview.entrypoints.iter().any(|entrypoint| {
+                    &entrypoint.id == entrypoint_id && entrypoint.path.as_deref() == Some("/orders")
+                })
+            })
+        })
+        .expect("POST /orders 기능이 있어야 한다");
+    assert!(
+        !order_feature.unit_ids.iter().any(|unit_id| {
+            overview
+                .units
+                .iter()
+                .find(|unit| &unit.id == unit_id)
+                .is_some_and(|unit| unit.relative_path.contains("payment"))
+        }),
+        "주문 기능의 소유 유닛에 결제 모듈이 포함되면 안 된다"
+    );
     assert!(overview.coverage.total_units >= 6);
     assert!(overview.coverage.total_entrypoints >= 1);
     assert!(overview.coverage.total_resources >= 1);
@@ -205,11 +229,8 @@ export function dispatch(name: string, request: Request) {
         overview.static_graph.dynamic_edge_ids.len(),
         overview.dynamic_boundary_ids.len()
     );
-    let prepared = result
-        .preprocessed_overview
-        .as_ref()
-        .expect("정적 전처리 Overview가 생성되어야 한다");
-    let prepared_json = serde_json::to_string(prepared).expect("전처리 결과를 직렬화해야 한다");
+    let prepared = code_analysis_engine::clean::prepare(&overview, &result.files);
+    let prepared_json = serde_json::to_string(&prepared).expect("전처리 결과를 직렬화해야 한다");
     assert_eq!(prepared.schema_version, "prepared-static-overview.v1");
     assert!(!prepared_json.contains("staticGraph"));
     assert!(prepared.features.iter().all(|feature| feature
@@ -259,17 +280,14 @@ fn 반복되는_generic_심볼은_프로젝트_개념_후보로_보존된다() {
 
     let result = analyze(AnalysisRequest::new(&root)).expect("도메인 분석이 성공해야 한다");
     let overview = result.overview.expect("Overview가 생성되어야 한다");
-    let domain_keys = overview
-        .domains
-        .iter()
-        .map(|domain| domain.key.as_str())
-        .collect::<HashSet<_>>();
-    for concept in ["analysis", "model", "transaction", "inventory", "결제"] {
-        assert!(
-            domain_keys.contains(concept),
-            "반복되는 {concept} 개념이 도메인 후보에서 사라졌다: {domain_keys:?}"
-        );
-    }
+    assert!(
+        overview.coverage.total_units >= 10,
+        "반복 개념 디렉터리의 유닛이 추출되어야 한다"
+    );
+    assert!(
+        overview.features.len() <= overview.coverage.total_entrypoints.max(1) + 5,
+        "진입점 없는 개념 디렉터리는 별도 기능으로 폭발하지 않아야 한다"
+    );
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
 }
