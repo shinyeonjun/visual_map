@@ -96,6 +96,7 @@ pub(crate) fn build_map(
         return Err("정적 분석에서 도메인을 찾지 못했습니다.".to_string());
     }
 
+    let canonical_by_source = canonical_domain_map(semantic_domains);
     let semantic_by_id: HashMap<&str, &SemanticDomain> = semantic_domains
         .iter()
         .map(|domain| (domain.domain_id.as_str(), domain))
@@ -105,43 +106,79 @@ pub(crate) fn build_map(
         .iter()
         .map(|feature| (feature.id.as_str(), feature))
         .collect();
-    let mut dependencies: HashMap<String, Vec<String>> = HashMap::new();
-    for relation in &overview.relations {
-        if relation.source_domain_id == relation.target_domain_id {
+    let mut grouped: Vec<(String, Vec<&DomainJson>)> = Vec::new();
+    let mut group_index: HashMap<String, usize> = HashMap::new();
+    for domain in &overview.domains {
+        let canonical_id = canonical_by_source
+            .get(domain.id.as_str())
+            .cloned()
+            .unwrap_or_else(|| domain.id.clone());
+        if let Some(&index) = group_index.get(&canonical_id) {
+            grouped[index].1.push(domain);
             continue;
         }
-        dependencies
-            .entry(relation.source_domain_id.clone())
-            .or_default()
-            .push(relation.target_domain_id.clone());
+        group_index.insert(canonical_id.clone(), grouped.len());
+        grouped.push((canonical_id, vec![domain]));
+    }
+
+    let mut dependencies: HashMap<String, Vec<String>> = HashMap::new();
+    for relation in &overview.relations {
+        let source = canonical_by_source
+            .get(relation.source_domain_id.as_str())
+            .cloned()
+            .unwrap_or_else(|| relation.source_domain_id.clone());
+        let target = canonical_by_source
+            .get(relation.target_domain_id.as_str())
+            .cloned()
+            .unwrap_or_else(|| relation.target_domain_id.clone());
+        if source == target {
+            continue;
+        }
+        dependencies.entry(source).or_default().push(target);
     }
     for targets in dependencies.values_mut() {
         targets.sort();
         targets.dedup();
     }
 
-    let domains = overview
-        .domains
-        .iter()
-        .map(|domain| {
-            let semantic = semantic_by_id.get(domain.id.as_str());
+    let domains = grouped
+        .into_iter()
+        .map(|(canonical_id, members)| {
+            let representative = members
+                .iter()
+                .find(|domain| domain.id == canonical_id)
+                .copied()
+                .unwrap_or(members[0]);
+            let semantic = semantic_by_id.get(canonical_id.as_str());
             let name = semantic
                 .map(|item| item.name.clone())
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| domain.label.clone());
+                .unwrap_or_else(|| representative.label.clone());
+            let unit_count = members
+                .iter()
+                .map(|domain| domain.primary_unit_ids.len() + domain.shared_unit_ids.len())
+                .sum::<usize>();
+            let feature_count = members
+                .iter()
+                .map(|domain| domain.feature_ids.len())
+                .sum::<usize>();
             let summary = semantic
                 .and_then(|item| item.summary.clone())
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| {
                     format!(
                         "{} 도메인 · {} units · {} features",
-                        domain.key,
-                        domain.primary_unit_ids.len() + domain.shared_unit_ids.len(),
-                        domain.feature_ids.len()
+                        representative.key, unit_count, feature_count
                     )
                 });
-            let feature_items = domain
-                .feature_ids
+            let mut feature_ids = members
+                .iter()
+                .flat_map(|domain| domain.feature_ids.iter())
+                .cloned()
+                .collect::<Vec<_>>();
+            feature_ids.sort();
+            feature_ids.dedup();
+            let feature_items = feature_ids
                 .iter()
                 .filter_map(|feature_id| features_by_id.get(feature_id.as_str()))
                 .map(|feature| MapFeature {
@@ -152,27 +189,37 @@ pub(crate) fn build_map(
                     entrypoints: feature.entrypoint_ids.len(),
                 })
                 .collect::<Vec<_>>();
-            let mut signals = domain
-                .evidence
+            let mut signals = members
                 .iter()
+                .flat_map(|domain| domain.evidence.iter())
                 .map(|evidence| format!("{}: {}", evidence.kind, evidence.description))
                 .collect::<Vec<_>>();
             if signals.is_empty() {
-                signals.push(format!("domain:{}", domain.key));
+                signals.push(format!("domain:{}", representative.key));
             }
+            signals.sort();
+            signals.dedup();
             signals.truncate(8);
+            let shared_unit_count = members
+                .iter()
+                .map(|domain| domain.shared_unit_ids.len())
+                .sum::<usize>();
+            let entrypoints = members
+                .iter()
+                .map(|domain| domain.entrypoint_ids.len())
+                .sum::<usize>();
 
             MapDomain {
-                domain_id: domain.id.clone(),
+                domain_id: canonical_id.clone(),
                 name,
                 summary,
-                status: map_status(&domain.status, domain.shared_unit_ids.len()),
-                confidence: domain.confidence.score.min(100),
-                units: domain.primary_unit_ids.len() + domain.shared_unit_ids.len(),
-                features: domain.feature_ids.len(),
-                entrypoints: domain.entrypoint_ids.len(),
+                status: map_status(&representative.status, shared_unit_count),
+                confidence: representative.confidence.score.min(100),
+                units: unit_count,
+                features: feature_items.len(),
+                entrypoints,
                 dependencies: dependencies
-                    .get(&domain.id)
+                    .get(&canonical_id)
                     .cloned()
                     .unwrap_or_default(),
                 signals,
@@ -200,6 +247,21 @@ fn map_status(status: &str, shared_unit_count: usize) -> String {
         "confirmed" => "verified".to_string(),
         _ => "candidate".to_string(),
     }
+}
+
+fn canonical_domain_map(semantic_domains: &[SemanticDomain]) -> HashMap<String, String> {
+    let mut mapped = HashMap::new();
+    for domain in semantic_domains {
+        mapped
+            .entry(domain.domain_id.clone())
+            .or_insert_with(|| domain.domain_id.clone());
+        for source_id in &domain.source_domain_ids {
+            mapped
+                .entry(source_id.clone())
+                .or_insert_with(|| domain.domain_id.clone());
+        }
+    }
+    mapped
 }
 
 #[cfg(test)]
@@ -271,6 +333,7 @@ mod tests {
 
         let semantic = vec![SemanticDomain {
             domain_id: "domain-a".into(),
+            source_domain_ids: vec!["domain-a".into()],
             name: "주문".into(),
             summary: Some("주문 처리".into()),
         }];
@@ -287,6 +350,117 @@ mod tests {
         assert_eq!(domains[0].dependencies, vec!["domain-b".to_string()]);
         assert_eq!(domains[0].feature_items[0].name, "Create Order");
         assert_eq!(stats.files, 3);
+
+        std::fs::remove_file(path).expect("fixture를 정리해야 한다");
+    }
+
+    #[test]
+    fn canonical_도메인은_정적_카드를_하나로_합친다() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("visual-map-map-canonical-{suffix}.json"));
+        let json = r#"{
+          "summary": { "totalFiles": 1 },
+          "overview": {
+            "domains": [
+              {
+                "id": "domain-a",
+                "key": "auth",
+                "label": "Auth",
+                "status": "confirmed",
+                "confidence": { "score": 70, "level": "medium", "signalFamilies": [] },
+                "primaryUnitIds": ["unit-1"],
+                "sharedUnitIds": [],
+                "entrypointIds": ["entry-1"],
+                "featureIds": ["feature-1"],
+                "resourceIds": [],
+                "evidence": []
+              },
+              {
+                "id": "domain-b",
+                "key": "session",
+                "label": "Session",
+                "status": "confirmed",
+                "confidence": { "score": 80, "level": "high", "signalFamilies": [] },
+                "primaryUnitIds": ["unit-2"],
+                "sharedUnitIds": [],
+                "entrypointIds": ["entry-2"],
+                "featureIds": ["feature-2"],
+                "resourceIds": [],
+                "evidence": []
+              }
+            ],
+            "features": [
+              {
+                "id": "feature-1",
+                "key": "login",
+                "label": "Login",
+                "kind": "endpoint",
+                "status": "confirmed",
+                "visibility": "userFacing",
+                "confidence": { "level": "high", "resolvedEdgeCount": 1, "unresolvedEdgeCount": 0, "dynamicEdgeCount": 0, "evidenceCount": 1 },
+                "domainIds": ["domain-a"],
+                "unitIds": ["unit-1"],
+                "reachableUnitCount": 1,
+                "entrypointIds": ["entry-1"],
+                "flowIds": [],
+                "resourceIds": [],
+                "dynamicBoundaryIds": [],
+                "evidence": []
+              },
+              {
+                "id": "feature-2",
+                "key": "session",
+                "label": "Session",
+                "kind": "endpoint",
+                "status": "confirmed",
+                "visibility": "userFacing",
+                "confidence": { "level": "high", "resolvedEdgeCount": 1, "unresolvedEdgeCount": 0, "dynamicEdgeCount": 0, "evidenceCount": 1 },
+                "domainIds": ["domain-b"],
+                "unitIds": ["unit-2"],
+                "reachableUnitCount": 1,
+                "entrypointIds": ["entry-2"],
+                "flowIds": [],
+                "resourceIds": [],
+                "dynamicBoundaryIds": [],
+                "evidence": []
+              }
+            ],
+            "relations": [{
+              "sourceDomainId": "domain-a",
+              "targetDomainId": "domain-b",
+              "kind": "call",
+              "status": "confirmed",
+              "weight": 1,
+              "evidence": []
+            }],
+            "coverage": {
+              "totalFiles": 2,
+              "totalUnits": 2,
+              "totalFeatures": 2,
+              "totalExecutionFlows": 0,
+              "totalResources": 0
+            }
+          }
+        }"#;
+        let mut file = std::fs::File::create(&path).expect("fixture를 써야 한다");
+        file.write_all(json.as_bytes()).expect("fixture를 써야 한다");
+
+        let semantic = vec![SemanticDomain {
+            domain_id: "domain-b".into(),
+            source_domain_ids: vec!["domain-a".into(), "domain-b".into()],
+            name: "인증과 세션".into(),
+            summary: Some("사용자 인증".into()),
+        }];
+        let (domains, _) = build_map(&path, &semantic).expect("지도를 만들어야 한다");
+        assert_eq!(domains.len(), 1);
+        assert_eq!(domains[0].domain_id, "domain-b");
+        assert_eq!(domains[0].name, "인증과 세션");
+        assert_eq!(domains[0].units, 2);
+        assert_eq!(domains[0].features, 2);
+        assert!(domains[0].dependencies.is_empty());
 
         std::fs::remove_file(path).expect("fixture를 정리해야 한다");
     }

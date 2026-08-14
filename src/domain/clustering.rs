@@ -106,13 +106,6 @@ pub(super) fn cluster(
 
     absorb_singletons(&mut clusters, &mut active, &mut cluster_sim, constraints, matrix);
 
-    while active.len() < options.min_count && active.len() > 1 {
-        let Some((a, b, _)) = best_merge_pair_force(&active, &cluster_sim, constraints) else {
-            break;
-        };
-        merge_clusters(a, b, &mut clusters, &mut active, &mut cluster_sim, matrix);
-    }
-
     clusters.into_iter().flatten().collect()
 }
 
@@ -330,4 +323,29 @@ pub(super) fn target_cluster_count(feature_count: usize, min_count: usize, max_c
     }
     let sqrt = (feature_count as f64).sqrt().round() as usize;
     sqrt.clamp(min_count, max_count).min(feature_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cluster, ClusterOptions, MergeConstraints};
+    use crate::domain::feature_graph::SimilarityMatrix;
+
+    #[test]
+    fn 클러스터가_하한보다_적어도_억지로_합치지_않는다() {
+        let matrix = SimilarityMatrix::uniform(3, 0.2);
+        let constraints = MergeConstraints {
+            forbidden_pairs: vec![(0, 1), (0, 2), (1, 2)],
+        };
+        let clusters = cluster(
+            &matrix,
+            &constraints,
+            ClusterOptions {
+                merge_threshold: 1.0,
+                target_count: 3,
+                min_count: 6,
+                max_count: 20,
+            },
+        );
+        assert_eq!(clusters.len(), 3);
+    }
 }

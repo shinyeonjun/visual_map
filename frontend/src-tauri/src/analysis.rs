@@ -506,6 +506,15 @@ fn semantic_progress_update(
                 indeterminate: chunk < total,
             })
         }
+        "failed" => {
+            let chunk = event.chunk.unwrap_or(1);
+            Some(SemanticProgressUpdate {
+                completed: chunk.saturating_sub(1),
+                total,
+                detail: format!("{stage_label} 청크 {chunk}/{total}이 실패했습니다."),
+                indeterminate: chunk < total,
+            })
+        }
         _ => None,
     }
 }
