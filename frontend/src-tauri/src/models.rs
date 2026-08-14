@@ -176,6 +176,8 @@ pub(crate) struct WorkspaceMetadata {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SemanticDomain {
     pub(crate) domain_id: String,
+    #[serde(default)]
+    pub(crate) source_domain_ids: Vec<String>,
     pub(crate) name: String,
     pub(crate) summary: Option<String>,
 }

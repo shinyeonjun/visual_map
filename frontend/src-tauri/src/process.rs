@@ -136,4 +136,14 @@ mod tests {
         assert_eq!(event.status.as_deref(), Some("completed"));
         assert_eq!(event.chunk, Some(1));
     }
+
+    #[test]
+    fn parses_chunk_failed_event() {
+        let event = parse_semantic_progress(
+            "[semantic] progress stage=domain chunk=1 total=1 status=failed",
+        )
+        .expect("failed event");
+        assert_eq!(event.status.as_deref(), Some("failed"));
+        assert_eq!(event.chunk, Some(1));
+    }
 }

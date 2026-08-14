@@ -89,6 +89,25 @@ impl SimilarityMatrix {
     pub fn size(&self) -> usize {
         self.size
     }
+
+    #[cfg(test)]
+    pub(super) fn uniform(size: usize, combined: f64) -> Self {
+        let pair_count = size.saturating_mul(size.saturating_sub(1)) / 2;
+        Self {
+            size,
+            values: vec![
+                FeatureSimilarity {
+                    call: 0.0,
+                    flow: 0.0,
+                    resource: 0.0,
+                    path: 0.0,
+                    lexical: combined,
+                    combined,
+                };
+                pair_count
+            ],
+        }
+    }
 }
 
 /// Feature 목록과 FactStore에서 전체 유사도 행렬을 계산한다.

@@ -277,6 +277,12 @@ fn run_stage(
         if let Some(proposal) = proposal {
             run.proposals.push(proposal);
             run.completed_chunks += 1;
+            eprintln!(
+                "[semantic] progress stage={} chunk={} total={} status=completed",
+                stage_name,
+                index + 1,
+                contexts.len()
+            );
         } else {
             run.failed_chunks += 1;
             run.warnings.push(ReviewWarning {
@@ -284,13 +290,13 @@ fn run_stage(
                 item_id: Some(context.chunk_id.clone()),
                 message: last_error.unwrap_or_else(|| "Codex 응답이 없습니다.".into()),
             });
+            eprintln!(
+                "[semantic] progress stage={} chunk={} total={} status=failed",
+                stage_name,
+                index + 1,
+                contexts.len()
+            );
         }
-        eprintln!(
-            "[semantic] progress stage={} chunk={} total={} status=completed",
-            stage_name,
-            index + 1,
-            contexts.len()
-        );
     }
     Ok(run)
 }
