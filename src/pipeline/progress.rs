@@ -1,4 +1,19 @@
-//! 장시간 분석의 진행 상태와 부분 결과 보고.
-//!
-//! 대규모 프로젝트에서는 파일·언어·프레임워크·Codex 검토 단계를 프론트에
-//! 보고할 수 있어야 한다. 진행 보고가 실패해도 분석 자체는 중단하지 않는다.
+//! 정적 분석 파이프라인 진행 상태.
+
+use super::stages::StaticAnalysisStage;
+
+/// 장시간 분석의 단계별 진행 상태다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineProgress {
+    pub stage: StaticAnalysisStage,
+    pub detail: String,
+}
+
+impl PipelineProgress {
+    pub fn new(stage: StaticAnalysisStage, detail: impl Into<String>) -> Self {
+        Self {
+            stage,
+            detail: detail.into(),
+        }
+    }
+}

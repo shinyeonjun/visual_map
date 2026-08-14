@@ -151,7 +151,15 @@ fn normalize_contexts(contexts: &[ReviewContext], stage: PromptStage) -> Vec<Rev
 
 fn project_stage(context: &mut ReviewContext, stage: PromptStage) {
     match stage {
-        PromptStage::DomainFeature => {
+        PromptStage::Domain => {
+            context.features.clear();
+            context.flows.clear();
+            for domain in &mut context.domains {
+                domain.feature_ids.clear();
+                domain.flow_ids.clear();
+            }
+        }
+        PromptStage::Feature => {
             context.flows.clear();
             for domain in &mut context.domains {
                 domain.flow_ids.clear();
@@ -282,6 +290,18 @@ fn split_single_domain(
         ));
     };
 
+    if matches!(options.stage, PromptStage::Domain) {
+        let compact = compact_context(context);
+        if prompt_size(&compact, options)? <= options.max_input_bytes {
+            return Ok(vec![compact]);
+        }
+        return Err(too_large_message(
+            context,
+            options.max_input_bytes,
+            &compact,
+        ));
+    }
+
     let flows_by_id = context
         .flows
         .iter()
@@ -299,6 +319,10 @@ fn split_single_domain(
         let Some(feature) = features_by_id.get(feature_id) else {
             continue;
         };
+        if matches!(options.stage, PromptStage::Feature) {
+            bundles.push((vec![feature.clone()], Vec::new()));
+            continue;
+        }
         let flows = feature
             .flow_ids
             .iter()
@@ -311,12 +335,14 @@ fn split_single_domain(
         bundles.push((vec![feature.clone()], flows));
     }
 
-    for flow_id in &domain.flow_ids {
-        let Some(flow) = flows_by_id.get(flow_id) else {
-            continue;
-        };
-        if !referenced_flow_ids.contains(&flow.id) {
-            bundles.push((Vec::new(), vec![flow.clone()]));
+    if matches!(options.stage, PromptStage::Flow) {
+        for flow_id in &domain.flow_ids {
+            let Some(flow) = flows_by_id.get(flow_id) else {
+                continue;
+            };
+            if !referenced_flow_ids.contains(&flow.id) {
+                bundles.push((Vec::new(), vec![flow.clone()]));
+            }
         }
     }
 
@@ -759,17 +785,30 @@ mod tests {
 
         let domain_stage = super::split_to_budget_for_stage(
             &[first.clone(), second.clone()],
-            super::PromptStage::DomainFeature,
+            super::PromptStage::Domain,
             &super::SemanticNames::default(),
             2_000_000,
             120,
             500,
         )
-        .expect("도메인·기능 단계 context를 만들어야 한다");
+        .expect("도메인 단계 context를 만들어야 한다");
         assert_eq!(domain_stage.contexts.len(), 1);
         assert_eq!(domain_stage.contexts[0].domains.len(), 1);
-        assert_eq!(domain_stage.contexts[0].features.len(), 1);
+        assert!(domain_stage.contexts[0].features.is_empty());
         assert!(domain_stage.contexts[0].flows.is_empty());
+
+        let feature_stage = super::split_to_budget_for_stage(
+            &[first.clone(), second.clone()],
+            super::PromptStage::Feature,
+            &super::SemanticNames::default(),
+            2_000_000,
+            120,
+            500,
+        )
+        .expect("기능 단계 context를 만들어야 한다");
+        assert_eq!(feature_stage.contexts.len(), 1);
+        assert_eq!(feature_stage.contexts[0].features.len(), 1);
+        assert!(feature_stage.contexts[0].flows.is_empty());
 
         let flow_stage = super::split_to_budget_for_stage(
             &[first, second],

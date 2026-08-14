@@ -1,4 +1,4 @@
-//! `codex-context` 산출물을 의미 분석에 필요한 형태로 읽는다.
+//! `ai-context` 산출물을 의미 분석에 필요한 형태로 읽는다.
 
 use super::ReviewError;
 use serde::{Deserialize, Serialize};
@@ -209,7 +209,7 @@ pub fn load(path: &Path) -> Result<ReviewInput, ReviewError> {
         "{}.chunks",
         path.file_stem()
             .and_then(|value| value.to_str())
-            .unwrap_or("codex-context")
+            .unwrap_or("ai-context")
     ));
     let mut contexts = Vec::with_capacity(manifest.chunks.len());
     for descriptor in manifest.chunks {

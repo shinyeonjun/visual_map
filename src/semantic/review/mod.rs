@@ -1,4 +1,4 @@
-//! `codex-context`를 Codex에 보내고 의미 이름·한 줄 설명을 병합한다.
+//! `ai-context`를 AI provider에 보내고 의미 이름·한 줄 설명을 병합한다.
 
 mod context;
 mod merge;
@@ -9,7 +9,7 @@ mod response;
 use self::prompt::{PromptLimits, PromptStage, SemanticNames};
 use self::response::ReviewProposal;
 use crate::config::SemanticPolicy;
-use crate::semantic::codex::CodexProvider;
+use crate::semantic::AiProvider;
 use std::path::{Path, PathBuf};
 
 pub use context::{load, ReviewInput};
@@ -70,7 +70,7 @@ pub fn run(
     let original_context_count = source_contexts.len();
     let domain_partition = partition::split_to_budget_for_stage(
         &source_contexts,
-        PromptStage::DomainFeature,
+        PromptStage::Domain,
         &SemanticNames::default(),
         policy.codex_max_input_bytes,
         policy.maximum_label_length,
@@ -82,85 +82,70 @@ pub fn run(
     })?;
     let domain_contexts = domain_partition.contexts;
     eprintln!(
-        "[semantic] progress started source={} domain_feature={}",
+        "[semantic] progress started source={} domain={}",
         original_context_count,
         domain_contexts.len()
     );
     if domain_contexts.len() != original_context_count {
         eprintln!(
-            "[semantic] context_partition source={} domain_feature={} max_input_bytes={}",
+            "[semantic] context_partition source={} domain={} max_input_bytes={}",
             original_context_count,
             domain_contexts.len(),
             policy.codex_max_input_bytes
         );
     }
-    let provider = CodexProvider {
-        executable: policy.codex_executable.clone(),
-        model: policy.codex_model.clone(),
-        timeout_ms: policy.codex_timeout_ms,
-        max_input_bytes: policy.codex_max_input_bytes,
-        command_prefix: Vec::new(),
-    };
+    let provider = build_provider(policy);
     let domain_stage = run_stage(
         &provider,
         &domain_contexts,
         project_root,
         policy,
-        PromptStage::DomainFeature,
+        PromptStage::Domain,
         &SemanticNames::default(),
     )?;
-    let semantic_names = prompt::semantic_names(&domain_stage.proposals);
-    let flow_partition = partition::split_to_budget_for_stage(
-        &source_contexts,
-        PromptStage::Flow,
-        &semantic_names,
-        policy.codex_max_input_bytes,
-        policy.maximum_label_length,
-        policy.maximum_summary_length,
-    )
-    .map_err(|message| ReviewError::InvalidInput {
-        path: input_path.to_path_buf(),
-        message,
-    })?;
-    let flow_contexts = flow_partition.contexts;
-    eprintln!(
-        "[semantic] stage_partition domain_feature={} flow={}",
-        domain_contexts.len(),
-        flow_contexts.len()
-    );
-    let flow_stage = run_stage(
-        &provider,
-        &flow_contexts,
-        project_root,
-        policy,
-        PromptStage::Flow,
-        &semantic_names,
-    )?;
-    let mut proposals = domain_stage.proposals;
-    proposals.extend(flow_stage.proposals);
-    let failed_chunks = domain_stage.failed_chunks + flow_stage.failed_chunks;
-    let retry_attempts = domain_stage.retry_attempts + flow_stage.retry_attempts;
-    let mut failure_details = domain_stage.warnings;
-    failure_details.extend(flow_stage.warnings);
 
     let mut result = merge::merge(
         &source_contexts,
-        &proposals,
+        &domain_stage.proposals,
         input.source_path.display().to_string(),
-        failed_chunks,
-        retry_attempts,
+        domain_stage.failed_chunks,
+        domain_stage.retry_attempts,
         policy.maximum_label_length,
         policy.maximum_summary_length,
     );
-    result.warnings.extend(failure_details);
-    result.semantic_stage_count = 2;
-    result.domain_feature_completed_chunks = domain_stage.completed_chunks;
-    result.flow_completed_chunks = flow_stage.completed_chunks;
-    result.chunk_count = domain_contexts.len() + flow_contexts.len();
-    result.completed_chunks = domain_stage.completed_chunks + flow_stage.completed_chunks;
+    result.warnings.extend(domain_stage.warnings);
+    result.semantic_stage_count = 1;
+    result.domain_completed_chunks = domain_stage.completed_chunks;
+    result.feature_completed_chunks = 0;
+    result.flow_completed_chunks = 0;
+    result.chunk_count = domain_contexts.len();
+    result.completed_chunks = domain_stage.completed_chunks;
+    eprintln!(
+        "[semantic] static_labels features={} flows={}",
+        result.features.len(),
+        result.flows.len()
+    );
     let json = serde_json::to_vec_pretty(&result).map_err(ReviewError::Serialize)?;
     write_atomic(output_path, &json)?;
     Ok(result)
+}
+
+fn build_provider(policy: &SemanticPolicy) -> AiProvider {
+    match policy.provider.as_str() {
+        "claude" => AiProvider::Claude(crate::semantic::ClaudeProvider {
+            executable: policy.claude_executable.clone(),
+            model: policy.claude_model.clone(),
+            timeout_ms: policy.codex_timeout_ms,
+            max_input_bytes: policy.codex_max_input_bytes,
+        }),
+        _ => AiProvider::Codex(crate::semantic::CodexProvider {
+            executable: policy.codex_executable.clone(),
+            model: policy.codex_model.clone(),
+            timeout_ms: policy.codex_timeout_ms,
+            max_input_bytes: policy.codex_max_input_bytes,
+            command_prefix: Vec::new(),
+        }),
+    }
 }
 
 struct StageRun {
@@ -172,7 +157,7 @@ struct StageRun {
 }
 
 fn run_stage(
-    provider: &CodexProvider,
+    provider: &AiProvider,
     contexts: &[context::ReviewContext],
     project_root: &Path,
     policy: &SemanticPolicy,
@@ -180,11 +165,13 @@ fn run_stage(
     names: &SemanticNames,
 ) -> Result<StageRun, ReviewError> {
     let stage_name = match stage {
-        PromptStage::DomainFeature => "domain_feature",
+        PromptStage::Domain => "domain",
+        PromptStage::Feature => "feature",
         PromptStage::Flow => "flow",
     };
     let failure_code = match stage {
-        PromptStage::DomainFeature => "SEMANTIC_DOMAIN_FEATURE_CHUNK_FAILED",
+        PromptStage::Domain => "SEMANTIC_DOMAIN_CHUNK_FAILED",
+        PromptStage::Feature => "SEMANTIC_FEATURE_CHUNK_FAILED",
         PromptStage::Flow => "SEMANTIC_FLOW_CHUNK_FAILED",
     };
     let mut run = StageRun {
@@ -199,7 +186,18 @@ fn run_stage(
         stage_name,
         contexts.len()
     );
+    eprintln!(
+        "[semantic] progress stage={} total={} status=stage_started",
+        stage_name,
+        contexts.len()
+    );
     for (index, context) in contexts.iter().enumerate() {
+        eprintln!(
+            "[semantic] progress stage={} chunk={} total={} status=started",
+            stage_name,
+            index + 1,
+            contexts.len()
+        );
         let prompt = prompt::build_stage(
             context,
             stage,
@@ -288,18 +286,17 @@ fn run_stage(
             });
         }
         eprintln!(
-            "[semantic] stage={} progress completed={} total={} retries={}",
+            "[semantic] progress stage={} chunk={} total={} status=completed",
             stage_name,
             index + 1,
-            contexts.len(),
-            run.retry_attempts
+            contexts.len()
         );
     }
     Ok(run)
 }
 
 fn execute_proposal(
-    provider: &CodexProvider,
+    provider: &AiProvider,
     prompt: &str,
     project_root: &Path,
     stage: PromptStage,
@@ -312,7 +309,7 @@ fn execute_proposal(
             return None;
         }
     };
-    match response::parse_jsonl(&stdout) {
+    match response::parse_response(&stdout) {
         Ok(mut proposal) => {
             retain_stage_items(&mut proposal, stage);
             Some(proposal)
@@ -326,7 +323,14 @@ fn execute_proposal(
 
 fn retain_stage_items(proposal: &mut ReviewProposal, stage: PromptStage) {
     match stage {
-        PromptStage::DomainFeature => proposal.flows.clear(),
+        PromptStage::Domain => {
+            proposal.features.clear();
+            proposal.flows.clear();
+        }
+        PromptStage::Feature => {
+            proposal.domains.clear();
+            proposal.flows.clear();
+        }
         PromptStage::Flow => {
             proposal.domains.clear();
             proposal.features.clear();

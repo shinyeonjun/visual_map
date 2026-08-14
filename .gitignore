@@ -4,6 +4,8 @@ target/
 *.pdb
 *.profraw
 *.dSYM/
+target-agent/
+target-agent-tauri/
 
 # 프론트엔드(Node / Vite)
 node_modules/
@@ -34,6 +36,8 @@ tests/dev/
 
 # ── 개인 메모 ──────────────────────────────────────────────
 memo.txt
+ai_memo.md
+.claude/*
 
 # ── 편집기 / 운영체제 ──────────────────────────────────────
 .idea/

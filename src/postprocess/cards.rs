@@ -6,7 +6,7 @@ use super::context_profile::{compact_global_summary, global_summary, project_pro
 use super::domains::build_plan;
 use super::indexes::PostprocessIndexes;
 use super::model::{
-    CodexContextBundle, CodexContextManifest, ContextChunkDescriptor, ContextWarning,
+    AiContextBundle, AiContextManifest, ContextChunkDescriptor, ContextWarning,
     DomainCoverage,
 };
 use super::partition::partition_domains;
@@ -18,7 +18,7 @@ use std::collections::{HashMap, VecDeque};
 pub(crate) fn build_bundle(
     result: &AnalysisResult,
     config: &AnalysisConfig,
-) -> Result<CodexContextBundle, PostprocessError> {
+) -> Result<AiContextBundle, PostprocessError> {
     let overview = result
         .overview
         .as_ref()
@@ -91,8 +91,8 @@ pub(crate) fn build_bundle(
     append_alias_coverage(&mut coverage, &plan.aliases);
     coverage.sort_by(|left, right| left.domain_id.cmp(&right.domain_id));
     let descriptors = chunk_descriptors(&chunks, config);
-    let manifest = CodexContextManifest {
-        schema_version: "codex-context-manifest.v1",
+    let manifest = AiContextManifest {
+        schema_version: "ai-context-manifest.v1",
         source_analysis_id: result.analysis_id.clone(),
         source_schema_version: result.schema_version.clone(),
         project_id: result.project.project_id.clone(),
@@ -102,7 +102,7 @@ pub(crate) fn build_bundle(
         domain_coverage: coverage,
         warnings,
     };
-    Ok(CodexContextBundle { manifest, chunks })
+    Ok(AiContextBundle { manifest, chunks })
 }
 
 fn domain_representation(domain: &super::model::ContextDomain) -> String {
@@ -117,7 +117,7 @@ fn domain_representation(domain: &super::model::ContextDomain) -> String {
 }
 
 fn should_split_empty_content(
-    context: &super::model::CodexSemanticContext,
+    context: &super::model::AiSemanticContext,
     partition_len: usize,
 ) -> bool {
     context.summary.included_features == 0
@@ -127,7 +127,7 @@ fn should_split_empty_content(
 
 fn record_budget_warning(
     warnings: &mut Vec<ContextWarning>,
-    context: &super::model::CodexSemanticContext,
+    context: &super::model::AiSemanticContext,
     partition: &[String],
     budget_bytes: usize,
 ) {
@@ -170,7 +170,7 @@ fn append_alias_coverage(
 }
 
 fn chunk_descriptors(
-    chunks: &[super::model::CodexSemanticContext],
+    chunks: &[super::model::AiSemanticContext],
     config: &AnalysisConfig,
 ) -> Vec<ContextChunkDescriptor> {
     chunks

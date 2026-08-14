@@ -1,4 +1,14 @@
+export type AiProvider = 'codex' | 'claude'
+
 export type AnalysisState = 'ready' | 'running' | 'partial' | 'error'
+
+export type DomainFeature = {
+  id: string
+  name: string
+  summary?: string | null
+  kind: string
+  entrypoints: number
+}
 
 export type DomainNode = {
   id: string
@@ -14,6 +24,7 @@ export type DomainNode = {
   status: 'verified' | 'candidate' | 'shared'
   dependencies: string[]
   signals: string[]
+  featureItems: DomainFeature[]
 }
 
 export type ProjectStats = {
@@ -35,10 +46,18 @@ export type Project = {
   domains: DomainNode[]
 }
 
-export type SemanticSuggestion = {
+export type MapDomain = {
   domainId: string
   name: string
-  summary?: string | null
+  summary: string
+  status: 'verified' | 'candidate' | 'shared'
+  confidence: number
+  units: number
+  features: number
+  entrypoints: number
+  dependencies: string[]
+  signals: string[]
+  featureItems: DomainFeature[]
 }
 
 export type CodexModel = {
@@ -55,14 +74,31 @@ export type CodexModelCatalog = {
   source: string
   selectedModel?: string | null
   models: CodexModel[]
+  savedProvider: string
+  savedClaudeModel: string
 }
 
 export type AnalysisResponse = {
   projectPath: string
   workspacePath?: string
   semanticResultPath?: string
-  domains: SemanticSuggestion[]
-  stats?: Partial<ProjectStats>
+  domains: MapDomain[]
+  stats: ProjectStats
+}
+
+export type ClaudeStatus = {
+  version: string
+  executable: string
+}
+
+export type ClaudeModel = {
+  slug: string
+  displayName: string
+}
+
+export type ClaudeModelCatalog = {
+  models: ClaudeModel[]
+  selectedModel?: string | null
 }
 
 export type AnalysisProgress = {

@@ -8,8 +8,7 @@ use crate::graph::build as build_static_graph;
 use crate::languages::analyze_file;
 use crate::model::{AnalysisRequest, AnalysisResult, AnalysisStatus};
 use crate::project::ProjectScanner;
-use crate::views::overview::projector::project;
-use crate::views::preprocessed::prepare;
+use crate::views::overview::projector::project_with_features;
 use crate::EngineError;
 use rayon::prelude::*;
 use std::fs;
@@ -242,21 +241,22 @@ impl DomainAnalysisPipeline {
             request.options.config.domains.clone(),
             request.options.config.paths.clone(),
         );
-        let mut domain_analysis = domain_analyzer.analyze_with_graph(&facts, &static_graph);
+        let feature_first_result =
+            domain_analyzer.analyze_feature_first(&facts, &static_graph, &execution_flows);
+        let mut domain_analysis = feature_first_result.analysis;
+        let prebuilt_features = feature_first_result.features;
         profiler.record(
             "domain_grouping",
             stage_started,
             format!(
-                "domains={} memberships={} relations={} signals={}",
+                "domains={} features={} memberships={} relations={}",
                 domain_analysis.groups.len(),
+                prebuilt_features.len(),
                 domain_analysis.memberships.len(),
                 domain_analysis.relations.len(),
-                domain_analysis.signal_count
             ),
         );
 
-        // 관계 재집계는 의미 리뷰와 무관한 정적 단계다. Codex 리뷰는
-        // 이 결과를 저장한 뒤 별도의 `semantic review` 명령으로 실행한다.
         let stage_started = Instant::now();
         reaggregate_relations(&facts, &mut domain_analysis);
         profiler.record(
@@ -266,8 +266,9 @@ impl DomainAnalysisPipeline {
         );
 
         let stage_started = Instant::now();
-        let overview = project(
+        let overview = project_with_features(
             &domain_analysis,
+            prebuilt_features,
             &facts,
             &files,
             framework_detections,
@@ -275,7 +276,6 @@ impl DomainAnalysisPipeline {
             SemanticStatus::Disabled,
             SemanticAnalysisSummary::default(),
         );
-        let preprocessed_overview = prepare(&overview, &files);
         profiler.record(
             "overview_projection",
             stage_started,
@@ -302,7 +302,6 @@ impl DomainAnalysisPipeline {
             diagnostics,
             elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
             overview: Some(overview),
-            preprocessed_overview: Some(preprocessed_overview),
         })
     }
 }

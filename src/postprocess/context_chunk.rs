@@ -5,7 +5,7 @@ use super::features::select_for_domain as select_features;
 use super::flows::candidates_for_features;
 use super::indexes::PostprocessIndexes;
 use super::model::{
-    AdjacentDomain, CodexSemanticContext, ContextDomain, ContextFeature, ContextFlow,
+    AdjacentDomain, AiSemanticContext, ContextDomain, ContextFeature, ContextFlow,
     ContextProjectProfile, ContextSummary, ContextWarning, GlobalContextSummary,
 };
 use super::selection::{fill_domain, promote_required_relationships, required_domain_bytes};
@@ -26,7 +26,7 @@ pub(super) struct ChunkBuildInput<'a> {
     pub(super) global_summary: GlobalContextSummary,
 }
 
-pub(super) fn build_chunk(input: ChunkBuildInput<'_>) -> CodexSemanticContext {
+pub(super) fn build_chunk(input: ChunkBuildInput<'_>) -> AiSemanticContext {
     let ChunkBuildInput {
         chunk_id,
         partition,
@@ -141,14 +141,14 @@ pub(super) fn build_chunk(input: ChunkBuildInput<'_>) -> CodexSemanticContext {
         );
     }
     let adjacent_domains = adjacent_domains(partition, overview, shells, config);
-    let mut context = CodexSemanticContext {
-        schema_version: "codex-semantic-context.v1",
+    let mut context = AiSemanticContext {
+        schema_version: "ai-semantic-context.v1",
         chunk_id: chunk_id.into(),
         source_analysis_id: result.analysis_id.clone(),
         source_schema_version: result.schema_version.clone(),
         project_id: result.project.project_id.clone(),
         analysis_status: result.status.clone(),
-        policy_version: "codex-semantic-context-policy.v2",
+        policy_version: "ai-semantic-context-policy.v2",
         project_profile: profile,
         global_summary,
         adjacent_domains,
@@ -187,7 +187,7 @@ pub(super) fn build_chunk(input: ChunkBuildInput<'_>) -> CodexSemanticContext {
     context
 }
 
-pub(super) fn fit_context_budget(context: &mut CodexSemanticContext, budget: usize) {
+pub(super) fn fit_context_budget(context: &mut AiSemanticContext, budget: usize) {
     while serialized_bytes(context) > budget {
         let optional_feature = context
             .features
@@ -262,7 +262,7 @@ pub(super) fn fit_context_budget(context: &mut CodexSemanticContext, budget: usi
 /// 있다. 이를 도메인 안에 매번 직렬화하면 같은 객체와 실행 단계가 청크마다
 /// 반복되어 컨텍스트 크기와 AI 호출 수가 함께 증가한다. 도메인은 ID 목록만
 /// 유지하고 실제 객체는 context 전역 배열에 한 번만 둔다.
-fn normalize_context_items(context: &mut CodexSemanticContext) {
+fn normalize_context_items(context: &mut AiSemanticContext) {
     let mut features = BTreeMap::<String, ContextFeature>::new();
     let mut flows = BTreeMap::<String, ContextFlow>::new();
     let mut feature_domains = BTreeMap::<String, BTreeSet<String>>::new();
@@ -356,7 +356,7 @@ fn normalize_context_items(context: &mut CodexSemanticContext) {
     }
 }
 
-fn record_budget_omission(context: &mut CodexSemanticContext) {
+fn record_budget_omission(context: &mut AiSemanticContext) {
     for domain in &mut context.domains {
         *domain
             .omission
@@ -367,7 +367,7 @@ fn record_budget_omission(context: &mut CodexSemanticContext) {
 }
 
 /// 정규화된 전역 항목과 도메인 ID 참조를 서로 일치시킨다.
-fn sync_item_domain_links(context: &mut CodexSemanticContext) {
+fn sync_item_domain_links(context: &mut AiSemanticContext) {
     let feature_domains = context
         .domains
         .iter()
@@ -404,7 +404,7 @@ fn sync_item_domain_links(context: &mut CodexSemanticContext) {
     }
 }
 
-fn update_summary(context: &mut CodexSemanticContext) {
+fn update_summary(context: &mut AiSemanticContext) {
     let feature_memberships = context
         .domains
         .iter()

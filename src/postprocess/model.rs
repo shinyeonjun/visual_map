@@ -1,4 +1,4 @@
-//! Codex에 전달할 정적 분석 후보정 결과의 출력 계약.
+//! AI 의미 분석에 전달할 정적 분석 후보정 결과의 출력 계약.
 
 use crate::facts::{AccessMode, EntrypointKind, ResourceKind};
 use crate::flow::FlowNodeKind;
@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodexSemanticContext {
+pub struct AiSemanticContext {
     pub schema_version: &'static str,
     pub chunk_id: String,
     pub source_analysis_id: String,
@@ -31,9 +31,9 @@ pub struct CodexSemanticContext {
 }
 
 #[derive(Debug, Clone)]
-pub struct CodexContextBundle {
-    pub manifest: CodexContextManifest,
-    pub chunks: Vec<CodexSemanticContext>,
+pub struct AiContextBundle {
+    pub manifest: AiContextManifest,
+    pub chunks: Vec<AiSemanticContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -68,7 +68,7 @@ pub struct ContextWarning {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodexContextManifest {
+pub struct AiContextManifest {
     pub schema_version: &'static str,
     pub source_analysis_id: String,
     pub source_schema_version: String,

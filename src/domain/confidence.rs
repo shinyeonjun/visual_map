@@ -1,4 +1,3 @@
-use crate::config::DomainPolicy;
 use crate::domain::signals::DomainSignalKind;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -20,37 +19,48 @@ pub struct DomainConfidence {
     pub level: String,
     pub score: u32,
     pub signal_families: BTreeSet<DomainSignalKind>,
+    #[serde(default)]
+    pub cohesion: f64,
+    #[serde(default)]
+    pub separation: f64,
+    #[serde(default)]
+    pub evidence_diversity: f64,
+    #[serde(default)]
+    pub overall: f64,
 }
 
-pub fn calculate(
-    score: u32,
-    families: &BTreeSet<DomainSignalKind>,
-    ambiguous: bool,
-    policy: &DomainPolicy,
+/// Feature-first 클러스터링에서 도메인 확신도를 계산한다.
+pub fn calculate_from_cluster(
+    member_count: usize,
+    cohesion: f64,
+    separation: f64,
+    evidence_diversity: f64,
 ) -> (DomainStatus, DomainConfidence) {
-    let status = if ambiguous {
-        DomainStatus::Ambiguous
-    } else if families.len() >= policy.confirmed_minimum_signal_families
-        && score >= policy.confirmed_minimum_score
+    let overall = 0.4 * cohesion + 0.3 * separation + 0.3 * evidence_diversity;
+    let (status, level) = if member_count >= 2
+        && overall >= 0.6
+        && evidence_diversity >= 0.4
+        && separation >= 0.3
     {
-        DomainStatus::Confirmed
-    } else if score > 0 {
-        DomainStatus::Candidate
+        (DomainStatus::Confirmed, "high")
+    } else if overall >= 0.3 {
+        (DomainStatus::Candidate, "medium")
+    } else if overall > 0.0 {
+        (DomainStatus::Ambiguous, "low")
     } else {
-        DomainStatus::Unknown
+        (DomainStatus::Unknown, "none")
     };
-    let level = match status {
-        DomainStatus::Confirmed => "high",
-        DomainStatus::Candidate => "medium",
-        DomainStatus::Ambiguous => "low",
-        DomainStatus::Unknown => "none",
-    };
+    let score = (overall * 100.0).round() as u32;
     (
         status,
         DomainConfidence {
             level: level.to_string(),
             score,
-            signal_families: families.clone(),
+            signal_families: BTreeSet::new(),
+            cohesion,
+            separation,
+            evidence_diversity,
+            overall,
         },
     )
 }

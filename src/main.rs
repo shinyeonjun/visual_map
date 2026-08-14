@@ -26,20 +26,26 @@ fn main() -> ExitCode {
 
 fn run_command(arguments: Vec<String>) -> ExitCode {
     if arguments.first().map(String::as_str) == Some("postprocess")
-        && arguments.get(1).map(String::as_str) == Some("codex-context")
+        && arguments.get(1).map(String::as_str) == Some("ai-context")
     {
-        return run_codex_context_postprocess(&arguments[2..]);
+        return run_ai_context_postprocess(&arguments[2..]);
     }
     if arguments.first().map(String::as_str) == Some("semantic")
         && arguments.get(1).map(String::as_str) == Some("review")
     {
         return run_semantic_review(&arguments[2..]);
     }
+    if arguments.first().map(String::as_str) == Some("clean")
+        && arguments.get(1).map(String::as_str) == Some("bundle")
+    {
+        return run_clean_bundle(&arguments[2..]);
+    }
 
     let Some(root_path) = arguments.first() else {
-        eprintln!("사용법: code-analysis-engine <프로젝트-경로> [--compact] [--profile] [--no-cache] [--no-output] [--output=<경로>] [--prepared-output=<경로>] [--config=<경로>]");
-        eprintln!("       code-analysis-engine postprocess codex-context --input=<분석결과.json> --output=<컨텍스트.json> [--config=<경로>] [--pretty] [--profile]");
-        eprintln!("       code-analysis-engine semantic review --input=<codex-context.json> --output=<semantic-result.json> --project-root=<프로젝트-경로> [--config=<경로>] [--model=<모델>] [--profile]");
+        eprintln!("사용법: code-analysis-engine <프로젝트-경로> [--compact] [--profile] [--no-cache] [--no-output] [--output=<경로>] [--clean-output=<디렉터리>] [--config=<경로>]");
+        eprintln!("       code-analysis-engine postprocess ai-context --input=<분석결과.json> --output=<컨텍스트.json> [--config=<경로>] [--pretty] [--profile]");
+        eprintln!("       code-analysis-engine semantic review --input=<ai-context.json> --output=<semantic-result.json> --project-root=<프로젝트-경로> [--config=<경로>] [--model=<모델>] [--profile]");
+        eprintln!("       code-analysis-engine clean bundle --input=<분석결과.json> --output=<clean-디렉터리> [--config=<경로>] [--part-target-bytes=<바이트>] [--profile]");
         return ExitCode::from(2);
     };
 
@@ -53,9 +59,9 @@ fn run_command(arguments: Vec<String>) -> ExitCode {
         .iter()
         .find_map(|argument| argument.strip_prefix("--output="))
         .map(PathBuf::from);
-    let prepared_output_path = flags
+    let clean_output_path = flags
         .iter()
-        .find_map(|argument| argument.strip_prefix("--prepared-output="))
+        .find_map(|argument| argument.strip_prefix("--clean-output="))
         .map(PathBuf::from);
     let config_path = flags
         .iter()
@@ -74,20 +80,10 @@ fn run_command(arguments: Vec<String>) -> ExitCode {
     request.options.profile = profile;
     request.options.use_fact_cache = !flags.iter().any(|argument| argument == "--no-cache");
     let max_output_bytes = request.options.config.limits.max_output_bytes;
+    let clean_policy = request.options.config.clean.clone();
 
     match analyze(request) {
         Ok(result) => {
-            if let Some(path) = prepared_output_path {
-                let Some(prepared) = result.preprocessed_overview.as_ref() else {
-                    eprintln!("전처리 Overview가 생성되지 않았습니다.");
-                    return ExitCode::from(1);
-                };
-                if let Err(error) = output::write_pretty_json(&path, prepared) {
-                    eprintln!("전처리 Overview 저장 실패: {error}");
-                    return ExitCode::from(1);
-                }
-                eprintln!("전처리 Overview 저장 완료: {}", path.display());
-            }
             if no_output {
                 eprintln!("분석 결과 JSON 출력 생략 (--no-output)");
             } else if let Some(path) = output_path {
@@ -103,6 +99,28 @@ fn run_command(arguments: Vec<String>) -> ExitCode {
             {
                 eprintln!("결과 JSON 생성 실패: {error}");
                 return ExitCode::from(1);
+            }
+            if let Some(path) = clean_output_path {
+                let started = Instant::now();
+                match code_analysis_engine::clean::write_from_result(
+                    &result,
+                    &path,
+                    &clean_policy,
+                ) {
+                    Ok(manifest) => eprintln!(
+                        "Clean bundle 저장 완료: domains={} features={} flows={} datasets={} elapsed_ms={} output={}",
+                        dataset_count(&manifest, "domains"),
+                        dataset_count(&manifest, "features"),
+                        dataset_count(&manifest, "flows"),
+                        manifest.datasets.len(),
+                        started.elapsed().as_millis(),
+                        path.display()
+                    ),
+                    Err(error) => {
+                        eprintln!("Clean bundle 저장 실패: {error}");
+                        return ExitCode::from(1);
+                    }
+                }
             }
             let elapsed_ms = result.elapsed_ms;
             eprintln!(
@@ -120,13 +138,13 @@ fn run_command(arguments: Vec<String>) -> ExitCode {
     }
 }
 
-fn run_codex_context_postprocess(arguments: &[String]) -> ExitCode {
+fn run_clean_bundle(arguments: &[String]) -> ExitCode {
     let Some(input_path) = option_value(arguments, "--input") else {
-        eprintln!("postprocess codex-context에는 --input=<분석 결과 JSON>이 필요합니다.");
+        eprintln!("clean bundle에는 --input=<분석 결과 JSON>이 필요합니다.");
         return ExitCode::from(2);
     };
     let Some(output_path) = option_value(arguments, "--output") else {
-        eprintln!("postprocess codex-context에는 --output=<컨텍스트 JSON>이 필요합니다.");
+        eprintln!("clean bundle에는 --output=<clean 디렉터리>가 필요합니다.");
         return ExitCode::from(2);
     };
     let source = match fs::read_to_string(&input_path) {
@@ -153,22 +171,106 @@ fn run_codex_context_postprocess(arguments: &[String]) -> ExitCode {
         },
         None => AnalysisConfig::default(),
     };
-    let pretty = arguments.iter().any(|argument| argument == "--pretty");
-    let bundle = match code_analysis_engine::postprocess::build_codex_context(&result, &config) {
-        Ok(context) => context,
+    let mut policy = config.clean;
+    if let Some(value) = option_value(arguments, "--part-target-bytes") {
+        match value.parse::<usize>() {
+            Ok(bytes) => policy.part_target_bytes = bytes,
+            Err(error) => {
+                eprintln!("--part-target-bytes를 해석하지 못했습니다: {error}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let started = Instant::now();
+    match code_analysis_engine::clean::write_from_result(&result, Path::new(&output_path), &policy)
+    {
+        Ok(manifest) => {
+            eprintln!(
+                "Clean bundle 생성 완료: bundleId={} datasets={} elapsed_ms={} output={}",
+                manifest.bundle_id,
+                manifest.datasets.len(),
+                started.elapsed().as_millis(),
+                output_path
+            );
+            ExitCode::SUCCESS
+        }
         Err(error) => {
-            eprintln!("Codex 컨텍스트 후보정 실패: {error}");
-            return ExitCode::from(1);
+            eprintln!("Clean bundle 생성 실패: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn dataset_count(manifest: &code_analysis_engine::clean::CleanBundleManifest, name: &str) -> usize {
+    manifest
+        .datasets
+        .iter()
+        .find(|dataset| dataset.name == name)
+        .map(|dataset| dataset.count)
+        .unwrap_or(0)
+}
+
+fn run_ai_context_postprocess(arguments: &[String]) -> ExitCode {
+    let Some(input_path) = option_value(arguments, "--input") else {
+        eprintln!("postprocess ai-context에는 --input=<분석 결과 JSON 또는 clean 디렉터리>이 필요합니다.");
+        return ExitCode::from(2);
+    };
+    let Some(output_path) = option_value(arguments, "--output") else {
+        eprintln!("postprocess ai-context에는 --output=<컨텍스트 JSON>이 필요합니다.");
+        return ExitCode::from(2);
+    };
+    let config = match option_value(arguments, "--config") {
+        Some(path) => match AnalysisConfig::from_file(Path::new(&path)) {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("설정 적용 실패: {error}");
+                return ExitCode::from(2);
+            }
+        },
+        None => AnalysisConfig::default(),
+    };
+    let pretty = arguments.iter().any(|argument| argument == "--pretty");
+    let input = Path::new(&input_path);
+    let bundle = if input.is_dir() {
+        eprintln!("Clean bundle에서 AI 컨텍스트를 생성합니다: {input_path}");
+        match code_analysis_engine::postprocess::build_ai_context_from_clean(input, &config) {
+            Ok(context) => context,
+            Err(error) => {
+                eprintln!("AI 컨텍스트 후보정 실패: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        let source = match fs::read_to_string(&input_path) {
+            Ok(source) => source,
+            Err(error) => {
+                eprintln!("분석 결과 JSON을 읽지 못했습니다: {error}");
+                return ExitCode::from(1);
+            }
+        };
+        let result: code_analysis_engine::AnalysisResult = match serde_json::from_str(&source) {
+            Ok(result) => result,
+            Err(error) => {
+                eprintln!("분석 결과 JSON을 해석하지 못했습니다: {error}");
+                return ExitCode::from(1);
+            }
+        };
+        match code_analysis_engine::postprocess::build_ai_context(&result, &config) {
+            Ok(context) => context,
+            Err(error) => {
+                eprintln!("AI 컨텍스트 후보정 실패: {error}");
+                return ExitCode::from(1);
+            }
         }
     };
     if bundle.chunks.len() == 1 {
         if let Err(error) = write_context_json(Path::new(&output_path), &bundle.chunks[0], pretty) {
-            eprintln!("Codex 컨텍스트 저장 실패: {error}");
+            eprintln!("AI 컨텍스트 저장 실패: {error}");
             return ExitCode::from(1);
         }
         let context = &bundle.chunks[0];
         eprintln!(
-            "Codex 컨텍스트 후보정 완료: domains={} features={}/{} flows={}/{} bytes={} output={}",
+            "AI 컨텍스트 후보정 완료: domains={} features={}/{} flows={}/{} bytes={} output={}",
             context.summary.included_domains,
             context.summary.included_features,
             context.summary.total_features,
@@ -184,25 +286,25 @@ fn run_codex_context_postprocess(arguments: &[String]) -> ExitCode {
             output
                 .file_stem()
                 .and_then(|value| value.to_str())
-                .unwrap_or("codex-context")
+                .unwrap_or("ai-context")
         ));
         if let Err(error) = fs::create_dir_all(&chunk_directory) {
-            eprintln!("Codex 컨텍스트 chunk 디렉터리 생성 실패: {error}");
+            eprintln!("AI 컨텍스트 chunk 디렉터리 생성 실패: {error}");
             return ExitCode::from(1);
         }
         for (descriptor, chunk) in bundle.manifest.chunks.iter().zip(&bundle.chunks) {
             let chunk_path = chunk_directory.join(&descriptor.file_name);
             if let Err(error) = write_context_json(&chunk_path, chunk, pretty) {
-                eprintln!("Codex 컨텍스트 chunk 저장 실패: {error}");
+                eprintln!("AI 컨텍스트 chunk 저장 실패: {error}");
                 return ExitCode::from(1);
             }
         }
         if let Err(error) = output::write_pretty_json(output, &bundle.manifest) {
-            eprintln!("Codex 컨텍스트 manifest 저장 실패: {error}");
+            eprintln!("AI 컨텍스트 manifest 저장 실패: {error}");
             return ExitCode::from(1);
         }
         eprintln!(
-            "Codex 컨텍스트 후보정 완료: chunks={} output={} chunkDirectory={}",
+            "AI 컨텍스트 후보정 완료: chunks={} output={} chunkDirectory={}",
             bundle.chunks.len(),
             output_path,
             chunk_directory.display()
@@ -213,7 +315,7 @@ fn run_codex_context_postprocess(arguments: &[String]) -> ExitCode {
 
 fn run_semantic_review(arguments: &[String]) -> ExitCode {
     let Some(input_path) = option_value(arguments, "--input") else {
-        eprintln!("semantic review에는 --input=<codex-context.json>이 필요합니다.");
+        eprintln!("semantic review에는 --input=<ai-context.json>이 필요합니다.");
         return ExitCode::from(2);
     };
     let Some(output_path) = option_value(arguments, "--output") else {
@@ -235,9 +337,19 @@ fn run_semantic_review(arguments: &[String]) -> ExitCode {
         None => AnalysisConfig::default(),
     };
     let mut semantic_policy = config.semantic;
-    if let Some(model) = option_value(arguments, "--model") {
-        semantic_policy.codex_model = Some(model);
+    if let Some(provider) = option_value(arguments, "--provider") {
+        semantic_policy.provider = provider;
     }
+    if let Some(model) = option_value(arguments, "--model") {
+        match semantic_policy.provider.as_str() {
+            "claude" => semantic_policy.claude_model = Some(model),
+            _ => semantic_policy.codex_model = Some(model),
+        }
+    }
+    let provider_label = match semantic_policy.provider.as_str() {
+        "claude" => "Claude",
+        _ => "Codex",
+    };
     let started = Instant::now();
     match code_analysis_engine::semantic::review::run(
         Path::new(&input_path),
@@ -247,12 +359,13 @@ fn run_semantic_review(arguments: &[String]) -> ExitCode {
     ) {
         Ok(result) => {
             eprintln!(
-                "Codex 의미 분석 완료: status={} stages={} chunks={}/{} domainFeatureChunks={} flowChunks={} retries={} domains={} features={} flows={} output={}",
+                "{provider_label} 의미 분석 완료: status={} stages={} chunks={}/{} domainChunks={} featureChunks={} flowChunks={} retries={} domains={} features={} flows={} output={}",
                 result.status,
                 result.semantic_stage_count,
                 result.completed_chunks,
                 result.chunk_count,
-                result.domain_feature_completed_chunks,
+                result.domain_completed_chunks,
+                result.feature_completed_chunks,
                 result.flow_completed_chunks,
                 result.retry_attempts,
                 result.domains.len(),

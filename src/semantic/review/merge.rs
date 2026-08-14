@@ -1,7 +1,7 @@
 //! 청크별 의미 제안을 ID와 원본 순서 기준으로 병합한다.
 
 use super::context::ReviewContext;
-use super::response::{DomainSuggestion, FeatureSuggestion, FlowSuggestion, ReviewProposal};
+use super::response::{DomainSuggestion, FeatureSuggestion, ReviewProposal};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,7 +16,8 @@ pub struct SemanticReviewResult {
     pub failed_chunks: usize,
     pub retry_attempts: usize,
     pub semantic_stage_count: usize,
-    pub domain_feature_completed_chunks: usize,
+    pub domain_completed_chunks: usize,
+    pub feature_completed_chunks: usize,
     pub flow_completed_chunks: usize,
     pub domains: Vec<DomainResult>,
     pub features: Vec<FeatureResult>,
@@ -105,8 +106,6 @@ pub fn merge(
     }
 
     let mut domain_suggestions = BTreeMap::new();
-    let mut features = BTreeMap::new();
-    let mut flows = BTreeMap::new();
     let mut warnings = Vec::new();
     for proposal in proposals {
         for suggestion in &proposal.domains {
@@ -114,26 +113,6 @@ pub fn merge(
                 &mut domain_suggestions,
                 suggestion,
                 &known_domains,
-                maximum_name_length,
-                maximum_summary_length,
-                &mut warnings,
-            );
-        }
-        for suggestion in &proposal.features {
-            merge_suggestion(
-                &mut features,
-                suggestion,
-                &known_features,
-                maximum_name_length,
-                maximum_summary_length,
-                &mut warnings,
-            );
-        }
-        for suggestion in &proposal.flows {
-            merge_suggestion(
-                &mut flows,
-                suggestion,
-                &known_flows,
                 maximum_name_length,
                 maximum_summary_length,
                 &mut warnings,
@@ -190,27 +169,15 @@ pub fn merge(
     let flow_relations = flow_relations(contexts, &canonical_by_source);
     let features = feature_order
         .into_iter()
-        .map(|id| {
-            let mut result = result_for(
-                id.clone(),
-                &feature_current,
-                &features,
-                &mut warnings,
-                "feature",
-            );
-            result.domain_ids = feature_domain_ids.get(&id).cloned().unwrap_or_default();
-            result
-        })
+        .map(|id| static_feature_result(
+            id,
+            &feature_current,
+            &feature_domain_ids,
+        ))
         .collect();
     let flows = flow_order
         .into_iter()
-        .map(|id| {
-            let mut result = result_for(id.clone(), &flow_current, &flows, &mut warnings, "flow");
-            let (domain_ids, feature_ids) = flow_relations.get(&id).cloned().unwrap_or_default();
-            result.domain_ids = domain_ids;
-            result.feature_ids = feature_ids;
-            result
-        })
+        .map(|id| static_flow_result(id, &flow_current, &flow_relations))
         .collect();
 
     let status = if proposals.is_empty() {
@@ -222,7 +189,7 @@ pub fn merge(
     };
 
     SemanticReviewResult {
-        schema_version: "codex-semantic-review.v2",
+        schema_version: "ai-semantic-review.v2",
         source_context,
         status: status.into(),
         chunk_count: contexts.len(),
@@ -230,7 +197,8 @@ pub fn merge(
         failed_chunks,
         retry_attempts,
         semantic_stage_count: 1,
-        domain_feature_completed_chunks: proposals.len(),
+        domain_completed_chunks: proposals.len(),
+        feature_completed_chunks: 0,
         flow_completed_chunks: 0,
         domains,
         features,
@@ -326,13 +294,10 @@ mod tests {
 
         assert_eq!(result.domains[0].domain_id, "domain-a");
         assert_eq!(result.domains[0].name, "사용자 인증");
-        assert_eq!(result.features[0].name, "로그인");
+        assert_eq!(result.features[0].name, "login");
         assert_eq!(result.flows[0].name, "Login");
-        assert_eq!(result.status, "partial");
-        assert!(result
-            .warnings
-            .iter()
-            .any(|warning| warning.item_id.as_deref() == Some("flow-a")));
+        assert_eq!(result.status, "completed");
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
@@ -341,17 +306,21 @@ mod tests {
         let result = merge(
             &[context()],
             &[ReviewProposal {
-                domains: vec![DomainSuggestion {
-                    domain_id: "unknown".into(),
-                    canonical_domain_id: None,
-                    name: "가짜".into(),
-                    summary: None,
-                }],
-                features: vec![FeatureSuggestion {
-                    feature_id: "feature-a".into(),
-                    name: "로그인".into(),
-                    summary: Some("첫 줄\n둘째 줄".into()),
-                }],
+                domains: vec![
+                    DomainSuggestion {
+                        domain_id: "unknown".into(),
+                        canonical_domain_id: None,
+                        name: "가짜".into(),
+                        summary: None,
+                    },
+                    DomainSuggestion {
+                        domain_id: "domain-a".into(),
+                        canonical_domain_id: None,
+                        name: "인증".into(),
+                        summary: Some("첫 줄\n둘째 줄".into()),
+                    },
+                ],
+                features: Vec::new(),
                 flows: Vec::new(),
             }],
             "context.json".into(),
@@ -362,6 +331,8 @@ mod tests {
         );
 
         assert_eq!(result.features[0].name, "login");
+        assert_eq!(result.features[0].summary, None);
+        assert_eq!(result.domains[0].name, "auth");
         assert!(result
             .warnings
             .iter()
@@ -424,23 +395,35 @@ mod tests {
     }
 }
 
-fn result_for<T: Clone + IntoResult>(
+fn static_feature_result(
     id: String,
     current: &BTreeMap<String, String>,
-    suggestions: &BTreeMap<String, T>,
-    warnings: &mut Vec<ReviewWarning>,
-    kind: &str,
-) -> T::Output {
+    feature_domain_ids: &BTreeMap<String, Vec<String>>,
+) -> FeatureResult {
     let current_name = current.get(&id).cloned().unwrap_or_else(|| id.clone());
-    if let Some(suggestion) = suggestions.get(&id) {
-        suggestion.clone().into_result(id, current_name)
-    } else {
-        warnings.push(ReviewWarning {
-            code: "SEMANTIC_ITEM_UNREVIEWED".into(),
-            item_id: Some(id.clone()),
-            message: format!("{kind} 의미 분석 결과가 없어 원본 이름을 유지했습니다."),
-        });
-        T::Output::fallback(id, current_name)
+    FeatureResult {
+        feature_id: id.clone(),
+        domain_ids: feature_domain_ids.get(&id).cloned().unwrap_or_default(),
+        current_name: current_name.clone(),
+        name: current_name,
+        summary: None,
+    }
+}
+
+fn static_flow_result(
+    id: String,
+    current: &BTreeMap<String, String>,
+    flow_relations: &BTreeMap<String, (Vec<String>, Vec<String>)>,
+) -> FlowResult {
+    let current_name = current.get(&id).cloned().unwrap_or_else(|| id.clone());
+    let (domain_ids, feature_ids) = flow_relations.get(&id).cloned().unwrap_or_default();
+    FlowResult {
+        flow_id: id,
+        domain_ids,
+        feature_ids,
+        current_name: current_name.clone(),
+        name: current_name,
+        summary: None,
     }
 }
 
@@ -553,89 +536,6 @@ fn flow_relations(
         .collect()
 }
 
-trait IntoResult: Clone {
-    type Output: FallbackResult;
-    fn into_result(self, id: String, current_name: String) -> Self::Output;
-}
-
-trait FallbackResult {
-    fn fallback(id: String, current_name: String) -> Self;
-}
-
-impl IntoResult for DomainSuggestion {
-    type Output = DomainResult;
-    fn into_result(self, id: String, current_name: String) -> Self::Output {
-        DomainResult {
-            domain_id: id.clone(),
-            source_domain_ids: vec![id.clone()],
-            canonical_domain_id: id.clone(),
-            current_name,
-            name: self.name,
-            summary: self.summary,
-        }
-    }
-}
-impl FallbackResult for DomainResult {
-    fn fallback(id: String, current_name: String) -> Self {
-        Self {
-            domain_id: id.clone(),
-            source_domain_ids: vec![id.clone()],
-            canonical_domain_id: id.clone(),
-            name: current_name.clone(),
-            current_name,
-            summary: None,
-        }
-    }
-}
-impl IntoResult for FeatureSuggestion {
-    type Output = FeatureResult;
-    fn into_result(self, id: String, current_name: String) -> Self::Output {
-        FeatureResult {
-            feature_id: id,
-            domain_ids: Vec::new(),
-            current_name,
-            name: self.name,
-            summary: self.summary,
-        }
-    }
-}
-impl FallbackResult for FeatureResult {
-    fn fallback(id: String, current_name: String) -> Self {
-        Self {
-            feature_id: id,
-            domain_ids: Vec::new(),
-            name: current_name.clone(),
-            current_name,
-            summary: None,
-        }
-    }
-}
-impl IntoResult for FlowSuggestion {
-    type Output = FlowResult;
-    fn into_result(self, id: String, current_name: String) -> Self::Output {
-        FlowResult {
-            flow_id: id,
-            domain_ids: Vec::new(),
-            feature_ids: Vec::new(),
-            current_name,
-            name: self.name,
-            summary: self.summary,
-        }
-    }
-}
-impl FallbackResult for FlowResult {
-    fn fallback(id: String, current_name: String) -> Self {
-        Self {
-            flow_id: id,
-            domain_ids: Vec::new(),
-            feature_ids: Vec::new(),
-            name: current_name.clone(),
-            current_name,
-            summary: None,
-        }
-    }
-}
-
 fn merge_suggestion<T: Suggestion>(
     destination: &mut BTreeMap<String, T>,
     suggestion: &T,
@@ -677,28 +577,6 @@ trait Suggestion: Clone {
 impl Suggestion for DomainSuggestion {
     fn id(&self) -> &str {
         &self.domain_id
-    }
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn summary(&self) -> &Option<String> {
-        &self.summary
-    }
-}
-impl Suggestion for FeatureSuggestion {
-    fn id(&self) -> &str {
-        &self.feature_id
-    }
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn summary(&self) -> &Option<String> {
-        &self.summary
-    }
-}
-impl Suggestion for FlowSuggestion {
-    fn id(&self) -> &str {
-        &self.flow_id
     }
     fn name(&self) -> &str {
         &self.name

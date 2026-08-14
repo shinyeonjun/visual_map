@@ -9,9 +9,54 @@ use crate::views::overview::model::{
 };
 use std::collections::{BTreeMap, HashMap};
 
+/// Feature-first 파이프라인에서 이미 만든 Feature를 받아 Overview를 구성한다.
+pub fn project_with_features(
+    analysis: &DomainAnalysisOutput,
+    prebuilt_features: Vec<super::FeatureGroup>,
+    facts: &FactStore,
+    files: &[FileEntry],
+    frameworks: Vec<FrameworkDetection>,
+    execution_flows: ExecutionFlowGraph,
+    semantic_status: SemanticStatus,
+    semantic_analysis: SemanticAnalysisSummary,
+) -> OverviewResponse {
+    project_inner(
+        analysis,
+        Some(prebuilt_features),
+        facts,
+        files,
+        frameworks,
+        execution_flows,
+        semantic_status,
+        semantic_analysis,
+    )
+}
+
 /// 내부 분석 결과를 프론트엔드 Overview 응답으로 변환한다.
 pub fn project(
     analysis: &DomainAnalysisOutput,
+    facts: &FactStore,
+    files: &[FileEntry],
+    frameworks: Vec<FrameworkDetection>,
+    execution_flows: ExecutionFlowGraph,
+    semantic_status: SemanticStatus,
+    semantic_analysis: SemanticAnalysisSummary,
+) -> OverviewResponse {
+    project_inner(
+        analysis,
+        None,
+        facts,
+        files,
+        frameworks,
+        execution_flows,
+        semantic_status,
+        semantic_analysis,
+    )
+}
+
+fn project_inner(
+    analysis: &DomainAnalysisOutput,
+    prebuilt_features: Option<Vec<super::FeatureGroup>>,
     facts: &FactStore,
     files: &[FileEntry],
     frameworks: Vec<FrameworkDetection>,
@@ -42,7 +87,8 @@ pub fn project(
             .unwrap_or(0);
     }
 
-    let features = super::features::build(analysis, facts, &execution_flows);
+    let features = prebuilt_features
+        .unwrap_or_else(|| super::features::build(analysis, facts, &execution_flows));
     let confirmed_reference_count = facts
         .references
         .iter()
