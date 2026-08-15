@@ -3,6 +3,7 @@
 mod capability_data;
 mod cluster_groups;
 mod constraints;
+mod domain_cleanup;
 mod feature_assignment;
 mod singleton_absorption;
 
@@ -21,6 +22,7 @@ use super::{clustering, feature_graph, tfidf};
 use capability_data::extract_capability_data;
 use cluster_groups::form_domains_from_clusters;
 use constraints::{build_constraints, collect_unassigned_units};
+use domain_cleanup::prune_resource_only_domains;
 use feature_assignment::assign_features_to_domains;
 use singleton_absorption::absorb_singleton_domains;
 
@@ -108,6 +110,8 @@ pub(super) fn analyze_feature_first(
         store,
         domain_policy,
     );
+
+    prune_resource_only_domains(&mut formation);
 
     assign_features_to_domains(&mut features, &formation.groups);
 

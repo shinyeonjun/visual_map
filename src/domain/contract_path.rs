@@ -125,6 +125,27 @@ pub(crate) fn mounted_path_suffix_match(left: &str, right: &str) -> bool {
     prefix.iter().any(|segment| *segment == ":param")
 }
 
+/// 같은 핸들러의 라우터 마운트 접미 경로를 비교한다.
+///
+/// `/history/timeline`과 `/timeline`은 참이지만, 핸들러가 다르면
+/// `same_contract`에서 `unit_id`로 막는다.
+pub(crate) fn handler_mount_suffix_match(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    let (shorter, longer) = if path_segments(left).len() <= path_segments(right).len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let short_segments = path_segments(shorter);
+    let long_segments = path_segments(longer);
+    if short_segments.is_empty() || short_segments.len() >= long_segments.len() {
+        return false;
+    }
+    long_segments.ends_with(&short_segments)
+}
+
 fn path_segments(path: &str) -> Vec<&str> {
     path.trim_end_matches('/')
         .trim_start_matches('/')
@@ -216,8 +237,8 @@ fn normalize_segment(segment: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        capability_key_from_path, contract_identity, mounted_path_suffix_match,
-        normalize_contract_path, path_prefix_match, paths_match,
+        capability_key_from_path, contract_identity, handler_mount_suffix_match,
+        mounted_path_suffix_match, normalize_contract_path, path_prefix_match, paths_match,
     };
 
     #[test]
@@ -280,6 +301,14 @@ mod tests {
             "/participants/contacts",
             "/contacts"
         ));
+    }
+
+    #[test]
+    fn 핸들러_마운트_접미_매칭은_정적_접두도_허용한다() {
+        assert!(handler_mount_suffix_match("/history/timeline", "/timeline"));
+        assert!(handler_mount_suffix_match("/retrieval/search", "/search"));
+        // 접미만 보면 참이지만 same_contract에서는 unit_id로 막는다.
+        assert!(handler_mount_suffix_match("/admin/users", "/users"));
     }
 
     #[test]

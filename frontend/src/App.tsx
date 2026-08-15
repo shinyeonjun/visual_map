@@ -1,74 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { listen } from '@tauri-apps/api/event'
-import { analyzeProject, checkClaudeCli, createProject, isDesktopRuntime, loadClaudeModels, loadCodexModels, saveAiSettings, selectProjectFolder } from './services/analysis'
-import type { AiProvider, AnalysisProgress, ClaudeModel, CodexModel, CodexModelCatalog, DomainNode, MapDomain, Project } from './domain'
-import { domainPalette, trustLabel } from './domain'
+import { analyzeProject, checkClaudeCli, createProject, isDesktopRuntime, listSavedProjects, loadClaudeModels, loadCodexModels, loadProjectMap, saveAiSettings, selectProjectFolder } from './services/analysis'
+import type { AiProvider, ClaudeModel, CodexModel, Project } from './domain'
 import { useCanvasViewport } from './hooks/useCanvasViewport'
-import { AnalysisProgressPanel, Icon, SetupScreen } from './components/ui'
-import { DomainCard } from './components/domain-card'
+import { useAnalysisProgress } from './hooks/useAnalysisProgress'
+import { useMapNavigation } from './hooks/useMapNavigation'
+import { AnalysisProgressPanel, SetupScreen } from './components/ui'
+import { MapSidebar } from './components/map/map-sidebar'
+import { MapToolbar } from './components/map/map-toolbar'
+import { MapCanvas } from './components/map/map-canvas'
+import { MapInspector } from './components/map/map-inspector'
+import { DOMAIN_CARD, FEATURE_CARD, MAX_FLOW_STEPS, flowCanvasSize, gridCanvasSize, gridPosition } from './map-layout'
+import { resolveSelectedModel } from './lib/ai-model'
+import { getErrorMessage } from './lib/errors'
+import { mergeAnalysisIntoProject, normalizeProjectPath, projectFromAnalysis, workspaceKeyFromPath } from './lib/project-mapper'
 import './styles.css'
-
-function featureKindLabel(kind: string): string {
-  if (kind === 'endpoint') return 'API'
-  if (kind === 'operation') return 'FUNC'
-  return kind.toUpperCase()
-}
-
-function flowStepLabel(kind: string): string {
-  if (kind === 'call') return '호출'
-  if (kind === 'condition') return '분기'
-  if (kind === 'switch') return '선택'
-  if (kind === 'loop') return '반복'
-  if (kind === 'return') return '반환'
-  if (kind === 'throw') return '예외'
-  if (kind === 'dynamicBoundary') return '동적 경계'
-  return kind.toUpperCase()
-}
-
-function mapDomainToNode(mapDomain: MapDomain, index: number, existing?: DomainNode): DomainNode {
-  return {
-    id: mapDomain.domainId,
-    name: mapDomain.name,
-    summary: mapDomain.summary,
-    color: existing?.color ?? domainPalette[index % domainPalette.length],
-    x: existing?.x ?? 70 + (index % 3) * 320,
-    y: existing?.y ?? 70 + Math.floor(index / 3) * 220,
-    units: mapDomain.units,
-    features: mapDomain.features,
-    entrypoints: mapDomain.entrypoints,
-    confidence: mapDomain.confidence,
-    status: mapDomain.status,
-    dependencies: mapDomain.dependencies,
-    signals: mapDomain.signals,
-    featureItems: mapDomain.featureItems,
-  }
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error) return error.message
-  if (typeof error === 'string' && error.trim()) return error
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = error.message
-    if (typeof message === 'string' && message.trim()) return message
-  }
-  return fallback
-}
-
-function resolveSelectedModel(current: string, catalog: CodexModelCatalog): string {
-  if (catalog.models.some((item) => item.slug === current)) return current
-  if (catalog.selectedModel && catalog.models.some((item) => item.slug === catalog.selectedModel)) return catalog.selectedModel
-  return catalog.models[0]?.slug ?? ''
-}
 
 function App() {
   const [projects, setProjects] = useState<Project[]>([])
   const [projectId, setProjectId] = useState('')
-  const [selectedId, setSelectedId] = useState('')
-  const [selectedFeatureId, setSelectedFeatureId] = useState('')
   const [model, setModel] = useState('')
   const [models, setModels] = useState<CodexModel[]>([])
   const [claudeModels, setClaudeModels] = useState<ClaudeModel[]>([])
-  const [query, setQuery] = useState('')
   const [isProjectMenuOpen, setProjectMenuOpen] = useState(false)
   const [provider, setProvider] = useState<AiProvider>('codex')
   const [isAnalyzing, setAnalyzing] = useState(false)
@@ -80,19 +32,34 @@ function App() {
   const [isClaudeChecking, setClaudeChecking] = useState(false)
   const [claudeVersion, setClaudeVersion] = useState('')
   const [claudeError, setClaudeError] = useState('')
-  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null)
   const [activeView, setActiveView] = useState<'setup' | 'map'>('setup')
+  const { analysisProgress, setAnalysisProgress } = useAnalysisProgress()
+  const navigation = useMapNavigation()
+  const {
+    mapLayer,
+    setMapLayer,
+    selectedId,
+    setSelectedId,
+    selectedFeatureId,
+    setSelectedFeatureId,
+    query,
+    setQuery,
+    openDomain,
+    openFeature,
+    goToDomains,
+    goToFeatures,
+    resetSelection,
+  } = navigation
+
   const codexCheckingRef = useRef(false)
   const selectedModelRef = useRef(model)
+  const savedClaudeModelRef = useRef('')
   selectedModelRef.current = model
-  const canvas = useCanvasViewport(1040, 700)
+
   const project = projects.find((item) => item.id === projectId)
   const selectedDomain = project?.domains.find((domain) => domain.id === selectedId) ?? project?.domains[0]
   const selectedFeature = selectedDomain?.featureItems.find((feature) => feature.id === selectedFeatureId) ?? null
 
-  useEffect(() => {
-    setSelectedFeatureId('')
-  }, [selectedId])
   const visibleDomains = useMemo(() => {
     if (!project) return []
     const normalizedQuery = query.trim().toLowerCase()
@@ -100,12 +67,42 @@ function App() {
     return project.domains.filter((domain) => `${domain.name} ${domain.summary} ${domain.signals.join(' ')}`.toLowerCase().includes(normalizedQuery))
   }, [project, query])
 
+  const visibleFeatures = useMemo(() => {
+    if (!selectedDomain) return []
+    const normalizedQuery = query.trim().toLowerCase()
+    if (!normalizedQuery || mapLayer !== 'features') return selectedDomain.featureItems
+    return selectedDomain.featureItems.filter((feature) => {
+      const haystack = `${feature.name} ${feature.summary ?? ''} ${feature.kind}`
+      return haystack.toLowerCase().includes(normalizedQuery)
+    })
+  }, [mapLayer, query, selectedDomain])
+
+  const domainLayout = useMemo(
+    () => visibleDomains.map((domain, index) => ({ domain, ...gridPosition(index, 3, DOMAIN_CARD.width, DOMAIN_CARD.height) })),
+    [visibleDomains],
+  )
+
+  const canvasSize = useMemo(() => {
+    if (mapLayer === 'features') {
+      return gridCanvasSize(visibleFeatures.length, 4, FEATURE_CARD.width, FEATURE_CARD.height)
+    }
+    if (mapLayer === 'flow' && selectedFeature) {
+      const maxSteps = Math.max(1, ...selectedFeature.flows.map((flow) => Math.min(flow.steps.length, MAX_FLOW_STEPS)))
+      return flowCanvasSize(selectedFeature.flows.length, maxSteps)
+    }
+    return gridCanvasSize(visibleDomains.length, 3, DOMAIN_CARD.width, DOMAIN_CARD.height)
+  }, [mapLayer, selectedFeature, visibleDomains.length, visibleFeatures.length])
+
+  const canvas = useCanvasViewport(canvasSize.width, canvasSize.height)
+  const cliReady = provider === 'claude' ? Boolean(claudeVersion) : Boolean(codexVersion)
+
   function switchProject(id: string) {
     const next = projects.find((item) => item.id === id)
     if (!next) return
     setProjectId(id)
     setSelectedId(next.domains[0]?.id ?? '')
     setSelectedFeatureId('')
+    setMapLayer('domains')
     setProjectMenuOpen(false)
     setNotice('프로젝트 지도를 불러왔습니다.')
     setActiveView(next.domains.length > 0 ? 'map' : 'setup')
@@ -114,15 +111,44 @@ function App() {
   async function handleAddProject() {
     const path = await selectProjectFolder()
     if (!path) return
-    const next = createProject(path)
-    setProjects((current) => [...current, next])
-    setProjectId(next.id)
-    setSelectedId('')
-    setActiveView('setup')
-    setNotice('프로젝트가 추가되었습니다. 분석을 시작해 도메인을 찾아보세요.')
-  }
 
-  const savedClaudeModelRef = useRef('')
+    const existing = projects.find((item) => normalizeProjectPath(item.path) === normalizeProjectPath(path))
+    if (existing) {
+      switchProject(existing.id)
+      setNotice(existing.domains.length > 0 ? '이미 추가된 프로젝트 지도를 열었습니다.' : '이미 추가된 프로젝트입니다.')
+      return
+    }
+
+    try {
+      const response = await loadProjectMap(path)
+      if (response.domains.length === 0) {
+        throw new Error('저장된 분석 결과에서 도메인을 찾지 못했습니다.')
+      }
+      const summary = {
+        projectPath: path,
+        workspaceKey: workspaceKeyFromPath(response.workspacePath, `project-${Date.now()}`),
+        updatedAtMs: Date.now(),
+      }
+      const next = projectFromAnalysis(summary, response)
+      setProjects((current) => [...current, next])
+      setProjectId(next.id)
+      setSelectedId(next.domains[0]?.id ?? '')
+      setSelectedFeatureId('')
+      setMapLayer('domains')
+      setQuery('')
+      setActiveView('map')
+      setNotice('저장된 분석 결과를 불러왔습니다.')
+    } catch {
+      const next = createProject(path)
+      setProjects((current) => [...current, next])
+      setProjectId(next.id)
+      setSelectedId('')
+      setSelectedFeatureId('')
+      setMapLayer('domains')
+      setActiveView('setup')
+      setNotice('프로젝트가 추가되었습니다. 분석을 시작해 도메인을 찾아보세요.')
+    }
+  }
 
   const handleClaudeConnection = useCallback(async () => {
     setClaudeChecking(true)
@@ -186,20 +212,40 @@ function App() {
   useEffect(() => {
     if (!isDesktopRuntime()) return
     let disposed = false
-    let unlisten: (() => void) | undefined
-    void listen<AnalysisProgress>('analysis-progress', (event) => {
-      if (!disposed) setAnalysisProgress(event.payload)
-    }).then((cleanup) => {
-      if (disposed) cleanup()
-      else unlisten = cleanup
-    })
+    void (async () => {
+      try {
+        const saved = await listSavedProjects()
+        if (disposed || saved.length === 0) return
+
+        const loaded = await Promise.all(saved.map(async (summary) => {
+          try {
+            const response = await loadProjectMap(summary.projectPath)
+            return projectFromAnalysis(summary, response)
+          } catch {
+            return createProject(summary.projectPath, {
+              id: summary.workspaceKey,
+              updatedAtMs: summary.updatedAtMs,
+            })
+          }
+        }))
+
+        if (disposed) return
+        setProjects(loaded)
+        const preferred = loaded.find((item) => item.domains.length > 0) ?? loaded[0]
+        setProjectId(preferred.id)
+        setSelectedId(preferred.domains[0]?.id ?? '')
+        setSelectedFeatureId('')
+        setMapLayer('domains')
+        setActiveView(preferred.domains.length > 0 ? 'map' : 'setup')
+        setNotice(preferred.domains.length > 0 ? '저장된 분석 결과를 불러왔습니다.' : '저장된 프로젝트를 불러왔습니다.')
+      } catch {
+        if (!disposed) setNotice('저장된 프로젝트를 불러오지 못했습니다.')
+      }
+    })()
     return () => {
       disposed = true
-      unlisten?.()
     }
-  }, [])
-
-  const cliReady = provider === 'claude' ? Boolean(claudeVersion) : Boolean(codexVersion)
+  }, [setMapLayer, setSelectedFeatureId, setSelectedId])
 
   async function handleAnalysis() {
     if (!project?.path || isAnalyzing || !cliReady || !model) return
@@ -233,15 +279,13 @@ function App() {
       if (response.domains.length === 0) {
         throw new Error('분석 결과에서 도메인을 찾지 못했습니다.')
       }
-      setProjects((current) => current.map((item) => {
-        if (item.id !== project.id) return item
-        const domains = response.domains.map((mapDomain, index) => {
-          const existing = item.domains.find((domain) => domain.id === mapDomain.domainId)
-          return mapDomainToNode(mapDomain, index, existing)
-        })
-        return { ...item, state: 'ready', stats: response.stats, domains }
-      }))
-      setNotice(response.workspacePath ? `분석이 끝났습니다. 워크스페이스에 저장했습니다.` : '분석이 끝났습니다. 캔버스의 도메인 지도를 확인하세요.')
+      setProjects((current) => current.map((item) => item.id === project.id ? mergeAnalysisIntoProject(item, response) : item))
+      setProjectId(workspaceKeyFromPath(response.workspacePath, project.id))
+      setNotice(response.workspacePath ? '분석이 끝났습니다. 워크스페이스에 저장했습니다.' : '분석이 끝났습니다. 캔버스의 도메인 지도를 확인하세요.')
+      setMapLayer('domains')
+      setSelectedId(response.domains[0]?.domainId ?? '')
+      setSelectedFeatureId('')
+      setQuery('')
       setActiveView('map')
     } catch (error) {
       setProjects((current) => current.map((item) => item.id === project.id ? { ...item, state: 'error' } : item))
@@ -297,186 +341,106 @@ function App() {
   }
 
   if (activeView === 'setup' || !project) {
-    return <SetupScreen
-      project={project}
-      provider={provider}
-      onProviderChange={handleProviderChange}
-      onModelChange={handleModelChange}
-      isAnalyzing={isAnalyzing}
-      analysisProgress={analysisProgress}
-      isCodexChecking={isCodexChecking}
-      codexVersion={codexVersion}
-      models={models}
-      claudeModels={claudeModels}
-      model={model}
-      codexError={codexError}
-      isClaudeChecking={isClaudeChecking}
-      claudeVersion={claudeVersion}
-      claudeError={claudeError}
-      notice={notice}
-      onConnectProject={handleAddProject}
-      onCheckCodex={handleCodexConnection}
-      onCheckClaude={handleClaudeConnection}
-      onAnalyze={handleAnalysis}
-    />
+    return (
+      <SetupScreen
+        project={project}
+        provider={provider}
+        onProviderChange={handleProviderChange}
+        onModelChange={handleModelChange}
+        isAnalyzing={isAnalyzing}
+        analysisProgress={analysisProgress}
+        isCodexChecking={isCodexChecking}
+        codexVersion={codexVersion}
+        models={models}
+        claudeModels={claudeModels}
+        model={model}
+        codexError={codexError}
+        isClaudeChecking={isClaudeChecking}
+        claudeVersion={claudeVersion}
+        claudeError={claudeError}
+        notice={notice}
+        onConnectProject={handleAddProject}
+        onCheckCodex={handleCodexConnection}
+        onCheckClaude={handleClaudeConnection}
+        onAnalyze={handleAnalysis}
+      />
+    )
   }
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand"><span className="brand-mark"><span /></span><span>VisualMap</span><em>β</em></div>
-        <div className="workspace-label">WORKSPACE <button className="tiny-icon" aria-label="워크스페이스 메뉴"><Icon name="chevron" size={15} /></button></div>
-        <button className="project-switcher" onClick={() => setProjectMenuOpen((open) => !open)}>
-          <span className="project-dot" /><span className="project-switcher-text"><strong>{project.name}</strong><small>{project.branch} · 로컬 저장소</small></span><Icon name="chevron" size={16} />
-        </button>
-        <button className="add-project-button" onClick={handleAddProject}><Icon name="plus" size={15} />프로젝트 추가</button>
-        {isProjectMenuOpen && <div className="project-menu">{projects.map((item) => <button key={item.id} onClick={() => switchProject(item.id)}><span className="project-dot" /><span><b>{item.name}</b><small>{item.path}</small></span></button>)}</div>}
-        <nav className="nav-group" aria-label="주요 메뉴">
-          <p>MAP</p>
-          <button className="nav-item active" type="button" aria-current="page"><Icon name="grid" /><span>도메인 지도</span></button>
-        </nav>
-        <div className="project-stats">
-          <p>프로젝트 요약</p>
-          <span>{project.stats.units} units · {project.stats.features} features · {project.stats.flows} flows</span>
-        </div>
-        <div className="sidebar-bottom">
-          <div className="engine-card"><div className="engine-status"><i /> {provider === 'claude' ? 'CLAUDE CLI' : 'CODEX CLI'}</div><strong>의미 분석 엔진</strong><label className="engine-model"><span>PROVIDER</span><select value={provider} onChange={(event) => handleProviderChange(event.target.value as AiProvider)}><option value="codex">Codex</option><option value="claude">Claude</option></select></label><label className="engine-model"><span>MODEL</span><select value={model} onChange={(event) => void handleModelChange(event.target.value)}>{provider === 'claude' ? claudeModels.map((item) => <option key={item.slug} value={item.slug}>{item.displayName}</option>) : models.map((item) => <option key={item.slug} value={item.slug}>{item.displayName}</option>)}</select></label><small>{notice || '분석 결과는 캔버스에 표시됩니다.'}</small><button className="engine-run" onClick={handleAnalysis} disabled={isAnalyzing || !cliReady}><Icon name="spark" size={13} />{isAnalyzing ? '분석 중…' : `${provider === 'claude' ? 'Claude' : 'Codex'}로 분석`}<span>↗</span></button></div>
-          <div className="sidebar-foot"><span>Visual Map</span><span>v0.1.0</span></div>
-        </div>
-      </aside>
-
+      <MapSidebar
+        project={project}
+        projects={projects}
+        mapLayer={mapLayer}
+        selectedDomainId={selectedDomain?.id}
+        selectedFeatureId={selectedFeatureId}
+        isProjectMenuOpen={isProjectMenuOpen}
+        provider={provider}
+        model={model}
+        models={models}
+        claudeModels={claudeModels}
+        notice={notice}
+        isAnalyzing={isAnalyzing}
+        cliReady={cliReady}
+        onToggleProjectMenu={() => setProjectMenuOpen((open) => !open)}
+        onSwitchProject={switchProject}
+        onAddProject={handleAddProject}
+        onGoToDomains={goToDomains}
+        onOpenDomain={openDomain}
+        onOpenFeature={openFeature}
+        onProviderChange={handleProviderChange}
+        onModelChange={handleModelChange}
+        onAnalyze={handleAnalysis}
+      />
       <main className="main-stage">
-        {analysisProgress && (isAnalyzing || analysisProgress.phase === 'error') && <AnalysisProgressPanel progress={analysisProgress} floating />}
-        <div className="map-panel">
-          <div className="canvas-context"><span className="eyebrow">BUSINESS MAP / 01</span><strong>{project.name}</strong><span>도메인 지도</span></div>
-          <label className="canvas-search"><Icon name="search" size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="도메인 검색" /></label>
-          <div className="map-panel-head"><div className="map-legend"><span><i className="legend-line solid" />확인된 관계</span><span><i className="legend-line dashed" />공유 경계</span><span><i className="legend-node" />도메인</span><span><i className="legend-dot verified" />확인됨</span><span><i className="legend-dot candidate" />후보</span></div><div className="map-controls"><button onClick={canvas.zoomIn}>+</button><span>{Math.round(canvas.view.scale * 100)}%</span><button onClick={canvas.zoomOut}>−</button><button onClick={canvas.fit}>⌖</button></div></div>
-          <div ref={canvas.viewRef} className="map-canvas" {...canvas.handlers} onContextMenu={(event) => event.preventDefault()}>
-            <div className="canvas-grid" style={canvas.gridStyle} />
-            <div className="canvas-world" style={canvas.stageStyle}>
-              <svg className="relation-lines" width="1040" height="700" viewBox="0 0 1040 700" aria-hidden="true">{visibleDomains.flatMap((domain) => domain.dependencies.map((targetId) => { const target = project.domains.find((item) => item.id === targetId); if (!target) return null; return <line key={`${domain.id}-${target.id}`} x1={domain.x + 180} y1={domain.y + 66} x2={target.x + 10} y2={target.y + 66} className={domain.status === 'shared' ? 'relation shared' : 'relation'} /> }))}</svg>
-              {visibleDomains.map((domain) => <DomainCard key={domain.id} domain={domain} selected={domain.id === selectedId} onSelect={() => setSelectedId(domain.id)} />)}
-            </div>
-            {visibleDomains.length === 0 && <div className="empty-map"><Icon name="search" size={24} /><strong>찾는 도메인이 없습니다</strong><span>다른 검색어를 입력해보세요.</span></div>}
-            <div className="map-hint"><span>두 손가락 이동</span><b>·</b><span>핀치 / 휠 확대</span><b>·</b><span>드래그 이동</span></div>
-          </div>
-        </div>
-      </main>
-
-      <aside className="inspector">
-        <div className="inspector-head">
-          <div><span className="eyebrow">SELECTED DOMAIN</span><h2>{selectedDomain?.name ?? '도메인 선택'}</h2></div>
-          <button className="icon-button" onClick={() => { setSelectedId(''); setSelectedFeatureId('') }} aria-label="선택 해제"><Icon name="close" size={18} /></button>
-        </div>
-        {selectedDomain ? (
-          <>
-            <p className="inspector-summary">{selectedDomain.summary}</p>
-            <div className="confidence">
-              <div><span>분석 신뢰도</span><strong>{selectedDomain.confidence}%</strong></div>
-              <div className="confidence-track"><span style={{ width: `${selectedDomain.confidence}%`, background: selectedDomain.color }} /></div>
-              <small>정적 근거 {trustLabel(selectedDomain.status)} · {selectedDomain.units} units</small>
-            </div>
-            <div className="inspector-section">
-              <div className="section-title"><span>구성된 기능</span><b>{selectedDomain.features}</b></div>
-              {selectedDomain.featureItems.length > 0 ? (
-                <div className="fake-list">
-                  {selectedDomain.featureItems.map((feature) => (
-                    <button
-                      type="button"
-                      className={`fake-row feature-row${selectedFeatureId === feature.id ? ' selected' : ''}`}
-                      key={feature.id}
-                      onClick={() => setSelectedFeatureId((current) => current === feature.id ? '' : feature.id)}
-                    >
-                      <span className="mini-icon" style={{ color: selectedDomain.color }}>↗</span>
-                      <span>
-                        <strong>{feature.name}</strong>
-                        <small>
-                          {feature.summary?.trim()
-                            || (feature.flows.length > 0
-                              ? `실행 길 ${feature.flows.length}개`
-                              : feature.entrypoints > 0 ? '외부 진입점' : '내부 서비스 로직')}
-                        </small>
-                      </span>
-                      <span className="feature-meta">
-                        <span className={`trust-badge ${feature.status}`}>{trustLabel(feature.status)}</span>
-                        <em>{featureKindLabel(feature.kind)}</em>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted-copy">구성된 기능이 없습니다.</p>
-              )}
-            </div>
-            {selectedFeature && (
-              <div className="inspector-section flow-section">
-                <div className="section-title">
-                  <span>실행 길</span>
-                  <b>{selectedFeature.flows.length}</b>
-                </div>
-                {selectedFeature.flows.length > 0 ? (
-                  <div className="flow-list">
-                    {selectedFeature.flows.map((flow) => (
-                      <div className="flow-block" key={flow.id}>
-                        <div className="flow-owner">
-                          <span>{flow.owner}</span>
-                          <span className={`trust-badge ${flow.status}`}>{trustLabel(flow.status)}</span>
-                        </div>
-                        {flow.steps.length > 0 ? (
-                          <ol className="flow-steps">
-                            {flow.steps.map((step, index) => (
-                              <li key={`${flow.id}-${index}`} className={step.status === 'candidate' ? 'candidate-step' : undefined}>
-                                <span className="flow-step-label">{step.label}</span>
-                                <span className="flow-step-meta">
-                                  <span className={`trust-dot ${step.status}`} aria-label={trustLabel(step.status)} />
-                                  <em>{flowStepLabel(step.kind)}</em>
-                                </span>
-                              </li>
-                            ))}
-                          </ol>
-                        ) : (
-                          <p className="muted-copy">표시할 단계가 없습니다.</p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="muted-copy">이 기능에 연결된 실행 길이 없습니다.</p>
-                )}
-              </div>
-            )}
-            <div className="inspector-section">
-              <div className="section-title"><span>연결된 도메인</span><b>{selectedDomain.dependencies.length}</b></div>
-              {selectedDomain.dependencies.length > 0 ? (
-                <div className="linked-domains">
-                  {selectedDomain.dependencies.map((id) => {
-                    const linked = project.domains.find((item) => item.id === id)
-                    return linked ? (
-                      <button key={id} onClick={() => setSelectedId(id)}>
-                        <span className="linked-dot" style={{ background: linked.color }} />
-                        {linked.name}
-                        <span>↗</span>
-                      </button>
-                    ) : null
-                  })}
-                </div>
-              ) : (
-                <p className="muted-copy">직접 연결된 도메인이 없습니다.</p>
-              )}
-            </div>
-            <div className="inspector-section evidence">
-              <div className="section-title"><span>분석 근거</span><b>{selectedDomain.signals.length}</b></div>
-              <div className="tag-list">{selectedDomain.signals.map((signal) => <span key={signal}>{signal}</span>)}</div>
-            </div>
-          </>
-        ) : (
-          <div className="inspector-empty">
-            <div className="empty-ring">+</div>
-            <strong>지도를 탐색해보세요</strong>
-            <span>도메인 카드를 선택하면 코드 구조와 연결 관계를 확인할 수 있습니다.</span>
-          </div>
+        {analysisProgress && (isAnalyzing || analysisProgress.phase === 'error') && (
+          <AnalysisProgressPanel progress={analysisProgress} floating />
         )}
-      </aside>
+        <MapToolbar
+          projectName={project.name}
+          mapLayer={mapLayer}
+          selectedDomain={selectedDomain}
+          selectedFeature={selectedFeature}
+          query={query}
+          zoomPercent={Math.round(canvas.view.scale * 100)}
+          onGoToDomains={goToDomains}
+          onGoToFeatures={goToFeatures}
+          onQueryChange={setQuery}
+          onZoomIn={canvas.zoomIn}
+          onZoomOut={canvas.zoomOut}
+          onFit={canvas.fit}
+        />
+        <MapCanvas
+          mapLayer={mapLayer}
+          canvas={canvas}
+          canvasSize={canvasSize}
+          domainLayout={domainLayout}
+          visibleDomains={visibleDomains}
+          visibleFeatures={visibleFeatures}
+          selectedDomain={selectedDomain}
+          selectedDomainId={selectedId}
+          selectedFeatureId={selectedFeatureId}
+          selectedFeature={selectedFeature}
+          onSelectDomain={setSelectedId}
+          onOpenDomain={openDomain}
+          onSelectFeature={setSelectedFeatureId}
+          onOpenFeature={openFeature}
+        />
+      </main>
+      <MapInspector
+        project={project}
+        mapLayer={mapLayer}
+        selectedDomain={selectedDomain}
+        selectedFeature={selectedFeature}
+        selectedFeatureId={selectedFeatureId}
+        onResetSelection={resetSelection}
+        onOpenDomain={openDomain}
+        onOpenFeature={openFeature}
+        onSelectFeature={setSelectedFeatureId}
+        onSelectDomain={setSelectedId}
+        onGoToDomains={goToDomains}
+      />
     </div>
   )
 }

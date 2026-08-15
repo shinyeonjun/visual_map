@@ -2,7 +2,7 @@
 
 use crate::facts::{ControlFlowFact, ControlFlowKind, ResolutionStatus, SourceSpan};
 
-use super::local_index::{contains, FlowEventIndex};
+use super::local_index::FlowEventIndex;
 use super::model::{FlowEdge, FlowEdgeKind, FlowNode};
 
 pub(super) fn build_local_edges(
@@ -183,7 +183,7 @@ pub(super) fn build_local_edges(
                         None,
                     ));
                     if let Some(catch_target) =
-                        event_index.first_in_span(index, fact.alternative_span.as_ref())
+                        event_index.catch_in_span(fact.alternative_span.as_ref())
                     {
                         edges.push(make_edge(
                             &node.id,
@@ -205,23 +205,21 @@ pub(super) fn build_local_edges(
                             Some("finally".into()),
                             None,
                         ));
-                        if let Some(body_range) =
-                            event_index.range_in_span(index, fact.body_span.as_ref())
+                        if let Some(last_body) = event_index
+                            .events_in_span(index, fact.body_span.as_ref())
+                            .iter()
+                            .rev()
+                            .copied()
+                            .find(|event| !is_abrupt_event(event))
                         {
-                            if let Some(last_body) = body_range
-                                .rev()
-                                .map(|body_index| &event_index.events[body_index])
-                                .find(|event| !is_abrupt_event(event))
-                            {
-                                edges.push(make_edge(
-                                    &last_body.node().id,
-                                    &finally_target.node().id,
-                                    FlowEdgeKind::Sequential,
-                                    ResolutionStatus::Confirmed,
-                                    Some("finally".into()),
-                                    None,
-                                ));
-                            }
+                            edges.push(make_edge(
+                                &last_body.node().id,
+                                &finally_target.node().id,
+                                FlowEdgeKind::Sequential,
+                                ResolutionStatus::Confirmed,
+                                Some("finally".into()),
+                                None,
+                            ));
                         }
                     }
                 }
@@ -279,7 +277,7 @@ fn enclosing_try_handler<'a>(
         Event::Control { fact, .. } => fact.alternative_span.as_ref(),
         Event::Reference { .. } => None,
     }?;
-    event_index.first_in_span(try_index, Some(alternative))
+    event_index.catch_in_span(Some(alternative))
 }
 
 fn add_branch_edges(
@@ -335,11 +333,7 @@ fn add_loop_edges(
     exit_node_id: &str,
     edges: &mut Vec<FlowEdge>,
 ) {
-    let body_range = event_index.range_in_span(index, fact.body_span.as_ref());
-    let body_events = body_range
-        .as_ref()
-        .map(|range| &event_index.events[range.clone()])
-        .unwrap_or(&[]);
+    let body_events = event_index.events_in_span(index, fact.body_span.as_ref());
     let body_target = event_index
         .first_in_span(index, fact.body_span.as_ref())
         .map(|event| event.node().id.clone())
@@ -404,11 +398,7 @@ fn add_loop_edges(
     if let Some(last) = body_events
         .iter()
         .rev()
-        .filter(|event| {
-            fact.body_span
-                .as_ref()
-                .is_some_and(|span| event.span().is_some_and(|nested| contains(span, nested)))
-        })
+        .copied()
         .find(|event| !is_abrupt_event(event))
     {
         edges.push(make_edge(

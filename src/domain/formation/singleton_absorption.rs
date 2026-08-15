@@ -3,7 +3,7 @@
 use crate::config::DomainPolicy;
 use crate::domain::capabilities::Capability;
 use crate::domain::capability_keys::{
-    is_leaf_capability_key, is_static_page_key, is_technical_singleton_key, static_page_stem,
+    is_leaf_capability_key, is_operational_capability_key, is_static_page_key, static_page_stem,
 };
 use crate::domain::clustering;
 use crate::domain::contract_path::mounted_path_suffix_match;
@@ -65,7 +65,7 @@ pub(super) fn absorb_singleton_domains(
             continue;
         }
 
-        if is_technical_singleton_key(&capability.key) {
+        if is_operational_capability_key(&capability.key) {
             mark_cross_cutting(&mut formation.groups, &domain_index, &child_domain_id);
             continue;
         }
@@ -420,7 +420,7 @@ fn similarity_parent(
     best_domain_id
 }
 
-fn merge_domains(
+pub(super) fn merge_domains(
     groups: &mut [DomainGroup],
     memberships: &mut [DomainMembership],
     child_id: &str,

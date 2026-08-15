@@ -180,7 +180,7 @@ pub(crate) struct WorkspacePaths {
     pub(crate) semantic_output: PathBuf,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkspaceMetadata {
     pub(crate) project_path: String,

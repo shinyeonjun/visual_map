@@ -1,7 +1,8 @@
 //! HTTP 계약 동치로 entrypoint를 기능 하나로 묶는다.
 
 use crate::domain::contract_path::{
-    contract_identity, mounted_path_suffix_match, normalize_contract_path,
+    contract_identity, handler_mount_suffix_match, mounted_path_suffix_match,
+    normalize_contract_path,
 };
 use crate::facts::Entrypoint;
 use std::collections::BTreeMap;
@@ -55,25 +56,39 @@ fn same_contract(left: &Entrypoint, right: &Entrypoint) -> bool {
         return false;
     }
 
-    let left_identity = contract_identity(left.method.as_deref(), entrypoint_path(left));
-    let right_identity = contract_identity(right.method.as_deref(), entrypoint_path(right));
+    let left_path_raw = entrypoint_path(left);
+    let right_path_raw = entrypoint_path(right);
+    let left_identity = contract_identity(left.method.as_deref(), left_path_raw);
+    let right_identity = contract_identity(right.method.as_deref(), right_path_raw);
     if let (Some(left), Some(right)) = (&left_identity, &right_identity) {
         if left == right {
             return true;
         }
     }
 
-    let Some(left_path) = normalize_contract_path(entrypoint_path(left)) else {
-        return false;
-    };
-    let Some(right_path) = normalize_contract_path(entrypoint_path(right)) else {
-        return false;
-    };
-    if left_path == right_path {
-        return true;
+    let left_normalized = normalize_contract_path(left_path_raw);
+    let right_normalized = normalize_contract_path(right_path_raw);
+    match (&left_normalized, &right_normalized) {
+        (Some(left_path), Some(right_path)) => {
+            if left_path == right_path {
+                return true;
+            }
+            if left.unit_id == right.unit_id
+                && (mounted_path_suffix_match(left_path, right_path)
+                    || handler_mount_suffix_match(left_path, right_path))
+            {
+                return true;
+            }
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            if left.unit_id == right.unit_id {
+                return true;
+            }
+        }
+        (None, None) => {}
     }
 
-    left.unit_id == right.unit_id && mounted_path_suffix_match(&left_path, &right_path)
+    false
 }
 
 fn entrypoint_path(entrypoint: &Entrypoint) -> &str {
@@ -200,5 +215,39 @@ mod tests {
         let admin = entrypoint("ep-admin", Some("GET"), "/admin/users");
         let users = entrypoint("ep-users", Some("GET"), "/users");
         assert!(!same_contract(&admin, &users));
+    }
+
+    #[test]
+    fn 같은_핸들러의_정적_마운트_경로는_같은_계약이다() {
+        let mounted = entrypoint_with_unit(
+            "ep-mounted",
+            Some("GET"),
+            "/api/v1/history/timeline",
+            "unit-history".into(),
+        );
+        let nested = entrypoint_with_unit(
+            "ep-nested",
+            Some("GET"),
+            "/timeline",
+            "unit-history".into(),
+        );
+        assert!(same_contract(&mounted, &nested));
+    }
+
+    #[test]
+    fn 해석_불가_경로는_같은_핸들러의_파싱_가능_경로에_붙는다() {
+        let full = entrypoint_with_unit(
+            "ep-full",
+            Some("GET"),
+            "/api/v1/sessions/{session_id}",
+            "unit-session".into(),
+        );
+        let mount = entrypoint_with_unit(
+            "ep-mount",
+            Some("GET"),
+            "/{session_id}",
+            "unit-session".into(),
+        );
+        assert!(same_contract(&full, &mount));
     }
 }

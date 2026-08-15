@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { AnalysisResponse, ClaudeModelCatalog, ClaudeStatus, CodexModelCatalog, Project, ProjectStats } from '../domain'
+import type { AnalysisResponse, ClaudeModelCatalog, ClaudeStatus, CodexModelCatalog, Project, ProjectStats, SavedProject } from '../domain'
 
 export const isDesktopRuntime = (): boolean => '__TAURI_INTERNALS__' in window
 
@@ -85,16 +85,55 @@ export async function analyzeProject(input: {
   return invoke<AnalysisResponse>('analyze_project', { request: input })
 }
 
-export function createProject(path: string, domains: Project['domains'] = []): Project {
+export async function listSavedProjects(): Promise<SavedProject[]> {
+  if (!isDesktopRuntime()) return []
+  return invoke<SavedProject[]>('list_saved_projects')
+}
+
+export async function loadProjectMap(projectPath: string): Promise<AnalysisResponse> {
+  if (!isDesktopRuntime()) {
+    return {
+      projectPath,
+      domains: [],
+      stats: { files: 0, units: 0, features: 0, flows: 0, resources: 0 },
+    }
+  }
+  return invoke<AnalysisResponse>('load_project_map', { projectPath })
+}
+
+function formatUpdatedAt(updatedAtMs: number): string {
+  if (!updatedAtMs) return '알 수 없음'
+  const diffMs = Date.now() - updatedAtMs
+  if (diffMs < 60_000) return '방금 전'
+  const minutes = Math.floor(diffMs / 60_000)
+  if (minutes < 60) return `${minutes}분 전`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}시간 전`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}일 전`
+  return new Date(updatedAtMs).toLocaleDateString('ko-KR')
+}
+
+export function createProject(
+  path: string,
+  options: {
+    id?: string
+    domains?: Project['domains']
+    stats?: ProjectStats
+    updatedAtMs?: number
+    state?: Project['state']
+  } = {},
+): Project {
   const name = path.split(/[\\/]/).filter(Boolean).pop() ?? '새 프로젝트'
-  const stats: ProjectStats = { files: 0, units: 0, features: 0, flows: 0, resources: 0 }
+  const stats = options.stats ?? { files: 0, units: 0, features: 0, flows: 0, resources: 0 }
+  const domains = options.domains ?? []
   return {
-    id: `project-${Date.now()}`,
+    id: options.id ?? `project-${Date.now()}`,
     name,
     path,
     branch: 'local',
-    updatedAt: '방금 전',
-    state: 'ready',
+    updatedAt: formatUpdatedAt(options.updatedAtMs ?? Date.now()),
+    state: options.state ?? 'ready',
     stats,
     domains,
   }

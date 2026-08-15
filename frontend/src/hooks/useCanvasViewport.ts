@@ -15,8 +15,11 @@ const GRID_SIZE = 29
 
 export function useCanvasViewport(contentWidth: number, contentHeight: number, minFitScale = MIN_SCALE) {
   const viewRef = useRef<HTMLDivElement | null>(null)
+  const [canvasReady, setCanvasReady] = useState(false)
   const [view, setView] = useState<Viewport>({ scale: 1, x: 0, y: 0 })
   const dragRef = useRef<{ pointerX: number; pointerY: number; startX: number; startY: number } | null>(null)
+  const spaceRef = useRef(false)
+  const [spaceHeld, setSpaceHeld] = useState(false)
 
   const fit = useCallback(() => {
     const element = viewRef.current
@@ -50,9 +53,21 @@ export function useCanvasViewport(contentWidth: number, contentHeight: number, m
     zoomAt(factor, (bounds?.width ?? 0) / 2, (bounds?.height ?? 0) / 2)
   }, [zoomAt])
 
+  const setViewRef = useCallback((node: HTMLDivElement | null) => {
+    viewRef.current = node
+    setCanvasReady(node !== null)
+  }, [])
+
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0 && event.button !== 1) return
-    if (event.target instanceof Element && event.target.closest('button, a, input, textarea')) return
+    const isLeftButton = event.button === 0
+    const isMiddleButton = event.button === 1
+    if (!isLeftButton && !isMiddleButton) return
+
+    if (isLeftButton && !spaceRef.current) {
+      if (event.target instanceof Element && event.target.closest('button, a, input, textarea')) return
+      if (event.target instanceof Element && event.target.closest('.domain-card, .feature-card')) return
+    }
+
     dragRef.current = { pointerX: event.clientX, pointerY: event.clientY, startX: view.x, startY: view.y }
     event.currentTarget.setPointerCapture(event.pointerId)
     event.preventDefault()
@@ -75,45 +90,72 @@ export function useCanvasViewport(contentWidth: number, contentHeight: number, m
   }
 
   useEffect(() => {
-    const canvas = viewRef.current
-    if (!canvas) return
-    const canvasElement = canvas
+    if (!canvasReady) return
 
+    /*
+      WebView2는 precision touchpad pinch를 synthetic ctrl+wheel로 변환한다.
+      zoomHotkeysEnabled가 켜져 있어야 DOM까지 도달한다.
+      window capture에서 소비하지 않으면 WebView2가 페이지 전체를 확대한다.
+    */
     function onWheel(event: WheelEvent) {
-      const overCanvas = event.composedPath().includes(canvasElement)
+      const canvas = viewRef.current
+      if (!canvas) return
+
+      const overCanvas = event.composedPath().includes(canvas)
       const pageZoomGesture = event.ctrlKey || event.metaKey
+
       if (!overCanvas) {
         if (pageZoomGesture) event.preventDefault()
         return
       }
 
       event.preventDefault()
-      const bounds = canvasElement.getBoundingClientRect()
+      const bounds = canvas.getBoundingClientRect()
       const { x: deltaX, y: deltaY } = wheelDeltaInPixels(event)
+
       if (pageZoomGesture) {
         zoomAt(zoomStep(deltaY), event.clientX - bounds.left, event.clientY - bounds.top)
         return
       }
+
       setView((current) => ({ ...current, x: current.x - deltaX, y: current.y - deltaY }))
     }
 
     function onKeyDown(event: KeyboardEvent) {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return
-      if (['+', '=', '-', '_', '0'].includes(event.key)) event.preventDefault()
+      if (event.key === ' ' && !event.repeat) {
+        const tag = (event.target as Element)?.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+        event.preventDefault()
+        spaceRef.current = true
+        setSpaceHeld(true)
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && isPageZoomKey(event.key)) {
+        event.preventDefault()
+      }
+    }
+
+    function onKeyUp(event: KeyboardEvent) {
+      if (event.key === ' ') {
+        spaceRef.current = false
+        setSpaceHeld(false)
+      }
     }
 
     window.addEventListener('wheel', onWheel, { passive: false, capture: true })
     window.addEventListener('keydown', onKeyDown, { capture: true })
+    window.addEventListener('keyup', onKeyUp, { capture: true })
     return () => {
       window.removeEventListener('wheel', onWheel, true)
       window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keyup', onKeyUp, true)
     }
-  }, [zoomAt])
+  }, [canvasReady, zoomAt])
 
   return {
-    viewRef,
+    viewRef: setViewRef,
     view,
     fit,
+    spaceHeld,
     zoomIn: () => zoomBy(1.15),
     zoomOut: () => zoomBy(1 / 1.15),
     handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp },
@@ -137,4 +179,8 @@ function wheelDeltaInPixels(event: WheelEvent) {
 function zoomStep(deltaY: number) {
   const ratio = Math.exp(-deltaY * ZOOM_SENSITIVITY)
   return Math.min(MAX_ZOOM_STEP, Math.max(1 / MAX_ZOOM_STEP, ratio))
+}
+
+function isPageZoomKey(key: string) {
+  return key === '+' || key === '=' || key === '-' || key === '_' || key === '0'
 }

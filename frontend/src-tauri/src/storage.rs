@@ -5,6 +5,45 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) fn workspace_directory_for_project(project_path: &Path) -> Result<PathBuf, String> {
+    let root = storage_root()?;
+    Ok(root.join("workspaces").join(workspace_key(project_path)))
+}
+
+pub(crate) fn list_workspaces() -> Result<Vec<WorkspaceMetadata>, String> {
+    let workspaces_dir = storage_root()?.join("workspaces");
+    if !workspaces_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&workspaces_dir)
+        .map_err(|error| format!("저장된 워크스페이스를 읽지 못했습니다: {error}"))?
+    {
+        let entry = entry
+            .map_err(|error| format!("저장된 워크스페이스 항목을 읽지 못했습니다: {error}"))?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if !path.join("analysis/clean/manifest.json").is_file() {
+            continue;
+        }
+        let metadata_path = path.join("workspace.json");
+        if !metadata_path.is_file() {
+            continue;
+        }
+        let contents = fs::read_to_string(&metadata_path)
+            .map_err(|error| format!("워크스페이스 메타데이터를 읽지 못했습니다: {error}"))?;
+        let metadata: WorkspaceMetadata = serde_json::from_str(&contents)
+            .map_err(|error| format!("워크스페이스 메타데이터 형식이 올바르지 않습니다: {error}"))?;
+        entries.push(metadata);
+    }
+
+    entries.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
+    Ok(entries)
+}
+
 pub(crate) fn prepare_workspace(
     project_path: &Path,
     provider: &str,

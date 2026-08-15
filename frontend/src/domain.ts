@@ -109,6 +109,14 @@ export type AnalysisResponse = {
   stats: ProjectStats
 }
 
+export type SavedProject = {
+  projectPath: string
+  workspaceKey: string
+  model: string
+  environment: string
+  updatedAtMs: number
+}
+
 export type ClaudeStatus = {
   version: string
   executable: string
