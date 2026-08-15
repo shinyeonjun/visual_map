@@ -17,14 +17,35 @@ pub(crate) fn map_feature_status(status: &str) -> String {
     }
 }
 
-pub(crate) fn step_status(node_kind: &str, edge_status: Option<&str>) -> String {
-    if node_kind == "dynamicBoundary" {
-        return "candidate".to_string();
-    }
-    match edge_status {
+pub(crate) fn edge_status(status: Option<&str>) -> String {
+    match status {
         Some("confirmed") | None => "verified".to_string(),
+        Some("ambiguous") => "shared".to_string(),
         _ => "candidate".to_string(),
     }
+}
+
+pub(crate) fn node_status(flow: &super::clean::FlowJson, node: &super::clean::FlowNodeJson) -> String {
+    if node.kind == "dynamicBoundary" {
+        return "candidate".to_string();
+    }
+
+    let incoming = flow
+        .edges
+        .iter()
+        .filter(|edge| edge.target_node_id == node.id);
+
+    let mut status = "verified".to_string();
+    for edge in incoming {
+        let edge_state = edge_status(edge.status.as_deref());
+        if edge_state == "candidate" {
+            return "candidate".to_string();
+        }
+        if edge_state == "shared" {
+            status = "shared".to_string();
+        }
+    }
+    status
 }
 
 pub(crate) fn is_boundary_flow_kind(kind: &str) -> bool {

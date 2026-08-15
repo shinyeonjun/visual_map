@@ -1,0 +1,110 @@
+:root {
+  font-family: Manrope, Pretendard, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #e9edf5;
+  background: #111826;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}
+
+html,
+body,
+#root {
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
+body {
+  margin: 0;
+  min-width: 1180px;
+  min-height: 760px;
+  overflow: hidden;
+}
+
+#root {
+  height: 100vh;
+  overflow: hidden;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #84a9ff;
+  outline-offset: 2px;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.legend-dot.verified {
+  background: #5fbf98;
+  box-shadow: 0 0 0 2px #d8f2e8;
+}
+
+.legend-dot.candidate {
+  background: #d7a05e;
+  box-shadow: 0 0 0 2px #f6e8d2;
+}
+
+.trust-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font: 500 9px 'DM Mono', monospace;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.trust-badge.verified {
+  color: #5fbf98;
+  background: #1d2f28;
+}
+
+.trust-badge.candidate {
+  color: #d7a05e;
+  background: #2f2618;
+}
+
+.trust-badge.shared {
+  color: #8aa8e8;
+  background: #1a2438;
+}
+
+.trust-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.trust-dot.verified {
+  background: #5fbf98;
+}
+
+.trust-dot.candidate {
+  background: #d7a05e;
+}

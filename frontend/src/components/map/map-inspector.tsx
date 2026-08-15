@@ -2,6 +2,7 @@ import type { DomainNode, DomainFeature, Project } from '../../domain'
 import { trustLabel } from '../../domain'
 import { featureKindLabel, featureSummaryText } from '../../lib/feature-presentation'
 import { stepKindLabel } from '../../flow-presentation'
+import { summarizeFlowNodes } from '../../flow-layout'
 import { Icon } from '../icon'
 import type { MapLayer } from '../../types/map'
 
@@ -110,14 +111,14 @@ export function MapInspector({
                         <span>{flow.owner}</span>
                         <span className={`trust-badge ${flow.status}`}>{trustLabel(flow.status)}</span>
                       </div>
-                      {flow.steps.length > 0 ? (
+                      {flow.nodes.length > 0 ? (
                         <ol className="flow-steps">
-                          {flow.steps.slice(0, 6).map((step, index) => (
-                            <li key={`${flow.id}-${index}`} className={step.status === 'candidate' ? 'candidate-step' : undefined}>
-                              <span className="flow-step-label">{step.label}</span>
+                          {summarizeFlowNodes(flow).slice(0, 6).map((node) => (
+                            <li key={`${flow.id}-${node.id}`} className={node.status === 'candidate' ? 'candidate-step' : undefined}>
+                              <span className="flow-step-label">{node.label}</span>
                               <span className="flow-step-meta">
-                                <span className={`trust-dot ${step.status}`} aria-label={trustLabel(step.status)} />
-                                <em>{stepKindLabel(step.kind)}</em>
+                                <span className={`trust-dot ${node.status}`} aria-label={trustLabel(node.status)} />
+                                <em>{stepKindLabel(node.kind)}</em>
                               </span>
                             </li>
                           ))}

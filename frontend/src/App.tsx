@@ -9,7 +9,8 @@ import { MapSidebar } from './components/map/map-sidebar'
 import { MapToolbar } from './components/map/map-toolbar'
 import { MapCanvas } from './components/map/map-canvas'
 import { MapInspector } from './components/map/map-inspector'
-import { DOMAIN_CARD, FEATURE_CARD, MAX_FLOW_STEPS, flowCanvasSize, gridCanvasSize, gridPosition } from './map-layout'
+import { DOMAIN_CARD, FEATURE_CARD, gridCanvasSize, gridPosition } from './map-layout'
+import { flowMapCanvasSize, layoutFlowGraph } from './flow-layout'
 import { resolveSelectedModel } from './lib/ai-model'
 import { getErrorMessage } from './lib/errors'
 import { mergeAnalysisIntoProject, normalizeProjectPath, projectFromAnalysis, workspaceKeyFromPath } from './lib/project-mapper'
@@ -87,8 +88,8 @@ function App() {
       return gridCanvasSize(visibleFeatures.length, 4, FEATURE_CARD.width, FEATURE_CARD.height)
     }
     if (mapLayer === 'flow' && selectedFeature) {
-      const maxSteps = Math.max(1, ...selectedFeature.flows.map((flow) => Math.min(flow.steps.length, MAX_FLOW_STEPS)))
-      return flowCanvasSize(selectedFeature.flows.length, maxSteps)
+      const layouts = selectedFeature.flows.map((flow) => layoutFlowGraph(flow))
+      return flowMapCanvasSize(layouts)
     }
     return gridCanvasSize(visibleDomains.length, 3, DOMAIN_CARD.width, DOMAIN_CARD.height)
   }, [mapLayer, selectedFeature, visibleDomains.length, visibleFeatures.length])

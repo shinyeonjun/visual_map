@@ -109,10 +109,22 @@ pub(crate) struct MapDomain {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct MapFlowStep {
+pub(crate) struct MapFlowNode {
+    pub(crate) id: String,
     pub(crate) label: String,
     pub(crate) kind: String,
     pub(crate) status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MapFlowEdge {
+    pub(crate) source_node_id: String,
+    pub(crate) target_node_id: String,
+    pub(crate) kind: String,
+    pub(crate) status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,7 +133,9 @@ pub(crate) struct MapFlow {
     pub(crate) id: String,
     pub(crate) owner: String,
     pub(crate) status: String,
-    pub(crate) steps: Vec<MapFlowStep>,
+    pub(crate) entry_node_id: String,
+    pub(crate) nodes: Vec<MapFlowNode>,
+    pub(crate) edges: Vec<MapFlowEdge>,
 }
 
 #[derive(Debug, Clone, Serialize)]

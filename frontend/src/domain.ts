@@ -10,17 +10,28 @@ export function trustLabel(status: TrustStatus): string {
   return '후보'
 }
 
-export type DomainFlowStep = {
+export type DomainFlowNode = {
+  id: string
   label: string
   kind: string
   status: TrustStatus
+}
+
+export type DomainFlowEdge = {
+  sourceNodeId: string
+  targetNodeId: string
+  kind: string
+  status: TrustStatus
+  label?: string | null
 }
 
 export type DomainFlow = {
   id: string
   owner: string
   status: TrustStatus
-  steps: DomainFlowStep[]
+  entryNodeId: string
+  nodes: DomainFlowNode[]
+  edges: DomainFlowEdge[]
 }
 
 export type DomainFeature = {

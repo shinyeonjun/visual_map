@@ -1,8 +1,8 @@
-use crate::models::{MapFlow, MapFlowStep};
-use std::collections::{HashMap, HashSet, VecDeque};
+use crate::models::{MapFlow, MapFlowEdge, MapFlowNode};
+use std::collections::HashMap;
 
 use super::clean::{FeatureJson, FlowJson, UnitJson};
-use super::status::{is_boundary_flow_kind, step_status};
+use super::status::{edge_status, is_boundary_flow_kind, node_status};
 
 pub(crate) fn build_feature_flows(
     feature: &FeatureJson,
@@ -24,60 +24,66 @@ pub(crate) fn build_feature_flows(
                         .map(|unit| unit.name.clone())
                 })
                 .unwrap_or_else(|| flow.owner_unit_id.clone());
-            let steps = ordered_flow_steps(flow);
+            let (nodes, edges) = project_flow_graph(flow);
             MapFlow {
                 id: flow.id.clone(),
                 owner,
-                status: flow_status(flow, &steps),
-                steps,
+                status: flow_status(flow, &nodes),
+                entry_node_id: flow.entry_node_id.clone(),
+                nodes,
+                edges,
             }
         })
         .collect()
 }
 
-fn ordered_flow_steps(flow: &FlowJson) -> Vec<MapFlowStep> {
-    let nodes_by_id: HashMap<&str, &super::clean::FlowNodeJson> = flow
+fn project_flow_graph(flow: &FlowJson) -> (Vec<MapFlowNode>, Vec<MapFlowEdge>) {
+    let visible_node_ids: std::collections::HashSet<&str> = flow
         .nodes
         .iter()
-        .map(|node| (node.id.as_str(), node))
+        .filter(|node| !is_boundary_flow_kind(&node.kind))
+        .map(|node| node.id.as_str())
         .collect();
-    let mut next: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
-    for edge in &flow.edges {
-        let status = edge.status.as_deref().unwrap_or("confirmed");
-        next.entry(edge.source_node_id.as_str())
-            .or_default()
-            .push((edge.target_node_id.as_str(), status));
-    }
 
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::from([(flow.entry_node_id.as_str(), None)]);
-    let mut steps = Vec::new();
-    while let Some((node_id, edge_status)) = queue.pop_front() {
-        if !visited.insert(node_id) {
-            continue;
-        }
-        let Some(node) = nodes_by_id.get(node_id) else {
-            continue;
-        };
-        if !is_boundary_flow_kind(&node.kind) {
-            steps.push(MapFlowStep {
-                label: node.label.clone(),
-                kind: node.kind.clone(),
-                status: step_status(&node.kind, edge_status),
-            });
-        }
-        if let Some(children) = next.get(node_id) {
-            for (child, status) in children {
-                if !visited.contains(child) {
-                    queue.push_back((child, Some(*status)));
-                }
-            }
-        }
-    }
-    steps
+    let nodes = flow
+        .nodes
+        .iter()
+        .filter(|node| visible_node_ids.contains(node.id.as_str()))
+        .map(|node| MapFlowNode {
+            id: node.id.clone(),
+            label: node.label.clone(),
+            kind: node.kind.clone(),
+            status: node_status(flow, node),
+        })
+        .collect();
+
+    let edges = flow
+        .edges
+        .iter()
+        .filter(|edge| {
+            let source_visible = visible_node_ids.contains(edge.source_node_id.as_str());
+            let target_visible = visible_node_ids.contains(edge.target_node_id.as_str());
+            let from_entry = edge.source_node_id == flow.entry_node_id;
+            (source_visible && target_visible) || (from_entry && target_visible)
+        })
+        .map(|edge| MapFlowEdge {
+            source_node_id: edge.source_node_id.clone(),
+            target_node_id: edge.target_node_id.clone(),
+            kind: edge
+                .kind
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("sequential")
+                .to_string(),
+            status: edge_status(edge.status.as_deref()),
+            label: edge.label.clone(),
+        })
+        .collect();
+
+    (nodes, edges)
 }
 
-fn flow_status(flow: &FlowJson, steps: &[MapFlowStep]) -> String {
+fn flow_status(flow: &FlowJson, nodes: &[MapFlowNode]) -> String {
     if !flow.dynamic_boundary_ids.is_empty() {
         return "candidate".to_string();
     }
@@ -88,7 +94,7 @@ fn flow_status(flow: &FlowJson, steps: &[MapFlowStep]) -> String {
     }) {
         return "candidate".to_string();
     }
-    if steps.iter().any(|step| step.status == "candidate") {
+    if nodes.iter().any(|node| node.status == "candidate") {
         return "candidate".to_string();
     }
     "verified".to_string()

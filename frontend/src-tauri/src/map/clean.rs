@@ -83,7 +83,11 @@ pub(crate) struct FlowEdgeJson {
     pub source_node_id: String,
     pub target_node_id: String,
     #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
