@@ -18,7 +18,8 @@ pub(super) fn extract(
     let body_span = condition_operator
         .as_deref()
         .and_then(|_| child_span(node, file, &["right", "rhs"]))
-        .or_else(|| child_span(node, file, &["body", "consequence", "then"]));
+        .or_else(|| child_span(node, file, &["body", "consequence", "then"]))
+        .or_else(|| child_span(node, file, &["value", "argument", "expression"]));
     let alternative_span = child_span(
         node,
         file,

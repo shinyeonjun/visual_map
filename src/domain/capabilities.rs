@@ -1,7 +1,7 @@
 //! HTTP/WS/Job 계약을 클러스터 원자로 묶는다.
 
 use crate::config::PathPolicy;
-use crate::domain::capability_keys::is_leaf_capability_key;
+use crate::domain::capability_keys::{canonical_capability_key, is_leaf_capability_key};
 use crate::domain::contract_path::{capability_key_from_path, normalize_contract_path};
 use crate::facts::{
     Entrypoint, EntrypointKind, FactStore, ResourceAccess, ResourceKind,
@@ -33,7 +33,7 @@ pub(crate) fn build(store: &FactStore, path_policy: &PathPolicy) -> Vec<Capabili
         if !production && !archived {
             continue;
         }
-        let Some(key) = (match entrypoint.kind {
+        let Some(raw_key) = (match entrypoint.kind {
             EntrypointKind::Job => job_capability_key(entrypoint),
             _ => unit_capability_keys
                 .get(&entrypoint.unit_id)
@@ -42,6 +42,7 @@ pub(crate) fn build(store: &FactStore, path_policy: &PathPolicy) -> Vec<Capabili
         }) else {
             continue;
         };
+        let key = canonical_capability_key(&raw_key);
         buckets
             .entry(key.clone())
             .or_insert_with(|| CapabilityBuilder::new(&key))
@@ -61,9 +62,10 @@ pub(crate) fn build(store: &FactStore, path_policy: &PathPolicy) -> Vec<Capabili
         if !path_policy.is_production_path(&unit.relative_path) {
             continue;
         }
-        let Some(key) = capability_key_from_path(&resource.name) else {
+        let Some(raw_key) = capability_key_from_path(&resource.name) else {
             continue;
         };
+        let key = canonical_capability_key(&raw_key);
         buckets
             .entry(key.clone())
             .or_insert_with(|| CapabilityBuilder::new(&key))
@@ -109,6 +111,7 @@ fn assign_client_homes(
         let Some(key) = capability_key_from_path(&resource.name) else {
             continue;
         };
+        let key = canonical_capability_key(&key);
         if !buckets.contains_key(&key) {
             continue;
         }
@@ -145,7 +148,7 @@ fn is_capability_entrypoint_kind(kind: &EntrypointKind) -> bool {
 
 fn contract_capability_key(entrypoint: &Entrypoint) -> Option<String> {
     let raw = entrypoint.path.as_deref().unwrap_or(&entrypoint.name);
-    capability_key_from_path(raw)
+    capability_key_from_path(raw).map(|key| canonical_capability_key(&key))
 }
 
 fn unit_capability_keys(
@@ -191,7 +194,7 @@ fn unit_capability_keys(
                     .then_with(|| left.0.cmp(&right.0))
             });
             keys.first()
-                .map(|(key, _)| (unit_id, key.clone()))
+                .map(|(key, _)| (unit_id, canonical_capability_key(key)))
         })
         .collect()
 }

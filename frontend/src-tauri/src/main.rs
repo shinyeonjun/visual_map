@@ -3,6 +3,8 @@ mod analysis;
 mod map;
 mod models;
 mod process;
+mod projects;
+mod semantic;
 mod storage;
 mod timing;
 
@@ -19,7 +21,9 @@ pub fn run() {
             analysis::get_codex_models,
             analysis::get_claude_models,
             analysis::get_claude_status,
-            analysis::save_ai_settings
+            analysis::save_ai_settings,
+            projects::list_saved_projects,
+            projects::load_project_map,
         ])
         .run(tauri::generate_context!())
         .expect("error while running VisualMap");

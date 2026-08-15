@@ -1,7 +1,7 @@
 use crate::map::build_map;
 use crate::models::{
     AiSettings, AnalysisProgress, AnalyzeRequest, AnalyzeResponse, ClaudeModelCatalog, ClaudeStatus,
-    CodexModelCatalog, CodexModelOption, RawCodexModelCatalog, SemanticResult,
+    CodexModelCatalog, CodexModelOption, RawCodexModelCatalog,
 };
 use crate::process::{
     command_output, parse_semantic_progress, run_engine_with_progress, SemanticProgressEvent,
@@ -12,7 +12,6 @@ use crate::storage::{
 };
 use crate::timing::AnalysisTimingLog;
 use std::ffi::OsString;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -404,11 +403,8 @@ fn run_analysis_steps(
             indeterminate: true,
         },
     );
-    let result = fs::read_to_string(&workspace.semantic_output)
-        .map_err(|error| format!("의미 분석 결과를 읽지 못했습니다: {error}"))?;
-    let semantic: SemanticResult = serde_json::from_str(&result)
-        .map_err(|error| format!("의미 분석 결과 형식이 올바르지 않습니다: {error}"))?;
-    let (domains, stats) = build_map(&workspace.clean_output, &semantic.domains)?;
+    let semantic_domains = crate::semantic::load_semantic_domains_or_error(&workspace.semantic_output)?;
+    let (domains, stats) = build_map(&workspace.clean_output, &semantic_domains)?;
     emit_analysis_progress(
         app,
         started,

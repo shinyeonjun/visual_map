@@ -2,6 +2,7 @@
 
 use crate::config::DomainPolicy;
 use crate::domain::capabilities::Capability;
+use crate::domain::capability_keys::is_operational_capability_key;
 use crate::domain::confidence::calculate_from_cluster;
 use crate::domain::grouping::{stable_domain_id, DomainGroup, DomainKind};
 use crate::domain::membership::{DomainMembership, MembershipKind};
@@ -166,7 +167,7 @@ fn ensure_group(
 }
 
 fn domain_kind(key: &str, policy: &DomainPolicy) -> DomainKind {
-    if policy.cross_cutting_keys.contains(key) {
+    if policy.cross_cutting_keys.contains(key) || is_operational_capability_key(key) {
         DomainKind::CrossCutting
     } else {
         DomainKind::Business
