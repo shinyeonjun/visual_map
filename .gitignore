@@ -47,6 +47,9 @@ Thumbs.db
 desktop.ini
 *.swp
 *.swo
+docs/
+.githooks/
+scripts/
 
 # ── 임시 파일 / 로그 / 커버리지 ────────────────────────────
 *.log
