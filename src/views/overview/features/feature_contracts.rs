@@ -1,6 +1,8 @@
 //! HTTP 계약 동치로 entrypoint를 기능 하나로 묶는다.
 
-use crate::domain::contract_path::{contract_identity, normalize_contract_path};
+use crate::domain::contract_path::{
+    contract_identity, mounted_path_suffix_match, normalize_contract_path,
+};
 use crate::facts::Entrypoint;
 use std::collections::BTreeMap;
 
@@ -49,10 +51,16 @@ pub(crate) fn contract_feature_key(entrypoint: &Entrypoint) -> String {
 }
 
 fn same_contract(left: &Entrypoint, right: &Entrypoint) -> bool {
-    if contract_identity(left.method.as_deref(), entrypoint_path(left))
-        == contract_identity(right.method.as_deref(), entrypoint_path(right))
-    {
-        return true;
+    if !methods_compatible(left.method.as_deref(), right.method.as_deref()) {
+        return false;
+    }
+
+    let left_identity = contract_identity(left.method.as_deref(), entrypoint_path(left));
+    let right_identity = contract_identity(right.method.as_deref(), entrypoint_path(right));
+    if let (Some(left), Some(right)) = (&left_identity, &right_identity) {
+        if left == right {
+            return true;
+        }
     }
 
     let Some(left_path) = normalize_contract_path(entrypoint_path(left)) else {
@@ -61,7 +69,11 @@ fn same_contract(left: &Entrypoint, right: &Entrypoint) -> bool {
     let Some(right_path) = normalize_contract_path(entrypoint_path(right)) else {
         return false;
     };
-    left_path == right_path && methods_compatible(left.method.as_deref(), right.method.as_deref())
+    if left_path == right_path {
+        return true;
+    }
+
+    left.unit_id == right.unit_id && mounted_path_suffix_match(&left_path, &right_path)
 }
 
 fn entrypoint_path(entrypoint: &Entrypoint) -> &str {
@@ -104,13 +116,22 @@ mod tests {
     use crate::facts::{EntrypointKind, Evidence};
 
     fn entrypoint(id: &str, method: Option<&str>, path: &str) -> Entrypoint {
+        entrypoint_with_unit(id, method, path, format!("unit-{id}"))
+    }
+
+    fn entrypoint_with_unit(
+        id: &str,
+        method: Option<&str>,
+        path: &str,
+        unit_id: String,
+    ) -> Entrypoint {
         Entrypoint {
             id: id.into(),
             name: id.into(),
             kind: EntrypointKind::Http,
             method: method.map(str::to_string),
             path: Some(path.into()),
-            unit_id: format!("unit-{id}"),
+            unit_id,
             framework_id: None,
             evidence: Vec::<Evidence>::new(),
         }
@@ -148,5 +169,36 @@ mod tests {
         let mut sizes: Vec<_> = groups.iter().map(|group| group.entrypoints.len()).collect();
         sizes.sort_unstable();
         assert_eq!(sizes, vec![1, 2]);
+    }
+
+    #[test]
+    fn 해석_불가_경로끼리는_같은_계약이_아니다() {
+        let root = entrypoint("ep-root", Some("GET"), "/");
+        let session = entrypoint("ep-session", Some("GET"), "/{session_id}");
+        assert!(!same_contract(&root, &session));
+    }
+
+    #[test]
+    fn 같은_핸들러의_마운트_경로는_같은_계약이다() {
+        let mounted = entrypoint_with_unit(
+            "ep-mounted",
+            Some("POST"),
+            "/api/v1/sessions/{session_id}/start",
+            "unit-start".into(),
+        );
+        let nested = entrypoint_with_unit(
+            "ep-nested",
+            Some("POST"),
+            "/{session_id}/start",
+            "unit-start".into(),
+        );
+        assert!(same_contract(&mounted, &nested));
+    }
+
+    #[test]
+    fn 다른_핸들러의_접미_유사_경로는_같은_계약이_아니다() {
+        let admin = entrypoint("ep-admin", Some("GET"), "/admin/users");
+        let users = entrypoint("ep-users", Some("GET"), "/users");
+        assert!(!same_contract(&admin, &users));
     }
 }
