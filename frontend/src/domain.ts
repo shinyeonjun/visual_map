@@ -2,12 +2,35 @@ export type AiProvider = 'codex' | 'claude'
 
 export type AnalysisState = 'ready' | 'running' | 'partial' | 'error'
 
+export type TrustStatus = 'verified' | 'candidate' | 'shared'
+
+export function trustLabel(status: TrustStatus): string {
+  if (status === 'verified') return '확인됨'
+  if (status === 'shared') return '공유'
+  return '후보'
+}
+
+export type DomainFlowStep = {
+  label: string
+  kind: string
+  status: TrustStatus
+}
+
+export type DomainFlow = {
+  id: string
+  owner: string
+  status: TrustStatus
+  steps: DomainFlowStep[]
+}
+
 export type DomainFeature = {
   id: string
   name: string
   summary?: string | null
   kind: string
+  status: TrustStatus
   entrypoints: number
+  flows: DomainFlow[]
 }
 
 export type DomainNode = {

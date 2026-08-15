@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import type { DomainNode } from '../domain'
+import { trustLabel } from '../domain'
 
 export function DomainCard({ domain, selected, onSelect }: { domain: DomainNode; selected: boolean; onSelect: () => void }) {
   const style = { left: domain.x, top: domain.y, '--domain-color': domain.color } as CSSProperties
@@ -8,7 +9,7 @@ export function DomainCard({ domain, selected, onSelect }: { domain: DomainNode;
     <span className="domain-orb" />
     <strong>{domain.name}</strong>
     <p>{domain.summary}</p>
-    <div className="domain-card-meta"><span><b>{domain.features}</b> features</span><span><b>{domain.entrypoints}</b> entrypoints</span></div>
-    <div className="card-foot"><span className={`confidence-dot ${domain.status}`} />{domain.status === 'verified' ? '확인된 도메인' : domain.status === 'shared' ? '공유 경계' : '분석 후보'}<span className="card-arrow">↗</span></div>
+    <div className="domain-card-meta"><span><b>{domain.features}</b> features</span><span><b>{domain.entrypoints}</b> entrypoints</span><span><b>{domain.confidence}%</b> 신뢰</span></div>
+    <div className="card-foot"><span className={`confidence-dot ${domain.status}`} />{trustLabel(domain.status)}<span className="card-arrow">↗</span></div>
   </button>
 }

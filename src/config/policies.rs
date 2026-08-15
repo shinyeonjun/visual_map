@@ -89,6 +89,25 @@ pub struct PathPolicy {
     pub test_directory_names: Vec<String>,
     pub test_file_prefixes: Vec<String>,
     pub test_suffixes: Vec<String>,
+    #[serde(default = "default_experiment_directory_names")]
+    pub experiment_directory_names: Vec<String>,
+    #[serde(default = "default_script_directory_names")]
+    pub script_directory_names: Vec<String>,
+    #[serde(default = "default_generated_directory_names")]
+    pub generated_directory_names: Vec<String>,
+    #[serde(default = "default_archived_directory_names")]
+    pub archived_directory_names: Vec<String>,
+}
+
+/// 코드 경로의 역할 분류다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathRole {
+    Production,
+    Test,
+    Experiment,
+    Script,
+    Generated,
+    Archived,
 }
 
 impl Default for PathPolicy {
@@ -98,7 +117,45 @@ impl Default for PathPolicy {
 }
 
 impl PathPolicy {
+    pub fn path_role(&self, path: &str) -> PathRole {
+        if self.matches_test_path(path) {
+            return PathRole::Test;
+        }
+        let normalized = path.replace('\\', "/").to_ascii_lowercase();
+        if self.matches_directory_name(&normalized, &self.experiment_directory_names) {
+            return PathRole::Experiment;
+        }
+        if self.matches_directory_name(&normalized, &self.script_directory_names) {
+            return PathRole::Script;
+        }
+        if self.matches_directory_name(&normalized, &self.generated_directory_names) {
+            return PathRole::Generated;
+        }
+        if self.matches_directory_name(&normalized, &self.archived_directory_names) {
+            return PathRole::Archived;
+        }
+        PathRole::Production
+    }
+
+    pub fn is_production_path(&self, path: &str) -> bool {
+        self.path_role(path) == PathRole::Production
+    }
+
+    pub fn is_archived_path(&self, path: &str) -> bool {
+        self.path_role(path) == PathRole::Archived
+    }
+
     pub fn is_test_path(&self, path: &str) -> bool {
+        self.path_role(path) == PathRole::Test
+    }
+
+    fn matches_directory_name(&self, normalized_path: &str, names: &[String]) -> bool {
+        normalized_path
+            .split('/')
+            .any(|part| names.iter().any(|name| name == part))
+    }
+
+    fn matches_test_path(&self, path: &str) -> bool {
         let normalized = path.replace('\\', "/").to_ascii_lowercase();
         normalized
             .split('/')
@@ -115,6 +172,32 @@ impl PathPolicy {
     }
 }
 
+fn default_experiment_directory_names() -> Vec<String> {
+    vec![
+        "experiments".into(),
+        "experiment".into(),
+        "sandbox".into(),
+        "poc".into(),
+    ]
+}
+
+fn default_script_directory_names() -> Vec<String> {
+    vec!["scripts".into(), "tools".into()]
+}
+
+fn default_generated_directory_names() -> Vec<String> {
+    vec!["generated".into(), "gen".into()]
+}
+
+fn default_archived_directory_names() -> Vec<String> {
+    vec![
+        "legacy".into(),
+        "deprecated".into(),
+        "archive".into(),
+        "archives".into(),
+    ]
+}
+
 /// 도메인 후보 점수와 그룹화 기준이다.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,12 +205,6 @@ pub struct DomainPolicy {
     pub minimum_token_length: usize,
     pub minimum_repeated_symbol_units: usize,
     pub maximum_candidate_evidence: usize,
-    pub path_weight: u32,
-    pub symbol_weight: u32,
-    pub entrypoint_weight: u32,
-    pub resource_weight: u32,
-    pub framework_weight: u32,
-    pub reference_weight: u32,
     pub confirmed_minimum_signal_families: usize,
     pub confirmed_minimum_score: u32,
     pub shared_ratio_numerator: u32,
@@ -135,6 +212,8 @@ pub struct DomainPolicy {
     pub shared_minimum_score: u32,
     pub generic_tokens: BTreeSet<String>,
     pub cross_cutting_keys: BTreeSet<String>,
+    #[serde(default = "default_feature_http_match_weight")]
+    pub feature_http_match_weight: f64,
     #[serde(default = "default_feature_call_weight")]
     pub feature_call_weight: f64,
     #[serde(default = "default_feature_flow_weight")]
@@ -173,20 +252,24 @@ impl DomainPolicy {
     }
 }
 
+fn default_feature_http_match_weight() -> f64 {
+    0.40
+}
+
 fn default_feature_call_weight() -> f64 {
     0.15
 }
 
 fn default_feature_flow_weight() -> f64 {
-    0.20
+    0.15
 }
 
 fn default_feature_resource_weight() -> f64 {
-    0.25
+    0.10
 }
 
 fn default_feature_path_weight() -> f64 {
-    0.25
+    0.05
 }
 
 fn default_feature_lexical_weight() -> f64 {
@@ -198,7 +281,7 @@ fn default_domain_cluster_min() -> usize {
 }
 
 fn default_domain_cluster_max() -> usize {
-    20
+    24
 }
 
 fn default_domain_cluster_merge_threshold() -> f64 {
@@ -380,5 +463,22 @@ pub struct CleanPolicy {
 impl Default for CleanPolicy {
     fn default() -> Self {
         default_section("clean")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PathPolicy, PathRole};
+
+    #[test]
+    fn legacy_경로는_archived이고_production이_아니다() {
+        let policy = PathPolicy::default();
+        assert_eq!(
+            policy.path_role("legacy/backend/health.py"),
+            PathRole::Archived
+        );
+        assert!(policy.is_archived_path("src/deprecated/old.ts"));
+        assert!(!policy.is_production_path("archive/api.py"));
+        assert!(policy.is_production_path("server/app.py"));
     }
 }

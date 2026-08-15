@@ -277,7 +277,7 @@ fn run_analysis_steps(
         [
             project_path.as_os_str(),
             OsString::from(format!("--config={}", workspace.config.display())).as_os_str(),
-            OsString::from(format!("--output={}", workspace.static_output.display())).as_os_str(),
+            OsString::from("--no-output").as_os_str(),
             OsString::from(format!("--clean-output={}", workspace.clean_output.display())).as_os_str(),
             OsString::from("--no-cache").as_os_str(),
             OsString::from("--profile").as_os_str(),
@@ -408,10 +408,7 @@ fn run_analysis_steps(
         .map_err(|error| format!("의미 분석 결과를 읽지 못했습니다: {error}"))?;
     let semantic: SemanticResult = serde_json::from_str(&result)
         .map_err(|error| format!("의미 분석 결과 형식이 올바르지 않습니다: {error}"))?;
-    if semantic.domains.is_empty() {
-        return Err("의미 분석 결과에 도메인이 없습니다.".to_string());
-    }
-    let (domains, stats) = build_map(&workspace.static_output, &semantic.domains)?;
+    let (domains, stats) = build_map(&workspace.clean_output, &semantic.domains)?;
     emit_analysis_progress(
         app,
         started,

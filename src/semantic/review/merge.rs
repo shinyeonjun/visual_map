@@ -1,7 +1,7 @@
 //! 청크별 의미 제안을 ID와 원본 순서 기준으로 병합한다.
 
 use super::context::ReviewContext;
-use super::response::{DomainSuggestion, FeatureSuggestion, ReviewProposal};
+use super::response::{DomainSuggestion, ReviewProposal};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,10 +15,7 @@ pub struct SemanticReviewResult {
     pub completed_chunks: usize,
     pub failed_chunks: usize,
     pub retry_attempts: usize,
-    pub semantic_stage_count: usize,
     pub domain_completed_chunks: usize,
-    pub feature_completed_chunks: usize,
-    pub flow_completed_chunks: usize,
     pub domains: Vec<DomainResult>,
     pub features: Vec<FeatureResult>,
     pub flows: Vec<FlowResult>,
@@ -120,6 +117,13 @@ pub fn merge(
         }
     }
 
+    reject_contract_demotes(contexts, &mut domain_suggestions, &mut warnings);
+
+    let demoted_domains = domain_suggestions
+        .iter()
+        .filter(|(_, suggestion)| suggestion.is_demoted())
+        .map(|(domain_id, _)| domain_id.clone())
+        .collect::<BTreeSet<_>>();
     let canonical_by_source = canonical_domain_ids(
         &domain_order,
         &known_domains,
@@ -128,6 +132,9 @@ pub fn merge(
     );
     let mut canonical_sources = BTreeMap::<String, Vec<String>>::new();
     for source_id in &domain_order {
+        if demoted_domains.contains(source_id) {
+            continue;
+        }
         canonical_sources
             .entry(
                 canonical_by_source
@@ -196,14 +203,44 @@ pub fn merge(
         completed_chunks: proposals.len(),
         failed_chunks,
         retry_attempts,
-        semantic_stage_count: 1,
         domain_completed_chunks: proposals.len(),
-        feature_completed_chunks: 0,
-        flow_completed_chunks: 0,
         domains,
         features,
         flows,
         warnings,
+    }
+}
+
+fn reject_contract_demotes(
+    contexts: &[ReviewContext],
+    suggestions: &mut BTreeMap<String, DomainSuggestion>,
+    warnings: &mut Vec<ReviewWarning>,
+) {
+    let mut records = BTreeMap::new();
+    for context in contexts {
+        for domain in &context.domains {
+            records.entry(domain.domain_id.clone()).or_insert(domain);
+        }
+    }
+    for (domain_id, suggestion) in suggestions.iter_mut() {
+        if !suggestion.is_demoted() {
+            continue;
+        }
+        let Some(domain) = records.get(domain_id) else {
+            continue;
+        };
+        if domain.entrypoints.is_empty()
+            && domain.resources.is_empty()
+            && domain.feature_ids.is_empty()
+        {
+            continue;
+        }
+        suggestion.action = Some("keep".into());
+        warnings.push(ReviewWarning {
+            code: "SEMANTIC_DEMOTE_REJECTED".into(),
+            item_id: Some(domain_id.clone()),
+            message: "계약 근거가 있는 도메인의 demote를 keep으로 바꿨습니다.".into(),
+        });
     }
 }
 
@@ -212,10 +249,10 @@ pub fn merge(
 mod tests {
     use super::merge;
     use crate::semantic::review::context::{
-        ReviewContext, ReviewDomain, ReviewFeature, ReviewFlow, ReviewGlobalSummary,
-        ReviewProjectProfile,
+        ReviewContext, ReviewDomain, ReviewEntrypoint, ReviewFeature, ReviewFlow,
+        ReviewGlobalSummary, ReviewProjectProfile,
     };
-    use crate::semantic::review::response::{DomainSuggestion, FeatureSuggestion, ReviewProposal};
+    use crate::semantic::review::response::{DomainSuggestion, ReviewProposal};
     use serde_json::Value;
 
     fn context() -> ReviewContext {
@@ -275,15 +312,10 @@ mod tests {
                 domains: vec![DomainSuggestion {
                     domain_id: "domain-a".into(),
                     canonical_domain_id: None,
+                    action: None,
                     name: "사용자 인증".into(),
                     summary: Some("로그인을 담당한다".into()),
                 }],
-                features: vec![FeatureSuggestion {
-                    feature_id: "feature-a".into(),
-                    name: "로그인".into(),
-                    summary: None,
-                }],
-                flows: Vec::new(),
             }],
             "context.json".into(),
             0,
@@ -310,18 +342,18 @@ mod tests {
                     DomainSuggestion {
                         domain_id: "unknown".into(),
                         canonical_domain_id: None,
+                        action: None,
                         name: "가짜".into(),
                         summary: None,
                     },
                     DomainSuggestion {
                         domain_id: "domain-a".into(),
                         canonical_domain_id: None,
+                        action: None,
                         name: "인증".into(),
                         summary: Some("첫 줄\n둘째 줄".into()),
                     },
                 ],
-                features: Vec::new(),
-                flows: Vec::new(),
             }],
             "context.json".into(),
             0,
@@ -364,18 +396,18 @@ mod tests {
                     DomainSuggestion {
                         domain_id: "domain-a".into(),
                         canonical_domain_id: Some("domain-b".into()),
+                        action: None,
                         name: "인증과 세션".into(),
                         summary: Some("사용자 인증과 세션을 담당한다".into()),
                     },
                     DomainSuggestion {
                         domain_id: "domain-b".into(),
                         canonical_domain_id: Some("domain-b".into()),
+                        action: None,
                         name: "인증과 세션".into(),
                         summary: Some("사용자 인증과 세션을 담당한다".into()),
                     },
                 ],
-                features: Vec::new(),
-                flows: Vec::new(),
             }],
             "context.json".into(),
             0,
@@ -392,6 +424,72 @@ mod tests {
         );
         assert_eq!(result.features[0].domain_ids, vec!["domain-b"]);
         assert_eq!(result.flows[0].domain_ids, vec!["domain-b"]);
+    }
+
+    #[test]
+    fn demote는_빈_도메인만_결과에서_제거한다() {
+        let mut empty = context();
+        empty.domains[0].feature_ids.clear();
+        empty.domains[0].flow_ids.clear();
+        empty.features.clear();
+        empty.flows.clear();
+        let result = merge(
+            &[empty],
+            &[ReviewProposal {
+                domains: vec![DomainSuggestion {
+                    domain_id: "domain-a".into(),
+                    canonical_domain_id: None,
+                    action: Some("demote".into()),
+                    name: "배포 표면".into(),
+                    summary: None,
+                }],
+            }],
+            "context.json".into(),
+            0,
+            0,
+            120,
+            500,
+        );
+
+        assert!(result.domains.is_empty());
+        assert!(result.features.is_empty());
+    }
+
+    #[test]
+    fn 계약이_있는_도메인_demote는_keep으로_되돌린다() {
+        let mut with_contract = context();
+        with_contract.domains[0].entrypoints.push(ReviewEntrypoint {
+            id: "entry-a".into(),
+            unit_id: "unit-a".into(),
+            kind: Value::Null,
+            name: "GET /threads".into(),
+            method: Some("GET".into()),
+            path: Some("/threads".into()),
+        });
+        let result = merge(
+            &[with_contract],
+            &[ReviewProposal {
+                domains: vec![DomainSuggestion {
+                    domain_id: "domain-a".into(),
+                    canonical_domain_id: None,
+                    action: Some("demote".into()),
+                    name: "배포 표면".into(),
+                    summary: None,
+                }],
+            }],
+            "context.json".into(),
+            0,
+            0,
+            120,
+            500,
+        );
+
+        assert_eq!(result.domains.len(), 1);
+        assert_eq!(result.domains[0].domain_id, "domain-a");
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "SEMANTIC_DEMOTE_REJECTED"));
     }
 }
 
@@ -553,6 +651,10 @@ fn merge_suggestion<T: Suggestion>(
         });
         return;
     }
+    if suggestion.bypass_validation() {
+        destination.entry(id).or_insert_with(|| suggestion.clone());
+        return;
+    }
     if !valid_text(suggestion.name(), maximum_name_length)
         || suggestion.name().contains(['\r', '\n'])
         || suggestion.summary().as_ref().is_some_and(|value| {
@@ -573,6 +675,9 @@ trait Suggestion: Clone {
     fn id(&self) -> &str;
     fn name(&self) -> &str;
     fn summary(&self) -> &Option<String>;
+    fn bypass_validation(&self) -> bool {
+        false
+    }
 }
 impl Suggestion for DomainSuggestion {
     fn id(&self) -> &str {
@@ -583,6 +688,9 @@ impl Suggestion for DomainSuggestion {
     }
     fn summary(&self) -> &Option<String> {
         &self.summary
+    }
+    fn bypass_validation(&self) -> bool {
+        self.is_demoted()
     }
 }
 

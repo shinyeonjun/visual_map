@@ -109,12 +109,31 @@ pub(crate) struct MapDomain {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct MapFlowStep {
+    pub(crate) label: String,
+    pub(crate) kind: String,
+    pub(crate) status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MapFlow {
+    pub(crate) id: String,
+    pub(crate) owner: String,
+    pub(crate) status: String,
+    pub(crate) steps: Vec<MapFlowStep>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct MapFeature {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) summary: Option<String>,
     pub(crate) kind: String,
+    pub(crate) status: String,
     pub(crate) entrypoints: usize,
+    pub(crate) flows: Vec<MapFlow>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -156,7 +175,6 @@ pub(crate) struct AnalysisProgress {
 pub(crate) struct WorkspacePaths {
     pub(crate) directory: PathBuf,
     pub(crate) config: PathBuf,
-    pub(crate) static_output: PathBuf,
     pub(crate) clean_output: PathBuf,
     pub(crate) context_output: PathBuf,
     pub(crate) semantic_output: PathBuf,
