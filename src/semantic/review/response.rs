@@ -1,4 +1,4 @@
-//! Codex JSONL 응답에서 의미 이름 제안만 추출한다.
+//! Codex JSONL 응답에서 도메인 이름 제안만 추출한다.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -7,21 +7,11 @@ use serde_json::Value;
 #[serde(rename_all = "camelCase", default)]
 pub struct ReviewProposal {
     pub domains: Vec<DomainSuggestion>,
-    pub features: Vec<FeatureSuggestion>,
-    pub flows: Vec<FlowSuggestion>,
 }
 
 impl ReviewProposal {
     pub fn merge_missing(&mut self, supplement: Self) {
-        merge_by_id(&mut self.domains, supplement.domains, |item| {
-            item.domain_id.as_str()
-        });
-        merge_by_id(&mut self.features, supplement.features, |item| {
-            item.feature_id.as_str()
-        });
-        merge_by_id(&mut self.flows, supplement.flows, |item| {
-            item.flow_id.as_str()
-        });
+        merge_by_id(&mut self.domains, supplement.domains, |item| item.domain_id.as_str());
     }
 }
 
@@ -49,24 +39,18 @@ pub struct DomainSuggestion {
     /// 대표 원본 domain ID다. 새 ID는 허용하지 않는다.
     #[serde(default)]
     pub canonical_domain_id: Option<String>,
+    #[serde(default)]
+    pub action: Option<String>,
     pub name: String,
     pub summary: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FeatureSuggestion {
-    pub feature_id: String,
-    pub name: String,
-    pub summary: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FlowSuggestion {
-    pub flow_id: String,
-    pub name: String,
-    pub summary: Option<String>,
+impl DomainSuggestion {
+    pub fn is_demoted(&self) -> bool {
+        self.action
+            .as_deref()
+            .is_some_and(|action| action.eq_ignore_ascii_case("demote"))
+    }
 }
 
 pub fn parse_response(stdout: &[u8]) -> Result<ReviewProposal, String> {
@@ -99,12 +83,10 @@ pub fn parse_response(stdout: &[u8]) -> Result<ReviewProposal, String> {
         let Ok(value) = serde_json::from_str::<Value>(candidate_json) else {
             continue;
         };
-        let has_review_keys = value.as_object().is_some_and(|object| {
-            ["domains", "features", "flows"]
-                .iter()
-                .any(|key| object.contains_key(*key))
-        });
-        if has_review_keys {
+        let has_domains = value
+            .as_object()
+            .is_some_and(|object| object.contains_key("domains"));
+        if has_domains {
             if let Ok(proposal) = serde_json::from_value::<ReviewProposal>(value) {
                 return Ok(proposal);
             }
@@ -132,7 +114,7 @@ mod tests {
     use super::parse_response;
 
     #[test]
-    fn 의미_응답에서_도메인_기능_흐름을_읽는다() {
+    fn 의미_응답에서_도메인_이름을_읽는다() {
         let payload = serde_json::json!({
             "domains": [{"domainId": "domain_a", "name": "auth", "summary": "login"}],
             "features": [{"featureId": "feature_a", "name": "login", "summary": null}],
@@ -145,7 +127,6 @@ mod tests {
         .to_string();
         let proposal = parse_response(output.as_bytes()).expect("의미 응답을 읽어야 한다");
         assert_eq!(proposal.domains[0].domain_id, "domain_a");
-        assert_eq!(proposal.features[0].feature_id, "feature_a");
-        assert_eq!(proposal.flows[0].flow_id, "flow_a");
+        assert_eq!(proposal.domains[0].name, "auth");
     }
 }

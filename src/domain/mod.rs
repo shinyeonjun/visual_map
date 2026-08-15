@@ -10,7 +10,9 @@ pub mod naming;
 pub mod signals;
 
 mod aggregation;
+mod capabilities;
 mod clustering;
+pub(crate) mod contract_path;
 mod feature_graph;
 mod formation;
 mod models;

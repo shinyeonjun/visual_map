@@ -32,6 +32,13 @@ mod tests {
         assert_eq!(config.semantic.codex_executable, "codex");
         assert!(config.languages.from_extension("ts").is_some());
         assert!(!config.paths.ignored_directories.is_empty());
+        assert!(config.paths.is_archived_path("legacy/backend/health.py"));
+        assert!(!config.paths.is_production_path("legacy/backend/health.py"));
+        assert!(!config
+            .paths
+            .ignored_directories
+            .iter()
+            .any(|name| name == "legacy"));
         assert_eq!(config.scan.max_file_size_bytes, 10 * 1024 * 1024);
     }
 

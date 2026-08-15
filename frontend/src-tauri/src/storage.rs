@@ -75,7 +75,6 @@ pub(crate) fn prepare_workspace(
     Ok(WorkspacePaths {
         directory,
         config: workspace_config,
-        static_output: analysis_directory.join("static-result.json"),
         clean_output: clean_directory,
         context_output: ai_directory.join("context.json"),
         semantic_output: ai_directory.join("semantic-result.json"),
@@ -235,7 +234,7 @@ pub(crate) fn resolve_executable(
     } else {
         ["release", "debug"]
     };
-    // dev에서는 워크스페이스에 방금 빌드한 엔진을 번들 복사본보다 우선한다.
+    // dev도 release 엔진을 우선한다. 코드 바꾼 뒤에는 release를 다시 빌드해야 한다.
     if cfg!(debug_assertions) {
         if let Some(candidate) = find_engine_in_roots(&executable, profiles) {
             return candidate;

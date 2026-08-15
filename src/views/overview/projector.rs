@@ -1,4 +1,5 @@
-use crate::domain::DomainAnalysisOutput;
+use crate::config::PathPolicy;
+use crate::domain::{DomainAnalysisOutput, DomainKind};
 use crate::facts::{FactStore, ResolutionStatus};
 use crate::flow::ExecutionFlowGraph;
 use crate::frameworks::registry::detector::FrameworkDetection;
@@ -88,7 +89,9 @@ fn project_inner(
     }
 
     let features = prebuilt_features
-        .unwrap_or_else(|| super::features::build(analysis, facts, &execution_flows));
+        .unwrap_or_else(|| {
+            super::features::build(analysis, facts, &execution_flows, &PathPolicy::default())
+        });
     let confirmed_reference_count = facts
         .references
         .iter()
@@ -147,7 +150,12 @@ fn project_inner(
         })
         .collect();
 
-    let mut domains = analysis.groups.clone();
+    let mut domains = analysis
+        .groups
+        .iter()
+        .filter(|group| group.kind == DomainKind::Business)
+        .cloned()
+        .collect::<Vec<_>>();
     let domain_indexes = domains
         .iter()
         .enumerate()

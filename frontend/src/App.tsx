@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { analyzeProject, checkClaudeCli, createProject, isDesktopRuntime, loadClaudeModels, loadCodexModels, saveAiSettings, selectProjectFolder } from './services/analysis'
 import type { AiProvider, AnalysisProgress, ClaudeModel, CodexModel, CodexModelCatalog, DomainNode, MapDomain, Project } from './domain'
-import { domainPalette } from './domain'
+import { domainPalette, trustLabel } from './domain'
 import { useCanvasViewport } from './hooks/useCanvasViewport'
 import { AnalysisProgressPanel, Icon, SetupScreen } from './components/ui'
 import { DomainCard } from './components/domain-card'
@@ -11,6 +11,17 @@ import './styles.css'
 function featureKindLabel(kind: string): string {
   if (kind === 'endpoint') return 'API'
   if (kind === 'operation') return 'FUNC'
+  return kind.toUpperCase()
+}
+
+function flowStepLabel(kind: string): string {
+  if (kind === 'call') return '호출'
+  if (kind === 'condition') return '분기'
+  if (kind === 'switch') return '선택'
+  if (kind === 'loop') return '반복'
+  if (kind === 'return') return '반환'
+  if (kind === 'throw') return '예외'
+  if (kind === 'dynamicBoundary') return '동적 경계'
   return kind.toUpperCase()
 }
 
@@ -53,6 +64,7 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([])
   const [projectId, setProjectId] = useState('')
   const [selectedId, setSelectedId] = useState('')
+  const [selectedFeatureId, setSelectedFeatureId] = useState('')
   const [model, setModel] = useState('')
   const [models, setModels] = useState<CodexModel[]>([])
   const [claudeModels, setClaudeModels] = useState<ClaudeModel[]>([])
@@ -76,6 +88,11 @@ function App() {
   const canvas = useCanvasViewport(1040, 700)
   const project = projects.find((item) => item.id === projectId)
   const selectedDomain = project?.domains.find((domain) => domain.id === selectedId) ?? project?.domains[0]
+  const selectedFeature = selectedDomain?.featureItems.find((feature) => feature.id === selectedFeatureId) ?? null
+
+  useEffect(() => {
+    setSelectedFeatureId('')
+  }, [selectedId])
   const visibleDomains = useMemo(() => {
     if (!project) return []
     const normalizedQuery = query.trim().toLowerCase()
@@ -88,6 +105,7 @@ function App() {
     if (!next) return
     setProjectId(id)
     setSelectedId(next.domains[0]?.id ?? '')
+    setSelectedFeatureId('')
     setProjectMenuOpen(false)
     setNotice('프로젝트 지도를 불러왔습니다.')
     setActiveView(next.domains.length > 0 ? 'map' : 'setup')
@@ -332,7 +350,7 @@ function App() {
         <div className="map-panel">
           <div className="canvas-context"><span className="eyebrow">BUSINESS MAP / 01</span><strong>{project.name}</strong><span>도메인 지도</span></div>
           <label className="canvas-search"><Icon name="search" size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="도메인 검색" /></label>
-          <div className="map-panel-head"><div className="map-legend"><span><i className="legend-line solid" />확인된 관계</span><span><i className="legend-line dashed" />공유 경계</span><span><i className="legend-node" />도메인</span></div><div className="map-controls"><button onClick={canvas.zoomIn}>+</button><span>{Math.round(canvas.view.scale * 100)}%</span><button onClick={canvas.zoomOut}>−</button><button onClick={canvas.fit}>⌖</button></div></div>
+          <div className="map-panel-head"><div className="map-legend"><span><i className="legend-line solid" />확인된 관계</span><span><i className="legend-line dashed" />공유 경계</span><span><i className="legend-node" />도메인</span><span><i className="legend-dot verified" />확인됨</span><span><i className="legend-dot candidate" />후보</span></div><div className="map-controls"><button onClick={canvas.zoomIn}>+</button><span>{Math.round(canvas.view.scale * 100)}%</span><button onClick={canvas.zoomOut}>−</button><button onClick={canvas.fit}>⌖</button></div></div>
           <div ref={canvas.viewRef} className="map-canvas" {...canvas.handlers} onContextMenu={(event) => event.preventDefault()}>
             <div className="canvas-grid" style={canvas.gridStyle} />
             <div className="canvas-world" style={canvas.stageStyle}>
@@ -348,7 +366,7 @@ function App() {
       <aside className="inspector">
         <div className="inspector-head">
           <div><span className="eyebrow">SELECTED DOMAIN</span><h2>{selectedDomain?.name ?? '도메인 선택'}</h2></div>
-          <button className="icon-button" onClick={() => setSelectedId('')} aria-label="선택 해제"><Icon name="close" size={18} /></button>
+          <button className="icon-button" onClick={() => { setSelectedId(''); setSelectedFeatureId('') }} aria-label="선택 해제"><Icon name="close" size={18} /></button>
         </div>
         {selectedDomain ? (
           <>
@@ -356,27 +374,77 @@ function App() {
             <div className="confidence">
               <div><span>분석 신뢰도</span><strong>{selectedDomain.confidence}%</strong></div>
               <div className="confidence-track"><span style={{ width: `${selectedDomain.confidence}%`, background: selectedDomain.color }} /></div>
-              <small>정적 근거 {selectedDomain.status === 'verified' ? '확인됨' : selectedDomain.status === 'shared' ? '공유 경계' : '후보'} · {selectedDomain.units} units</small>
+              <small>정적 근거 {trustLabel(selectedDomain.status)} · {selectedDomain.units} units</small>
             </div>
             <div className="inspector-section">
               <div className="section-title"><span>구성된 기능</span><b>{selectedDomain.features}</b></div>
               {selectedDomain.featureItems.length > 0 ? (
                 <div className="fake-list">
-                  {selectedDomain.featureItems.slice(0, 8).map((feature) => (
-                    <div className="fake-row" key={feature.id}>
+                  {selectedDomain.featureItems.map((feature) => (
+                    <button
+                      type="button"
+                      className={`fake-row feature-row${selectedFeatureId === feature.id ? ' selected' : ''}`}
+                      key={feature.id}
+                      onClick={() => setSelectedFeatureId((current) => current === feature.id ? '' : feature.id)}
+                    >
                       <span className="mini-icon" style={{ color: selectedDomain.color }}>↗</span>
                       <span>
                         <strong>{feature.name}</strong>
-                        <small>{feature.summary?.trim() || (feature.entrypoints > 0 ? '외부 진입점' : '내부 서비스 로직')}</small>
+                        <small>
+                          {feature.summary?.trim()
+                            || (feature.flows.length > 0
+                              ? `실행 길 ${feature.flows.length}개`
+                              : feature.entrypoints > 0 ? '외부 진입점' : '내부 서비스 로직')}
+                        </small>
                       </span>
-                      <em>{featureKindLabel(feature.kind)}</em>
-                    </div>
+                      <span className="feature-meta">
+                        <span className={`trust-badge ${feature.status}`}>{trustLabel(feature.status)}</span>
+                        <em>{featureKindLabel(feature.kind)}</em>
+                      </span>
+                    </button>
                   ))}
                 </div>
               ) : (
                 <p className="muted-copy">구성된 기능이 없습니다.</p>
               )}
             </div>
+            {selectedFeature && (
+              <div className="inspector-section flow-section">
+                <div className="section-title">
+                  <span>실행 길</span>
+                  <b>{selectedFeature.flows.length}</b>
+                </div>
+                {selectedFeature.flows.length > 0 ? (
+                  <div className="flow-list">
+                    {selectedFeature.flows.map((flow) => (
+                      <div className="flow-block" key={flow.id}>
+                        <div className="flow-owner">
+                          <span>{flow.owner}</span>
+                          <span className={`trust-badge ${flow.status}`}>{trustLabel(flow.status)}</span>
+                        </div>
+                        {flow.steps.length > 0 ? (
+                          <ol className="flow-steps">
+                            {flow.steps.map((step, index) => (
+                              <li key={`${flow.id}-${index}`} className={step.status === 'candidate' ? 'candidate-step' : undefined}>
+                                <span className="flow-step-label">{step.label}</span>
+                                <span className="flow-step-meta">
+                                  <span className={`trust-dot ${step.status}`} aria-label={trustLabel(step.status)} />
+                                  <em>{flowStepLabel(step.kind)}</em>
+                                </span>
+                              </li>
+                            ))}
+                          </ol>
+                        ) : (
+                          <p className="muted-copy">표시할 단계가 없습니다.</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted-copy">이 기능에 연결된 실행 길이 없습니다.</p>
+                )}
+              </div>
+            )}
             <div className="inspector-section">
               <div className="section-title"><span>연결된 도메인</span><b>{selectedDomain.dependencies.length}</b></div>
               {selectedDomain.dependencies.length > 0 ? (

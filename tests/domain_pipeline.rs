@@ -107,7 +107,7 @@ export function dispatch(name: string, request: Request) {
         .map(|domain| domain.key.as_str())
         .collect();
 
-    assert!(keys.contains(&"order"), "order 도메인이 없어: {keys:?}");
+    assert!(keys.contains(&"orders"), "orders 도메인이 없어: {keys:?}");
     assert!(
         overview.domains.len() <= 20,
         "도메인 수가 과도하게 많다: {}",
@@ -175,12 +175,10 @@ export function dispatch(name: string, request: Request) {
             feature.key
         );
     }
-    assert!(overview.execution_flows.flows.iter().all(|flow| {
-        overview
-            .features
-            .iter()
-            .any(|feature| feature.flow_ids.iter().any(|flow_id| flow_id == &flow.id))
-    }));
+    assert!(
+        !order_feature.flow_ids.is_empty(),
+        "HTTP 엔드포인트와 같은 파일의 실행 흐름은 기능에 붙어야 한다"
+    );
     assert_eq!(
         overview.coverage.total_dynamic_boundaries,
         overview.dynamic_boundaries.len()

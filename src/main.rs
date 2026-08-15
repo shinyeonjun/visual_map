@@ -359,14 +359,11 @@ fn run_semantic_review(arguments: &[String]) -> ExitCode {
     ) {
         Ok(result) => {
             eprintln!(
-                "{provider_label} 의미 분석 완료: status={} stages={} chunks={}/{} domainChunks={} featureChunks={} flowChunks={} retries={} domains={} features={} flows={} output={}",
+                "{provider_label} 의미 분석 완료: status={} chunks={}/{} domainChunks={} retries={} domains={} features={} flows={} output={}",
                 result.status,
-                result.semantic_stage_count,
                 result.completed_chunks,
                 result.chunk_count,
                 result.domain_completed_chunks,
-                result.feature_completed_chunks,
-                result.flow_completed_chunks,
                 result.retry_attempts,
                 result.domains.len(),
                 result.features.len(),

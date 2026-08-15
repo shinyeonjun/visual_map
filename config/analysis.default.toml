@@ -41,29 +41,28 @@ ignoredDirectories = [".git",".idea",".vscode","node_modules","target","dist","b
 testDirectoryNames = ["test","tests","__tests__"]
 testFilePrefixes = ["test_","test-"]
 testSuffixes = ["_test.go","_test.rs",".test.js",".spec.js",".test.jsx",".spec.jsx",".test.ts",".spec.ts",".test.tsx",".spec.tsx","_test.py","test.java","tests.java"]
+experimentDirectoryNames = ["experiments","experiment","sandbox","poc"]
+scriptDirectoryNames = ["scripts","tools"]
+generatedDirectoryNames = ["generated","gen"]
+archivedDirectoryNames = ["legacy","deprecated","archive","archives"]
 
 [domains]
 minimumTokenLength = 3
 minimumRepeatedSymbolUnits = 2
 maximumCandidateEvidence = 12
-pathWeight = 4
-symbolWeight = 3
-entrypointWeight = 6
-resourceWeight = 5
-frameworkWeight = 1
-referenceWeight = 2
 confirmedMinimumSignalFamilies = 2
 confirmedMinimumScore = 8
 sharedRatioNumerator = 3
 sharedRatioDenominator = 4
 sharedMinimumScore = 3
+featureHttpMatchWeight = 0.40
 featureCallWeight = 0.15
-featureFlowWeight = 0.20
-featureResourceWeight = 0.25
-featurePathWeight = 0.25
+featureFlowWeight = 0.15
+featureResourceWeight = 0.10
+featurePathWeight = 0.05
 featureLexicalWeight = 0.15
 domainClusterMin = 6
-domainClusterMax = 20
+domainClusterMax = 24
 domainClusterMergeThreshold = 0.08
 genericTokens = ["src","lib","app","apps","main","index","test","tests","spec","fixture","fixtures","from","adapter","adapters","aggregate","aggregation","analysis","analyze","analyzer","analyzers","access","all","argument","arguments","array","ast","async","attribute","attributes","build","call","callback","candidate","candidates","catalog","codex","bundle","capability","capabilities","class","code","compile","collection","cpp","csharp","context","coverage","declaration","declarations","dependency","dependencies","default","detect","detected","detection","detector","diagnostic","diagnostics","domain","dispatch","dispatcher","dynamic","dart","engine","ecma","entry","entries","entrypoint","entrypoints","error","errors","evidence","extension","extensions","fact","facts","file","files","flow","framework","frameworks","function","functions","generic","go","get","graph","group","groups","grouping","collect","confidence","family","fmt","for","import","imports","input","issue","issues","ids","info","internal","join","key","keys","java","javascript","kind","language","languages","line","lines","map","member","members","membership","metadata","merge","method","methods","module","modules","mod","name","names","naming","new","normalize","normalized","node","nodes","option","options","output","package","packages","python","parameter","parameters","parser","parsers","path","paths","pipeline","project","projects","read","provider","providers","reference","references","relation","relations","resource","resources","result","results","request","route","routes","overview","progress","projector","proposal","registry","resolution","resolve","rust","scan","schema","schemas","semantic","signal","signals","snapshot","source","span","status","stable","stages","store","structure","target","targets","token","tokens","tree","trees","typescript","type","types","suggestion","summarize","summary","temporary","unit","units","unknown","value","values","validate","validated","validator","view","views","warning","warnings","worse","service","services","controller","controllers","handler","handlers","manager","factory","helper","helpers","util","utils","common","shared","base","impl","repository","repositories","model","models","dto","infra","infrastructure","config","configuration","logging","logger","database","transaction","transactions","http","api","apis","com","org","net","set","skip","with","post","backend","legacy","rstrip","strip","format","parse","run","load","save","put","delete","create","update","list","item","items","data","state","client","server","frontend","runtime","core","web","ui"]
 crossCuttingKeys = ["common","shared","infra","infrastructure","logging","logger","config","database","transaction","http"]
@@ -175,7 +174,7 @@ requiresImport = true
 
 [[parser.resourceRules]]
 languages = ["javascript","typescript"]
-calleePatterns = ["fetch"]
+calleePatterns = ["fetch","fetchImpl","requestJson","requestNoContent","requestLiveJson"]
 kind = "externalApi"
 mode = "readwrite"
 argumentIndex = 0

@@ -1,12 +1,14 @@
-//! Feature 쌍의 다차원 유사도를 계산하는 Multi-view Feature Similarity Graph.
+//! Capability 쌍의 다차원 유사도를 계산하는 Multi-view Similarity Graph.
 
 use crate::config::DomainPolicy;
+use crate::domain::contract_path::paths_match;
 use crate::domain::tfidf::{self, FeatureTerms};
 use crate::facts::{FactStore, ReferenceKind, ResolutionStatus};
 use crate::flow::ExecutionFlowGraph;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 struct SimilarityWeights {
+    http_match: f64,
     call: f64,
     flow: f64,
     resource: f64,
@@ -17,6 +19,7 @@ struct SimilarityWeights {
 impl SimilarityWeights {
     fn from_policy(policy: &DomainPolicy) -> Self {
         let raw = [
+            policy.feature_http_match_weight,
             policy.feature_call_weight,
             policy.feature_flow_weight,
             policy.feature_resource_weight,
@@ -25,56 +28,28 @@ impl SimilarityWeights {
         ];
         let total = raw.iter().sum::<f64>().max(f64::MIN_POSITIVE);
         Self {
-            call: raw[0] / total,
-            flow: raw[1] / total,
-            resource: raw[2] / total,
-            path: raw[3] / total,
-            lexical: raw[4] / total,
+            http_match: raw[0] / total,
+            call: raw[1] / total,
+            flow: raw[2] / total,
+            resource: raw[3] / total,
+            path: raw[4] / total,
+            lexical: raw[5] / total,
         }
     }
 }
 
-/// 두 Feature 사이의 다차원 유사도다.
+/// 두 Capability 사이의 다차원 유사도다.
 #[derive(Debug, Clone)]
 pub(super) struct FeatureSimilarity {
+    pub http_match: f64,
     pub call: f64,
     pub flow: f64,
     pub resource: f64,
-    pub path: f64,
     pub lexical: f64,
     pub combined: f64,
 }
 
-#[allow(dead_code)]
-impl FeatureSimilarity {
-    /// 구조적 증거(call 또는 flow)가 하나 이상 있는지 확인한다.
-    pub fn has_structural_evidence(&self) -> bool {
-        self.call > 0.0 || self.flow > 0.0
-    }
-
-    /// 유사도가 0이 아닌 독립 증거 유형의 수를 센다.
-    pub fn evidence_type_count(&self) -> usize {
-        let mut count = 0;
-        if self.call > 0.0 {
-            count += 1;
-        }
-        if self.flow > 0.0 {
-            count += 1;
-        }
-        if self.resource > 0.0 {
-            count += 1;
-        }
-        if self.path > 0.0 {
-            count += 1;
-        }
-        if self.lexical > 0.0 {
-            count += 1;
-        }
-        count
-    }
-}
-
-/// Feature 쌍의 유사도 행렬이다. 대칭 상삼각만 저장한다.
+/// Capability 쌍의 유사도 행렬이다. 대칭 상삼각만 저장한다.
 pub(super) struct SimilarityMatrix {
     size: usize,
     values: Vec<FeatureSimilarity>,
@@ -97,10 +72,10 @@ impl SimilarityMatrix {
             size,
             values: vec![
                 FeatureSimilarity {
+                    http_match: combined,
                     call: 0.0,
                     flow: 0.0,
                     resource: 0.0,
-                    path: 0.0,
                     lexical: combined,
                     combined,
                 };
@@ -110,43 +85,52 @@ impl SimilarityMatrix {
     }
 }
 
-/// Feature 목록과 FactStore에서 전체 유사도 행렬을 계산한다.
+/// Capability 목록과 FactStore에서 전체 유사도 행렬을 계산한다.
 pub(super) fn compute(
-    feature_unit_ids: &[Vec<String>],
-    feature_resource_ids: &[Vec<String>],
-    feature_flow_ids: &[Vec<String>],
-    feature_paths: &[HashSet<String>],
+    atom_unit_ids: &[Vec<String>],
+    atom_resource_ids: &[Vec<String>],
+    atom_flow_ids: &[Vec<String>],
+    atom_paths: &[HashSet<String>],
+    atom_keys: &[String],
+    atom_contract_paths: &[BTreeSet<String>],
     terms: &[FeatureTerms],
     store: &FactStore,
     flows: &ExecutionFlowGraph,
     domain_policy: &DomainPolicy,
 ) -> SimilarityMatrix {
     let weights = SimilarityWeights::from_policy(domain_policy);
-    let n = feature_unit_ids.len();
-    let unit_to_feature = build_unit_to_feature_index(feature_unit_ids);
-    let call_counts = compute_call_counts(feature_unit_ids, &unit_to_feature, store);
-    let flow_links = compute_flow_connections(feature_flow_ids, flows);
+    let n = atom_unit_ids.len();
+    let unit_to_atom = build_unit_to_atom_index(atom_unit_ids);
+    let call_counts = compute_call_counts(&unit_to_atom, store);
+    let flow_links = compute_flow_connections(atom_flow_ids, flows);
 
     let mut values = Vec::with_capacity(n * (n - 1) / 2);
     for i in 0..n {
         for j in (i + 1)..n {
-            let call = call_similarity(&call_counts, i, j, feature_unit_ids);
+            let http_match = http_match_similarity(
+                &atom_keys[i],
+                &atom_contract_paths[i],
+                &atom_keys[j],
+                &atom_contract_paths[j],
+            );
+            let call = call_similarity(&call_counts, i, j, atom_unit_ids);
             let flow = flow_similarity(&flow_links, i, j);
-            let resource = resource_similarity(&feature_resource_ids[i], &feature_resource_ids[j]);
-            let path = path_similarity(&feature_paths[i], &feature_paths[j]);
+            let resource = resource_similarity(&atom_resource_ids[i], &atom_resource_ids[j]);
+            let path = path_similarity(&atom_paths[i], &atom_paths[j]);
             let lexical = tfidf::cosine_similarity(&terms[i], &terms[j]);
 
-            let combined = weights.call * call
+            let combined = weights.http_match * http_match
+                + weights.call * call
                 + weights.flow * flow
                 + weights.resource * resource
                 + weights.path * path
                 + weights.lexical * lexical;
 
             values.push(FeatureSimilarity {
+                http_match,
                 call,
                 flow,
                 resource,
-                path,
                 lexical,
                 combined,
             });
@@ -156,20 +140,18 @@ pub(super) fn compute(
     SimilarityMatrix { size: n, values }
 }
 
-fn build_unit_to_feature_index(feature_unit_ids: &[Vec<String>]) -> HashMap<String, usize> {
+fn build_unit_to_atom_index(atom_unit_ids: &[Vec<String>]) -> HashMap<String, usize> {
     let mut index = HashMap::new();
-    for (feature_index, unit_ids) in feature_unit_ids.iter().enumerate() {
+    for (atom_index, unit_ids) in atom_unit_ids.iter().enumerate() {
         for unit_id in unit_ids {
-            index.entry(unit_id.clone()).or_insert(feature_index);
+            index.entry(unit_id.clone()).or_insert(atom_index);
         }
     }
     index
 }
 
-/// Feature 쌍 사이의 확정 참조(Call/Constructs) 수를 집계한다.
 fn compute_call_counts(
-    _feature_unit_ids: &[Vec<String>],
-    unit_to_feature: &HashMap<String, usize>,
+    unit_to_atom: &HashMap<String, usize>,
     store: &FactStore,
 ) -> HashMap<(usize, usize), usize> {
     let mut counts: HashMap<(usize, usize), usize> = HashMap::new();
@@ -186,19 +168,19 @@ fn compute_call_counts(
         let Some(target_id) = &reference.target_unit_id else {
             continue;
         };
-        let Some(&source_feature) = unit_to_feature.get(&reference.source_unit_id) else {
+        let Some(&source_atom) = unit_to_atom.get(&reference.source_unit_id) else {
             continue;
         };
-        let Some(&target_feature) = unit_to_feature.get(target_id) else {
+        let Some(&target_atom) = unit_to_atom.get(target_id) else {
             continue;
         };
-        if source_feature == target_feature {
+        if source_atom == target_atom {
             continue;
         }
-        let key = if source_feature < target_feature {
-            (source_feature, target_feature)
+        let key = if source_atom < target_atom {
+            (source_atom, target_atom)
         } else {
-            (target_feature, source_feature)
+            (target_atom, source_atom)
         };
         *counts.entry(key).or_insert(0) += 1;
     }
@@ -209,47 +191,46 @@ fn call_similarity(
     counts: &HashMap<(usize, usize), usize>,
     i: usize,
     j: usize,
-    feature_unit_ids: &[Vec<String>],
+    atom_unit_ids: &[Vec<String>],
 ) -> f64 {
     let key = if i < j { (i, j) } else { (j, i) };
     let count = *counts.get(&key).unwrap_or(&0);
     if count == 0 {
         return 0.0;
     }
-    let max_possible = feature_unit_ids[i].len().max(feature_unit_ids[j].len()).max(1);
+    let max_possible = atom_unit_ids[i].len().max(atom_unit_ids[j].len()).max(1);
     (count as f64 / max_possible as f64).clamp(0.0, 1.0)
 }
 
-/// Feature 쌍 사이의 FlowLink 연결 수를 집계한다.
 fn compute_flow_connections(
-    feature_flow_ids: &[Vec<String>],
+    atom_flow_ids: &[Vec<String>],
     flows: &ExecutionFlowGraph,
 ) -> HashMap<(usize, usize), usize> {
-    let flow_to_feature: HashMap<&str, usize> = feature_flow_ids
+    let flow_to_atom: HashMap<&str, usize> = atom_flow_ids
         .iter()
         .enumerate()
-        .flat_map(|(feature_index, flow_ids)| {
+        .flat_map(|(atom_index, flow_ids)| {
             flow_ids
                 .iter()
-                .map(move |flow_id| (flow_id.as_str(), feature_index))
+                .map(move |flow_id| (flow_id.as_str(), atom_index))
         })
         .collect();
 
     let mut counts: HashMap<(usize, usize), usize> = HashMap::new();
     for link in &flows.links {
-        let Some(&source_feature) = flow_to_feature.get(link.source_flow_id.as_str()) else {
+        let Some(&source_atom) = flow_to_atom.get(link.source_flow_id.as_str()) else {
             continue;
         };
-        let Some(&target_feature) = flow_to_feature.get(link.target_flow_id.as_str()) else {
+        let Some(&target_atom) = flow_to_atom.get(link.target_flow_id.as_str()) else {
             continue;
         };
-        if source_feature == target_feature {
+        if source_atom == target_atom {
             continue;
         }
-        let key = if source_feature < target_feature {
-            (source_feature, target_feature)
+        let key = if source_atom < target_atom {
+            (source_atom, target_atom)
         } else {
-            (target_feature, source_feature)
+            (target_atom, source_atom)
         };
         *counts.entry(key).or_insert(0) += 1;
     }
@@ -310,4 +291,31 @@ fn single_path_similarity(a: &str, b: &str) -> f64 {
         return 0.0;
     }
     common as f64 / max_len as f64
+}
+
+fn http_match_similarity(
+    key_a: &str,
+    paths_a: &BTreeSet<String>,
+    key_b: &str,
+    paths_b: &BTreeSet<String>,
+) -> f64 {
+    if !key_a.is_empty() && key_a == key_b {
+        return 1.0;
+    }
+    if paths_a.is_empty() || paths_b.is_empty() {
+        return 0.0;
+    }
+    let mut matches = 0usize;
+    for left in paths_a {
+        for right in paths_b {
+            if paths_match(left, right) {
+                matches += 1;
+            }
+        }
+    }
+    let union = paths_a.len() * paths_b.len();
+    if union == 0 {
+        return 0.0;
+    }
+    (matches as f64 / union as f64).clamp(0.0, 1.0)
 }

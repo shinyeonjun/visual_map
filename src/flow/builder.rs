@@ -114,22 +114,7 @@ fn build_flow(unit: &CodeUnit, input_index: &FlowInputIndex<'_>) -> ExecutionFlo
     // 호출식의 span은 인자 전체를 포함한다. 단순한 시작 위치 정렬을
     // 사용하면 `combine(first(), second())`가 `combine → first → second`로
     // 보이므로, 중첩된 호출은 내부 인자를 먼저 평가하는 순서로 정렬한다.
-    events.sort_by(|left, right| {
-        if matches!(
-            (left, right),
-            (Event::Reference { .. }, Event::Reference { .. })
-        ) {
-            if spans_contain(left.span(), right.span()) {
-                return std::cmp::Ordering::Greater;
-            }
-            if spans_contain(right.span(), left.span()) {
-                return std::cmp::Ordering::Less;
-            }
-        }
-        left.start_position()
-            .cmp(&right.start_position())
-            .then_with(|| left.end_position().cmp(&right.end_position()))
-    });
+    events.sort_by(compare_events);
 
     let mut nodes = vec![
         entry_node(unit, &entry_node_id),
@@ -158,6 +143,19 @@ fn build_flow(unit: &CodeUnit, input_index: &FlowInputIndex<'_>) -> ExecutionFlo
         edges,
         dynamic_boundary_ids,
     }
+}
+
+fn compare_events(left: &Event, right: &Event) -> std::cmp::Ordering {
+    if spans_contain(left.span(), right.span()) {
+        return std::cmp::Ordering::Greater;
+    }
+    if spans_contain(right.span(), left.span()) {
+        return std::cmp::Ordering::Less;
+    }
+    left.start_position()
+        .cmp(&right.start_position())
+        .then_with(|| left.end_position().cmp(&right.end_position()))
+        .then_with(|| left.node().id.cmp(&right.node().id))
 }
 
 fn spans_contain(

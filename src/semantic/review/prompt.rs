@@ -1,28 +1,9 @@
-//! 도메인·기능·실행 흐름 의미 분석 프롬프트를 만든다.
+//! 도메인 이름 의미 분석 프롬프트를 만든다.
 
 use super::context::ReviewContext;
 use super::response::ReviewProposal;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptStage {
-    Domain,
-    Feature,
-    Flow,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SemanticNames {
-    pub domains: BTreeMap<String, SemanticDomainName>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SemanticDomainName {
-    pub canonical_domain_id: String,
-    pub name: String,
-    pub summary: Option<String>,
-}
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PromptLimits {
@@ -31,27 +12,23 @@ pub struct PromptLimits {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct MissingItems {
+pub struct MissingDomainIds {
     pub domains: BTreeSet<String>,
-    pub features: BTreeSet<String>,
-    pub flows: BTreeSet<String>,
 }
 
-impl MissingItems {
+impl MissingDomainIds {
     pub fn is_empty(&self) -> bool {
-        self.domains.is_empty() && self.features.is_empty() && self.flows.is_empty()
+        self.domains.is_empty()
     }
 }
 
-pub fn build_stage(
+pub fn build_prompt(
     context: &ReviewContext,
-    stage: PromptStage,
-    names: &SemanticNames,
     chunk_index: usize,
     chunk_count: usize,
     limits: PromptLimits,
 ) -> Result<String, serde_json::Error> {
-    let context_json = stage_context(context, stage, names);
+    let context_json = domain_name_context(context);
     Ok(include_str!("../prompts/semantic_review.txt")
         .replace("{chunk_number}", &(chunk_index + 1).to_string())
         .replace("{chunk_count}", &chunk_count.to_string())
@@ -62,12 +39,11 @@ pub fn build_stage(
         .replace("{context_json}", &context_json.to_string()))
 }
 
-pub fn missing_items_for_stage(
+pub fn missing_domain_ids(
     context: &ReviewContext,
     proposal: &ReviewProposal,
-    stage: PromptStage,
     limits: PromptLimits,
-) -> MissingItems {
+) -> MissingDomainIds {
     let domain_ids = proposal
         .domains
         .iter()
@@ -77,208 +53,49 @@ pub fn missing_items_for_stage(
                 &item.summary,
                 limits.maximum_name_length,
                 limits.maximum_summary_length,
-            )
+            ) || item.is_demoted()
         })
         .map(|item| item.domain_id.as_str())
         .collect::<BTreeSet<_>>();
-    let feature_ids = proposal
-        .features
-        .iter()
-        .filter(|item| {
-            valid_suggestion(
-                &item.name,
-                &item.summary,
-                limits.maximum_name_length,
-                limits.maximum_summary_length,
-            )
-        })
-        .map(|item| item.feature_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let flow_ids = proposal
-        .flows
-        .iter()
-        .filter(|item| {
-            valid_suggestion(
-                &item.name,
-                &item.summary,
-                limits.maximum_name_length,
-                limits.maximum_summary_length,
-            )
-        })
-        .map(|item| item.flow_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut missing = MissingItems::default();
-    match stage {
-        PromptStage::Domain => {
-            for domain in &context.domains {
-                if !domain_ids.contains(domain.domain_id.as_str()) {
-                    missing.domains.insert(domain.domain_id.clone());
-                }
-            }
-        }
-        PromptStage::Feature => {
-            for feature in &context.features {
-                if !feature_ids.contains(feature.id.as_str()) {
-                    missing.features.insert(feature.id.clone());
-                }
-            }
-        }
-        PromptStage::Flow => {
-            for flow in &context.flows {
-                if !flow_ids.contains(flow.id.as_str()) {
-                    missing.flows.insert(flow.id.clone());
-                }
-            }
+    let mut missing = MissingDomainIds::default();
+    for domain in &context.domains {
+        if !domain_ids.contains(domain.domain_id.as_str()) {
+            missing.domains.insert(domain.domain_id.clone());
         }
     }
     missing
 }
 
-pub fn build_missing_stage(
+pub fn build_missing_prompt(
     context: &ReviewContext,
-    missing: &MissingItems,
-    stage: PromptStage,
-    names: &SemanticNames,
+    missing: &MissingDomainIds,
     chunk_index: usize,
     chunk_count: usize,
     limits: PromptLimits,
 ) -> Result<String, serde_json::Error> {
-    let narrowed = context_with_missing_items(context, missing, stage);
-    build_stage(&narrowed, stage, names, chunk_index, chunk_count, limits)
+    let narrowed = context_with_missing_domains(context, missing);
+    build_prompt(&narrowed, chunk_index, chunk_count, limits)
 }
 
-fn context_with_missing_items(
+fn context_with_missing_domains(
     context: &ReviewContext,
-    missing: &MissingItems,
-    stage: PromptStage,
+    missing: &MissingDomainIds,
 ) -> ReviewContext {
     let mut narrowed = context.clone();
-    match stage {
-        PromptStage::Domain => {
-            narrowed.domains = context
-                .domains
-                .iter()
-                .filter(|domain| missing.domains.contains(&domain.domain_id))
-                .map(|domain| {
-                    let mut domain = domain.clone();
-                    domain.feature_ids.clear();
-                    domain.flow_ids.clear();
-                    domain
-                })
-                .collect();
-            narrowed.features.clear();
-            narrowed.flows.clear();
-        }
-        PromptStage::Feature => {
-            narrowed.domains = context
-                .domains
-                .iter()
-                .filter_map(|domain| {
-                    let mut domain = domain.clone();
-                    domain
-                        .feature_ids
-                        .retain(|id| missing.features.contains(id));
-                    domain.flow_ids.clear();
-                    if !domain.feature_ids.is_empty() {
-                        Some(domain)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            narrowed
-                .features
-                .retain(|feature| missing.features.contains(&feature.id));
-            for feature in &mut narrowed.features {
-                feature.flow_ids.clear();
-            }
-            narrowed.flows.clear();
-        }
-        PromptStage::Flow => {
-            narrowed.domains = context
-                .domains
-                .iter()
-                .filter_map(|domain| {
-                    let mut domain = domain.clone();
-                    domain.flow_ids.retain(|id| missing.flows.contains(id));
-                    if !domain.flow_ids.is_empty() {
-                        Some(domain)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            narrowed
-                .features
-                .retain(|feature| feature.flow_ids.iter().any(|id| missing.flows.contains(id)));
-            narrowed
-                .flows
-                .retain(|flow| missing.flows.contains(&flow.id));
-        }
-    }
-    narrowed
-}
-
-const MAX_DOMAIN_HINTS: usize = 8;
-
-fn stage_context(context: &ReviewContext, stage: PromptStage, names: &SemanticNames) -> Value {
-    if matches!(stage, PromptStage::Domain) {
-        return domain_name_context(context);
-    }
-
-    let include_features = matches!(stage, PromptStage::Feature | PromptStage::Flow);
-    let include_flows = matches!(stage, PromptStage::Flow);
-    let domains = context
+    narrowed.domains = context
         .domains
         .iter()
+        .filter(|domain| missing.domains.contains(&domain.domain_id))
         .map(|domain| {
-            let semantic = names.domains.get(&domain.domain_id);
-            json!({
-                "domainId": domain.domain_id,
-                "currentLabel": domain.current_label,
-                "businessDomainId": semantic.map(|item| item.canonical_domain_id.clone()),
-                "businessName": semantic.map(|item| item.name.clone()),
-                "featureIds": if include_features { domain.feature_ids.clone() } else { Vec::new() },
-                "flowIds": if include_flows { domain.flow_ids.clone() } else { Vec::new() }
-            })
+            let mut domain = domain.clone();
+            domain.feature_ids.clear();
+            domain.flow_ids.clear();
+            domain
         })
-        .collect::<Vec<_>>();
-    let features = if include_features {
-        context
-            .features
-            .iter()
-            .map(|feature| {
-                json!({
-                    "featureId": feature.id,
-                    "domainIds": feature.domain_ids,
-                    "currentLabel": feature.current_label,
-                    "flowIds": if include_flows { feature.flow_ids.clone() } else { Vec::new() }
-                })
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    let flows = if include_flows {
-        context
-            .flows
-            .iter()
-            .map(|flow| {
-                json!({
-                    "flowId": flow.id,
-                    "ownerName": flow.owner_name,
-                    "steps": flow.steps.iter().map(|step| json!({ "label": step.label })).collect::<Vec<_>>()
-                })
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    json!({
-        "domains": domains,
-        "features": features,
-        "flows": flows
-    })
+        .collect();
+    narrowed.features.clear();
+    narrowed.flows.clear();
+    narrowed
 }
 
 fn domain_name_context(context: &ReviewContext) -> Value {
@@ -291,11 +108,7 @@ fn domain_name_context(context: &ReviewContext) -> Value {
 fn domain_name_item(domain: &crate::semantic::review::context::ReviewDomain) -> Value {
     json!({
         "domainId": domain.domain_id,
-        "currentLabel": domain.current_label,
-        "paths": unique_limited(
-            domain.source_paths.iter().map(|path| directory_hint(path)),
-            MAX_DOMAIN_HINTS
-        ),
+        "contractKey": domain.current_label,
         "entrypoints": unique_limited(
             domain.entrypoints.iter().map(entrypoint_hint),
             MAX_DOMAIN_HINTS
@@ -307,13 +120,7 @@ fn domain_name_item(domain: &crate::semantic::review::context::ReviewDomain) -> 
     })
 }
 
-fn directory_hint(path: &str) -> String {
-    let normalized = path.replace('\\', "/");
-    normalized
-        .rsplit_once('/')
-        .map(|(directory, _)| directory.to_string())
-        .unwrap_or(normalized)
-}
+const MAX_DOMAIN_HINTS: usize = 8;
 
 fn entrypoint_hint(entrypoint: &crate::semantic::review::context::ReviewEntrypoint) -> String {
     match (&entrypoint.method, &entrypoint.path) {
@@ -361,8 +168,7 @@ fn valid_text(value: &str, maximum_length: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_missing_stage, build_stage, missing_items_for_stage, MissingItems, PromptLimits,
-        PromptStage, SemanticDomainName, SemanticNames,
+        build_missing_prompt, build_prompt, missing_domain_ids, MissingDomainIds, PromptLimits,
     };
     use crate::semantic::review::context::{
         ReviewContext, ReviewDomain, ReviewFeature, ReviewFlow, ReviewGlobalSummary,
@@ -381,18 +187,32 @@ mod tests {
             project_profile: ReviewProjectProfile::default(),
             global_summary: ReviewGlobalSummary::default(),
             adjacent_domains: Vec::new(),
-            domains: vec![ReviewDomain {
-                domain_id: "domain-a".into(),
-                source_domain_ids: Vec::new(),
-                current_label: "auth".into(),
-                role: Value::Null,
-                signal: Value::Null,
-                source_paths: Vec::new(),
-                entrypoints: Vec::new(),
-                resources: Vec::new(),
-                feature_ids: vec!["feature-a".into()],
-                flow_ids: vec!["flow-a".into()],
-            }],
+            domains: vec![
+                ReviewDomain {
+                    domain_id: "domain-a".into(),
+                    source_domain_ids: Vec::new(),
+                    current_label: "auth".into(),
+                    role: Value::Null,
+                    signal: Value::Null,
+                    source_paths: Vec::new(),
+                    entrypoints: Vec::new(),
+                    resources: Vec::new(),
+                    feature_ids: vec!["feature-a".into()],
+                    flow_ids: vec!["flow-a".into()],
+                },
+                ReviewDomain {
+                    domain_id: "domain-b".into(),
+                    source_domain_ids: Vec::new(),
+                    current_label: "billing".into(),
+                    role: Value::Null,
+                    signal: Value::Null,
+                    source_paths: Vec::new(),
+                    entrypoints: Vec::new(),
+                    resources: Vec::new(),
+                    feature_ids: Vec::new(),
+                    flow_ids: Vec::new(),
+                },
+            ],
             features: vec![ReviewFeature {
                 id: "feature-a".into(),
                 domain_ids: vec!["domain-a".into()],
@@ -422,11 +242,12 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn 응답에_없는_ID만_재요청_목록에_남긴다() {
+    fn 응답에_없는_도메인만_재요청_목록에_남긴다() {
         let proposal = ReviewProposal {
             domains: vec![DomainSuggestion {
                 domain_id: "domain-a".into(),
                 canonical_domain_id: None,
+                action: None,
                 name: "인증".into(),
                 summary: None,
             }],
@@ -436,33 +257,23 @@ mod tests {
             maximum_name_length: 80,
             maximum_summary_length: 120,
         };
-        let mut missing =
-            missing_items_for_stage(&context(), &proposal, PromptStage::Domain, limits);
-        missing.features =
-            missing_items_for_stage(&context(), &proposal, PromptStage::Feature, limits).features;
-        missing.flows =
-            missing_items_for_stage(&context(), &proposal, PromptStage::Flow, limits).flows;
+        let missing = missing_domain_ids(&context(), &proposal, limits);
         assert_eq!(
             missing,
-            MissingItems {
-                domains: Default::default(),
-                features: ["feature-a".into()].into_iter().collect(),
-                flows: ["flow-a".into()].into_iter().collect(),
+            MissingDomainIds {
+                domains: ["domain-b".into()].into_iter().collect(),
             }
         );
     }
 
     #[test]
-    fn 재요청_컨텍스트는_누락된_항목만_포함한다() {
-        let missing = MissingItems {
-            features: ["feature-a".into()].into_iter().collect(),
-            ..MissingItems::default()
+    fn 재요청_컨텍스트는_누락된_도메인만_포함한다() {
+        let missing = MissingDomainIds {
+            domains: ["domain-b".into()].into_iter().collect(),
         };
-        let prompt = build_missing_stage(
+        let prompt = build_missing_prompt(
             &context(),
             &missing,
-            PromptStage::Feature,
-            &Default::default(),
             0,
             1,
             PromptLimits {
@@ -471,16 +282,16 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(prompt.contains("feature-a"));
+        assert!(prompt.contains("domain-b"));
+        assert!(!prompt.contains("domain-a"));
+        assert!(!prompt.contains("feature-a"));
         assert!(!prompt.contains("flow-a"));
     }
 
     #[test]
     fn 도메인_prompt는_이름_재료만_포함하고_기능_흐름은_보내지_않는다() {
-        let domain_prompt = build_stage(
+        let domain_prompt = build_prompt(
             &context(),
-            PromptStage::Domain,
-            &SemanticNames::default(),
             0,
             1,
             PromptLimits {
@@ -490,54 +301,12 @@ mod tests {
         )
         .unwrap();
         assert!(domain_prompt.contains("\"domains\":["));
-        assert!(domain_prompt.contains("currentLabel"));
+        assert!(domain_prompt.contains("contractKey"));
         assert!(!domain_prompt.contains("feature-a"));
         assert!(!domain_prompt.contains("flow-a"));
         assert!(!domain_prompt.contains("\"features\""));
         assert!(!domain_prompt.contains("\"flows\""));
         assert!(!domain_prompt.contains("projectProfile"));
         assert!(!domain_prompt.contains("globalSummary"));
-
-        let mut names = SemanticNames::default();
-        names.domains.insert(
-            "domain-a".into(),
-            SemanticDomainName {
-                canonical_domain_id: "domain-a".into(),
-                name: "사용자 인증".into(),
-                summary: Some("사용자 인증 기능".into()),
-            },
-        );
-        let feature_prompt = build_stage(
-            &context(),
-            PromptStage::Feature,
-            &names,
-            0,
-            1,
-            PromptLimits {
-                maximum_name_length: 80,
-                maximum_summary_length: 120,
-            },
-        )
-        .unwrap();
-        assert!(feature_prompt.contains("feature-a"));
-        assert!(feature_prompt.contains("사용자 인증"));
-        assert!(feature_prompt.contains("\"flows\":[]"));
-        assert!(!feature_prompt.contains("flow-a"));
-        let flow_prompt = build_stage(
-            &context(),
-            PromptStage::Flow,
-            &names,
-            0,
-            1,
-            PromptLimits {
-                maximum_name_length: 80,
-                maximum_summary_length: 120,
-            },
-        )
-        .unwrap();
-        assert!(flow_prompt.contains("flow-a"));
-        assert!(flow_prompt.contains("사용자 인증"));
-        assert!(flow_prompt.contains("\"domains\":["));
-        assert!(flow_prompt.contains("\"features\":["));
     }
 }

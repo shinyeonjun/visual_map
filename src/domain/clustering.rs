@@ -2,14 +2,13 @@
 //!
 //! 평균 연결(average linkage)을 사용하고, 동점일 때 ID 기반 안정
 //! tie-breaking으로 결과를 결정적으로 유지한다. 목표 클러스터 수에 맞춰
-//! 임계값 기반 병합 후 필요하면 강제 병합·싱글톤 흡수를 수행한다.
+//! 임계값 기반 병합 후 필요하면 강제 병합을 수행한다.
 
 use super::feature_graph::SimilarityMatrix;
 
 const DEFAULT_MERGE_THRESHOLD: f64 = 0.08;
-const MIN_EVIDENCE_TYPES: usize = 2;
 
-/// 하나의 클러스터는 Feature 인덱스 집합이다.
+/// 하나의 클러스터는 Capability 인덱스 집합이다.
 #[derive(Debug, Clone)]
 pub(super) struct Cluster {
     pub id: usize,
@@ -34,7 +33,6 @@ impl MergeConstraints {
 pub(super) struct ClusterOptions {
     pub merge_threshold: f64,
     pub target_count: usize,
-    pub min_count: usize,
     pub max_count: usize,
 }
 
@@ -43,7 +41,6 @@ impl Default for ClusterOptions {
         Self {
             merge_threshold: DEFAULT_MERGE_THRESHOLD,
             target_count: 12,
-            min_count: 6,
             max_count: 20,
         }
     }
@@ -98,13 +95,17 @@ pub(super) fn cluster(
     }
 
     while active.len() > options.max_count {
-        let Some((a, b, _)) = best_merge_pair_force(&active, &cluster_sim, constraints) else {
+        let Some((a, b, _)) = best_merge_pair_force(
+            &active,
+            &cluster_sim,
+            constraints,
+            &clusters,
+            matrix,
+        ) else {
             break;
         };
         merge_clusters(a, b, &mut clusters, &mut active, &mut cluster_sim, matrix);
     }
-
-    absorb_singletons(&mut clusters, &mut active, &mut cluster_sim, constraints, matrix);
 
     clusters.into_iter().flatten().collect()
 }
@@ -139,12 +140,17 @@ fn best_merge_pair_force(
     active: &[usize],
     cluster_sim: &[Vec<f64>],
     constraints: &MergeConstraints,
+    clusters: &[Option<Cluster>],
+    matrix: &SimilarityMatrix,
 ) -> Option<(usize, usize, f64)> {
     let mut best_sim = -1.0_f64;
     let mut best_pair: Option<(usize, usize)> = None;
     for (idx_a, &a) in active.iter().enumerate() {
         for &b in active.iter().skip(idx_a + 1) {
             if constraints.is_forbidden(a, b) {
+                continue;
+            }
+            if !can_merge(a, b, clusters, matrix, constraints) {
                 continue;
             }
             let sim = cluster_sim[a][b];
@@ -196,56 +202,6 @@ fn merge_clusters(
     }
 }
 
-fn absorb_singletons(
-    clusters: &mut [Option<Cluster>],
-    active: &mut Vec<usize>,
-    cluster_sim: &mut [Vec<f64>],
-    constraints: &MergeConstraints,
-    matrix: &SimilarityMatrix,
-) {
-    loop {
-        let singleton = active.iter().find(|&&cluster_id| {
-            clusters[cluster_id]
-                .as_ref()
-                .is_some_and(|cluster| cluster.members.len() == 1)
-        });
-        let Some(&singleton_id) = singleton else {
-            break;
-        };
-        if active.len() <= 1 {
-            break;
-        }
-        let mut best_neighbor = None;
-        let mut best_sim = -1.0_f64;
-        for &other in active.iter() {
-            if other == singleton_id {
-                continue;
-            }
-            if constraints.is_forbidden(singleton_id, other) {
-                continue;
-            }
-            let sim = cluster_sim[singleton_id][other];
-            if sim > best_sim
-                || (sim == best_sim && best_neighbor.map_or(true, |current| other < current))
-            {
-                best_sim = sim;
-                best_neighbor = Some(other);
-            }
-        }
-        let Some(neighbor) = best_neighbor else {
-            break;
-        };
-        merge_clusters(
-            singleton_id,
-            neighbor,
-            clusters,
-            active,
-            cluster_sim,
-            matrix,
-        );
-    }
-}
-
 fn can_merge(
     a: usize,
     b: usize,
@@ -265,34 +221,19 @@ fn can_merge(
     }
 
     let mut has_structural = false;
-    let mut evidence_types = std::collections::HashSet::new();
     for &member_a in &cluster_a.members {
         for &member_b in &cluster_b.members {
             let sim = matrix.get(member_a, member_b);
-            if sim.call > 0.0 {
-                evidence_types.insert("call");
+            if sim.http_match > 0.0 || sim.call > 0.0 || sim.flow > 0.0 {
                 has_structural = true;
-            }
-            if sim.flow > 0.0 {
-                evidence_types.insert("flow");
-                has_structural = true;
-            }
-            if sim.resource > 0.0 {
-                evidence_types.insert("resource");
-            }
-            if sim.path > 0.0 {
-                evidence_types.insert("path");
-            }
-            if sim.lexical > 0.0 {
-                evidence_types.insert("lexical");
+                break;
             }
         }
+        if has_structural {
+            break;
+        }
     }
-
-    if has_structural {
-        return evidence_types.len() >= MIN_EVIDENCE_TYPES;
-    }
-    evidence_types.len() >= 1
+    has_structural
 }
 
 fn average_linkage_from_matrix(
@@ -342,10 +283,27 @@ mod tests {
             ClusterOptions {
                 merge_threshold: 1.0,
                 target_count: 3,
-                min_count: 6,
                 max_count: 20,
             },
         );
         assert_eq!(clusters.len(), 3);
+    }
+
+    #[test]
+    fn force_merge도_병합_금지와_구조_가드를_지킨다() {
+        let matrix = SimilarityMatrix::uniform(4, 0.95);
+        let constraints = MergeConstraints {
+            forbidden_pairs: vec![(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)],
+        };
+        let clusters = cluster(
+            &matrix,
+            &constraints,
+            ClusterOptions {
+                merge_threshold: 0.0,
+                target_count: 1,
+                max_count: 1,
+            },
+        );
+        assert_eq!(clusters.len(), 4);
     }
 }

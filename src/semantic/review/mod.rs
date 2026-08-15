@@ -6,7 +6,7 @@ mod partition;
 mod prompt;
 mod response;
 
-use self::prompt::{PromptLimits, PromptStage, SemanticNames};
+use self::prompt::PromptLimits;
 use self::response::ReviewProposal;
 use crate::config::SemanticPolicy;
 use crate::semantic::AiProvider;
@@ -68,10 +68,8 @@ pub fn run(
     let input = context::load(input_path)?;
     let source_contexts = input.contexts;
     let original_context_count = source_contexts.len();
-    let domain_partition = partition::split_to_budget_for_stage(
+    let domain_partition = partition::split_to_budget_with_limits(
         &source_contexts,
-        PromptStage::Domain,
-        &SemanticNames::default(),
         policy.codex_max_input_bytes,
         policy.maximum_label_length,
         policy.maximum_summary_length,
@@ -95,13 +93,11 @@ pub fn run(
         );
     }
     let provider = build_provider(policy);
-    let domain_stage = run_stage(
+    let domain_stage = run_domain_review(
         &provider,
         &domain_contexts,
         project_root,
         policy,
-        PromptStage::Domain,
-        &SemanticNames::default(),
     )?;
 
     let mut result = merge::merge(
@@ -114,10 +110,7 @@ pub fn run(
         policy.maximum_summary_length,
     );
     result.warnings.extend(domain_stage.warnings);
-    result.semantic_stage_count = 1;
     result.domain_completed_chunks = domain_stage.completed_chunks;
-    result.feature_completed_chunks = 0;
-    result.flow_completed_chunks = 0;
     result.chunk_count = domain_contexts.len();
     result.completed_chunks = domain_stage.completed_chunks;
     eprintln!(
@@ -148,7 +141,7 @@ fn build_provider(policy: &SemanticPolicy) -> AiProvider {
     }
 }
 
-struct StageRun {
+struct DomainReviewRun {
     proposals: Vec<ReviewProposal>,
     failed_chunks: usize,
     retry_attempts: usize,
@@ -156,25 +149,13 @@ struct StageRun {
     warnings: Vec<ReviewWarning>,
 }
 
-fn run_stage(
+fn run_domain_review(
     provider: &AiProvider,
     contexts: &[context::ReviewContext],
     project_root: &Path,
     policy: &SemanticPolicy,
-    stage: PromptStage,
-    names: &SemanticNames,
-) -> Result<StageRun, ReviewError> {
-    let stage_name = match stage {
-        PromptStage::Domain => "domain",
-        PromptStage::Feature => "feature",
-        PromptStage::Flow => "flow",
-    };
-    let failure_code = match stage {
-        PromptStage::Domain => "SEMANTIC_DOMAIN_CHUNK_FAILED",
-        PromptStage::Feature => "SEMANTIC_FEATURE_CHUNK_FAILED",
-        PromptStage::Flow => "SEMANTIC_FLOW_CHUNK_FAILED",
-    };
-    let mut run = StageRun {
+) -> Result<DomainReviewRun, ReviewError> {
+    let mut run = DomainReviewRun {
         proposals: Vec::new(),
         failed_chunks: 0,
         retry_attempts: 0,
@@ -182,26 +163,21 @@ fn run_stage(
         warnings: Vec::new(),
     };
     eprintln!(
-        "[semantic] stage={} started total={}",
-        stage_name,
+        "[semantic] stage=domain started total={}",
         contexts.len()
     );
     eprintln!(
-        "[semantic] progress stage={} total={} status=stage_started",
-        stage_name,
+        "[semantic] progress stage=domain total={} status=stage_started",
         contexts.len()
     );
     for (index, context) in contexts.iter().enumerate() {
         eprintln!(
-            "[semantic] progress stage={} chunk={} total={} status=started",
-            stage_name,
+            "[semantic] progress stage=domain chunk={} total={} status=started",
             index + 1,
             contexts.len()
         );
-        let prompt = prompt::build_stage(
+        let prompt = prompt::build_prompt(
             context,
-            stage,
-            names,
             index,
             contexts.len(),
             PromptLimits {
@@ -211,18 +187,11 @@ fn run_stage(
         )
         .map_err(ReviewError::Serialize)?;
         let mut last_error = None;
-        let mut proposal =
-            execute_proposal(provider, &prompt, project_root, stage, &mut last_error);
-        let mut empty_proposal = ReviewProposal::default();
-        if let Some(proposal) = proposal.as_mut() {
-            retain_stage_items(proposal, stage);
-        } else {
-            retain_stage_items(&mut empty_proposal, stage);
-        }
-        let mut missing = prompt::missing_items_for_stage(
+        let mut proposal = execute_proposal(provider, &prompt, project_root, &mut last_error);
+        let empty_proposal = ReviewProposal::default();
+        let mut missing = prompt::missing_domain_ids(
             context,
             proposal.as_ref().unwrap_or(&empty_proposal),
-            stage,
             PromptLimits {
                 maximum_name_length: policy.maximum_label_length,
                 maximum_summary_length: policy.maximum_summary_length,
@@ -233,11 +202,9 @@ fn run_stage(
                 break;
             }
             run.retry_attempts += 1;
-            let retry_prompt = prompt::build_missing_stage(
+            let retry_prompt = prompt::build_missing_prompt(
                 context,
                 &missing,
-                stage,
-                names,
                 index,
                 contexts.len(),
                 PromptLimits {
@@ -246,28 +213,21 @@ fn run_stage(
                 },
             )
             .map_err(ReviewError::Serialize)?;
-            let Some(retry_proposal) = execute_proposal(
-                provider,
-                &retry_prompt,
-                project_root,
-                stage,
-                &mut last_error,
-            ) else {
+            let Some(retry_proposal) =
+                execute_proposal(provider, &retry_prompt, project_root, &mut last_error)
+            else {
                 continue;
             };
-            let mut retry_proposal = retry_proposal;
-            retain_stage_items(&mut retry_proposal, stage);
             if let Some(current) = proposal.as_mut() {
                 current.merge_missing(retry_proposal);
             } else {
                 proposal = Some(retry_proposal);
             }
-            missing = prompt::missing_items_for_stage(
+            missing = prompt::missing_domain_ids(
                 context,
                 proposal
                     .as_ref()
                     .expect("재시도 성공 시 proposal이 존재해야 한다"),
-                stage,
                 PromptLimits {
                     maximum_name_length: policy.maximum_label_length,
                     maximum_summary_length: policy.maximum_summary_length,
@@ -278,21 +238,19 @@ fn run_stage(
             run.proposals.push(proposal);
             run.completed_chunks += 1;
             eprintln!(
-                "[semantic] progress stage={} chunk={} total={} status=completed",
-                stage_name,
+                "[semantic] progress stage=domain chunk={} total={} status=completed",
                 index + 1,
                 contexts.len()
             );
         } else {
             run.failed_chunks += 1;
             run.warnings.push(ReviewWarning {
-                code: failure_code.into(),
+                code: "SEMANTIC_DOMAIN_CHUNK_FAILED".into(),
                 item_id: Some(context.chunk_id.clone()),
                 message: last_error.unwrap_or_else(|| "Codex 응답이 없습니다.".into()),
             });
             eprintln!(
-                "[semantic] progress stage={} chunk={} total={} status=failed",
-                stage_name,
+                "[semantic] progress stage=domain chunk={} total={} status=failed",
                 index + 1,
                 contexts.len()
             );
@@ -305,7 +263,6 @@ fn execute_proposal(
     provider: &AiProvider,
     prompt: &str,
     project_root: &Path,
-    stage: PromptStage,
     last_error: &mut Option<String>,
 ) -> Option<ReviewProposal> {
     let stdout = match provider.execute_prompt(prompt, project_root) {
@@ -316,30 +273,10 @@ fn execute_proposal(
         }
     };
     match response::parse_response(&stdout) {
-        Ok(mut proposal) => {
-            retain_stage_items(&mut proposal, stage);
-            Some(proposal)
-        }
+        Ok(proposal) => Some(proposal),
         Err(error) => {
             *last_error = Some(error.to_string());
             None
-        }
-    }
-}
-
-fn retain_stage_items(proposal: &mut ReviewProposal, stage: PromptStage) {
-    match stage {
-        PromptStage::Domain => {
-            proposal.features.clear();
-            proposal.flows.clear();
-        }
-        PromptStage::Feature => {
-            proposal.domains.clear();
-            proposal.flows.clear();
-        }
-        PromptStage::Flow => {
-            proposal.domains.clear();
-            proposal.features.clear();
         }
     }
 }

@@ -184,7 +184,7 @@ fn resource_name(call: &CallSiteFact, rule: &ResourceRule) -> String {
     let argument_name = call
         .arguments
         .get(rule.argument_index)
-        .and_then(|argument| string_literal(argument));
+        .and_then(|argument| extract_url_name(argument));
     match rule.name_source {
         ResourceNameSource::Argument => argument_name,
         ResourceNameSource::Receiver => call.receiver.clone(),
@@ -192,6 +192,100 @@ fn resource_name(call: &CallSiteFact, rule: &ResourceRule) -> String {
     }
     .filter(|name| !name.trim().is_empty())
     .unwrap_or_else(|| "<dynamic>".to_string())
+}
+
+fn extract_url_name(argument: &str) -> Option<String> {
+    let mut candidate = argument.trim();
+    for _ in 0..3 {
+        if let Some(literal) = string_literal(candidate) {
+            return normalize_url_name(&literal);
+        }
+        if let Some(template) = template_literal_path(candidate) {
+            return normalize_url_name(&template);
+        }
+        let unwrapped = unwrap_url_wrapper(candidate);
+        if unwrapped == candidate {
+            break;
+        }
+        candidate = unwrapped;
+    }
+    None
+}
+
+fn normalize_url_name(raw: &str) -> Option<String> {
+    crate::domain::contract_path::normalize_contract_path(raw)
+        .or_else(|| {
+            let trimmed = raw.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+}
+
+fn unwrap_url_wrapper(argument: &str) -> &str {
+    for prefix in ["buildApiUrl(", "buildLiveApiUrl("] {
+        let Some(rest) = argument.strip_prefix(prefix) else {
+            continue;
+        };
+        let Some(inner) = strip_balanced_suffix(rest, ')') else {
+            continue;
+        };
+        return inner.trim();
+    }
+    argument
+}
+
+fn strip_balanced_suffix<'a>(value: &'a str, closing: char) -> Option<&'a str> {
+    let open = match closing {
+        ')' => '(',
+        ']' => '[',
+        '}' => '{',
+        _ => return None,
+    };
+    let mut depth = 0_i32;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            c if c == open => depth += 1,
+            c if c == closing => {
+                if depth == 0 {
+                    return Some(value[..index].trim());
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn template_literal_path(argument: &str) -> Option<String> {
+    let trimmed = argument.trim();
+    if trimmed.len() < 2 || !trimmed.starts_with('`') || !trimmed.ends_with('`') {
+        return None;
+    }
+    let inner = &trimmed[1..trimmed.len() - 1];
+    let mut path = String::new();
+    let mut chars = inner.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '$' && chars.peek() == Some(&'{') {
+            chars.next();
+            let mut depth = 1_i32;
+            for next in chars.by_ref() {
+                match next {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            path.push_str(":param");
+            continue;
+        }
+        path.push(ch);
+    }
+    Some(path)
 }
 
 fn effective_mode(configured: &str, callee: &str) -> AccessMode {
@@ -220,7 +314,7 @@ fn string_literal(value: &str) -> Option<String> {
     }
     let first = value.chars().next()?;
     let last = value.chars().last()?;
-    if !matches!((first, last), ('"', '"') | ('\'', '\'') | ('`', '`')) {
+    if !matches!((first, last), ('"', '"') | ('\'', '\'')) {
         return None;
     }
     Some(value[1..value.len() - 1].to_string())
@@ -337,5 +431,110 @@ mod tests {
         );
 
         assert!(bundle.resources.is_empty());
+    }
+
+    #[test]
+    fn 템플릿_fetch_url은_계약_경로로_정규화한다() {
+        let mut bundle = FactBundle::default();
+        let mut site = call("fetch");
+        site.arguments = vec!["`/api/v1/sessions/${sessionId}/overview`".to_string()];
+
+        extract(
+            Language::TypeScript,
+            &[site],
+            &file(),
+            &mut bundle,
+            &[ResourceRule {
+                languages: vec!["typescript".to_string()],
+                callee_patterns: vec!["fetch".to_string()],
+                kind: "externalApi".to_string(),
+                mode: "readwrite".to_string(),
+                argument_index: 0,
+                name_source: ResourceNameSource::Argument,
+                requires_import: false,
+            }],
+        );
+
+        assert_eq!(bundle.resources.len(), 1);
+        assert_eq!(bundle.resources[0].name, "/sessions/:param/overview");
+    }
+
+    #[test]
+    fn build_api_url_래퍼와_fetch_impl도_계약_경로를_추출한다() {
+        let mut bundle = FactBundle::default();
+        let mut site = call("fetchImpl");
+        site.arguments =
+            vec!["buildApiUrl(`/api/v1/reports/${sessionId}/latest`)".to_string()];
+
+        extract(
+            Language::TypeScript,
+            &[site],
+            &file(),
+            &mut bundle,
+            &[ResourceRule {
+                languages: vec!["typescript".to_string()],
+                callee_patterns: vec!["fetchImpl".to_string()],
+                kind: "externalApi".to_string(),
+                mode: "readwrite".to_string(),
+                argument_index: 0,
+                name_source: ResourceNameSource::Argument,
+                requires_import: false,
+            }],
+        );
+
+        assert_eq!(bundle.resources.len(), 1);
+        assert_eq!(bundle.resources[0].name, "/reports/:param/latest");
+    }
+
+    #[test]
+    fn request_json_호출도_첫_인자에서_경로를_읽는다() {
+        let mut bundle = FactBundle::default();
+        let mut site = call("requestJson");
+        site.arguments = vec!["\"/health\"".to_string()];
+
+        extract(
+            Language::JavaScript,
+            &[site],
+            &file(),
+            &mut bundle,
+            &[ResourceRule {
+                languages: vec!["javascript".to_string()],
+                callee_patterns: vec!["requestJson".to_string()],
+                kind: "externalApi".to_string(),
+                mode: "readwrite".to_string(),
+                argument_index: 0,
+                name_source: ResourceNameSource::Argument,
+                requires_import: false,
+            }],
+        );
+
+        assert_eq!(bundle.resources.len(), 1);
+        assert_eq!(bundle.resources[0].name, "/health");
+    }
+
+    #[test]
+    fn 변수만_넘기는_fetch는_dynamic으로_남긴다() {
+        let mut bundle = FactBundle::default();
+        let mut site = call("fetchImpl");
+        site.arguments = vec!["buildApiUrl(url)".to_string()];
+
+        extract(
+            Language::TypeScript,
+            &[site],
+            &file(),
+            &mut bundle,
+            &[ResourceRule {
+                languages: vec!["typescript".to_string()],
+                callee_patterns: vec!["fetchImpl".to_string()],
+                kind: "externalApi".to_string(),
+                mode: "readwrite".to_string(),
+                argument_index: 0,
+                name_source: ResourceNameSource::Argument,
+                requires_import: false,
+            }],
+        );
+
+        assert_eq!(bundle.resources.len(), 1);
+        assert_eq!(bundle.resources[0].name, "<dynamic>");
     }
 }
