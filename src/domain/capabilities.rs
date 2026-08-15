@@ -1,6 +1,7 @@
 //! HTTP/WS/Job 계약을 클러스터 원자로 묶는다.
 
 use crate::config::PathPolicy;
+use crate::domain::capability_keys::is_leaf_capability_key;
 use crate::domain::contract_path::{capability_key_from_path, normalize_contract_path};
 use crate::facts::{
     Entrypoint, EntrypointKind, FactStore, ResourceAccess, ResourceKind,
@@ -17,6 +18,7 @@ pub(crate) struct Capability {
 }
 
 pub(crate) fn build(store: &FactStore, path_policy: &PathPolicy) -> Vec<Capability> {
+    let unit_capability_keys = unit_capability_keys(store, path_policy);
     let mut buckets: BTreeMap<String, CapabilityBuilder> = BTreeMap::new();
 
     for entrypoint in &store.entrypoints {
@@ -33,7 +35,10 @@ pub(crate) fn build(store: &FactStore, path_policy: &PathPolicy) -> Vec<Capabili
         }
         let Some(key) = (match entrypoint.kind {
             EntrypointKind::Job => job_capability_key(entrypoint),
-            _ => contract_capability_key(entrypoint),
+            _ => unit_capability_keys
+                .get(&entrypoint.unit_id)
+                .cloned()
+                .or_else(|| contract_capability_key(entrypoint)),
         }) else {
             continue;
         };
@@ -141,6 +146,62 @@ fn is_capability_entrypoint_kind(kind: &EntrypointKind) -> bool {
 fn contract_capability_key(entrypoint: &Entrypoint) -> Option<String> {
     let raw = entrypoint.path.as_deref().unwrap_or(&entrypoint.name);
     capability_key_from_path(raw)
+}
+
+fn unit_capability_keys(
+    store: &FactStore,
+    path_policy: &PathPolicy,
+) -> HashMap<String, String> {
+    let mut candidates: HashMap<String, Vec<(String, usize)>> = HashMap::new();
+
+    for entrypoint in &store.entrypoints {
+        if !is_capability_entrypoint_kind(&entrypoint.kind) || entrypoint.kind == EntrypointKind::Job
+        {
+            continue;
+        }
+        let Some(unit) = store.unit(&entrypoint.unit_id) else {
+            continue;
+        };
+        if !path_policy.is_production_path(&unit.relative_path)
+            && !path_policy.is_archived_path(&unit.relative_path)
+        {
+            continue;
+        }
+        let raw = entrypoint.path.as_deref().unwrap_or(&entrypoint.name);
+        let Some(key) = capability_key_from_path(raw) else {
+            continue;
+        };
+        let segment_count = normalize_contract_path(raw)
+            .map(|path| path.matches('/').count())
+            .unwrap_or(0);
+        candidates
+            .entry(entrypoint.unit_id.clone())
+            .or_default()
+            .push((key, segment_count));
+    }
+
+    candidates
+        .into_iter()
+        .filter_map(|(unit_id, mut keys)| {
+            keys.sort_by(|left, right| {
+                right
+                    .1
+                    .cmp(&left.1)
+                    .then_with(|| capability_key_rank(&right.0).cmp(&capability_key_rank(&left.0)))
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+            keys.first()
+                .map(|(key, _)| (unit_id, key.clone()))
+        })
+        .collect()
+}
+
+fn capability_key_rank(key: &str) -> u8 {
+    if is_leaf_capability_key(key) {
+        0
+    } else {
+        1
+    }
 }
 
 fn job_capability_key(entrypoint: &Entrypoint) -> Option<String> {
@@ -357,5 +418,31 @@ mod tests {
         assert!(!auth.unit_ids.contains(&"unit:client".to_string()));
         assert_eq!(auth.resource_ids.len(), 1);
         assert_eq!(billing.resource_ids.len(), 3);
+    }
+
+    #[test]
+    fn 같은_핸들러의_긴_경로_키가_짧은_마운트_키보다_우선한다() {
+        let mut store = FactStore::default();
+        store.units.insert(
+            "unit:start".into(),
+            file_unit("unit:start", "server/routes/start.py"),
+        );
+        store.entrypoints.push(http_entrypoint(
+            "entry:mounted",
+            "unit:start",
+            "POST",
+            "/api/v1/sessions/{session_id}/start",
+        ));
+        store.entrypoints.push(http_entrypoint(
+            "entry:nested",
+            "unit:start",
+            "POST",
+            "/{session_id}/start",
+        ));
+
+        let capabilities = build(&store, &PathPolicy::default());
+        assert_eq!(capabilities.len(), 1);
+        assert_eq!(capabilities[0].key, "sessions");
+        assert_eq!(capabilities[0].entrypoint_ids.len(), 2);
     }
 }

@@ -41,18 +41,35 @@ pub fn prepare(overview: &OverviewResponse, files: &[FileEntry]) -> PreparedStat
         })
         .map(|domain| domain.id.clone())
         .collect::<HashSet<_>>();
+    let entrypoint_by_id = overview
+        .entrypoints
+        .iter()
+        .map(|entrypoint| (entrypoint.id.as_str(), entrypoint))
+        .collect::<HashMap<_, _>>();
     let visible_feature_ids = overview
         .features
         .iter()
         .filter(|feature| {
-            feature
+            let has_visible_domain = feature
                 .domain_ids
                 .iter()
                 .any(|domain_id| visible_domain_ids.contains(domain_id))
-                && feature
-                    .unit_ids
-                    .iter()
-                    .any(|unit_id| visible_unit_ids.contains(unit_id))
+                || feature.entrypoint_ids.iter().any(|entrypoint_id| {
+                    overview.domains.iter().any(|domain| {
+                        visible_domain_ids.contains(&domain.id)
+                            && domain.entrypoint_ids.contains(entrypoint_id)
+                    })
+                });
+            let has_visible_anchor = feature
+                .unit_ids
+                .iter()
+                .any(|unit_id| visible_unit_ids.contains(unit_id))
+                || feature.entrypoint_ids.iter().any(|entrypoint_id| {
+                    entrypoint_by_id
+                        .get(entrypoint_id.as_str())
+                        .is_some_and(|entrypoint| visible_unit_ids.contains(&entrypoint.unit_id))
+                });
+            has_visible_domain && has_visible_anchor
         })
         .map(|feature| feature.id.clone())
         .collect::<HashSet<_>>();

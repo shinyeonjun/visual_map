@@ -583,3 +583,74 @@ def health():
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
 }
+
+#[test]
+fn 같은_핸들러의_마운트_경로는_기능과_도메인_하나로_묶인다() {
+    let root = temporary_project("mounted-router-contract");
+    fs::create_dir_all(root.join("server")).expect("server 디렉터리를 만들어야 한다");
+    fs::write(
+        root.join("server/app.py"),
+        r#"from fastapi import APIRouter, FastAPI
+
+router = APIRouter()
+
+@router.post("/{session_id}/start")
+def start_session(session_id: str):
+    return {"ok": True}
+
+app = FastAPI()
+app.include_router(router, prefix="/api/v1/sessions")
+"#,
+    )
+    .expect("마운트 route를 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("분석이 성공해야 한다")
+        .overview
+        .expect("Overview가 생성되어야 한다");
+
+    let start_features: Vec<_> = overview
+        .features
+        .iter()
+        .filter(|feature| {
+            feature.entrypoint_ids.iter().any(|entrypoint_id| {
+                overview.entrypoints.iter().any(|entrypoint| {
+                    entrypoint.id == *entrypoint_id
+                        && entrypoint
+                            .path
+                            .as_deref()
+                            .is_some_and(|path| path.contains("/start"))
+                })
+            })
+        })
+        .collect();
+
+    assert_eq!(
+        start_features.len(),
+        1,
+        "마운트 전후 start route는 기능 하나여야 한다: {:?}",
+        overview
+            .features
+            .iter()
+            .map(|feature| feature.label.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        start_features[0].entrypoint_ids.len() >= 2,
+        "두 route 진입점이 같은 기능에 남아야 한다"
+    );
+    assert!(
+        overview
+            .domains
+            .iter()
+            .any(|domain| domain.key == "sessions"),
+        "start route는 sessions 도메인에 속해야 한다: {:?}",
+        overview
+            .domains
+            .iter()
+            .map(|domain| domain.key.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}

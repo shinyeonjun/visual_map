@@ -4,6 +4,7 @@ mod capability_data;
 mod cluster_groups;
 mod constraints;
 mod feature_assignment;
+mod singleton_absorption;
 
 use crate::config::DomainPolicy;
 use crate::domain::capabilities::build as build_capabilities;
@@ -21,6 +22,7 @@ use capability_data::extract_capability_data;
 use cluster_groups::form_domains_from_clusters;
 use constraints::{build_constraints, collect_unassigned_units};
 use feature_assignment::assign_features_to_domains;
+use singleton_absorption::absorb_singleton_domains;
 
 /// Capability-first 클러스터링의 결과다.
 pub struct FeatureFirstResult {
@@ -88,13 +90,23 @@ pub(super) fn analyze_feature_first(
         },
     );
 
-    let formation = form_domains_from_clusters(
+    let mut formation = form_domains_from_clusters(
         &clusters,
         &capabilities,
         &terms,
         &matrix,
         domain_policy,
         store,
+    );
+
+    absorb_singleton_domains(
+        &mut formation,
+        &clusters,
+        &capabilities,
+        &terms,
+        &matrix,
+        store,
+        domain_policy,
     );
 
     assign_features_to_domains(&mut features, &formation.groups);

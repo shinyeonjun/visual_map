@@ -2,6 +2,10 @@
 
 const STRIP_PREFIXES: &[&str] = &["api", "v1", "v2", "v3", "public", "internal", "backend"];
 
+const NON_INSTANCE_SEGMENTS: &[&str] = &[
+    "auth", "data", "file", "http", "jobs", "role", "tags", "task", "user", "ws",
+];
+
 /// 원시 경로·URL·메서드 접두를 정규화한 계약 경로다.
 pub(crate) fn normalize_contract_path(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
@@ -96,6 +100,39 @@ pub(crate) fn path_prefix_match(left: &str, right: &str) -> bool {
     left.starts_with(&format!("{right}/")) || right.starts_with(&format!("{left}/"))
 }
 
+/// 라우터 마운트로 짧아진 경로가 긴 정규화 경로의 꼬리인지 본다.
+///
+/// `/sessions/:param/start`와 `/start`는 참이지만,
+/// `/admin/users`와 `/users`처럼 자원 접두만 다른 경우는 거짓이다.
+pub(crate) fn mounted_path_suffix_match(left: &str, right: &str) -> bool {
+    let (shorter, longer) = if path_segments(left).len() <= path_segments(right).len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    if shorter == longer {
+        return true;
+    }
+    let short_segments = path_segments(shorter);
+    let long_segments = path_segments(longer);
+    if short_segments.is_empty() || short_segments.len() >= long_segments.len() {
+        return false;
+    }
+    if !long_segments.ends_with(&short_segments) {
+        return false;
+    }
+    let prefix = &long_segments[..long_segments.len() - short_segments.len()];
+    prefix.iter().any(|segment| *segment == ":param")
+}
+
+fn path_segments(path: &str) -> Vec<&str> {
+    path.trim_end_matches('/')
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect()
+}
+
 fn strip_http_method(value: &str) -> &str {
     let upper = value.to_ascii_uppercase();
     for method in [
@@ -144,7 +181,7 @@ fn mark_instance_segments(mut segments: Vec<String>) -> Vec<String> {
 }
 
 fn is_instance_value_segment(segment: &str) -> bool {
-    if segment == ":param" {
+    if segment == ":param" || NON_INSTANCE_SEGMENTS.contains(&segment) {
         return false;
     }
     let len = segment.len();
@@ -179,8 +216,8 @@ fn normalize_segment(segment: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        capability_key_from_path, contract_identity, normalize_contract_path, path_prefix_match,
-        paths_match,
+        capability_key_from_path, contract_identity, mounted_path_suffix_match,
+        normalize_contract_path, path_prefix_match, paths_match,
     };
 
     #[test]
@@ -218,6 +255,31 @@ mod tests {
     fn 접두_매칭은_세그먼트_경계를_지킨다() {
         assert!(path_prefix_match("/reports", "/reports/123"));
         assert!(!path_prefix_match("/report", "/reports"));
+    }
+
+    #[test]
+    fn auth_세그먼트는_능력_키로_남는다() {
+        assert_eq!(
+            normalize_contract_path("/api/v1/auth/login"),
+            Some("/auth/login".into())
+        );
+        assert_eq!(
+            capability_key_from_path("/api/v1/auth/login"),
+            Some("auth".into())
+        );
+    }
+
+    #[test]
+    fn 마운트_접미_매칭은_자원_접두만_다른_경로를_묶지_않는다() {
+        assert!(mounted_path_suffix_match(
+            "/sessions/:param/start",
+            "/start"
+        ));
+        assert!(!mounted_path_suffix_match("/admin/users", "/users"));
+        assert!(!mounted_path_suffix_match(
+            "/participants/contacts",
+            "/contacts"
+        ));
     }
 
     #[test]

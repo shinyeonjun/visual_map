@@ -19,6 +19,20 @@ pub(super) struct FormationResult {
     pub assigned_units: HashSet<String>,
 }
 
+pub(super) fn cluster_domain_id(
+    cluster: &clustering::Cluster,
+    capabilities: &[Capability],
+    terms: &[tfidf::FeatureTerms],
+    domain_policy: &DomainPolicy,
+) -> String {
+    stable_domain_id(&pick_capability_cluster_key(
+        cluster,
+        capabilities,
+        terms,
+        domain_policy,
+    ))
+}
+
 pub(super) fn form_domains_from_clusters(
     clusters: &[clustering::Cluster],
     capabilities: &[Capability],
