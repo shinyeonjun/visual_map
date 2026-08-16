@@ -42,6 +42,85 @@ function isBackEdge(kind: string): boolean {
   return kind === 'loopBack'
 }
 
+const ENTRY_COLUMN = -1
+
+type FlowPredRef = { sourceId: string; edge: DomainFlowEdge }
+
+function predecessorColumn(
+  sourceId: string,
+  entryNodeId: string,
+  columns: Map<string, number>,
+): number {
+  if (sourceId === entryNodeId) return ENTRY_COLUMN
+  return columns.get(sourceId) ?? ENTRY_COLUMN
+}
+
+function assignNodeColumns(
+  visibleNodes: DomainFlowNode[],
+  entryNodeId: string,
+  predecessors: Map<string, FlowPredRef[]>,
+): Map<string, number> {
+  const columns = new Map<string, number>()
+  for (const node of visibleNodes) {
+    columns.set(node.id, 0)
+  }
+
+  for (let pass = 0; pass < visibleNodes.length; pass++) {
+    let changed = false
+    for (const node of visibleNodes) {
+      const incoming = predecessors.get(node.id) ?? []
+      const nextColumn = incoming.length === 0
+        ? 0
+        : Math.max(
+          ...incoming.map(({ sourceId }) => predecessorColumn(sourceId, entryNodeId, columns) + 1),
+        )
+
+      if ((columns.get(node.id) ?? 0) !== nextColumn) {
+        columns.set(node.id, nextColumn)
+        changed = true
+      }
+    }
+    if (!changed) break
+  }
+
+  return columns
+}
+
+function assignNodeLanes(
+  visibleNodes: DomainFlowNode[],
+  entryNodeId: string,
+  predecessors: Map<string, FlowPredRef[]>,
+): Map<string, number> {
+  const lanes = new Map<string, number>()
+  for (const node of visibleNodes) {
+    lanes.set(node.id, 0)
+  }
+
+  for (let pass = 0; pass < visibleNodes.length; pass++) {
+    let changed = false
+    for (const node of visibleNodes) {
+      const incoming = predecessors.get(node.id) ?? []
+      if (incoming.length === 0) continue
+
+      const nextLane = incoming.length > 1
+        ? 0
+        : (() => {
+          const { sourceId, edge } = incoming[0]
+          const sourceLane = sourceId === entryNodeId ? 0 : (lanes.get(sourceId) ?? 0)
+          return sourceLane + laneOffsetForEdge(edge.kind)
+        })()
+
+      if ((lanes.get(node.id) ?? 0) !== nextLane) {
+        lanes.set(node.id, nextLane)
+        changed = true
+      }
+    }
+    if (!changed) break
+  }
+
+  return lanes
+}
+
 export function layoutFlowGraph(flow: DomainFlow): FlowGraphLayout {
   const visibleNodes = flow.nodes.slice(0, MAX_FLOW_NODES)
   const visibleIds = new Set(visibleNodes.map((node) => node.id))
@@ -51,67 +130,24 @@ export function layoutFlowGraph(flow: DomainFlow): FlowGraphLayout {
       && (visibleIds.has(edge.sourceNodeId) || edge.sourceNodeId === flow.entryNodeId),
   )
 
-  const predecessors = new Map<string, Array<{ sourceId: string; edge: DomainFlowEdge }>>()
-  const successors = new Map<string, DomainFlowEdge[]>()
+  const predecessors = new Map<string, FlowPredRef[]>()
   for (const node of visibleNodes) {
     predecessors.set(node.id, [])
-    successors.set(node.id, [])
   }
 
   for (const edge of edges) {
     if (!isBackEdge(edge.kind)) {
       predecessors.get(edge.targetNodeId)?.push({ sourceId: edge.sourceNodeId, edge })
-      if (visibleIds.has(edge.sourceNodeId)) {
-        successors.get(edge.sourceNodeId)?.push(edge)
-      }
     }
   }
 
-  const columns = new Map<string, number>()
-  const lanes = new Map<string, number>()
-  const queue: Array<{ id: string; column: number; lane: number }> = []
-
-  for (const node of visibleNodes) {
-    const incoming = predecessors.get(node.id) ?? []
-    if (incoming.length === 0) {
-      queue.push({ id: node.id, column: 0, lane: 0 })
-    }
-  }
-
-  if (queue.length === 0 && visibleNodes[0]) {
-    queue.push({ id: visibleNodes[0].id, column: 0, lane: 0 })
-  }
-
-  const visited = new Set<string>()
-  while (queue.length > 0) {
-    const current = queue.shift()!
-    const previousColumn = columns.get(current.id)
-    const previousLane = lanes.get(current.id)
-    const nextColumn = previousColumn === undefined
-      ? current.column
-      : Math.max(previousColumn, current.column)
-    const nextLane = previousLane === undefined
-      ? current.lane
-      : Math.abs(previousLane) > Math.abs(current.lane) ? previousLane : current.lane
-
-    columns.set(current.id, nextColumn)
-    lanes.set(current.id, nextLane)
-    if (visited.has(current.id)) {
-      continue
-    }
-    visited.add(current.id)
-
-    const outgoing = successors.get(current.id) ?? []
-    for (const edge of outgoing) {
-      const childColumn = nextColumn + 1
-      const childLane = nextLane + laneOffsetForEdge(edge.kind)
-      queue.push({ id: edge.targetNodeId, column: childColumn, lane: childLane })
-    }
-  }
+  const columns = assignNodeColumns(visibleNodes, flow.entryNodeId, predecessors)
+  const lanes = assignNodeLanes(visibleNodes, flow.entryNodeId, predecessors)
 
   let fallbackColumn = Math.max(0, ...columns.values()) + 1
   for (const node of visibleNodes) {
-    if (!columns.has(node.id)) {
+    const incoming = predecessors.get(node.id) ?? []
+    if (incoming.length === 0 && !edges.some((edge) => edge.targetNodeId === node.id && edge.sourceNodeId === flow.entryNodeId)) {
       columns.set(node.id, fallbackColumn)
       lanes.set(node.id, 0)
       fallbackColumn += 1

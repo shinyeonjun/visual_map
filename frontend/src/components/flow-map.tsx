@@ -185,23 +185,18 @@ function FlowTrack({
 
       <div className="flow-track-body" style={{ height: bodyHeight }}>
         <svg className="flow-track-lines" width={layout.width} height={bodyHeight} aria-hidden="true">
-          {layout.nodes[0] && (
-            <path
-              className="flow-line flow-line-start"
-              d={connectorPath(entryX, entryY, layout.nodes[0].x, layout.nodes[0].y + FLOW_TRACK.stepHeight / 2)}
-            />
-          )}
-
           {layout.edges.map((edge) => {
             const target = positions.get(edge.targetNodeId)
             if (!target) return null
             const source = positions.get(edge.sourceNodeId)
+            const fromEntry = edge.sourceNodeId === flow.entryNodeId
             const dimmed = Boolean(activeNodeId && target.column > (positions.get(activeNodeId)?.column ?? -1))
             return (
               <g key={`${edge.sourceNodeId}-${edge.targetNodeId}-${edge.kind}`}>
                 <path
                   className={[
                     'flow-line',
+                    fromEntry ? 'flow-line-start' : '',
                     `tone-${edgeKindTone(edge.kind)}`,
                     isBackEdge(edge.kind) ? 'back' : '',
                     isExceptionEdge(edge.kind) ? 'exception' : '',
