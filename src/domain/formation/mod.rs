@@ -3,12 +3,14 @@
 mod capability_data;
 mod cluster_groups;
 mod constraints;
+pub mod diagnostics;
 mod domain_cleanup;
 mod feature_assignment;
 mod singleton_absorption;
 
 use crate::config::DomainPolicy;
 use crate::domain::capabilities::build as build_capabilities;
+use crate::domain::formation::diagnostics::DomainFormationDiagnostics;
 use crate::domain::grouping::DomainAnalysisOutput;
 use crate::domain::membership::{DomainMembership, MembershipKind};
 use crate::facts::{FactStore, ResolutionStatus};
@@ -53,11 +55,22 @@ pub(super) fn analyze_feature_first(
         return FeatureFirstResult {
             analysis: DomainAnalysisOutput {
                 static_graph: graph.clone(),
+                formation_diagnostics: DomainFormationDiagnostics::new(
+                    domain_policy.domain_clustering_mode,
+                ),
                 ..Default::default()
             },
             features,
         };
     }
+
+    let mut formation_diagnostics =
+        DomainFormationDiagnostics::new(domain_policy.domain_clustering_mode);
+    let distinct_keys = capabilities
+        .iter()
+        .map(|capability| capability.key.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
 
     let capability_data = extract_capability_data(&capabilities, store, execution_flows);
     let (terms, _term_index) =
@@ -76,21 +89,35 @@ pub(super) fn analyze_feature_first(
         domain_policy,
     );
 
-    let constraints = build_constraints(&capabilities, store, path_policy);
+    let constraints = build_constraints(
+        &capabilities,
+        store,
+        path_policy,
+        domain_policy.domain_clustering_mode,
+    );
+    formation_diagnostics.record_constraint_stats(
+        capabilities.len(),
+        distinct_keys,
+        constraints.forbidden_pairs.len(),
+    );
     let target_clusters = clustering::target_cluster_count(
         capabilities.len().max(1),
         domain_policy.domain_cluster_min,
         domain_policy.domain_cluster_max,
     );
-    let clusters = clustering::cluster(
+    let (clusters, merge_events) = clustering::cluster(
         &matrix,
         &constraints,
         clustering::ClusterOptions {
             merge_threshold: domain_policy.domain_cluster_merge_threshold,
             target_count: target_clusters,
             max_count: domain_policy.domain_cluster_max,
+            mode: domain_policy.domain_clustering_mode,
         },
     );
+    for event in merge_events {
+        formation_diagnostics.record_merge(&event.reason);
+    }
 
     let mut formation = form_domains_from_clusters(
         &clusters,
@@ -100,6 +127,7 @@ pub(super) fn analyze_feature_first(
         domain_policy,
         store,
     );
+    formation_diagnostics.record_clustering(clusters.len(), formation.groups.len());
 
     absorb_singleton_domains(
         &mut formation,
@@ -109,19 +137,26 @@ pub(super) fn analyze_feature_first(
         &matrix,
         store,
         domain_policy,
+        &mut formation_diagnostics,
     );
 
     prune_resource_only_domains(&mut formation);
+    formation_diagnostics.record_absorption(formation.groups.len());
 
     assign_features_to_domains(&mut features, &formation.groups);
 
     eprintln!(
-        "[domain] formation capabilities={} features={} clusters={} groups={} target_clusters={}",
+        "[domain] formation mode={} capabilities={} features={} clusters={} groups={} target_clusters={} forbidden={}/{} merges={} absorbed={}",
+        formation_diagnostics.clustering_mode,
         capabilities.len(),
         features.len(),
-        clusters.len(),
+        formation_diagnostics.clusters_before_absorption,
         formation.groups.len(),
         target_clusters,
+        formation_diagnostics.forbidden_pairs,
+        formation_diagnostics.total_pairs,
+        formation_diagnostics.clustering_merges,
+        formation_diagnostics.absorbed_domains,
     );
 
     let unassigned_unit_ids =
@@ -157,6 +192,7 @@ pub(super) fn analyze_feature_first(
             unassigned_unit_ids,
             dynamic_reference_ids,
             signal_count: 0,
+            formation_diagnostics,
         },
         features,
     }

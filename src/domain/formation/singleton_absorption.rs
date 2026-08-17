@@ -24,6 +24,7 @@ pub(super) fn absorb_singleton_domains(
     matrix: &feature_graph::SimilarityMatrix,
     store: &FactStore,
     domain_policy: &DomainPolicy,
+    diagnostics: &mut super::diagnostics::DomainFormationDiagnostics,
 ) {
     if formation.groups.is_empty() || clusters.is_empty() {
         return;
@@ -49,7 +50,7 @@ pub(super) fn absorb_singleton_domains(
         .collect();
 
     let mut absorbed_domain_ids = HashSet::new();
-    let mut merges: Vec<(String, String)> = Vec::new();
+    let mut merges: Vec<(String, String, &'static str)> = Vec::new();
 
     for cluster in clusters {
         if cluster.members.len() != 1 {
@@ -70,7 +71,7 @@ pub(super) fn absorb_singleton_domains(
             continue;
         }
 
-        let Some(parent_domain_id) = find_absorption_parent(
+        let Some((parent_domain_id, reason)) = find_absorption_parent(
             member,
             capability,
             &child_domain_id,
@@ -90,11 +91,12 @@ pub(super) fn absorb_singleton_domains(
         if parent_domain_id == child_domain_id {
             continue;
         }
-        merges.push((child_domain_id.clone(), parent_domain_id));
+        merges.push((child_domain_id.clone(), parent_domain_id, reason));
         absorbed_domain_ids.insert(child_domain_id);
     }
 
-    for (child_id, parent_id) in merges {
+    for (child_id, parent_id, reason) in merges {
+        diagnostics.record_absorption_reason(reason);
         merge_domains(
             &mut formation.groups,
             &mut formation.memberships,
@@ -132,9 +134,9 @@ fn find_absorption_parent(
     domain_policy: &DomainPolicy,
     domain_capability_counts: &HashMap<String, usize>,
     absorbed: &HashSet<String>,
-) -> Option<String> {
+) -> Option<(String, &'static str)> {
     if let Some(domain_id) = related_noun_parent(child, groups, absorbed) {
-        return Some(domain_id);
+        return Some((domain_id, "related-noun"));
     }
 
     if let Some(domain_id) = static_page_parent(
@@ -146,13 +148,13 @@ fn find_absorption_parent(
         domain_policy,
         absorbed,
     ) {
-        return Some(domain_id);
+        return Some((domain_id, "static-page"));
     }
 
     if let Some(domain_id) =
         same_source_file_parent(child, capabilities, clusters, terms, store, domain_policy, absorbed)
     {
-        return Some(domain_id);
+        return Some((domain_id, "same-source-file"));
     }
 
     if is_leaf_capability_key(&child.key) || domain_policy.is_generic(&child.key) {
@@ -164,7 +166,7 @@ fn find_absorption_parent(
             domain_policy,
             absorbed,
         ) {
-            return Some(domain_id);
+            return Some((domain_id, "contract-path"));
         }
     }
 
@@ -178,6 +180,7 @@ fn find_absorption_parent(
         domain_capability_counts,
         absorbed,
     )
+    .map(|domain_id| (domain_id, "similarity"))
 }
 
 fn related_noun_parent(
@@ -501,7 +504,9 @@ pub(super) fn merge_domains(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DomainClusteringMode;
     use crate::domain::confidence::DomainStatus;
+    use crate::domain::formation::diagnostics::DomainFormationDiagnostics;
     use crate::domain::grouping::stable_domain_id;
     use crate::facts::{CodeUnit, CodeUnitKind, SourceSpan};
     use crate::model::Language;
@@ -604,6 +609,8 @@ mod tests {
             assigned_units: HashSet::new(),
         };
 
+        let mut diagnostics =
+            DomainFormationDiagnostics::new(DomainClusteringMode::LegacyStrictKey);
         absorb_singleton_domains(
             &mut formation,
             &clusters,
@@ -612,6 +619,7 @@ mod tests {
             &matrix,
             &store,
             &DomainPolicy::default(),
+            &mut diagnostics,
         );
 
         assert_eq!(formation.groups.len(), 1);
@@ -645,6 +653,8 @@ mod tests {
             assigned_units: HashSet::new(),
         };
 
+        let mut diagnostics =
+            DomainFormationDiagnostics::new(DomainClusteringMode::LegacyStrictKey);
         absorb_singleton_domains(
             &mut formation,
             &clusters,
@@ -653,6 +663,7 @@ mod tests {
             &matrix,
             &FactStore::default(),
             &DomainPolicy::default(),
+            &mut diagnostics,
         );
 
         assert_eq!(formation.groups.len(), 1);
@@ -674,6 +685,8 @@ mod tests {
             assigned_units: HashSet::new(),
         };
 
+        let mut diagnostics =
+            DomainFormationDiagnostics::new(DomainClusteringMode::LegacyStrictKey);
         absorb_singleton_domains(
             &mut formation,
             &clusters,
@@ -682,6 +695,7 @@ mod tests {
             &matrix,
             &FactStore::default(),
             &DomainPolicy::default(),
+            &mut diagnostics,
         );
 
         assert_eq!(formation.groups.len(), 1);
@@ -715,6 +729,8 @@ mod tests {
             assigned_units: HashSet::new(),
         };
 
+        let mut diagnostics =
+            DomainFormationDiagnostics::new(DomainClusteringMode::LegacyStrictKey);
         absorb_singleton_domains(
             &mut formation,
             &clusters,
@@ -723,6 +739,7 @@ mod tests {
             &matrix,
             &FactStore::default(),
             &DomainPolicy::default(),
+            &mut diagnostics,
         );
 
         assert_eq!(formation.groups.len(), 1);

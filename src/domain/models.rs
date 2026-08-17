@@ -1,5 +1,6 @@
 //! 도메인 분석에서 공유하는 데이터 모델.
 
+use crate::domain::formation::diagnostics::DomainFormationDiagnostics;
 use crate::domain::confidence::{DomainConfidence, DomainStatus};
 use crate::domain::membership::DomainMembership;
 use crate::facts::{Evidence, ResolutionStatus};
@@ -62,4 +63,6 @@ pub struct DomainAnalysisOutput {
     /// 그룹화에 사용한 내부 신호 개수다. 개별 신호는 후보·멤버십·증거에
     /// 반영된 뒤 보관하지 않아 대형 프로젝트의 메모리 사용량을 억제한다.
     pub signal_count: usize,
+    #[serde(default, skip_serializing_if = "DomainFormationDiagnostics::is_empty")]
+    pub formation_diagnostics: DomainFormationDiagnostics,
 }

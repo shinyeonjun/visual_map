@@ -26,6 +26,9 @@ fn main() -> ExitCode {
 
 fn run_command(arguments: Vec<String>) -> ExitCode {
     if arguments.first().map(String::as_str) == Some("eval") {
+        if arguments.get(1).map(String::as_str) == Some("ab") {
+            return run_eval_ab(&arguments[2..]);
+        }
         return run_eval(&arguments[1..]);
     }
     if arguments.first().map(String::as_str) == Some("postprocess")
@@ -48,6 +51,7 @@ fn run_command(arguments: Vec<String>) -> ExitCode {
         eprintln!("사용법: code-analysis-engine <프로젝트-경로> [--compact] [--profile] [--no-cache] [--no-output] [--output=<경로>] [--clean-output=<디렉터리>] [--config=<경로>]");
         eprintln!("       code-analysis-engine eval --gold=<정답.json> (--clean=<clean-디렉터리> | --overview=<분석결과.json> | --project=<프로젝트-경로>) [--output=<리포트.json>] [--config=<경로>]");
         eprintln!("       code-analysis-engine eval --catalog=<정답-디렉터리-또는-catalog.json> --clean-root=<clean-루트> [--output=<리포트.json>]");
+        eprintln!("       code-analysis-engine eval ab --catalog=<catalog.json> [--output=<ab-report.json>]");
         eprintln!("       code-analysis-engine postprocess ai-context --input=<분석결과.json> --output=<컨텍스트.json> [--config=<경로>] [--pretty] [--profile]");
         eprintln!("       code-analysis-engine semantic review --input=<ai-context.json> --output=<semantic-result.json> --project-root=<프로젝트-경로> [--config=<경로>] [--model=<모델>] [--profile]");
         eprintln!("       code-analysis-engine clean bundle --input=<분석결과.json> --output=<clean-디렉터리> [--config=<경로>] [--part-target-bytes=<바이트>] [--profile]");
@@ -225,7 +229,11 @@ fn run_eval(arguments: &[String]) -> ExitCode {
 }
 
 fn print_eval_report(report: &code_analysis_engine::eval::EvalReport) {
-    let status = if report.passed { "PASS" } else { "FAIL" };
+    let status = match report.outcome {
+        code_analysis_engine::eval::EvalOutcome::PassPositive => "PASS",
+        code_analysis_engine::eval::EvalOutcome::PassNegativeOnly => "PASS(negative-only)",
+        code_analysis_engine::eval::EvalOutcome::Fail => "FAIL",
+    };
     eprintln!(
         "eval {id}: {status} domains={domain_hits}/{domain_expected} features={feature_hits}/{feature_expected} flows={flow_hits}/{flow_expected} findings={findings}",
         id = report.id,
@@ -239,6 +247,86 @@ fn print_eval_report(report: &code_analysis_engine::eval::EvalReport) {
     );
     for finding in &report.findings {
         eprintln!("  [{}/{}] {}", finding.layer, finding.kind, finding.message);
+    }
+}
+
+fn run_eval_ab(arguments: &[String]) -> ExitCode {
+    let Some(catalog_path) = option_value(arguments, "--catalog") else {
+        eprintln!("eval ab에는 --catalog=<catalog.json>이 필요합니다.");
+        return ExitCode::from(2);
+    };
+    let output_path = option_value(arguments, "--output");
+    match code_analysis_engine::eval::compare_clustering_modes(Path::new(&catalog_path)) {
+        Ok(report) => {
+            print_clustering_ab_summary(&report);
+            finish_eval_output(output_path.as_deref(), &report, true)
+        }
+        Err(error) => {
+            eprintln!("clustering A/B 평가 실패: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn print_clustering_ab_summary(report: &code_analysis_engine::eval::ClusteringAbReport) {
+    let summary = &report.summary;
+    eprintln!(
+        "eval ab: projects={} analyzed={} skipped={}",
+        summary.projects, summary.analyzed, summary.skipped
+    );
+    eprintln!(
+        "  legacy: passed={}/{} domainHits={}/{} featureHits={}/{} overSplit={} wrongDomain={} overMerge={}",
+        summary.legacy_passed,
+        summary.analyzed,
+        summary.legacy_domain_hits,
+        summary.legacy_domain_expected,
+        summary.legacy_feature_hits,
+        summary.legacy_feature_expected,
+        summary.legacy_over_split,
+        summary.legacy_wrong_domain,
+        summary.legacy_over_merge
+    );
+    eprintln!(
+        "  structural: passed={}/{} domainHits={}/{} featureHits={}/{} overSplit={} wrongDomain={} overMerge={}",
+        summary.structural_passed,
+        summary.analyzed,
+        summary.structural_domain_hits,
+        summary.structural_domain_expected,
+        summary.structural_feature_hits,
+        summary.structural_feature_expected,
+        summary.structural_over_split,
+        summary.structural_wrong_domain,
+        summary.structural_over_merge
+    );
+    for project in &report.projects {
+        if project.skipped {
+            eprintln!(
+                "  {}: SKIP ({})",
+                project.id,
+                project.skip_reason.as_deref().unwrap_or("unknown")
+            );
+            continue;
+        }
+        let legacy = project.legacy.as_ref().expect("legacy report");
+        let structural = project.structural.as_ref().expect("structural report");
+        eprintln!(
+            "  {}: legacy domains={}/{} features={}/{} forbiddenRatio={:.0}% merges={} absorbed={} | structural domains={}/{} features={}/{} forbiddenRatio={:.0}% merges={} absorbed={}",
+            project.id,
+            legacy.domain_hits,
+            legacy.domain_expected,
+            legacy.feature_hits,
+            legacy.feature_expected,
+            legacy.formation_diagnostics.forbidden_ratio * 100.0,
+            legacy.formation_diagnostics.clustering_merges,
+            legacy.formation_diagnostics.absorbed_domains,
+            structural.domain_hits,
+            structural.domain_expected,
+            structural.feature_hits,
+            structural.feature_expected,
+            structural.formation_diagnostics.forbidden_ratio * 100.0,
+            structural.formation_diagnostics.clustering_merges,
+            structural.formation_diagnostics.absorbed_domains,
+        );
     }
 }
 

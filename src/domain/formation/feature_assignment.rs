@@ -9,35 +9,35 @@ pub(super) fn assign_features_to_domains(
     features: &mut [FeatureGroup],
     groups: &[DomainGroup],
 ) {
-    let entrypoint_to_domain: HashMap<&str, &str> = groups
-        .iter()
-        .flat_map(|group| {
-            group
-                .entrypoint_ids
-                .iter()
-                .map(move |entrypoint_id| (entrypoint_id.as_str(), group.id.as_str()))
-        })
-        .collect();
-    let resource_to_domain: HashMap<&str, &str> = groups
-        .iter()
-        .flat_map(|group| {
-            group
-                .resource_ids
-                .iter()
-                .map(move |resource_id| (resource_id.as_str(), group.id.as_str()))
-        })
-        .collect();
+    let mut entrypoint_to_domains: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+    for group in groups {
+        for entrypoint_id in &group.entrypoint_ids {
+            entrypoint_to_domains
+                .entry(entrypoint_id.as_str())
+                .or_default()
+                .insert(group.id.as_str());
+        }
+    }
+    let mut resource_to_domains: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+    for group in groups {
+        for resource_id in &group.resource_ids {
+            resource_to_domains
+                .entry(resource_id.as_str())
+                .or_default()
+                .insert(group.id.as_str());
+        }
+    }
 
     for feature in features {
         let mut domain_ids = BTreeSet::new();
         for entrypoint_id in &feature.entrypoint_ids {
-            if let Some(domain_id) = entrypoint_to_domain.get(entrypoint_id.as_str()) {
-                domain_ids.insert((*domain_id).to_string());
+            if let Some(domains) = entrypoint_to_domains.get(entrypoint_id.as_str()) {
+                domain_ids.extend(domains.iter().map(|domain_id| (*domain_id).to_string()));
             }
         }
         for resource_id in &feature.resource_ids {
-            if let Some(domain_id) = resource_to_domain.get(resource_id.as_str()) {
-                domain_ids.insert((*domain_id).to_string());
+            if let Some(domains) = resource_to_domains.get(resource_id.as_str()) {
+                domain_ids.extend(domains.iter().map(|domain_id| (*domain_id).to_string()));
             }
         }
         feature.domain_ids = domain_ids.into_iter().collect();
@@ -127,5 +127,38 @@ mod tests {
 
         assert_eq!(features[0].domain_ids, vec!["domain-auth"]);
         assert_eq!(features[1].domain_ids, vec!["domain-schedules"]);
+    }
+
+    #[test]
+    fn 공유_진입점은_여러_도메인에_붙는다() {
+        let groups = vec![
+            domain("domain-auth", &["ep-shared"], &[]),
+            domain("domain-audit", &["ep-shared"], &[]),
+        ];
+        let mut features = vec![FeatureGroup {
+            id: "feature-shared".into(),
+            key: "shared".into(),
+            label: "shared".into(),
+            kind: FeatureKind::Endpoint,
+            status: FeatureStatus::Confirmed,
+            visibility: FeatureVisibility::UserFacing,
+            confidence: FeatureConfidence::default(),
+            domain_ids: Vec::new(),
+            unit_ids: Vec::new(),
+            reachable_unit_count: 0,
+            entrypoint_ids: vec!["ep-shared".into()],
+            flow_ids: Vec::new(),
+            resource_ids: Vec::new(),
+            dynamic_boundary_ids: Vec::new(),
+            evidence: Vec::new(),
+            summary: None,
+        }];
+
+        assign_features_to_domains(&mut features, &groups);
+
+        assert_eq!(
+            features[0].domain_ids,
+            vec!["domain-audit", "domain-auth"]
+        );
     }
 }

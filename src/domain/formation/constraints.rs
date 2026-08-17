@@ -1,6 +1,6 @@
 //! 클러스터 병합 제약과 미배정 유닛 수집.
 
-use crate::config::PathPolicy;
+use crate::config::{DomainClusteringMode, PathPolicy};
 use crate::domain::capabilities::Capability;
 use crate::facts::FactStore;
 use std::collections::HashSet;
@@ -30,6 +30,7 @@ pub(super) fn build_constraints(
     capabilities: &[Capability],
     store: &FactStore,
     path_policy: &PathPolicy,
+    mode: DomainClusteringMode,
 ) -> clustering::MergeConstraints {
     let mut forbidden_pairs = Vec::new();
     for (i, capability_a) in capabilities.iter().enumerate() {
@@ -40,7 +41,9 @@ pub(super) fn build_constraints(
                 push_forbidden_pair(&mut forbidden_pairs, i, j);
                 continue;
             }
-            if capability_a.key != capability_b.key {
+            if mode == DomainClusteringMode::LegacyStrictKey
+                && capability_a.key != capability_b.key
+            {
                 push_forbidden_pair(&mut forbidden_pairs, i, j);
             }
         }
@@ -71,6 +74,7 @@ fn push_forbidden_pair(forbidden_pairs: &mut Vec<(usize, usize)>, a: usize, b: u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DomainClusteringMode;
     use std::collections::BTreeSet;
 
     fn capability(key: &str) -> Capability {
@@ -88,7 +92,12 @@ mod tests {
         let capabilities = vec![capability("auth"), capability("sessions")];
         let store = FactStore::default();
         let path_policy = PathPolicy::default();
-        let constraints = build_constraints(&capabilities, &store, &path_policy);
+        let constraints = build_constraints(
+            &capabilities,
+            &store,
+            &path_policy,
+            DomainClusteringMode::LegacyStrictKey,
+        );
         assert!(constraints.is_forbidden(0, 1));
     }
 
@@ -97,7 +106,26 @@ mod tests {
         let capabilities = vec![capability("billing"), capability("billing")];
         let store = FactStore::default();
         let path_policy = PathPolicy::default();
-        let constraints = build_constraints(&capabilities, &store, &path_policy);
+        let constraints = build_constraints(
+            &capabilities,
+            &store,
+            &path_policy,
+            DomainClusteringMode::LegacyStrictKey,
+        );
+        assert!(!constraints.is_forbidden(0, 1));
+    }
+
+    #[test]
+    fn structural_모드는_서로_다른_key를_금지하지_않는다() {
+        let capabilities = vec![capability("auth"), capability("sessions")];
+        let store = FactStore::default();
+        let path_policy = PathPolicy::default();
+        let constraints = build_constraints(
+            &capabilities,
+            &store,
+            &path_policy,
+            DomainClusteringMode::StructuralCrossKey,
+        );
         assert!(!constraints.is_forbidden(0, 1));
     }
 }

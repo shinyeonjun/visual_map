@@ -5,6 +5,9 @@
 //! 임계값 기반 병합 후 필요하면 강제 병합을 수행한다.
 
 use super::feature_graph::SimilarityMatrix;
+use crate::config::DomainClusteringMode;
+
+use super::merge_gate;
 
 const DEFAULT_MERGE_THRESHOLD: f64 = 0.08;
 
@@ -34,6 +37,7 @@ pub(super) struct ClusterOptions {
     pub merge_threshold: f64,
     pub target_count: usize,
     pub max_count: usize,
+    pub mode: DomainClusteringMode,
 }
 
 impl Default for ClusterOptions {
@@ -42,8 +46,15 @@ impl Default for ClusterOptions {
             merge_threshold: DEFAULT_MERGE_THRESHOLD,
             target_count: 12,
             max_count: 20,
+            mode: DomainClusteringMode::LegacyStrictKey,
         }
     }
+}
+
+/// 클러스터링 중 발생한 병합 이벤트다.
+#[derive(Debug, Clone)]
+pub(super) struct ClusterMergeEvent {
+    pub reason: String,
 }
 
 /// 응집형 클러스터링을 실행한다.
@@ -51,11 +62,13 @@ pub(super) fn cluster(
     matrix: &SimilarityMatrix,
     constraints: &MergeConstraints,
     options: ClusterOptions,
-) -> Vec<Cluster> {
+) -> (Vec<Cluster>, Vec<ClusterMergeEvent>) {
     let n = matrix.size();
     if n == 0 {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
+
+    let mut merge_events = Vec::new();
 
     let mut clusters: Vec<Option<Cluster>> = (0..n)
         .map(|i| {
@@ -86,28 +99,38 @@ pub(super) fn cluster(
         if sim < options.merge_threshold && active.len() <= options.max_count {
             break;
         }
-        if !can_merge(a, b, &clusters, matrix, constraints) {
+        if !can_merge(a, b, &clusters, matrix, constraints, options.mode) {
             cluster_sim[a][b] = -1.0;
             cluster_sim[b][a] = -1.0;
             continue;
         }
+        let reason = merge_reason(a, b, &clusters, matrix, options.mode);
         merge_clusters(a, b, &mut clusters, &mut active, &mut cluster_sim, matrix);
+        merge_events.push(ClusterMergeEvent { reason });
     }
 
-    while active.len() > options.max_count {
-        let Some((a, b, _)) = best_merge_pair_force(
-            &active,
-            &cluster_sim,
-            constraints,
-            &clusters,
-            matrix,
-        ) else {
-            break;
-        };
-        merge_clusters(a, b, &mut clusters, &mut active, &mut cluster_sim, matrix);
+    if options.mode == DomainClusteringMode::LegacyStrictKey {
+        while active.len() > options.max_count {
+            let Some((a, b, _)) = best_merge_pair_force(
+                &active,
+                &cluster_sim,
+                constraints,
+                &clusters,
+                matrix,
+                options.mode,
+            ) else {
+                break;
+            };
+            let reason = merge_reason(a, b, &clusters, matrix, options.mode);
+            merge_clusters(a, b, &mut clusters, &mut active, &mut cluster_sim, matrix);
+            merge_events.push(ClusterMergeEvent { reason });
+        }
     }
 
-    clusters.into_iter().flatten().collect()
+    (
+        clusters.into_iter().flatten().collect(),
+        merge_events,
+    )
 }
 
 fn best_merge_pair(
@@ -142,6 +165,7 @@ fn best_merge_pair_force(
     constraints: &MergeConstraints,
     clusters: &[Option<Cluster>],
     matrix: &SimilarityMatrix,
+    mode: DomainClusteringMode,
 ) -> Option<(usize, usize, f64)> {
     let mut best_sim = -1.0_f64;
     let mut best_pair: Option<(usize, usize)> = None;
@@ -150,7 +174,7 @@ fn best_merge_pair_force(
             if constraints.is_forbidden(a, b) {
                 continue;
             }
-            if !can_merge(a, b, clusters, matrix, constraints) {
+            if !can_merge(a, b, clusters, matrix, constraints, mode) {
                 continue;
             }
             let sim = cluster_sim[a][b];
@@ -162,6 +186,27 @@ fn best_merge_pair_force(
         }
     }
     best_pair.map(|(a, b)| (a, b, best_sim))
+}
+
+fn merge_reason(
+    a: usize,
+    b: usize,
+    clusters: &[Option<Cluster>],
+    matrix: &SimilarityMatrix,
+    mode: DomainClusteringMode,
+) -> String {
+    let cluster_a = clusters[a].as_ref().unwrap();
+    let cluster_b = clusters[b].as_ref().unwrap();
+    let mut best: Option<&'static str> = None;
+    for &member_a in &cluster_a.members {
+        for &member_b in &cluster_b.members {
+            let sim = matrix.get(member_a, member_b);
+            if let Some(reason) = merge_gate::merge_allowed(mode, sim) {
+                best = Some(reason);
+            }
+        }
+    }
+    best.unwrap_or("structural").to_string()
 }
 
 fn merge_clusters(
@@ -208,6 +253,7 @@ fn can_merge(
     clusters: &[Option<Cluster>],
     matrix: &SimilarityMatrix,
     constraints: &MergeConstraints,
+    mode: DomainClusteringMode,
 ) -> bool {
     let cluster_a = clusters[a].as_ref().unwrap();
     let cluster_b = clusters[b].as_ref().unwrap();
@@ -220,20 +266,15 @@ fn can_merge(
         }
     }
 
-    let mut has_structural = false;
     for &member_a in &cluster_a.members {
         for &member_b in &cluster_b.members {
             let sim = matrix.get(member_a, member_b);
-            if sim.http_match > 0.0 || sim.call > 0.0 || sim.flow > 0.0 {
-                has_structural = true;
-                break;
+            if merge_gate::merge_allowed(mode, sim).is_some() {
+                return true;
             }
         }
-        if has_structural {
-            break;
-        }
     }
-    has_structural
+    false
 }
 
 fn average_linkage_from_matrix(
@@ -269,6 +310,7 @@ pub(super) fn target_cluster_count(feature_count: usize, min_count: usize, max_c
 #[cfg(test)]
 mod tests {
     use super::{cluster, ClusterOptions, MergeConstraints};
+    use crate::config::DomainClusteringMode;
     use crate::domain::feature_graph::SimilarityMatrix;
 
     #[test]
@@ -277,13 +319,14 @@ mod tests {
         let constraints = MergeConstraints {
             forbidden_pairs: vec![(0, 1), (0, 2), (1, 2)],
         };
-        let clusters = cluster(
+        let (clusters, _) = cluster(
             &matrix,
             &constraints,
             ClusterOptions {
                 merge_threshold: 1.0,
                 target_count: 3,
                 max_count: 20,
+                mode: DomainClusteringMode::LegacyStrictKey,
             },
         );
         assert_eq!(clusters.len(), 3);
@@ -295,15 +338,36 @@ mod tests {
         let constraints = MergeConstraints {
             forbidden_pairs: vec![(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)],
         };
-        let clusters = cluster(
+        let (clusters, _) = cluster(
             &matrix,
             &constraints,
             ClusterOptions {
                 merge_threshold: 0.0,
                 target_count: 1,
                 max_count: 1,
+                mode: DomainClusteringMode::LegacyStrictKey,
             },
         );
         assert_eq!(clusters.len(), 4);
+    }
+
+    #[test]
+    fn structural_모드는_cross_key를_http_강신호로_병합한다() {
+        let matrix = SimilarityMatrix::uniform(3, 0.7);
+        let constraints = MergeConstraints {
+            forbidden_pairs: Vec::new(),
+        };
+        let (clusters, merges) = cluster(
+            &matrix,
+            &constraints,
+            ClusterOptions {
+                merge_threshold: 0.08,
+                target_count: 1,
+                max_count: 24,
+                mode: DomainClusteringMode::StructuralCrossKey,
+            },
+        );
+        assert!(clusters.len() < 3, "clusters={:?}", clusters);
+        assert!(!merges.is_empty());
     }
 }

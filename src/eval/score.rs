@@ -19,12 +19,21 @@ pub struct EvalFinding {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum EvalOutcome {
+    PassPositive,
+    PassNegativeOnly,
+    Fail,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvalReport {
     pub id: String,
     pub set: String,
     pub passed: bool,
+    pub outcome: EvalOutcome,
     pub domain_hits: usize,
     pub domain_expected: usize,
     pub feature_hits: usize,
@@ -32,9 +41,19 @@ pub struct EvalReport {
     pub flow_hits: usize,
     pub flow_expected: usize,
     pub findings: Vec<EvalFinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formation_diagnostics: Option<crate::domain::DomainFormationDiagnostics>,
 }
 
 pub fn score_gold(gold: &EvalGold, snapshot: &EvalSnapshot) -> EvalReport {
+    score_gold_with_diagnostics(gold, snapshot, None)
+}
+
+pub fn score_gold_with_diagnostics(
+    gold: &EvalGold,
+    snapshot: &EvalSnapshot,
+    formation_diagnostics: Option<crate::domain::DomainFormationDiagnostics>,
+) -> EvalReport {
     let mut findings = Vec::new();
     let aliases = alias_map(gold);
 
@@ -42,10 +61,12 @@ pub fn score_gold(gold: &EvalGold, snapshot: &EvalSnapshot) -> EvalReport {
     let feature_hits = score_features(gold, snapshot, &aliases, &mut findings);
     let flow_hits = score_flows(gold, snapshot, &mut findings);
 
+    let passed = findings.is_empty();
     EvalReport {
         id: gold.id.clone(),
         set: gold.set.clone(),
-        passed: findings.is_empty(),
+        passed,
+        outcome: classify_outcome(gold, passed),
         domain_hits,
         domain_expected: gold.must_have_domains.len(),
         feature_hits,
@@ -53,7 +74,15 @@ pub fn score_gold(gold: &EvalGold, snapshot: &EvalSnapshot) -> EvalReport {
         flow_hits,
         flow_expected: gold.flow_invariants.len(),
         findings,
+        formation_diagnostics,
     }
+}
+
+pub fn count_findings_by_kind(findings: &[EvalFinding], kind: &str) -> usize {
+    findings
+        .iter()
+        .filter(|finding| finding.kind == kind)
+        .count()
 }
 
 fn score_domains(
@@ -364,6 +393,20 @@ fn methods_compatible(left: &str, right: &str) -> bool {
 
 fn websocket_method(method: &str) -> bool {
     matches!(method, "WS" | "WSS" | "WEBSOCKET")
+}
+
+pub fn classify_outcome(gold: &EvalGold, passed: bool) -> EvalOutcome {
+    if !passed {
+        return EvalOutcome::Fail;
+    }
+    if gold.must_have_domains.is_empty()
+        && gold.must_have_features.is_empty()
+        && gold.flow_invariants.is_empty()
+    {
+        EvalOutcome::PassNegativeOnly
+    } else {
+        EvalOutcome::PassPositive
+    }
 }
 
 fn finding(layer: &str, kind: &str, message: String) -> EvalFinding {

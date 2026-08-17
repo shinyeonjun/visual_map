@@ -8,7 +8,8 @@ mod policies;
 
 pub use loader::{AnalysisConfig, ConfigLoadError};
 pub use policies::{
-    AnalysisLimits, CleanPolicy, DomainPolicy, FrameworkPolicy, LanguageRegistry, ParserPolicy,
+    AnalysisLimits, CleanPolicy, DomainClusteringMode, DomainPolicy, FrameworkPolicy,
+    LanguageRegistry, ParserPolicy,
     PathPolicy, PostprocessPolicy, ResourceNameSource, ResourceRule, RoutePatternKind, RouteRule,
     ScanPolicy, SemanticPolicy,
 };

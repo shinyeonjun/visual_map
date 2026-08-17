@@ -64,6 +64,7 @@ fn to_overview(prepared: &PreparedStaticOverview) -> OverviewResponse {
         semantic_status: Default::default(),
         semantic_analysis: Default::default(),
         coverage: prepared.coverage.clone(),
+        formation_diagnostics: Default::default(),
     }
 }
 

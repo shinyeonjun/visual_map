@@ -200,6 +200,17 @@ fn default_archived_directory_names() -> Vec<String> {
     ]
 }
 
+/// 도메인 클러스터링 알고리즘 선택지다.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DomainClusteringMode {
+    /// 서로 다른 capability key는 clustering에서 절대 병합하지 않는다.
+    #[default]
+    LegacyStrictKey,
+    /// cross-key 병합을 허용하되 structural merge gate로 제한한다.
+    StructuralCrossKey,
+}
+
 /// 도메인 후보 점수와 그룹화 기준이다.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -232,6 +243,8 @@ pub struct DomainPolicy {
     pub domain_cluster_max: usize,
     #[serde(default = "default_domain_cluster_merge_threshold")]
     pub domain_cluster_merge_threshold: f64,
+    #[serde(default)]
+    pub domain_clustering_mode: DomainClusteringMode,
 }
 
 impl Default for DomainPolicy {

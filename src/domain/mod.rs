@@ -16,9 +16,11 @@ mod clustering;
 pub(crate) mod contract_path;
 mod feature_graph;
 mod formation;
+mod merge_gate;
 mod models;
 mod tfidf;
 
+pub use formation::diagnostics::DomainFormationDiagnostics;
 pub use grouping::{
     reaggregate_relations, DomainAnalysisOutput, DomainAnalyzer, DomainGroup, DomainKind,
     DomainRelation, FeatureFirstResult,

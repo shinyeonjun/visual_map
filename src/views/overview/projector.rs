@@ -191,6 +191,7 @@ fn project_inner(
         semantic_status,
         semantic_analysis,
         coverage,
+        formation_diagnostics: analysis.formation_diagnostics.clone(),
     }
 }
 

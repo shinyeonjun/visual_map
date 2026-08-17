@@ -3,11 +3,19 @@
 mod gold;
 mod score;
 mod snapshot;
+mod clustering_ab;
 
+pub use clustering_ab::{
+    compare_clustering_modes, ClusteringAbModeReport, ClusteringAbProjectReport,
+    ClusteringAbReport, ClusteringAbSummary,
+};
 pub use gold::{
     DomainAlias, EvalCatalog, EvalGold, EvalMode, FeatureGold, FlowInvariantGold,
 };
-pub use score::{score_gold, EvalFinding, EvalReport};
+pub use score::{
+    classify_outcome, count_findings_by_kind, score_gold, score_gold_with_diagnostics,
+    EvalFinding, EvalOutcome, EvalReport,
+};
 pub use snapshot::{
     snapshot_from_clean, snapshot_from_overview, EvalSnapshot, SnapDomain, SnapFeature,
 };
@@ -29,6 +37,7 @@ pub enum EvalError {
     Clean(CleanBundleError),
     MissingOverview,
     MissingClean(PathBuf),
+    AnalysisFailed(String),
 }
 
 impl std::fmt::Display for EvalError {
@@ -50,6 +59,9 @@ impl std::fmt::Display for EvalError {
                     "Clean bundle 디렉터리가 없습니다: {}",
                     path.display()
                 )
+            }
+            Self::AnalysisFailed(message) => {
+                write!(formatter, "분석 실패: {message}")
             }
         }
     }
@@ -104,7 +116,13 @@ pub fn evaluate_clean(gold: &EvalGold, clean_dir: &Path) -> Result<EvalReport, E
 
 pub fn evaluate_result(gold: &EvalGold, result: &AnalysisResult) -> Result<EvalReport, EvalError> {
     let overview = result.overview.as_ref().ok_or(EvalError::MissingOverview)?;
-    Ok(evaluate_overview(gold, overview))
+    let diagnostics = (!overview.formation_diagnostics.is_empty())
+        .then(|| overview.formation_diagnostics.clone());
+    Ok(score_gold_with_diagnostics(
+        gold,
+        &snapshot_from_overview(overview),
+        diagnostics,
+    ))
 }
 
 pub fn evaluate_overview(gold: &EvalGold, overview: &OverviewResponse) -> EvalReport {
@@ -125,11 +143,20 @@ pub fn evaluate_analysis_file(gold: &EvalGold, path: &Path) -> Result<EvalReport
     Ok(evaluate_overview(gold, &overview))
 }
 
+pub fn resolve_clean_dir(clean_root: &Path, gold: &EvalGold) -> PathBuf {
+    for candidate in clean_bundle_candidates(clean_root, gold) {
+        if is_clean_bundle_dir(&candidate) {
+            return candidate;
+        }
+    }
+    preferred_clean_dir(clean_root, gold)
+}
+
 pub fn evaluate_catalog(catalog_path: &Path, clean_root: &Path) -> Result<CatalogReport, EvalError> {
     let golds = load_catalog(catalog_path)?;
     let mut reports = Vec::with_capacity(golds.len());
     for gold in &golds {
-        let clean_dir = clean_root.join(clean_dir_name(gold));
+        let clean_dir = resolve_clean_dir(clean_root, gold);
         match evaluate_clean(gold, &clean_dir) {
             Ok(report) => reports.push(report),
             Err(EvalError::MissingClean(path)) => reports.push(unavailable_report(
@@ -147,6 +174,7 @@ fn unavailable_report(gold: &EvalGold, message: String) -> EvalReport {
         id: gold.id.clone(),
         set: gold.set.clone(),
         passed: false,
+        outcome: EvalOutcome::Fail,
         domain_hits: 0,
         domain_expected: gold.must_have_domains.len(),
         feature_hits: 0,
@@ -158,6 +186,7 @@ fn unavailable_report(gold: &EvalGold, message: String) -> EvalReport {
             kind: "missingClean".into(),
             message,
         }],
+        formation_diagnostics: None,
     }
 }
 
@@ -180,6 +209,26 @@ pub fn clean_dir_name(gold: &EvalGold) -> String {
         .filter(|name| !name.is_empty())
         .unwrap_or(gold.id.as_str())
         .to_string()
+}
+
+fn preferred_clean_dir(clean_root: &Path, gold: &EvalGold) -> PathBuf {
+    clean_root.join(clean_dir_name(gold)).join("clean")
+}
+
+fn is_clean_bundle_dir(path: &Path) -> bool {
+    path.is_dir() && path.join("manifest.json").is_file()
+}
+
+fn clean_bundle_candidates(clean_root: &Path, gold: &EvalGold) -> Vec<PathBuf> {
+    let name = clean_dir_name(gold);
+    let mut candidates = Vec::with_capacity(6);
+    candidates.push(clean_root.join(&name).join("clean"));
+    candidates.push(clean_root.join(&name));
+    for kind in ["service", "library-cli"] {
+        candidates.push(clean_root.join(kind).join(&name).join("clean"));
+        candidates.push(clean_root.join(kind).join(&name));
+    }
+    candidates
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,4 +261,51 @@ fn load_gold_files_in_dir(dir: &Path) -> Result<Vec<EvalGold>, EvalError> {
         .collect();
     files.sort();
     files.iter().map(|path| load_gold(path)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn gold(id: &str) -> EvalGold {
+        EvalGold {
+            id: id.into(),
+            ..EvalGold::default()
+        }
+    }
+
+    #[test]
+    fn resolve_clean_dir은_clean_하위_번들을_우선한다() {
+        let base = std::env::temp_dir().join(format!(
+            "visual_map_eval_resolve_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        let bundle = base.join("simplebank").join("clean");
+        fs::create_dir_all(&bundle).expect("temp clean bundle");
+        fs::write(bundle.join("manifest.json"), "{}").expect("manifest");
+
+        let resolved = resolve_clean_dir(&base, &gold("simplebank"));
+        assert_eq!(resolved, bundle);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resolve_clean_dir은_runs_루트에서_kind_하위를_찾는다() {
+        let base = std::env::temp_dir().join(format!(
+            "visual_map_eval_runs_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        let bundle = base.join("service").join("ghost").join("clean");
+        fs::create_dir_all(&bundle).expect("temp clean bundle");
+        fs::write(bundle.join("manifest.json"), "{}").expect("manifest");
+
+        let resolved = resolve_clean_dir(&base, &gold("ghost"));
+        assert_eq!(resolved, bundle);
+
+        let _ = fs::remove_dir_all(&base);
+    }
 }
