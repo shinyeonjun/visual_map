@@ -269,11 +269,13 @@ mod tests {
         }
     }
 
+    use std::sync::Arc;
+
     #[test]
     fn unresolved_reference는_이름_suffix로_도메인_관계를_만들지_않는다() {
         let graph = StaticRelationGraph {
             node_ids: vec!["source".to_string()],
-            edges: vec![Reference {
+            edges: Arc::from([Reference {
                 id: "reference:unresolved".to_string(),
                 source_unit_id: "source".to_string(),
                 target_unit_id: None,
@@ -282,7 +284,7 @@ mod tests {
                 kind: ReferenceKind::Call,
                 status: ResolutionStatus::Unknown,
                 evidence: Vec::new(),
-            }],
+            }]),
             dynamic_edge_ids: Vec::new(),
             unresolved_edge_ids: vec!["reference:unresolved".to_string()],
         };
@@ -304,7 +306,7 @@ mod tests {
     fn confirmed_reference만_확정된_도메인_관계가_된다() {
         let graph = StaticRelationGraph {
             node_ids: vec!["source".to_string(), "target".to_string()],
-            edges: vec![Reference {
+            edges: Arc::from([Reference {
                 id: "reference:confirmed".to_string(),
                 source_unit_id: "source".to_string(),
                 target_unit_id: Some("target".to_string()),
@@ -313,7 +315,7 @@ mod tests {
                 kind: ReferenceKind::Call,
                 status: ResolutionStatus::Confirmed,
                 evidence: Vec::new(),
-            }],
+            }]),
             dynamic_edge_ids: Vec::new(),
             unresolved_edge_ids: Vec::new(),
         };

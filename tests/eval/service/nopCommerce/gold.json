@@ -1,0 +1,40 @@
+{
+  "id": "nopCommerce",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/nopCommerce",
+  "mustHaveDomains": ["catalog", "customers", "cart", "checkout", "orders", "payments", "shipping", "admin"],
+  "mustNotMerge": [
+    ["orders", "payments"],
+    ["customers", "catalog"],
+    ["checkout", "catalog"],
+    ["cart", "orders"],
+    ["admin", "catalog"]
+  ],
+  "crossCutting": ["common", "schedule-task", "install", "keepalive", "error", "health", "runtime"],
+  "mustHaveFeatures": [
+    { "contract": "GET /login/", "domain": "customers" },
+    { "contract": "GET /register/", "domain": "customers" },
+    { "contract": "GET /customer/info", "domain": "customers" },
+    { "contract": "GET /search/", "domain": "catalog" },
+    { "contract": "POST /addproducttocart/catalog/{productId}/{shoppingCartTypeId}/{quantity}", "domain": "catalog" },
+    { "contract": "GET /cart/", "domain": "cart" },
+    { "contract": "POST /cart/selectshippingoption", "domain": "cart" },
+    { "contract": "GET /checkout/", "domain": "checkout" },
+    { "contract": "GET /checkout/shippingmethod", "domain": "checkout" },
+    { "contract": "GET /checkout/paymentmethod", "domain": "checkout" },
+    { "contract": "GET /checkout/confirm", "domain": "checkout" },
+    { "contract": "GET /order/history", "domain": "orders" },
+    { "contract": "GET /checkout/completed/{orderId}", "domain": "orders" },
+    { "contract": "GET /Admin/Order/List", "domain": "admin" },
+    { "contract": "GET /Admin/Product/List", "domain": "admin" },
+    { "contract": "GET /Admin/Customer/List", "domain": "admin" },
+    { "contract": "GET /Admin/Shipping/Methods", "domain": "shipping" },
+    { "contract": "GET /Admin/Payment/Methods", "domain": "payments" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "GET /checkout/confirm", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /addproducttocart/catalog/{productId}/{shoppingCartTypeId}/{quantity}", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "GET /login/", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] }
+  ]
+}

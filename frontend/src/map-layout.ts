@@ -9,15 +9,19 @@ export const DOMAIN_CARD = { width: 204, height: 164 }
 export const FEATURE_CARD = { width: 236, height: 148 }
 
 export const FLOW_TRACK = {
-  paddingX: 52,
-  paddingY: 58,
+  paddingX: 60,
+  paddingY: 32,
   header: 48,
   body: 96,
   laneGap: 24,
-  stepWidth: 184,
-  stepHeight: 76,
-  stepGap: 56,
+  stepWidth: 192,
+  stepHeight: 88,
+  stepGap: 64,
   startWidth: 40,
+  terminalHeight: 44,
+  terminalWidth: 100,
+  listWidth: 230,
+  listGap: 20,
 }
 
 export const MAX_FLOW_STEPS = 24

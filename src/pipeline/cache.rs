@@ -9,6 +9,7 @@ use crate::config::AnalysisConfig;
 use crate::facts::FactBundle;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
+use std::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct FactCacheKey {
@@ -38,49 +39,69 @@ impl FactCacheKey {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct FactCache {
+struct FactCacheInner {
     entries: HashMap<FactCacheKey, FactBundle>,
     order: VecDeque<FactCacheKey>,
     capacity: usize,
 }
 
+/// 파일 Facts LRU 캐시다. 읽기는 `RwLock`으로 병렬 조회를 허용한다.
+#[derive(Debug, Default)]
+pub(crate) struct FactCache {
+    inner: RwLock<FactCacheInner>,
+}
+
 impl FactCache {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.entries.len()
+        self.inner
+            .read()
+            .expect("Facts 캐시 읽기 락이 poisoned되지 않아야 한다")
+            .entries
+            .len()
     }
 
-    pub(crate) fn ensure_capacity(&mut self, capacity: usize) {
-        self.capacity = capacity;
-        self.evict_over_capacity();
+    pub(crate) fn ensure_capacity(&self, capacity: usize) {
+        let mut inner = self
+            .inner
+            .write()
+            .expect("Facts 캐시 쓰기 락이 poisoned되지 않아야 한다");
+        inner.capacity = capacity;
+        evict_over_capacity(&mut inner);
     }
 
-    pub(crate) fn insert(&mut self, key: FactCacheKey, bundle: FactBundle) {
-        if self.capacity == 0 {
+    pub(crate) fn insert(&self, key: FactCacheKey, bundle: FactBundle) {
+        let mut inner = self
+            .inner
+            .write()
+            .expect("Facts 캐시 쓰기 락이 poisoned되지 않아야 한다");
+        if inner.capacity == 0 {
             return;
         }
-        self.entries.remove(&key);
-        self.order.retain(|current| current != &key);
-        self.entries.insert(key.clone(), bundle);
-        self.order.push_back(key);
-        self.evict_over_capacity();
+        inner.entries.remove(&key);
+        inner.order.retain(|current| current != &key);
+        inner.entries.insert(key.clone(), bundle);
+        inner.order.push_back(key);
+        evict_over_capacity(&mut inner);
     }
 
-    pub(crate) fn get(&mut self, key: &FactCacheKey) -> Option<FactBundle> {
-        let bundle = self.entries.get(key).cloned()?;
-        self.order.retain(|current| current != key);
-        self.order.push_back(key.clone());
-        Some(bundle)
+    pub(crate) fn get(&self, key: &FactCacheKey) -> Option<FactBundle> {
+        self.inner
+            .read()
+            .expect("Facts 캐시 읽기 락이 poisoned되지 않아야 한다")
+            .entries
+            .get(key)
+            .cloned()
     }
+}
 
-    fn evict_over_capacity(&mut self) {
-        while self.entries.len() > self.capacity {
-            let Some(oldest) = self.order.pop_front() else {
-                self.entries.clear();
-                break;
-            };
-            self.entries.remove(&oldest);
-        }
+fn evict_over_capacity(inner: &mut FactCacheInner) {
+    while inner.entries.len() > inner.capacity {
+        let Some(oldest) = inner.order.pop_front() else {
+            inner.entries.clear();
+            break;
+        };
+        inner.entries.remove(&oldest);
     }
 }
 
@@ -105,7 +126,7 @@ mod tests {
         let fingerprint = config_fingerprint(&AnalysisConfig::default());
         let key = FactCacheKey::new("project", "file", "python", Some("hash"), &fingerprint)
             .expect("내용 해시가 있는 키여야 한다");
-        let mut cache = FactCache::default();
+        let cache = FactCache::default();
         cache.ensure_capacity(1);
         cache.insert(key.clone(), FactBundle::default());
         assert!(cache.get(&key).is_some());

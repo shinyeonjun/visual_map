@@ -5,6 +5,7 @@ use crate::frameworks::registry::detector::FrameworkDetection;
 use crate::languages::common::metadata::stable_id;
 use std::collections::{HashMap, HashSet};
 
+use super::route_path::{is_plausible_http_path, join_paths, string_literal};
 use super::FrameworkApplicabilityIndex;
 
 /// 한 프레임워크의 호출 기반 route 규칙이다.
@@ -77,10 +78,11 @@ pub fn add_call_routes(
         {
             continue;
         }
-        let Some(path_argument) = call.arguments.get(rule.path_argument_index) else {
-            continue;
-        };
-        let path = string_literal(path_argument);
+        let path = call
+            .arguments
+            .get(rule.path_argument_index)
+            .and_then(|argument| string_literal(argument))
+            .or_else(|| alternate_route_literal(call, rule.path_argument_index));
         let receiver = call_receiver(&call.callee);
         let prefix = receiver
             .and_then(|name| prefixes.get(&(call.source_unit_id.clone(), name.to_string())))
@@ -88,12 +90,15 @@ pub fn add_call_routes(
             .or_else(|| {
                 source_file_id(facts, &call.source_unit_id)
                     .and_then(|file_id| file_prefixes.get(file_id).cloned())
-            });
-        let full_path = match (prefix.as_deref(), path.as_deref()) {
-            (Some(prefix), Some(path)) => Some(join_paths(prefix, path)),
-            (None, Some(path)) => Some(join_paths("", path)),
-            _ => None,
-        };
+            })
+            .or_else(|| endpoint_group_prefix(facts, &call.source_unit_id, rule.framework_id));
+        let full_path = compose_route_path(prefix.as_deref(), path.as_deref());
+        if full_path
+            .as_deref()
+            .is_some_and(|value| !is_plausible_http_path(value))
+        {
+            continue;
+        }
         let display_path = full_path.clone().unwrap_or_else(|| "<dynamic>".to_string());
         let unit_id = rule
             .target_argument_index
@@ -665,28 +670,43 @@ impl RouteUnitIndex {
     }
 }
 
-fn string_literal(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.len() < 2 {
-        return None;
+fn compose_route_path(prefix: Option<&str>, path: Option<&str>) -> Option<String> {
+    match (prefix, path) {
+        (Some(prefix), Some(path)) => Some(join_paths(prefix, path)),
+        (None, Some(path)) => Some(join_paths("", path)),
+        (Some(prefix), None) => Some(join_paths(prefix, "")),
+        (None, None) => None,
     }
-    let (first, last) = (value.chars().next()?, value.chars().last()?);
-    if !matches!((first, last), ('"', '"') | ('\'', '\'') | ('`', '`')) {
-        return None;
-    }
-    Some(value[1..value.len() - 1].to_string())
 }
 
-fn join_paths(prefix: &str, path: &str) -> String {
-    let prefix = prefix.trim_matches('/');
-    let path = path.trim_start_matches('/');
-    if prefix.is_empty() && path.is_empty() {
-        "/".to_string()
-    } else if prefix.is_empty() {
-        format!("/{path}")
-    } else if path.is_empty() {
-        format!("/{prefix}")
-    } else {
-        format!("/{prefix}/{path}")
+fn alternate_route_literal(call: &crate::facts::CallSiteFact, path_index: usize) -> Option<String> {
+    if path_index != 0 {
+        return None;
     }
+    call.arguments
+        .get(1)
+        .and_then(|argument| string_literal(argument))
+}
+
+fn endpoint_group_prefix(
+    facts: &FactStore,
+    source_unit_id: &str,
+    framework_id: &str,
+) -> Option<String> {
+    if framework_id != "csharp.minimal_api" {
+        return None;
+    }
+    let mut current = facts.unit(source_unit_id)?;
+    while current.kind != CodeUnitKind::Class {
+        let parent_id = current.parent_id.as_deref()?;
+        current = facts.unit(parent_id)?;
+    }
+    if !current
+        .relative_path
+        .replace('\\', "/")
+        .contains("/Endpoints/")
+    {
+        return None;
+    }
+    Some(format!("/api/{}", current.name))
 }

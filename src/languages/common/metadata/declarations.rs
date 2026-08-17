@@ -69,11 +69,13 @@ fn parse_parameter(raw: String) -> Option<CodeParameter> {
         Some((left, right)) => (left.trim().to_string(), Some(right.trim().to_string())),
         None => (text, None),
     };
-    let text = text
-        .trim_start_matches("mut ")
-        .trim_start_matches("ref ")
-        .trim_start_matches("final ")
-        .trim();
+    let text = strip_parameter_modifiers(
+        text
+            .trim_start_matches("mut ")
+            .trim_start_matches("ref ")
+            .trim_start_matches("final ")
+            .trim(),
+    );
 
     let (name, type_annotation) = if let Some((name, type_name)) = text.split_once(':') {
         (name.trim().to_string(), Some(type_name.trim().to_string()))
@@ -97,6 +99,23 @@ fn parse_parameter(raw: String) -> Option<CodeParameter> {
         default_value,
         variadic,
     })
+}
+
+fn strip_parameter_modifiers(mut text: &str) -> &str {
+    const MODIFIERS: &[&str] = &[
+        "public", "private", "protected", "readonly", "const", "override", "volatile",
+    ];
+    loop {
+        let trimmed = text.trim_start();
+        let Some((word, rest)) = trimmed.split_once(' ') else {
+            return trimmed;
+        };
+        if MODIFIERS.contains(&word) {
+            text = rest;
+        } else {
+            return trimmed;
+        }
+    }
 }
 
 pub(crate) fn extract_return_type(

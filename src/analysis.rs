@@ -43,21 +43,11 @@ mod tests {
         let first = engine
             .analyze(AnalysisRequest::new(&root))
             .expect("첫 분석이 성공해야 한다");
-        let first_cache_len = engine
-            .pipeline
-            .fact_cache
-            .lock()
-            .expect("Facts 캐시가 poisoned되지 않아야 한다")
-            .len();
+        let first_cache_len = engine.pipeline.fact_cache.len();
         let second = engine
             .analyze(AnalysisRequest::new(&root))
             .expect("반복 분석이 성공해야 한다");
-        let second_cache_len = engine
-            .pipeline
-            .fact_cache
-            .lock()
-            .expect("Facts 캐시가 poisoned되지 않아야 한다")
-            .len();
+        let second_cache_len = engine.pipeline.fact_cache.len();
 
         assert_eq!(first.summary.total_files, second.summary.total_files);
         assert_eq!(first_cache_len, 1);

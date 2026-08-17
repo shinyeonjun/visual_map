@@ -16,11 +16,37 @@ use crate::config::ParserPolicy;
 use crate::diagnostics::Diagnostic;
 use crate::facts::{CodeUnit, CodeUnitKind, FactBundle};
 use crate::model::{FileEntry, Language};
+use std::cell::RefCell;
 use std::path::Path;
-use tree_sitter::{Language as TreeLanguage, Parser};
+use tree_sitter::{Language as TreeLanguage, Parser, Tree};
 
 use line_facts::extract_line_facts;
 use metadata::{file_module_name, stable_id};
+
+// rayon 병렬 파일 분석마다 Parser를 새로 만들지 않도록 스레드별로 재사용한다.
+thread_local! {
+    static PARSER: RefCell<Option<(Language, Parser)>> = const { RefCell::new(None) };
+}
+
+fn parse_source(language: Language, grammar: fn() -> TreeLanguage, source: &str) -> Option<Tree> {
+    PARSER.with(|slot| {
+        let mut parser_slot = slot.borrow_mut();
+        let needs_init = parser_slot
+            .as_ref()
+            .is_none_or(|(cached_language, _)| *cached_language != language);
+        if needs_init {
+            let mut parser = Parser::new();
+            parser
+                .set_language(&grammar())
+                .expect("언어 grammar는 항상 설정 가능해야 한다");
+            *parser_slot = Some((language, parser));
+        }
+        parser_slot
+            .as_mut()
+            .and_then(|(_, parser)| parser.parse(source, None))
+    })
+}
+
 
 // 기존 외부 호출 경로를 유지하고 실제 구현은 책임별 모듈에 둔다.
 pub use normalization::{mark_dynamic_calls, normalize_bundle};
@@ -139,19 +165,7 @@ where
         return bundle;
     }
 
-    let mut parser = Parser::new();
-    let tree_language = grammar();
-    if let Err(error) = parser.set_language(&tree_language) {
-        bundle.diagnostics.push(Diagnostic::error(
-            "LANGUAGE_SETUP_FAILED",
-            format!("언어 파서를 설정하지 못했습니다: {error}"),
-            Path::new(&file.relative_path),
-        ));
-        bundle.parse_status = crate::model::ParseStatus::Failed;
-        return bundle;
-    }
-
-    let Some(tree) = parser.parse(source, None) else {
+    let Some(tree) = parse_source(language, grammar, source) else {
         bundle.diagnostics.push(Diagnostic::error(
             "PARSE_FAILED",
             "언어 AST를 생성하지 못했습니다.",
@@ -181,8 +195,7 @@ where
         None,
         &mut bundle,
     );
-    let units = bundle.units.clone();
-    let unit_index = unit_index::UnitSpanIndex::build(&units);
+    let unit_index = unit_index::UnitSpanIndex::build(&bundle.units);
     call_sites::extract(
         language,
         root,

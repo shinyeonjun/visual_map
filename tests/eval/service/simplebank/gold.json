@@ -1,0 +1,31 @@
+{
+  "id": "simplebank",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/simplebank",
+  "mustHaveDomains": ["users", "tokens", "accounts", "transfers"],
+  "domainAliases": [{ "key": "users", "aliases": ["user", "auth"] }],
+  "mustNotMerge": [
+    ["users", "accounts"],
+    ["users", "transfers"],
+    ["accounts", "transfers"],
+    ["tokens", "users"]
+  ],
+  "mustNotSplit": ["users", "accounts", "transfers"],
+  "crossCutting": [],
+  "mustHaveFeatures": [
+    { "contract": "POST /users", "domain": "users" },
+    { "contract": "POST /users/login", "domain": "users" },
+    { "contract": "POST /tokens/renew_access", "domain": "tokens" },
+    { "contract": "POST /accounts", "domain": "accounts" },
+    { "contract": "GET /accounts", "domain": "accounts" },
+    { "contract": "GET /accounts/{id}", "domain": "accounts" },
+    { "contract": "POST /transfers", "domain": "transfers" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "POST /users/login", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /tokens/renew_access", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "GET /accounts/{id}", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /transfers", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] }
+  ]
+}

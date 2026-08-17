@@ -1,0 +1,14 @@
+{
+  "id": "go-prometheus",
+  "set": "lab",
+  "mode": "library",
+  "projectPath": "D:/test/visual_map_reliability_lab/go-prometheus",
+  "mustHaveDomains": [],
+  "mustHaveFeatures": [],
+  "flowInvariants": [],
+  "forbiddenDomainKeys": [
+    "src", "lib", "app", "apps", "packages", "frontend", "backend", "web", "api", "core", "utils", "common",
+    "vendor", "include", "internal", "modules", "tools", "tests", "docs", "examples", "third_party", "build",
+    "scripts", "prometheus", "promql", "scrape", "tsdb", "model", "discovery", "cmd"
+  ]
+}

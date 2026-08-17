@@ -20,7 +20,7 @@ pub enum ReferenceKind {
 }
 
 /// 정적 관계가 어느 정도 해석되었는지 나타낸다.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ResolutionStatus {
     Confirmed,

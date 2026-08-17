@@ -25,6 +25,9 @@ fn main() -> ExitCode {
 }
 
 fn run_command(arguments: Vec<String>) -> ExitCode {
+    if arguments.first().map(String::as_str) == Some("eval") {
+        return run_eval(&arguments[1..]);
+    }
     if arguments.first().map(String::as_str) == Some("postprocess")
         && arguments.get(1).map(String::as_str) == Some("ai-context")
     {
@@ -43,6 +46,8 @@ fn run_command(arguments: Vec<String>) -> ExitCode {
 
     let Some(root_path) = arguments.first() else {
         eprintln!("사용법: code-analysis-engine <프로젝트-경로> [--compact] [--profile] [--no-cache] [--no-output] [--output=<경로>] [--clean-output=<디렉터리>] [--config=<경로>]");
+        eprintln!("       code-analysis-engine eval --gold=<정답.json> (--clean=<clean-디렉터리> | --overview=<분석결과.json> | --project=<프로젝트-경로>) [--output=<리포트.json>] [--config=<경로>]");
+        eprintln!("       code-analysis-engine eval --catalog=<정답-디렉터리-또는-catalog.json> --clean-root=<clean-루트> [--output=<리포트.json>]");
         eprintln!("       code-analysis-engine postprocess ai-context --input=<분석결과.json> --output=<컨텍스트.json> [--config=<경로>] [--pretty] [--profile]");
         eprintln!("       code-analysis-engine semantic review --input=<ai-context.json> --output=<semantic-result.json> --project-root=<프로젝트-경로> [--config=<경로>] [--model=<모델>] [--profile]");
         eprintln!("       code-analysis-engine clean bundle --input=<분석결과.json> --output=<clean-디렉터리> [--config=<경로>] [--part-target-bytes=<바이트>] [--profile]");
@@ -135,6 +140,142 @@ fn run_command(arguments: Vec<String>) -> ExitCode {
             eprintln!("분석 시작 실패: {error}");
             ExitCode::from(1)
         }
+    }
+}
+
+fn run_eval(arguments: &[String]) -> ExitCode {
+    let catalog = option_value(arguments, "--catalog");
+    let gold_path = option_value(arguments, "--gold");
+    let output_path = option_value(arguments, "--output");
+
+    if catalog.is_some() && gold_path.is_some() {
+        eprintln!("eval은 --gold 와 --catalog 를 함께 쓰지 않습니다.");
+        return ExitCode::from(2);
+    }
+
+    if let Some(catalog_path) = catalog {
+        let Some(clean_root) = option_value(arguments, "--clean-root") else {
+            eprintln!("--catalog 에는 --clean-root=<clean 루트>가 필요합니다.");
+            return ExitCode::from(2);
+        };
+        match code_analysis_engine::eval::evaluate_catalog(
+            Path::new(&catalog_path),
+            Path::new(&clean_root),
+        ) {
+            Ok(report) => {
+                print_eval_catalog(&report);
+            return finish_eval_output(output_path.as_deref(), &report, report.failed == 0);
+            }
+            Err(error) => {
+                eprintln!("평가 실패: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+
+    let Some(gold_path) = gold_path else {
+        eprintln!("eval에는 --gold=<정답.json> 또는 --catalog=<catalog.json>이 필요합니다.");
+        return ExitCode::from(2);
+    };
+    let gold = match code_analysis_engine::eval::load_gold(Path::new(&gold_path)) {
+        Ok(gold) => gold,
+        Err(error) => {
+            eprintln!("정답 JSON을 읽지 못했습니다: {error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let report = if let Some(clean_dir) = option_value(arguments, "--clean") {
+        code_analysis_engine::eval::evaluate_clean(&gold, Path::new(&clean_dir))
+    } else if let Some(overview_path) = option_value(arguments, "--overview") {
+        code_analysis_engine::eval::evaluate_analysis_file(&gold, Path::new(&overview_path))
+    } else if let Some(project_path) = option_value(arguments, "--project") {
+        let mut request = AnalysisRequest::new(&project_path);
+        if let Some(path) = option_value(arguments, "--config") {
+            match AnalysisConfig::from_file(Path::new(&path)) {
+                Ok(config) => request.options.config = config,
+                Err(error) => {
+                    eprintln!("설정 적용 실패: {error}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        match analyze(request) {
+            Ok(result) => code_analysis_engine::eval::evaluate_result(&gold, &result),
+            Err(error) => {
+                eprintln!("분석 시작 실패: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        eprintln!("eval에는 --clean, --overview, --project 중 하나가 필요합니다.");
+        return ExitCode::from(2);
+    };
+
+    match report {
+        Ok(report) => {
+            print_eval_report(&report);
+            finish_eval_output(output_path.as_deref(), &report, report.passed)
+        }
+        Err(error) => {
+            eprintln!("평가 실패: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn print_eval_report(report: &code_analysis_engine::eval::EvalReport) {
+    let status = if report.passed { "PASS" } else { "FAIL" };
+    eprintln!(
+        "eval {id}: {status} domains={domain_hits}/{domain_expected} features={feature_hits}/{feature_expected} flows={flow_hits}/{flow_expected} findings={findings}",
+        id = report.id,
+        domain_hits = report.domain_hits,
+        domain_expected = report.domain_expected,
+        feature_hits = report.feature_hits,
+        feature_expected = report.feature_expected,
+        flow_hits = report.flow_hits,
+        flow_expected = report.flow_expected,
+        findings = report.findings.len()
+    );
+    for finding in &report.findings {
+        eprintln!("  [{}/{}] {}", finding.layer, finding.kind, finding.message);
+    }
+}
+
+fn print_eval_catalog(report: &code_analysis_engine::eval::CatalogReport) {
+    eprintln!(
+        "eval catalog: passed={} failed={}",
+        report.passed, report.failed
+    );
+    for item in &report.reports {
+        print_eval_report(item);
+    }
+}
+
+fn finish_eval_output<T: serde::Serialize>(
+    output_path: Option<&str>,
+    value: &T,
+    passed: bool,
+) -> ExitCode {
+    if let Some(path) = output_path {
+        if let Err(error) = output::write_pretty_json(Path::new(path), value) {
+            eprintln!("평가 리포트 저장 실패: {error}");
+            return ExitCode::from(1);
+        }
+        eprintln!("평가 리포트 저장 완료: {path}");
+    } else {
+        match serde_json::to_string_pretty(value) {
+            Ok(json) => println!("{json}"),
+            Err(error) => {
+                eprintln!("평가 리포트를 직렬화하지 못했습니다: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+    if passed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 

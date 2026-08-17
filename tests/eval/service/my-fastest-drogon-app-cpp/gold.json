@@ -1,0 +1,28 @@
+{
+  "id": "my-fastest-drogon-app-cpp",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/my-fastest-drogon-app-cpp",
+  "mustHaveDomains": ["user", "todos"],
+  "domainAliases": [{ "key": "user", "aliases": ["User", "auth"] }],
+  "mustNotMerge": [["user", "todos"]],
+  "mustNotSplit": ["user", "todos"],
+  "crossCutting": ["health"],
+  "mustHaveFeatures": [
+    { "contract": "GET /api/v1/health/", "domain": "health" },
+    { "contract": "POST /api/v1/User/signup", "domain": "user" },
+    { "contract": "POST /api/v1/User/login", "domain": "user" },
+    { "contract": "GET /api/v1/User/profile", "domain": "user" },
+    { "contract": "GET /api/v1/todos/{id}", "domain": "todos" },
+    { "contract": "POST /api/v1/todos/create", "domain": "todos" },
+    { "contract": "GET /api/v1/todos/getAll", "domain": "todos" },
+    { "contract": "GET /api/v1/todos/getAll/{completion}", "domain": "todos" },
+    { "contract": "PUT /api/v1/todos/update/{id}", "domain": "todos" },
+    { "contract": "DELETE /api/v1/todos/delete/{id}", "domain": "todos" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "POST /api/v1/User/login", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "GET /api/v1/todos/getAll", "mustHaveEdgeKinds": ["loopBack"] },
+    { "featureContract": "PUT /api/v1/todos/update/{id}", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] }
+  ]
+}

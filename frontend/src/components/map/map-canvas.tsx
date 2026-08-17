@@ -1,8 +1,9 @@
+import { useEffect, useState } from 'react'
 import type { CSSProperties, PointerEvent, RefCallback } from 'react'
 import type { DomainNode, DomainFeature } from '../../domain'
 import { DomainCard } from '../domain-card'
 import { FeatureCard } from '../feature-card'
-import { FlowMap } from '../flow-map'
+import { FlowListPanel, FlowMap } from '../flow-map'
 import { Icon } from '../icon'
 import { DOMAIN_CARD, FEATURE_CARD, gridPosition } from '../../map-layout'
 import type { MapLayer } from '../../types/map'
@@ -38,6 +39,8 @@ interface MapCanvasProps {
   selectedDomainId: string
   selectedFeatureId: string
   selectedFeature: DomainFeature | null
+  selectedFlowId: string | null
+  onSelectFlow: (id: string) => void
   onSelectDomain: (id: string) => void
   onOpenDomain: (id: string) => void
   onSelectFeature: (id: string) => void
@@ -55,13 +58,35 @@ export function MapCanvas({
   selectedDomainId,
   selectedFeatureId,
   selectedFeature,
+  selectedFlowId,
+  onSelectFlow,
   onSelectDomain,
   onOpenDomain,
   onSelectFeature,
   onOpenFeature,
 }: MapCanvasProps) {
+  const flows = selectedFeature?.flows ?? []
+  const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
+  const selectedFlow = flows.find((flow) => flow.id === selectedFlowId) ?? flows[0] ?? null
+  const color = selectedDomain?.color ?? '#3264d6'
+
+  useEffect(() => {
+    setActiveNodeId(null)
+  }, [selectedFlowId])
+
   return (
     <div className="map-panel">
+      {mapLayer === 'flow' && flows.length > 0 && (
+        <FlowListPanel
+          flows={flows}
+          selectedFlowId={selectedFlowId}
+          color={color}
+          onSelectFlow={(id) => {
+            onSelectFlow(id)
+            setActiveNodeId(null)
+          }}
+        />
+      )}
       <div
         ref={canvas.viewRef}
         className={`map-canvas${canvas.spaceHeld ? ' space-pan' : ''}`}
@@ -108,7 +133,7 @@ export function MapCanvas({
               <FeatureCard
                 key={feature.id}
                 feature={feature}
-                color={selectedDomain?.color ?? '#3264d6'}
+                color={color}
                 x={position.x}
                 y={position.y}
                 selected={feature.id === selectedFeatureId}
@@ -117,8 +142,13 @@ export function MapCanvas({
               />
             )
           })}
-          {mapLayer === 'flow' && selectedFeature && selectedFeature.flows.length > 0 && (
-            <FlowMap flows={selectedFeature.flows} color={selectedDomain?.color ?? '#3264d6'} />
+          {mapLayer === 'flow' && selectedFlow && (
+            <FlowMap
+              flow={selectedFlow}
+              color={color}
+              activeNodeId={activeNodeId}
+              onSelectNode={(nodeId) => setActiveNodeId(nodeId)}
+            />
           )}
         </div>
         {mapLayer === 'domains' && visibleDomains.length === 0 && (
@@ -136,7 +166,7 @@ export function MapCanvas({
               ? `도메인 ${visibleDomains.length}개 · 더블클릭하면 기능`
               : mapLayer === 'features'
                 ? `기능 ${visibleFeatures.length}개 · 클릭하면 실행 길`
-                : `실행 길 ${selectedFeature?.flows.length ?? 0}개 · Esc로 돌아가기`}
+                : `실행 길 ${flows.length}개 · Esc로 돌아가기`}
           </span>
           <span className="map-hint-divider" aria-hidden="true">·</span>
           <span>핀치 / Ctrl+휠 확대</span>

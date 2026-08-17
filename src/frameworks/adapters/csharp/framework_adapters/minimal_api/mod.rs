@@ -20,7 +20,7 @@ pub(super) fn enrich(facts: &mut FactStore, detections: &[FrameworkDetection]) {
         CallRouteRule {
             framework_id: "csharp.minimal_api",
             call_names: METHODS,
-            receiver_names: &["app", "group", "webApp"],
+            receiver_names: &["app", "group", "webApp", "groupBuilder"],
             receiver_constructors: &["CreateBuilder", "Build"],
             route_methods: &["Get", "Post", "Put", "Patch", "Delete", "Methods"],
             fixed_method: None,

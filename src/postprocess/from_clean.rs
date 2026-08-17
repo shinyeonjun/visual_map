@@ -69,7 +69,7 @@ fn to_overview(prepared: &PreparedStaticOverview) -> OverviewResponse {
 
 fn rebuild_static_graph(prepared: &PreparedStaticOverview) -> StaticRelationGraph {
     let node_ids = prepared.units.iter().map(|unit| unit.id.clone()).collect();
-    let edges = prepared
+    let edges: Vec<Reference> = prepared
         .references
         .iter()
         .map(|reference| Reference {
@@ -85,7 +85,7 @@ fn rebuild_static_graph(prepared: &PreparedStaticOverview) -> StaticRelationGrap
         .collect();
     StaticRelationGraph {
         node_ids,
-        edges,
+        edges: edges.into(),
         dynamic_edge_ids: prepared
             .dynamic_boundaries
             .iter()

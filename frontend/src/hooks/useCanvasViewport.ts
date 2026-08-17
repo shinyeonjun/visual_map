@@ -3,6 +3,12 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 
 type Viewport = { scale: number; x: number; y: number }
 
+export type ViewportFitOptions = {
+  minFitScale?: number
+  fitMode?: 'both' | 'width' | 'flow'
+  alignY?: 'center' | 'top'
+}
+
 const MIN_SCALE = 0.05
 const MAX_SCALE = 2.2
 const MAX_FIT_SCALE = 1.2
@@ -12,8 +18,17 @@ const LINE_DELTA_PX = 16
 const PAGE_DELTA_PX = 400
 const FIT_PADDING = 64
 const GRID_SIZE = 29
+const FLOW_READABLE_MIN = 0.78
+const FLOW_READABLE_MAX = 1.05
 
-export function useCanvasViewport(contentWidth: number, contentHeight: number, minFitScale = MIN_SCALE) {
+export function useCanvasViewport(
+  contentWidth: number,
+  contentHeight: number,
+  options: ViewportFitOptions = {},
+) {
+  const minFitScale = options.minFitScale ?? MIN_SCALE
+  const fitMode = options.fitMode ?? 'both'
+  const alignY = options.alignY ?? 'center'
   const viewRef = useRef<HTMLDivElement | null>(null)
   const [canvasReady, setCanvasReady] = useState(false)
   const [view, setView] = useState<Viewport>({ scale: 1, x: 0, y: 0 })
@@ -26,9 +41,44 @@ export function useCanvasViewport(contentWidth: number, contentHeight: number, m
     if (!element) return
     const bounds = element.getBoundingClientRect()
     if (bounds.width === 0 || bounds.height === 0) return
-    const scale = clamp(Math.max(minFitScale, Math.min((bounds.width - FIT_PADDING) / contentWidth, (bounds.height - FIT_PADDING) / contentHeight, MAX_FIT_SCALE)))
-    setView({ scale, x: (bounds.width - contentWidth * scale) / 2, y: (bounds.height - contentHeight * scale) / 2 })
-  }, [contentHeight, contentWidth, minFitScale])
+    const widthScale = (bounds.width - FIT_PADDING) / contentWidth
+    const heightScale = (bounds.height - FIT_PADDING) / contentHeight
+
+    if (fitMode === 'flow') {
+      const fitsBoth = Math.min(widthScale, heightScale)
+      if (fitsBoth >= FLOW_READABLE_MIN) {
+        const scale = clamp(Math.min(fitsBoth, FLOW_READABLE_MAX))
+        setView({
+          scale,
+          x: (bounds.width - contentWidth * scale) / 2,
+          y: (bounds.height - contentHeight * scale) / 2,
+        })
+        return
+      }
+
+      const scale = clamp(widthScale < FLOW_READABLE_MIN ? widthScale : Math.min(widthScale, FLOW_READABLE_MAX))
+      setView({
+        scale,
+        x: (bounds.width - contentWidth * scale) / 2,
+        y: FIT_PADDING / 2,
+      })
+      return
+    }
+
+    const scale = clamp(
+      Math.max(
+        minFitScale,
+        Math.min(
+          fitMode === 'width' ? widthScale : Math.min(widthScale, heightScale),
+          MAX_FIT_SCALE,
+        ),
+      ),
+    )
+    const y = alignY === 'top'
+      ? FIT_PADDING / 2
+      : (bounds.height - contentHeight * scale) / 2
+    setView({ scale, x: (bounds.width - contentWidth * scale) / 2, y })
+  }, [alignY, contentHeight, contentWidth, fitMode, minFitScale])
 
   useEffect(() => {
     fit()

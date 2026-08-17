@@ -1,0 +1,43 @@
+{
+  "id": "vaultwarden",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/vaultwarden",
+  "mustHaveDomains": ["identity", "accounts", "ciphers", "folders", "organizations", "sends", "emergency-access", "two-factor"],
+  "mustNotMerge": [
+    ["identity", "ciphers"],
+    ["accounts", "ciphers"],
+    ["organizations", "accounts"],
+    ["sends", "ciphers"],
+    ["emergency-access", "organizations"],
+    ["two-factor", "identity"]
+  ],
+  "crossCutting": ["admin", "notifications", "push", "icons", "web", "health", "runtime"],
+  "mustHaveFeatures": [
+    { "contract": "POST /connect/token", "domain": "identity" },
+    { "contract": "POST /accounts/register", "domain": "identity" },
+    { "contract": "POST /accounts/prelogin", "domain": "identity" },
+    { "contract": "GET /accounts/profile", "domain": "accounts" },
+    { "contract": "PUT /accounts/profile", "domain": "accounts" },
+    { "contract": "POST /accounts/password", "domain": "accounts" },
+    { "contract": "GET /sync", "domain": "ciphers" },
+    { "contract": "GET /ciphers", "domain": "ciphers" },
+    { "contract": "POST /ciphers", "domain": "ciphers" },
+    { "contract": "PUT /ciphers/{cipher_id}", "domain": "ciphers" },
+    { "contract": "GET /folders", "domain": "folders" },
+    { "contract": "POST /folders", "domain": "folders" },
+    { "contract": "POST /organizations", "domain": "organizations" },
+    { "contract": "GET /organizations/{org_id}/collections", "domain": "organizations" },
+    { "contract": "POST /organizations/{org_id}/users/invite", "domain": "organizations" },
+    { "contract": "GET /sends", "domain": "sends" },
+    { "contract": "POST /sends", "domain": "sends" },
+    { "contract": "POST /emergency-access/invite", "domain": "emergency-access" },
+    { "contract": "POST /two-factor/get-authenticator", "domain": "two-factor" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "POST /connect/token", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /accounts/register", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /ciphers", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "GET /sync", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] }
+  ]
+}

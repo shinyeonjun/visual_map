@@ -34,6 +34,7 @@ function App() {
   const [claudeVersion, setClaudeVersion] = useState('')
   const [claudeError, setClaudeError] = useState('')
   const [activeView, setActiveView] = useState<'setup' | 'map'>('setup')
+  const [selectedFlowId, setSelectedFlowId] = useState<string | null>(null)
   const { analysisProgress, setAnalysisProgress } = useAnalysisProgress()
   const navigation = useMapNavigation()
   const {
@@ -60,6 +61,13 @@ function App() {
   const project = projects.find((item) => item.id === projectId)
   const selectedDomain = project?.domains.find((domain) => domain.id === selectedId) ?? project?.domains[0]
   const selectedFeature = selectedDomain?.featureItems.find((feature) => feature.id === selectedFeatureId) ?? null
+  const selectedFlow = selectedFeature?.flows.find((flow) => flow.id === selectedFlowId)
+    ?? selectedFeature?.flows[0]
+    ?? null
+
+  useEffect(() => {
+    setSelectedFlowId(selectedFeature?.flows[0]?.id ?? null)
+  }, [selectedFeature?.id])
 
   const visibleDomains = useMemo(() => {
     if (!project) return []
@@ -87,14 +95,16 @@ function App() {
     if (mapLayer === 'features') {
       return gridCanvasSize(visibleFeatures.length, 4, FEATURE_CARD.width, FEATURE_CARD.height)
     }
-    if (mapLayer === 'flow' && selectedFeature) {
-      const layouts = selectedFeature.flows.map((flow) => layoutFlowGraph(flow))
-      return flowMapCanvasSize(layouts)
+    if (mapLayer === 'flow' && selectedFlow) {
+      return flowMapCanvasSize([layoutFlowGraph(selectedFlow)])
     }
     return gridCanvasSize(visibleDomains.length, 3, DOMAIN_CARD.width, DOMAIN_CARD.height)
-  }, [mapLayer, selectedFeature, visibleDomains.length, visibleFeatures.length])
+  }, [mapLayer, selectedFlow, visibleDomains.length, visibleFeatures.length])
 
-  const canvas = useCanvasViewport(canvasSize.width, canvasSize.height)
+  const flowViewportOptions = mapLayer === 'flow'
+    ? { fitMode: 'flow' as const }
+    : undefined
+  const canvas = useCanvasViewport(canvasSize.width, canvasSize.height, flowViewportOptions)
   const cliReady = provider === 'claude' ? Boolean(claudeVersion) : Boolean(codexVersion)
 
   function switchProject(id: string) {
@@ -423,6 +433,8 @@ function App() {
           selectedDomainId={selectedId}
           selectedFeatureId={selectedFeatureId}
           selectedFeature={selectedFeature}
+          selectedFlowId={selectedFlowId}
+          onSelectFlow={setSelectedFlowId}
           onSelectDomain={setSelectedId}
           onOpenDomain={openDomain}
           onSelectFeature={setSelectedFeatureId}

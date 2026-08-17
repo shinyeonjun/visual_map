@@ -1,0 +1,29 @@
+{
+  "files": [
+    "service/meeting-overlay-assistant/gold.json",
+    "service/ai-schedule-web/gold.json",
+    "service/simplebank/gold.json",
+    "service/my-fastest-drogon-app-cpp/gold.json",
+    "service/fastapi-full-stack-fastapi-template/gold.json",
+    "service/nestjs-boilerplate/gold.json",
+    "service/cleanarchitecture/gold.json",
+    "service/java-spring-petclinic-microservices/gold.json",
+    "service/nopCommerce/gold.json",
+    "service/vendure/gold.json",
+    "service/vaultwarden/gold.json",
+    "service/plane/gold.json",
+    "service/ghost/gold.json",
+    "service/serverpod/gold.json",
+    "service/dart-serverpod/gold.json",
+    "library-cli/c-curl/gold.json",
+    "library-cli/c-git/gold.json",
+    "library-cli/cpp-opencv/gold.json",
+    "library-cli/cpp-godot/gold.json",
+    "library-cli/go-etcd/gold.json",
+    "library-cli/go-prometheus/gold.json",
+    "library-cli/java-kafka/gold.json",
+    "library-cli/nushell/gold.json",
+    "library-cli/gvmd/gold.json",
+    "library-cli/dart-flutter-devtools/gold.json"
+  ]
+}

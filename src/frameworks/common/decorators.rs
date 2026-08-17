@@ -1,10 +1,11 @@
 //! 언어 공통 decorator 기반 route materializer.
 
-use crate::facts::{Entrypoint, EntrypointKind, FactStore};
+use crate::facts::{CodeUnitKind, Entrypoint, EntrypointKind, FactStore};
 use crate::frameworks::registry::detector::FrameworkDetection;
 use crate::languages::common::metadata::stable_id;
 use std::collections::HashMap;
 
+use super::route_path::{join_paths, route_path_literal};
 use super::FrameworkApplicabilityIndex;
 
 #[derive(Debug, Clone)]
@@ -29,7 +30,7 @@ pub struct DecoratorEntrypointRule {
 }
 
 /// `#[tauri::command]`, `#[tokio::main]`처럼 함수에 붙은 attribute를
-/// 이벤트/메인 진입점으로 보존한다.
+/// RPC/메인 진입점으로 보존한다.
 pub fn add_decorator_entrypoints(
     facts: &mut FactStore,
     detections: &[FrameworkDetection],
@@ -116,13 +117,13 @@ pub fn add_decorator_routes(
                 .any(|name| name.eq_ignore_ascii_case(&decorator.name))
         })
         .filter_map(|decorator| {
-            facts.unit(&decorator.unit_id)?;
+            let owner_id = controller_owner_unit_id(facts, decorator)?;
             applicability
-                .applies(facts, &decorator.unit_id, rule.framework_id)
+                .applies(facts, &owner_id, rule.framework_id)
                 .then(|| {
                     (
-                        decorator.unit_id.clone(),
-                        literal(decorator.arguments.first().map(String::as_str)),
+                        owner_id,
+                        decorator_path_argument(decorator),
                     )
                 })
         })
@@ -148,8 +149,9 @@ pub fn add_decorator_routes(
         if !is_route {
             continue;
         }
-        let route = literal(decorator.arguments.first().map(String::as_str));
-        let prefix = parent_prefix(facts, &controller_prefixes, &unit.id);
+        let route = decorator_path_argument(decorator);
+        let owner_id = route_owner_unit_id(facts, decorator).unwrap_or_else(|| unit.id.clone());
+        let prefix = parent_prefix(facts, &controller_prefixes, &owner_id);
         let path = match (prefix.as_deref(), route.as_deref()) {
             (Some(prefix), Some(route)) => Some(join_paths(prefix, route)),
             (None, Some(route)) => Some(join_paths("", route)),
@@ -181,7 +183,7 @@ pub fn add_decorator_routes(
         if facts.entrypoints.iter().any(|entrypoint| {
             entrypoint.id == id
                 || (entrypoint.framework_id.as_deref() == Some(rule.framework_id)
-                    && entrypoint.unit_id == decorator.unit_id
+                    && entrypoint.unit_id == owner_id
                     && entrypoint.kind
                         == if is_websocket {
                             EntrypointKind::WebSocket
@@ -198,7 +200,7 @@ pub fn add_decorator_routes(
         }
         additions.push(Entrypoint {
             id,
-            unit_id: decorator.unit_id.clone(),
+            unit_id: owner_id,
             kind: if is_websocket {
                 EntrypointKind::WebSocket
             } else {
@@ -224,7 +226,6 @@ pub fn add_decorator_routes(
         .iter()
         .map(|entrypoint| {
             (
-                entrypoint.unit_id.clone(),
                 entrypoint.kind.clone(),
                 entrypoint.path.clone(),
                 entrypoint.method.clone(),
@@ -235,9 +236,8 @@ pub fn add_decorator_routes(
         if entrypoint.framework_id.is_some() && !is_generic_route(entrypoint) {
             return true;
         }
-        !generic_keys.iter().any(|(unit_id, kind, path, method)| {
-            &entrypoint.unit_id == unit_id
-                && &entrypoint.kind == kind
+        !generic_keys.iter().any(|(kind, path, method)| {
+            &entrypoint.kind == kind
                 && &entrypoint.path == path
                 && &entrypoint.method == method
         })
@@ -257,6 +257,9 @@ fn parent_prefix(
     prefixes: &HashMap<String, Option<String>>,
     unit_id: &str,
 ) -> Option<String> {
+    if let Some(prefix) = prefixes.get(unit_id).and_then(|value| value.clone()) {
+        return Some(prefix);
+    }
     let mut current = facts.unit(unit_id)?.parent_id.clone();
     while let Some(parent_id) = current {
         if let Some(prefix) = prefixes.get(&parent_id).and_then(Clone::clone) {
@@ -269,29 +272,82 @@ fn parent_prefix(
     None
 }
 
-fn literal(value: Option<&str>) -> Option<String> {
-    let value = value?.trim();
-    if value.len() < 2 {
-        return None;
+fn route_owner_unit_id(
+    facts: &FactStore,
+    decorator: &crate::facts::DecoratorFact,
+) -> Option<String> {
+    let unit = facts.unit(&decorator.unit_id)?;
+    let line = decorator
+        .evidence
+        .first()
+        .map(|evidence| evidence.span.start_line)?;
+    if matches!(
+        unit.kind,
+        CodeUnitKind::Function | CodeUnitKind::Method | CodeUnitKind::Constructor
+    ) {
+        return Some(unit.id.clone());
     }
-    let first = value.chars().next()?;
-    let last = value.chars().last()?;
-    matches!((first, last), ('"', '"') | ('\'', '\''))
-        .then(|| value[1..value.len() - 1].to_string())
+    let flow_units = |candidate: &crate::facts::CodeUnit| {
+        matches!(
+            candidate.kind,
+            CodeUnitKind::Function | CodeUnitKind::Method | CodeUnitKind::Constructor
+        )
+    };
+    if let Some(containing) = facts
+        .units
+        .values()
+        .filter(|candidate| candidate.file_id == unit.file_id && flow_units(candidate))
+        .filter(|candidate| candidate.span.start_line <= line && line <= candidate.span.end_line)
+        .min_by_key(|candidate| candidate.span.end_line.saturating_sub(candidate.span.start_line))
+    {
+        return Some(containing.id.clone());
+    }
+    // `@Get()`처럼 메서드 선언 바로 위에 붙는 decorator는 class unit에
+    // 매핑되므로, 다음 flow unit을 handler owner로 본다.
+    facts
+        .units
+        .values()
+        .filter(|candidate| candidate.file_id == unit.file_id && flow_units(candidate))
+        .filter(|candidate| candidate.span.start_line > line)
+        .min_by_key(|candidate| candidate.span.start_line)
+        .map(|candidate| candidate.id.clone())
 }
 
-fn join_paths(prefix: &str, path: &str) -> String {
-    let prefix = prefix.trim_matches('/');
-    let path = path.trim_matches('/');
-    if prefix.is_empty() && path.is_empty() {
-        "/".to_string()
-    } else if prefix.is_empty() {
-        format!("/{path}")
-    } else if path.is_empty() {
-        format!("/{prefix}")
-    } else {
-        format!("/{prefix}/{path}")
+fn controller_owner_unit_id(
+    facts: &FactStore,
+    decorator: &crate::facts::DecoratorFact,
+) -> Option<String> {
+    let unit = facts.unit(&decorator.unit_id)?;
+    if unit.kind == CodeUnitKind::Class {
+        return Some(unit.id.clone());
     }
+    let file_id = unit.file_id.clone();
+    let line = decorator
+        .evidence
+        .first()
+        .map(|evidence| evidence.span.start_line)?;
+    facts
+        .units
+        .values()
+        .filter(|candidate| {
+            candidate.kind == CodeUnitKind::Class && candidate.file_id == file_id
+        })
+        .filter(|candidate| candidate.span.start_line >= line)
+        .min_by_key(|candidate| candidate.span.start_line)
+        .map(|candidate| candidate.id.clone())
+}
+
+fn decorator_path_argument(decorator: &crate::facts::DecoratorFact) -> Option<String> {
+    decorator
+        .arguments
+        .first()
+        .and_then(|argument| route_path_literal(argument))
+        .or_else(|| {
+            decorator
+                .expression
+                .split_once('(')
+                .and_then(|(_, inner)| route_path_literal(inner.trim_end_matches(')').trim()))
+        })
 }
 
 fn method_argument(argument: &str) -> Option<String> {

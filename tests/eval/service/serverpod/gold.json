@@ -1,0 +1,46 @@
+{
+  "id": "serverpod",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/serverpod",
+  "mustHaveDomains": [
+    "greeting",
+    "example",
+    "channels",
+    "authentication",
+    "basic_types",
+    "simple",
+    "cloud_storage",
+    "transactions_database"
+  ],
+  "domainAliases": [
+    { "key": "transactions_database", "aliases": ["TransactionsDatabase"] }
+  ],
+  "mustNotMerge": [
+    ["greeting", "example"],
+    ["authentication", "basic_types"],
+    ["cloud_storage", "transactions_database"]
+  ],
+  "mustNotSplit": ["greeting", "authentication", "basic_types", "simple"],
+  "crossCutting": ["logging", "test_tools"],
+  "forbiddenDomainKeys": ["src", "lib", "packages", "modules", "tools", "tests", "util", "generated"],
+  "mustHaveFeatures": [
+    { "contract": "RPC:/hello", "domain": "greeting" },
+    { "contract": "RPC:/getChannels", "domain": "channels" },
+    { "contract": "RPC:/authenticate", "domain": "authentication" },
+    { "contract": "RPC:/createUser", "domain": "authentication" },
+    { "contract": "RPC:/countUsers", "domain": "authentication" },
+    { "contract": "RPC:/testInt", "domain": "basic_types" },
+    { "contract": "RPC:/testString", "domain": "basic_types" },
+    { "contract": "RPC:/testBool", "domain": "basic_types" },
+    { "contract": "RPC:/getGlobalInt", "domain": "simple" },
+    { "contract": "RPC:/setGlobalInt", "domain": "simple" },
+    { "contract": "RPC:/storePublicFile", "domain": "cloud_storage" },
+    { "contract": "RPC:/retrievePublicFile", "domain": "cloud_storage" },
+    { "contract": "RPC:/removeRow", "domain": "transactions_database" },
+    { "contract": "RPC:/updateInsertDelete", "domain": "transactions_database" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "RPC:/authenticate", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] }
+  ]
+}

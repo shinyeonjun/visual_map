@@ -1,0 +1,42 @@
+{
+  "id": "cleanarchitecture",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/cleanarchitecture",
+  "mustHaveDomains": ["users", "todo-lists", "todo-items", "weather-forecasts"],
+  "domainAliases": [
+    { "key": "users", "aliases": ["identity", "auth"] },
+    { "key": "todo-lists", "aliases": ["todolists", "lists"] },
+    { "key": "todo-items", "aliases": ["todoitems", "items"] }
+  ],
+  "mustNotMerge": [
+    ["users", "todo-lists"],
+    ["users", "todo-items"],
+    ["todo-lists", "todo-items"],
+    ["weather-forecasts", "todo-lists"]
+  ],
+  "mustNotSplit": ["todo-lists", "todo-items"],
+  "crossCutting": [],
+  "mustHaveFeatures": [
+    { "contract": "POST /api/Users/register", "domain": "users" },
+    { "contract": "POST /api/Users/login", "domain": "users" },
+    { "contract": "POST /api/Users/refresh", "domain": "users" },
+    { "contract": "POST /api/Users/forgotPassword", "domain": "users" },
+    { "contract": "POST /api/Users/resetPassword", "domain": "users" },
+    { "contract": "POST /api/Users/logout", "domain": "users" },
+    { "contract": "GET /api/TodoLists", "domain": "todo-lists" },
+    { "contract": "POST /api/TodoLists", "domain": "todo-lists" },
+    { "contract": "PUT /api/TodoLists/{id}", "domain": "todo-lists" },
+    { "contract": "DELETE /api/TodoLists/{id}", "domain": "todo-lists" },
+    { "contract": "POST /api/TodoItems", "domain": "todo-items" },
+    { "contract": "PUT /api/TodoItems/{id}", "domain": "todo-items" },
+    { "contract": "PATCH /api/TodoItems/UpdateDetail/{id}", "domain": "todo-items" },
+    { "contract": "DELETE /api/TodoItems/{id}", "domain": "todo-items" },
+    { "contract": "GET /api/WeatherForecasts", "domain": "weather-forecasts" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "PUT /api/TodoLists/{id}", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "PUT /api/TodoItems/{id}", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /api/Users/logout", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] }
+  ]
+}

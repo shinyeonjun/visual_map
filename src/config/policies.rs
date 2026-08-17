@@ -195,6 +195,8 @@ fn default_archived_directory_names() -> Vec<String> {
         "deprecated".into(),
         "archive".into(),
         "archives".into(),
+        "examples".into(),
+        "templates".into(),
     ]
 }
 

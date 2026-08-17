@@ -45,6 +45,7 @@
   {"id":"javascript.express","displayName":"Express","languages":["javascript","typescript"],"kind":"web","capabilities":["httpEntrypoint"],"parent":null,"markers":["express","express()"]},
   {"id":"javascript.fastify","displayName":"Fastify","languages":["javascript","typescript"],"kind":"web","capabilities":["httpEntrypoint"],"parent":null,"markers":["fastify","fastify()"]},
   {"id":"javascript.nestjs","displayName":"NestJS","languages":["javascript","typescript"],"kind":"web","capabilities":["httpEntrypoint","dependencyInjection"],"parent":null,"markers":["@nestjs/common","@Controller"]},
+  {"id":"javascript.nestjs_graphql","displayName":"NestJS GraphQL","languages":["javascript","typescript"],"kind":"web","capabilities":["httpEntrypoint"],"parent":"javascript.nestjs","markers":["@nestjs/graphql","@Query","@Mutation","@Resolver"]},
   {"id":"javascript.koa","displayName":"Koa","languages":["javascript","typescript"],"kind":"web","capabilities":["httpEntrypoint"],"parent":null,"markers":["koa","new Koa"]},
   {"id":"javascript.tauri","displayName":"Tauri","languages":["javascript","typescript","rust"],"kind":"desktop","capabilities":["component","nativeBridge"],"parent":null,"markers":["@tauri-apps/api","tauri::"]},
   {"id":"python.django","displayName":"Django","languages":["python"],"kind":"web","capabilities":["httpEntrypoint","dependencyInjection","resourceAccess"],"parent":null,"markers":["django","urlpatterns","models.Model","django.db"]},

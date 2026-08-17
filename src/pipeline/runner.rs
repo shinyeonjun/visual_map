@@ -45,10 +45,7 @@ impl DomainAnalysisPipeline {
         };
         let fact_cache = Arc::clone(&self.fact_cache);
         if use_fact_cache {
-            fact_cache
-                .lock()
-                .expect("Facts 캐시가 poisoned되지 않아야 한다")
-                .ensure_capacity(request.options.config.scan.fact_cache_max_entries);
+            fact_cache.ensure_capacity(request.options.config.scan.fact_cache_max_entries);
         }
 
         let stage_started = Instant::now();
@@ -67,11 +64,7 @@ impl DomainAnalysisPipeline {
                     )
                 });
                 if let Some(Some(key)) = cache_key.as_ref() {
-                    if let Some(bundle) = fact_cache
-                        .lock()
-                        .expect("Facts 캐시가 poisoned되지 않아야 한다")
-                        .get(key)
-                    {
+                    if let Some(bundle) = fact_cache.get(key) {
                         return Ok((file.file_id.clone(), bundle, true));
                     }
                 }
@@ -79,10 +72,7 @@ impl DomainAnalysisPipeline {
                     Ok(source) => {
                         let bundle = analyze_file(file, &source, &request.options.config);
                         if let Some(Some(key)) = cache_key {
-                            fact_cache
-                                .lock()
-                                .expect("Facts 캐시가 poisoned되지 않아야 한다")
-                                .insert(key, bundle.clone());
+                            fact_cache.insert(key, bundle.clone());
                         }
                         Ok((file.file_id.clone(), bundle, false))
                     }
@@ -148,36 +138,29 @@ impl DomainAnalysisPipeline {
         let stage_started = Instant::now();
         facts.resolve_references();
         diagnostics.extend(facts.diagnostics.clone());
+        let resolution_counts = facts
+            .references
+            .iter()
+            .fold([0usize; 4], |mut counts, reference| {
+                let index = match reference.status {
+                    crate::facts::ResolutionStatus::Confirmed => 0,
+                    crate::facts::ResolutionStatus::Candidate => 1,
+                    crate::facts::ResolutionStatus::Unknown => 2,
+                    crate::facts::ResolutionStatus::Dynamic => 3,
+                };
+                counts[index] += 1;
+                counts
+            });
         profiler.record(
             "reference_resolution",
             stage_started,
             format!(
                 "references={} confirmed={} candidate={} unknown={} dynamic={}",
                 facts.references.len(),
-                facts
-                    .references
-                    .iter()
-                    .filter(
-                        |reference| reference.status == crate::facts::ResolutionStatus::Confirmed
-                    )
-                    .count(),
-                facts
-                    .references
-                    .iter()
-                    .filter(
-                        |reference| reference.status == crate::facts::ResolutionStatus::Candidate
-                    )
-                    .count(),
-                facts
-                    .references
-                    .iter()
-                    .filter(|reference| reference.status == crate::facts::ResolutionStatus::Unknown)
-                    .count(),
-                facts
-                    .references
-                    .iter()
-                    .filter(|reference| reference.status == crate::facts::ResolutionStatus::Dynamic)
-                    .count()
+                resolution_counts[0],
+                resolution_counts[1],
+                resolution_counts[2],
+                resolution_counts[3]
             ),
         );
 

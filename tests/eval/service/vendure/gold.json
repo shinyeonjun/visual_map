@@ -1,0 +1,37 @@
+{
+  "id": "vendure",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/vendure",
+  "mustHaveDomains": ["auth", "catalog", "customers", "orders", "payments", "shipping", "promotions", "fulfillment"],
+  "mustNotMerge": [
+    ["orders", "payments"],
+    ["orders", "shipping"],
+    ["catalog", "customers"],
+    ["promotions", "orders"],
+    ["fulfillment", "payments"]
+  ],
+  "crossCutting": ["health", "job-queue", "settings-store", "scheduled-task", "runtime"],
+  "mustHaveFeatures": [
+    { "contract": "POST /shop-api", "domain": "auth" },
+    { "contract": "POST /admin-api", "domain": "catalog" },
+    { "contract": "POST /shop-api/login", "domain": "auth" },
+    { "contract": "POST /shop-api/registerCustomerAccount", "domain": "customers" },
+    { "contract": "POST /shop-api/products", "domain": "catalog" },
+    { "contract": "POST /shop-api/collections", "domain": "catalog" },
+    { "contract": "POST /shop-api/activeOrder", "domain": "orders" },
+    { "contract": "POST /shop-api/addItemToOrder", "domain": "orders" },
+    { "contract": "POST /shop-api/transitionOrderToState", "domain": "orders" },
+    { "contract": "POST /shop-api/addPaymentToOrder", "domain": "payments" },
+    { "contract": "POST /shop-api/eligibleShippingMethods", "domain": "shipping" },
+    { "contract": "POST /shop-api/setOrderShippingMethod", "domain": "shipping" },
+    { "contract": "POST /admin-api/createPromotion", "domain": "promotions" },
+    { "contract": "POST /admin-api/addFulfillmentToOrder", "domain": "fulfillment" },
+    { "contract": "POST /admin-api/refundOrder", "domain": "fulfillment" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "POST /shop-api/login", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /shop-api/addItemToOrder", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /shop-api/transitionOrderToState", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] }
+  ]
+}

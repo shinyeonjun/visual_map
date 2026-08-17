@@ -293,6 +293,66 @@ mod tests {
     }
 
     #[test]
+    fn 패키지_접두가_빠진_qualified_이름은_suffix로_해석된다() {
+        let mut decoys = BTreeMap::from([
+            ("source".into(), unit("source", "source", "source")),
+            (
+                "backend".into(),
+                unit(
+                    "backend",
+                    "UserService",
+                    "backend::services::UserService",
+                ),
+            ),
+            (
+                "frontend".into(),
+                unit(
+                    "frontend",
+                    "UserService",
+                    "frontend::services::UserService",
+                ),
+            ),
+            (
+                "unique".into(),
+                unit("unique", "Store", "app::infra::cache::Store"),
+            ),
+        ]);
+        for index in 0..200 {
+            let id = format!("decoy-{index}");
+            decoys.insert(
+                id.clone(),
+                unit(&id, "Other", &format!("unrelated::module_{index}::Other")),
+            );
+        }
+
+        let mut store = FactStore {
+            units: decoys,
+            references: vec![
+                reference("ref_unique", "infra::cache::Store", ResolutionStatus::Candidate),
+                reference(
+                    "ref_ambiguous",
+                    "services::UserService",
+                    ResolutionStatus::Candidate,
+                ),
+                reference("ref_missing", "missing::Nothing", ResolutionStatus::Candidate),
+            ],
+            ..FactStore::default()
+        };
+
+        store.resolve_references();
+
+        assert_eq!(store.references[0].target_unit_id.as_deref(), Some("unique"));
+        assert_eq!(store.references[0].status, ResolutionStatus::Confirmed);
+        assert_eq!(store.references[1].status, ResolutionStatus::Candidate);
+        assert_eq!(
+            store.references[1].candidate_unit_ids,
+            ["backend".to_string(), "frontend".to_string()]
+        );
+        assert_eq!(store.references[2].status, ResolutionStatus::Unknown);
+        assert!(store.references[2].target_unit_id.is_none());
+    }
+
+    #[test]
     fn 참조_해석은_소스_언어가_다른_유닛을_확정하지_않는다() {
         let mut store = FactStore {
             units: BTreeMap::from([

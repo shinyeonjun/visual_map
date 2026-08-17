@@ -6,7 +6,9 @@ pub mod components;
 pub mod decorators;
 pub mod events;
 pub mod file_routes;
+pub mod graphql;
 pub mod inherited;
+pub mod route_path;
 pub mod routes;
 pub mod rpc;
 

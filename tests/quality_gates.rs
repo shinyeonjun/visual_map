@@ -92,7 +92,7 @@ export { createValue as valueFactory };
 
     let result = analyze(AnalysisRequest::new(&root)).expect("분석이 성공해야 한다");
     let overview = result.overview.expect("Overview가 있어야 한다");
-    for reference in &overview.static_graph.edges {
+    for reference in overview.static_graph.edges.iter() {
         assert!(!reference.target_name.contains(['\r', '\n']));
         assert!(reference.target_name.chars().count() <= 256);
     }

@@ -26,7 +26,60 @@ pub(crate) fn is_leaf_capability_key(key: &str) -> bool {
             | "share"
             | "send-email"
             | "download-ics"
+            | "login"
+            | "logout"
+            | "create"
+            | "update"
+            | "delete"
+            | "get"
+            | "getall"
+            | "list"
+            | "index"
+            | "show"
+            | "edit"
+            | "add"
+            | "remove"
+            | "configure"
+            | "confirm"
+            | "cancel"
+            | "submit"
+            | "register"
+            | "authenticate"
+            | "authorize"
+            | "refresh"
+            | "verify"
+            | "reset"
+            | "upload"
+            | "download"
     )
+}
+
+/// RPC endpoint 클래스 이름에서 도메인 capability 키를 만든다.
+///
+/// `GreetingEndpoint` → `greeting`, `TransactionsDatabaseEndpoint` → `transactions_database`
+pub(crate) fn endpoint_class_capability_key(class_name: &str, suffix: &str) -> Option<String> {
+    let stem = class_name.strip_suffix(suffix)?.trim();
+    if stem.is_empty() {
+        return None;
+    }
+    Some(canonical_capability_key(&pascal_case_to_snake_case(stem)))
+}
+
+fn pascal_case_to_snake_case(value: &str) -> String {
+    let mut out = String::new();
+    for (index, character) in value.chars().enumerate() {
+        if character.is_ascii_uppercase() && index > 0 {
+            let previous = value[..index].chars().last();
+            let next = value[index + 1..].chars().next();
+            if previous.is_some_and(|ch| ch.is_ascii_lowercase())
+                || next.is_some_and(|ch| ch.is_ascii_lowercase())
+            {
+                out.push('_');
+            }
+        }
+        out.push(character.to_ascii_lowercase());
+    }
+    out
 }
 
 /// 비즈니스 지도에 단독 카드로 두지 않는 기술·운영 키다.
@@ -50,7 +103,8 @@ pub(crate) fn is_operational_capability_key(key: &str) -> bool {
     }
     matches!(
         key,
-        "runtime" | "metrics" | "monitor" | "readiness" | "ready" | "ping" | "status"
+        "runtime" | "metrics" | "monitor" | "readiness" | "ready" | "ping" | "status" | "utils"
+            | "install"
     )
 }
 
@@ -92,5 +146,28 @@ mod tests {
         assert!(is_operational_capability_key("runtime"));
         assert!(is_operational_capability_key("health"));
         assert!(!is_operational_capability_key("sessions"));
+    }
+
+    #[test]
+    fn endpoint_클래스_이름은_snake_case_능력_키가_된다() {
+        assert_eq!(
+            endpoint_class_capability_key("GreetingEndpoint", "Endpoint"),
+            Some("greeting".into())
+        );
+        assert_eq!(
+            endpoint_class_capability_key("BasicTypesEndpoint", "Endpoint"),
+            Some("basic_types".into())
+        );
+        assert_eq!(
+            endpoint_class_capability_key("TransactionsDatabaseEndpoint", "Endpoint"),
+            Some("transactions_database".into())
+        );
+    }
+
+    #[test]
+    fn login_create는_잎_동사_키다() {
+        assert!(is_leaf_capability_key("login"));
+        assert!(is_leaf_capability_key("create"));
+        assert!(!is_leaf_capability_key("authentication"));
     }
 }

@@ -39,14 +39,19 @@ pub(super) fn build_local_edges(
 
     for (index, event) in events.iter().enumerate() {
         match event {
-            Event::Reference { node, reference } => {
+            Event::Reference {
+                node,
+                reference_id,
+                status,
+            } => {
                 if let Some((loop_index, loop_fact)) = event_index.post_test_loop_for(index) {
                     add_post_test_condition_edges(
                         &event_index,
                         loop_index,
                         loop_fact,
                         node,
-                        reference,
+                        reference_id,
+                        *status,
                         exit_node_id,
                         edges,
                     );
@@ -55,7 +60,8 @@ pub(super) fn build_local_edges(
                         &event_index,
                         index,
                         node,
-                        reference,
+                        reference_id,
+                        *status,
                         exit_node_id,
                         edges,
                     );
@@ -232,7 +238,8 @@ fn add_reference_successor(
     event_index: &FlowEventIndex<'_>,
     index: usize,
     node: &FlowNode,
-    reference: &crate::facts::Reference,
+    reference_id: &str,
+    status: ResolutionStatus,
     exit_node_id: &str,
     edges: &mut Vec<FlowEdge>,
 ) {
@@ -244,14 +251,14 @@ fn add_reference_successor(
     edges.push(make_edge(
         &node.id,
         &target,
-        if reference.status == ResolutionStatus::Dynamic {
+        if status == ResolutionStatus::Dynamic {
             FlowEdgeKind::Dynamic
         } else {
             FlowEdgeKind::Sequential
         },
-        reference.status.clone(),
+        status,
         None,
-        Some(reference.id.clone()),
+        Some(reference_id.to_string()),
     ));
 }
 
@@ -456,7 +463,8 @@ pub(super) enum Event {
     },
     Reference {
         node: FlowNode,
-        reference: crate::facts::Reference,
+        reference_id: String,
+        status: ResolutionStatus,
     },
 }
 
@@ -489,7 +497,8 @@ fn add_post_test_condition_edges(
     loop_index: usize,
     loop_fact: &ControlFlowFact,
     node: &FlowNode,
-    reference: &crate::facts::Reference,
+    reference_id: &str,
+    status: ResolutionStatus,
     exit_node_id: &str,
     edges: &mut Vec<FlowEdge>,
 ) {
@@ -505,20 +514,20 @@ fn add_post_test_condition_edges(
         &node.id,
         &body_target,
         FlowEdgeKind::LoopBody,
-        reference.status.clone(),
+        status,
         Some("repeat".into()),
-        Some(reference.id.clone()),
+        Some(reference_id.to_string()),
     ));
     edges.push(make_edge(
         &node.id,
         &exit_target,
-        if reference.status == ResolutionStatus::Dynamic {
+        if status == ResolutionStatus::Dynamic {
             FlowEdgeKind::Dynamic
         } else {
             FlowEdgeKind::FalseBranch
         },
-        reference.status.clone(),
+        status,
         Some("exit".into()),
-        Some(reference.id.clone()),
+        Some(reference_id.to_string()),
     ));
 }

@@ -1,0 +1,41 @@
+{
+  "id": "plane",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/plane",
+  "mustHaveDomains": ["auth", "workspaces", "projects", "issues", "cycles", "modules", "pages", "notifications"],
+  "domainAliases": [{ "key": "issues", "aliases": ["work-items", "intake"] }],
+  "mustNotMerge": [
+    ["auth", "workspaces"],
+    ["workspaces", "projects"],
+    ["projects", "issues"],
+    ["issues", "cycles"],
+    ["issues", "modules"]
+  ],
+  "crossCutting": ["instances", "license", "webhooks", "analytics", "exporter", "health", "runtime"],
+  "mustHaveFeatures": [
+    { "contract": "POST /auth/sign-in/", "domain": "auth" },
+    { "contract": "POST /auth/sign-up/", "domain": "auth" },
+    { "contract": "POST /auth/sign-out/", "domain": "auth" },
+    { "contract": "POST /auth/magic-generate/", "domain": "auth" },
+    { "contract": "GET /api/workspaces/", "domain": "workspaces" },
+    { "contract": "POST /api/workspaces/", "domain": "workspaces" },
+    { "contract": "GET /api/workspaces/{slug}/members/", "domain": "workspaces" },
+    { "contract": "GET /api/workspaces/{slug}/projects/", "domain": "projects" },
+    { "contract": "POST /api/workspaces/{slug}/projects/", "domain": "projects" },
+    { "contract": "GET /api/workspaces/{slug}/projects/{project_id}/issues/", "domain": "issues" },
+    { "contract": "POST /api/workspaces/{slug}/projects/{project_id}/issues/", "domain": "issues" },
+    { "contract": "GET /api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/comments/", "domain": "issues" },
+    { "contract": "GET /api/workspaces/{slug}/projects/{project_id}/cycles/", "domain": "cycles" },
+    { "contract": "GET /api/workspaces/{slug}/projects/{project_id}/modules/", "domain": "modules" },
+    { "contract": "GET /api/workspaces/{slug}/projects/{project_id}/pages/", "domain": "pages" },
+    { "contract": "GET /api/users/me/", "domain": "auth" },
+    { "contract": "GET /api/instances/", "domain": "instances" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "POST /auth/sign-in/", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /api/workspaces/", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /api/workspaces/{slug}/projects/{project_id}/issues/", "mustHaveEdgeKinds": ["trueBranch"] },
+    { "featureContract": "POST /auth/magic-generate/", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] }
+  ]
+}

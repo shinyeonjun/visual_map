@@ -41,18 +41,21 @@ pub(crate) fn build(facts: &FactStore, limits: &AnalysisLimits) -> (ExecutionFlo
         .map(|flow| (flow.owner_unit_id.clone(), flow.id.clone()))
         .collect();
 
-    let mut links = Vec::new();
-    for flow in &mut flows {
-        add_call_links(
-            flow,
-            &input_index,
-            &flow_ids,
-            &entry_nodes,
-            &exit_nodes,
-            &mut links,
-        );
-        sort_flow(flow);
-    }
+    let mut link_batches: Vec<_> = flows
+        .par_iter_mut()
+        .map(|flow| {
+            let links = collect_call_links(
+                flow,
+                &input_index,
+                &flow_ids,
+                &entry_nodes,
+                &exit_nodes,
+            );
+            sort_flow(flow);
+            links
+        })
+        .collect();
+    let mut links = link_batches.drain(..).flatten().collect::<Vec<_>>();
     flows.sort_by(|left, right| left.owner_unit_id.cmp(&right.owner_unit_id));
     let mut remaining_nodes = limits.max_flow_nodes;
     let mut remaining_edges = limits.max_flow_edges;
@@ -63,28 +66,31 @@ pub(crate) fn build(facts: &FactStore, limits: &AnalysisLimits) -> (ExecutionFlo
     // 내보내면 안 된다. 존재하지 않는 entryNodeId를 프론트가 따라가게
     // 하는 대신 해당 flow를 생략하고 한도 도달 상태만 보고한다.
     flows.retain(|flow| !flow.nodes.is_empty());
-    links.retain(|link| {
-        flows.iter().any(|flow| {
-            flow.id == link.source_flow_id
-                && flow.nodes.iter().any(|node| node.id == link.source_node_id)
-        }) && flows.iter().any(|flow| {
-            flow.id == link.target_flow_id
-                && flow
-                    .nodes
-                    .iter()
-                    .any(|node| node.id == link.target_entry_node_id)
-                && flow
-                    .nodes
-                    .iter()
-                    .any(|node| node.id == link.target_exit_node_id)
+    let nodes_by_flow: HashMap<&str, HashSet<&str>> = flows
+        .iter()
+        .map(|flow| {
+            (
+                flow.id.as_str(),
+                flow.nodes.iter().map(|node| node.id.as_str()).collect(),
+            )
         })
+        .collect();
+    links.retain(|link| {
+        let Some(source_nodes) = nodes_by_flow.get(link.source_flow_id.as_str()) else {
+            return false;
+        };
+        let Some(target_nodes) = nodes_by_flow.get(link.target_flow_id.as_str()) else {
+            return false;
+        };
+        source_nodes.contains(link.source_node_id.as_str())
+            && target_nodes.contains(link.target_entry_node_id.as_str())
+            && target_nodes.contains(link.target_exit_node_id.as_str())
     });
     for link in &mut links {
         let return_node_exists = link.return_node_id.as_ref().is_some_and(|return_node_id| {
-            flows.iter().any(|flow| {
-                flow.id == link.source_flow_id
-                    && flow.nodes.iter().any(|node| node.id == *return_node_id)
-            })
+            nodes_by_flow
+                .get(link.source_flow_id.as_str())
+                .is_some_and(|nodes| nodes.contains(return_node_id.as_str()))
         });
         if !return_node_exists {
             link.return_node_id = None;
@@ -108,7 +114,8 @@ fn build_flow(unit: &CodeUnit, input_index: &FlowInputIndex<'_>) -> ExecutionFlo
     for reference in input_index.calls_for(&unit.id) {
         events.push(Event::Reference {
             node: reference_node(unit, reference),
-            reference: (*reference).clone(),
+            reference_id: reference.id.clone(),
+            status: reference.status.clone(),
         });
     }
     // 호출식의 span은 인자 전체를 포함한다. 단순한 시작 위치 정렬을
@@ -127,8 +134,10 @@ fn build_flow(unit: &CodeUnit, input_index: &FlowInputIndex<'_>) -> ExecutionFlo
     let dynamic_boundary_ids = events
         .iter()
         .filter_map(|event| match event {
-            Event::Reference { reference, .. } if reference.status == ResolutionStatus::Dynamic => {
-                Some(reference.id.clone())
+            Event::Reference { reference_id, status, .. }
+                if *status == ResolutionStatus::Dynamic =>
+            {
+                Some(reference_id.clone())
             }
             _ => None,
         })
@@ -172,14 +181,13 @@ fn spans_contain(
         && container != nested
 }
 
-fn add_call_links(
-    flow: &mut ExecutionFlow,
+fn collect_call_links(
+    flow: &ExecutionFlow,
     input_index: &FlowInputIndex<'_>,
     flow_ids: &HashMap<String, String>,
     entry_nodes: &HashMap<String, String>,
     exit_nodes: &HashMap<String, String>,
-    links: &mut Vec<FlowLink>,
-) {
+) -> Vec<FlowLink> {
     let node_by_reference: HashMap<&str, &str> = flow
         .nodes
         .iter()
@@ -189,13 +197,14 @@ fn add_call_links(
                 .map(|reference_id| (reference_id, node.id.as_str()))
         })
         .collect();
-    let sequential_successors: HashMap<String, String> = flow
+    let sequential_successors: HashMap<&str, &str> = flow
         .edges
         .iter()
         .filter(|edge| edge.kind == FlowEdgeKind::Sequential)
-        .map(|edge| (edge.source_node_id.clone(), edge.target_node_id.clone()))
+        .map(|edge| (edge.source_node_id.as_str(), edge.target_node_id.as_str()))
         .collect();
 
+    let mut links = Vec::new();
     for reference in input_index.calls_for(&flow.owner_unit_id) {
         let Some(target_unit_id) = reference.target_unit_id.as_deref() else {
             continue;
@@ -214,8 +223,8 @@ fn add_call_links(
         };
         let return_target = sequential_successors
             .get(*call_node_id)
-            .cloned()
-            .unwrap_or_else(|| flow.exit_node_id.clone());
+            .copied()
+            .unwrap_or(flow.exit_node_id.as_str());
         links.push(FlowLink {
             id: stable_id(&flow.id, &format!("link:{}", reference.id)),
             reference_id: reference.id.clone(),
@@ -224,10 +233,11 @@ fn add_call_links(
             target_flow_id: target_flow_id.clone(),
             target_entry_node_id: target_entry.clone(),
             target_exit_node_id: target_exit.clone(),
-            return_node_id: Some(return_target),
+            return_node_id: Some(return_target.to_string()),
             status: reference.status.clone(),
         });
     }
+    links
 }
 
 fn limit_flow(

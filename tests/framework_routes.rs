@@ -662,7 +662,7 @@ class OrdersController {
     }));
     assert!(overview.entrypoints.iter().any(|entrypoint| {
         entrypoint.framework_id.as_deref() == Some("rust.tauri")
-            && entrypoint.kind == EntrypointKind::Event
+            && entrypoint.kind == EntrypointKind::Rpc
             && entrypoint.name == "greet"
     }));
     assert!(overview.entrypoints.iter().any(|entrypoint| {
@@ -673,7 +673,7 @@ class OrdersController {
     assert!(overview.entrypoints.iter().any(|entrypoint| {
         entrypoint.framework_id.as_deref() == Some("dart.serverpod")
             && entrypoint.kind == EntrypointKind::Rpc
-            && entrypoint.name == "getUser"
+            && entrypoint.path.as_deref() == Some("/getUser")
     }));
     assert!(overview
         .entrypoints
@@ -752,6 +752,71 @@ class OrdersController {
         .entrypoints
         .iter()
         .any(|entrypoint| entrypoint.path.as_deref() == Some("/orders/list")));
+
+    fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}
+
+#[test]
+fn aspnet_conventional_mvc는_controller_action_경로를_만든다() {
+    let root = temporary_project();
+    fs::write(
+        root.join("CustomerController.cs"),
+        r#"
+using Microsoft.AspNetCore.Mvc;
+public class CustomerController : Controller {
+  [HttpGet]
+  public IActionResult Login() { return View(); }
+}
+"#,
+    )
+    .expect("C# MVC fixture를 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("분석이 성공해야 한다")
+        .overview
+        .expect("Overview가 생성되어야 한다");
+
+    assert!(overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.path.as_deref() == Some("/Customer/Login")
+            && entrypoint.method.as_deref() == Some("HTTPGET")
+    }));
+
+    fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}
+
+#[test]
+fn nestjs_graphql_resolver는_api_prefix_계약을_만든다() {
+    let root = temporary_project();
+    fs::create_dir_all(root.join("api/resolvers/shop")).expect("resolver 디렉터리를 만들어야 한다");
+    fs::write(
+        root.join("api/resolvers/shop/shop-auth.resolver.ts"),
+        r#"
+import { Mutation, Resolver } from "@nestjs/graphql";
+
+@Resolver()
+export class ShopAuthResolver {
+  @Mutation()
+  async registerCustomerAccount() {
+    return {};
+  }
+}
+"#,
+    )
+    .expect("GraphQL fixture를 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("분석이 성공해야 한다")
+        .overview
+        .expect("Overview가 생성되어야 한다");
+
+    assert!(overview.entrypoints.iter().any(|entrypoint| {
+        entrypoint.path.as_deref() == Some("/shop-api/registerCustomerAccount")
+            && entrypoint.method.as_deref() == Some("POST")
+    }));
+    assert!(overview
+        .entrypoints
+        .iter()
+        .any(|entrypoint| entrypoint.path.as_deref() == Some("/shop-api")));
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
 }

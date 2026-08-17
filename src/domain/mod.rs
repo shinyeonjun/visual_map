@@ -10,7 +10,7 @@ pub mod naming;
 pub mod signals;
 
 mod aggregation;
-mod capability_keys;
+pub(crate) mod capability_keys;
 mod capabilities;
 mod clustering;
 pub(crate) mod contract_path;

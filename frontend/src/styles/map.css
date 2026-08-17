@@ -257,7 +257,7 @@
 .map-panel {
   display: flex;
   flex: 1;
-  flex-direction: column;
+  flex-direction: row;
   min-height: 0;
   margin: 0;
   border: 0;

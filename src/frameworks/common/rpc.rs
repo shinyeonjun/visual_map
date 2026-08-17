@@ -157,11 +157,21 @@ pub fn add_endpoint_methods(
     }
 
     for class_id in endpoint_classes {
+        let Some(class_unit) = facts.unit(&class_id) else {
+            continue;
+        };
+        if !class_unit.name.ends_with("Endpoint") {
+            continue;
+        }
         let methods = methods_by_parent
             .get(&class_id)
             .cloned()
             .unwrap_or_default();
         for method in methods {
+            if !is_server_endpoint_method(&method) {
+                continue;
+            }
+            let rpc_path = format!("/{}", method.name);
             let id = stable_id(
                 "entry",
                 &format!("endpoint:{}:{}:{}", framework_id, method.id, method.name),
@@ -178,9 +188,9 @@ pub fn add_endpoint_methods(
                 id,
                 unit_id: method.id.clone(),
                 kind: EntrypointKind::Rpc,
-                name: method.name.clone(),
+                name: rpc_path.clone(),
                 method: Some("RPC".to_string()),
-                path: None,
+                path: Some(rpc_path),
                 framework_id: Some(framework_id.to_string()),
                 evidence: vec![Evidence::new(
                     "endpointMethod",
@@ -190,6 +200,17 @@ pub fn add_endpoint_methods(
             });
         }
     }
+}
+
+fn is_server_endpoint_method(method: &crate::facts::CodeUnit) -> bool {
+    let path = method.relative_path.replace('\\', "/").to_ascii_lowercase();
+    if path.contains("_client/")
+        || path.ends_with("/client.dart")
+        || path.contains("/protocol/client.")
+    {
+        return false;
+    }
+    true
 }
 
 fn matches_call(call_name: &str, rule: &RpcRegistrationRule) -> bool {
@@ -293,4 +314,110 @@ fn resolve_service_unit(facts: &FactStore, source_file_id: &str, argument: &str)
         .map(|unit| unit.id.clone())
         .collect::<Vec<_>>();
     (global.len() == 1).then(|| global[0].clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::add_endpoint_methods;
+    use crate::facts::{
+        CodeUnit, CodeUnitKind, EntrypointKind, Evidence, FactStore, SourceSpan,
+    };
+    use crate::frameworks::registry::capabilities::FrameworkKind;
+    use crate::frameworks::registry::detector::FrameworkDetection;
+    use crate::model::Language;
+
+    fn detection(file_id: &str) -> Vec<FrameworkDetection> {
+        vec![FrameworkDetection {
+            id: "dart.serverpod".into(),
+            display_name: "Serverpod".into(),
+            kind: FrameworkKind::Web,
+            languages: vec!["dart".into()],
+            capabilities: vec![],
+            parent: None,
+            confidence: 1.0,
+            evidence: vec![Evidence::new(
+                "marker",
+                "package:serverpod",
+                SourceSpan::new(file_id, file_id, 1, 1, 1, 1),
+            )],
+        }]
+    }
+
+    fn endpoint_class(id: &str, path: &str) -> CodeUnit {
+        CodeUnit {
+            id: id.into(),
+            kind: CodeUnitKind::Class,
+            name: "GreetingEndpoint".into(),
+            qualified_name: "GreetingEndpoint".into(),
+            file_id: format!("file:{id}"),
+            relative_path: path.into(),
+            language: Language::Dart,
+            parent_id: None,
+            span: SourceSpan::new(format!("file:{id}"), path, 1, 1, 1, 1),
+            body_span: None,
+            signature: Some("class GreetingEndpoint extends Endpoint".into()),
+            parameters: Vec::new(),
+            return_type: None,
+            visibility: Default::default(),
+            modifiers: Vec::new(),
+            exported: true,
+        }
+    }
+
+    fn endpoint_method(id: &str, parent_id: &str, path: &str) -> CodeUnit {
+        CodeUnit {
+            id: id.into(),
+            kind: CodeUnitKind::Method,
+            name: "hello".into(),
+            qualified_name: format!("{parent_id}::hello"),
+            file_id: format!("file:{id}"),
+            relative_path: path.into(),
+            language: Language::Dart,
+            parent_id: Some(parent_id.into()),
+            span: SourceSpan::new(format!("file:{id}"), path, 1, 1, 1, 1),
+            body_span: None,
+            signature: Some("Future<void> hello()".into()),
+            parameters: Vec::new(),
+            return_type: None,
+            visibility: Default::default(),
+            modifiers: Vec::new(),
+            exported: true,
+        }
+    }
+
+    #[test]
+    fn endpoint_메서드는_rpc_경로를_가진다() {
+        let mut facts = FactStore::default();
+        facts
+            .units
+            .insert("class:greeting".into(), endpoint_class("class:greeting", "server/lib/greeting_endpoint.dart"));
+        facts.units.insert(
+            "method:hello".into(),
+            endpoint_method("method:hello", "class:greeting", "server/lib/greeting_endpoint.dart"),
+        );
+
+        add_endpoint_methods(&mut facts, &detection("file:class:greeting"), "dart.serverpod", "Endpoint");
+
+        assert_eq!(facts.entrypoints.len(), 1);
+        assert_eq!(facts.entrypoints[0].kind, EntrypointKind::Rpc);
+        assert_eq!(facts.entrypoints[0].path.as_deref(), Some("/hello"));
+        assert_eq!(facts.entrypoints[0].method.as_deref(), Some("RPC"));
+    }
+
+    #[test]
+    fn client_stub_메서드는_rpc_진입점에서_제외된다() {
+        let mut facts = FactStore::default();
+        facts.units.insert(
+            "class:client".into(),
+            endpoint_class("class:client", "lib/src/protocol/client.dart"),
+        );
+        facts.units.insert(
+            "method:hello".into(),
+            endpoint_method("method:hello", "class:client", "lib/src/protocol/client.dart"),
+        );
+
+        add_endpoint_methods(&mut facts, &detection("file:class:greeting"), "dart.serverpod", "Endpoint");
+
+        assert!(facts.entrypoints.is_empty());
+    }
 }

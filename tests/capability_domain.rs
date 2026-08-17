@@ -654,3 +654,52 @@ app.include_router(router, prefix="/api/v1/sessions")
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
 }
+
+#[test]
+fn tauri_command는_도메인_카드를_만든다() {
+    let root = temporary_project("tauri-command-domain");
+    fs::write(
+        root.join("desktop.rs"),
+        r#"
+use tauri::command;
+
+#[tauri::command]
+fn analyze_project() {}
+
+#[tauri::command]
+fn list_projects() {}
+"#,
+    )
+    .expect("Tauri command fixture를 써야 한다");
+
+    let overview = analyze(AnalysisRequest::new(&root))
+        .expect("분석이 성공해야 한다")
+        .overview
+        .expect("Overview가 생성되어야 한다");
+    let keys: Vec<_> = overview
+        .domains
+        .iter()
+        .map(|domain| domain.key.as_str())
+        .collect();
+
+    assert!(
+        !overview.domains.is_empty(),
+        "Tauri command만 있는 프로젝트도 도메인 카드가 있어야 한다: {keys:?}"
+    );
+    assert!(
+        overview.entrypoints.iter().any(|entrypoint| {
+            entrypoint.kind == code_analysis_engine::facts::EntrypointKind::Rpc
+                && entrypoint.name == "analyze_project"
+        }),
+        "analyze_project command가 RPC 진입점이어야 한다"
+    );
+    assert!(
+        overview
+            .features
+            .iter()
+            .any(|feature| !feature.entrypoint_ids.is_empty()),
+        "Tauri command가 기능으로 올라가야 한다"
+    );
+
+    fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
+}

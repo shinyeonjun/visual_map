@@ -1,0 +1,43 @@
+{
+  "id": "fastapi-full-stack-fastapi-template",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/fastapi-full-stack-fastapi-template",
+  "mustHaveDomains": ["login", "users", "items"],
+  "domainAliases": [{ "key": "login", "aliases": ["auth", "password-recovery"] }],
+  "mustNotMerge": [
+    ["login", "users"],
+    ["login", "items"],
+    ["users", "items"]
+  ],
+  "mustNotSplit": ["login", "users", "items"],
+  "crossCutting": ["utils"],
+  "mustHaveFeatures": [
+    { "contract": "POST /api/v1/login/access-token", "domain": "login" },
+    { "contract": "POST /api/v1/login/test-token", "domain": "login" },
+    { "contract": "POST /api/v1/password-recovery/{email}", "domain": "login" },
+    { "contract": "POST /api/v1/reset-password/", "domain": "login" },
+    { "contract": "POST /api/v1/users/signup", "domain": "users" },
+    { "contract": "GET /api/v1/users/me", "domain": "users" },
+    { "contract": "PATCH /api/v1/users/me", "domain": "users" },
+    { "contract": "PATCH /api/v1/users/me/password", "domain": "users" },
+    { "contract": "DELETE /api/v1/users/me", "domain": "users" },
+    { "contract": "GET /api/v1/users/", "domain": "users" },
+    { "contract": "POST /api/v1/users/", "domain": "users" },
+    { "contract": "GET /api/v1/users/{user_id}", "domain": "users" },
+    { "contract": "PATCH /api/v1/users/{user_id}", "domain": "users" },
+    { "contract": "DELETE /api/v1/users/{user_id}", "domain": "users" },
+    { "contract": "GET /api/v1/items/", "domain": "items" },
+    { "contract": "GET /api/v1/items/{id}", "domain": "items" },
+    { "contract": "POST /api/v1/items/", "domain": "items" },
+    { "contract": "PUT /api/v1/items/{id}", "domain": "items" },
+    { "contract": "DELETE /api/v1/items/{id}", "domain": "items" },
+    { "contract": "GET /api/v1/utils/health-check/", "domain": "utils" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "POST /api/v1/login/access-token", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /api/v1/password-recovery/{email}", "mustHaveEdgeKinds": ["trueBranch"] },
+    { "featureContract": "GET /api/v1/items/", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "GET /api/v1/items/{id}", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] }
+  ]
+}

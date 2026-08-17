@@ -10,10 +10,10 @@ pub mod stages;
 mod cache;
 mod runner;
 
-/// 도메인 분석 파이프라인의 실행 객체.
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+/// 도메인 분석 파이프라인의 실행 객체.
 #[derive(Debug, Default)]
 pub struct DomainAnalysisPipeline {
-    pub(crate) fact_cache: Arc<Mutex<cache::FactCache>>,
+    pub(crate) fact_cache: Arc<cache::FactCache>,
 }

@@ -1,10 +1,12 @@
 //! HTTP/WS/Job 계약을 클러스터 원자로 묶는다.
 
 use crate::config::PathPolicy;
-use crate::domain::capability_keys::{canonical_capability_key, is_leaf_capability_key};
+use crate::domain::capability_keys::{
+    canonical_capability_key, endpoint_class_capability_key, is_leaf_capability_key,
+};
 use crate::domain::contract_path::{capability_key_from_path, normalize_contract_path};
 use crate::facts::{
-    Entrypoint, EntrypointKind, FactStore, ResourceAccess, ResourceKind,
+    CodeUnitKind, Entrypoint, EntrypointKind, FactStore, ResourceAccess, ResourceKind,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -35,10 +37,10 @@ pub(crate) fn build(store: &FactStore, path_policy: &PathPolicy) -> Vec<Capabili
         }
         let Some(raw_key) = (match entrypoint.kind {
             EntrypointKind::Job => job_capability_key(entrypoint),
-            _ => unit_capability_keys
-                .get(&entrypoint.unit_id)
-                .cloned()
-                .or_else(|| contract_capability_key(entrypoint)),
+            EntrypointKind::Rpc => rpc_capability_key(entrypoint, store)
+                .or_else(|| contract_capability_key(entrypoint))
+                .or_else(|| unit_capability_keys.get(&entrypoint.unit_id).cloned()),
+            _ => http_capability_key(entrypoint, store, &unit_capability_keys),
         }) else {
             continue;
         };
@@ -151,6 +153,66 @@ fn contract_capability_key(entrypoint: &Entrypoint) -> Option<String> {
     capability_key_from_path(raw).map(|key| canonical_capability_key(&key))
 }
 
+fn http_capability_key(
+    entrypoint: &Entrypoint,
+    store: &FactStore,
+    unit_capability_keys: &HashMap<String, String>,
+) -> Option<String> {
+    if let Some(key) = contract_capability_key(entrypoint).filter(|key| {
+        !is_leaf_capability_key(key) && !is_transport_capability_key(key)
+    }) {
+        return Some(key);
+    }
+    if let Some(key) = handler_class_capability_key(entrypoint, store) {
+        return Some(key);
+    }
+    contract_capability_key(entrypoint).or_else(|| {
+        unit_capability_keys
+            .get(&entrypoint.unit_id)
+            .cloned()
+    })
+}
+
+fn is_transport_capability_key(key: &str) -> bool {
+    matches!(
+        key,
+        "shop-api" | "admin-api" | "gateway" | "graphql" | "connect" | "rpc"
+    )
+}
+
+fn handler_class_capability_key(entrypoint: &Entrypoint, store: &FactStore) -> Option<String> {
+    let unit = store.unit(&entrypoint.unit_id)?;
+    let mut current = Some(unit);
+    while let Some(unit) = current {
+        if unit.kind == CodeUnitKind::Class {
+            if let Some(key) = endpoint_class_capability_key(&unit.name, "Controller")
+                .or_else(|| endpoint_class_capability_key(&unit.name, "Resolver"))
+                .or_else(|| endpoint_class_capability_key(&unit.name, "Endpoint"))
+                .or_else(|| endpoint_class_capability_key(&unit.name, "Service"))
+                .or_else(|| endpoint_class_capability_key(&unit.name, "Handler"))
+            {
+                return Some(canonical_capability_key(&key));
+            }
+        }
+        current = unit
+            .parent_id
+            .as_deref()
+            .and_then(|parent_id| store.unit(parent_id));
+    }
+    None
+}
+
+fn rpc_capability_key(entrypoint: &Entrypoint, store: &FactStore) -> Option<String> {
+    let unit = store.unit(&entrypoint.unit_id)?;
+    let parent_id = unit.parent_id.as_deref()?;
+    let parent = store.unit(parent_id)?;
+    if parent.kind != CodeUnitKind::Class {
+        return None;
+    }
+    endpoint_class_capability_key(&parent.name, "Endpoint")
+        .or_else(|| endpoint_class_capability_key(&parent.name, "Service"))
+}
+
 fn unit_capability_keys(
     store: &FactStore,
     path_policy: &PathPolicy,
@@ -171,7 +233,11 @@ fn unit_capability_keys(
             continue;
         }
         let raw = entrypoint.path.as_deref().unwrap_or(&entrypoint.name);
-        let Some(key) = capability_key_from_path(raw) else {
+        let Some(key) = (match entrypoint.kind {
+            EntrypointKind::Rpc => rpc_capability_key(entrypoint, store)
+                .or_else(|| capability_key_from_path(raw)),
+            _ => capability_key_from_path(raw),
+        }) else {
             continue;
         };
         let segment_count = normalize_contract_path(raw)
@@ -281,6 +347,7 @@ mod tests {
         ResourceKind, SourceSpan,
     };
     use crate::model::Language;
+    use std::collections::HashSet;
 
     fn file_unit(id: &str, relative_path: &str) -> CodeUnit {
         CodeUnit {
@@ -316,6 +383,61 @@ mod tests {
         }
     }
 
+    fn rpc_entrypoint(id: &str, unit_id: &str, name: &str, path: Option<&str>) -> Entrypoint {
+        Entrypoint {
+            id: id.into(),
+            unit_id: unit_id.into(),
+            kind: EntrypointKind::Rpc,
+            name: name.into(),
+            method: Some("RPC".into()),
+            path: path.map(str::to_string),
+            framework_id: Some("dart.serverpod".into()),
+            evidence: Vec::new(),
+        }
+    }
+
+    fn class_unit(id: &str, name: &str, relative_path: &str, parent_id: Option<&str>) -> CodeUnit {
+        CodeUnit {
+            id: id.into(),
+            kind: CodeUnitKind::Class,
+            name: name.into(),
+            qualified_name: name.into(),
+            file_id: format!("file:{id}"),
+            relative_path: relative_path.into(),
+            language: Language::Dart,
+            parent_id: parent_id.map(str::to_string),
+            span: SourceSpan::new(format!("file:{id}"), relative_path, 1, 1, 1, 1),
+            body_span: None,
+            signature: Some(format!("class {name} extends Endpoint")),
+            parameters: Vec::new(),
+            return_type: None,
+            visibility: Default::default(),
+            modifiers: Vec::new(),
+            exported: true,
+        }
+    }
+
+    fn method_unit(id: &str, name: &str, parent_id: &str, relative_path: &str) -> CodeUnit {
+        CodeUnit {
+            id: id.into(),
+            kind: CodeUnitKind::Method,
+            name: name.into(),
+            qualified_name: format!("{parent_id}::{name}"),
+            file_id: format!("file:{id}"),
+            relative_path: relative_path.into(),
+            language: Language::Dart,
+            parent_id: Some(parent_id.into()),
+            span: SourceSpan::new(format!("file:{id}"), relative_path, 1, 1, 1, 1),
+            body_span: None,
+            signature: Some(format!("Future<void> {name}()")),
+            parameters: Vec::new(),
+            return_type: None,
+            visibility: Default::default(),
+            modifiers: Vec::new(),
+            exported: true,
+        }
+    }
+
     fn fetch_resource(id: &str, unit_id: &str, name: &str) -> ResourceAccess {
         ResourceAccess {
             id: id.into(),
@@ -325,6 +447,39 @@ mod tests {
             mode: AccessMode::Read,
             evidence: Vec::new(),
         }
+    }
+
+    #[test]
+    fn 같은_라우터_함수의_서로_다른_경로는_각각_능력_키를_가진다() {
+        let mut store = FactStore::default();
+        store.units.insert(
+            "unit:router".into(),
+            file_unit("unit:router", "api/server.go"),
+        );
+        store.entrypoints.push(http_entrypoint(
+            "entry:users",
+            "unit:router",
+            "POST",
+            "/users",
+        ));
+        store.entrypoints.push(http_entrypoint(
+            "entry:accounts",
+            "unit:router",
+            "GET",
+            "/accounts",
+        ));
+        store.entrypoints.push(http_entrypoint(
+            "entry:transfers",
+            "unit:router",
+            "POST",
+            "/transfers",
+        ));
+
+        let capabilities = build(&store, &PathPolicy::default());
+        let keys: HashSet<_> = capabilities.iter().map(|cap| cap.key.as_str()).collect();
+        assert!(keys.contains("users"));
+        assert!(keys.contains("accounts"));
+        assert!(keys.contains("transfers"));
     }
 
     #[test]
@@ -444,8 +599,84 @@ mod tests {
         ));
 
         let capabilities = build(&store, &PathPolicy::default());
+        assert_eq!(capabilities.len(), 2);
+        let keys: HashSet<_> = capabilities.iter().map(|cap| cap.key.as_str()).collect();
+        assert!(keys.contains("sessions"));
+        assert!(keys.contains("start"));
+    }
+
+    #[test]
+    fn tauri_command는_rpc_능력_원자가_된다() {
+        let mut store = FactStore::default();
+        store.units.insert(
+            "unit:analyze".into(),
+            file_unit("unit:analyze", "src-tauri/src/analysis.rs"),
+        );
+        store.entrypoints.push(Entrypoint {
+            id: "entry:analyze".into(),
+            unit_id: "unit:analyze".into(),
+            kind: EntrypointKind::Rpc,
+            name: "analyze_project".into(),
+            method: Some("TAURI_COMMAND".into()),
+            path: None,
+            framework_id: Some("rust.tauri".into()),
+            evidence: Vec::new(),
+        });
+
+        let capabilities = build(&store, &PathPolicy::default());
         assert_eq!(capabilities.len(), 1);
-        assert_eq!(capabilities[0].key, "sessions");
+        assert_eq!(capabilities[0].key, "analyze_project");
+        assert_eq!(capabilities[0].entrypoint_ids, vec!["entry:analyze"]);
+    }
+
+    #[test]
+    fn serverpod_endpoint_메서드는_클래스_키로_묶인다() {
+        let mut store = FactStore::default();
+        store.units.insert(
+            "unit:class".into(),
+            class_unit(
+                "unit:class",
+                "AuthenticationEndpoint",
+                "server/lib/authentication_endpoint.dart",
+                None,
+            ),
+        );
+        store.units.insert(
+            "unit:auth".into(),
+            method_unit(
+                "unit:auth",
+                "authenticate",
+                "unit:class",
+                "server/lib/authentication_endpoint.dart",
+            ),
+        );
+        store.units.insert(
+            "unit:create".into(),
+            method_unit(
+                "unit:create",
+                "createUser",
+                "unit:class",
+                "server/lib/authentication_endpoint.dart",
+            ),
+        );
+        store.entrypoints.push(rpc_entrypoint(
+            "entry:auth",
+            "unit:auth",
+            "authenticate",
+            Some("/authenticate"),
+        ));
+        store.entrypoints.push(rpc_entrypoint(
+            "entry:create",
+            "unit:create",
+            "createUser",
+            Some("/createUser"),
+        ));
+
+        let capabilities = build(&store, &PathPolicy::default());
+        assert_eq!(capabilities.len(), 1);
+        assert_eq!(capabilities[0].key, "authentication");
         assert_eq!(capabilities[0].entrypoint_ids.len(), 2);
+        assert!(capabilities[0].contract_paths.contains("/authenticate"));
+        assert!(capabilities[0].contract_paths.contains("/createuser"));
     }
 }

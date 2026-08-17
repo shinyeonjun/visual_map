@@ -66,6 +66,7 @@ pub(super) fn form_domains_from_clusters(
             status,
             &confidence,
             domain_policy,
+            store,
             &mut groups,
             &mut group_index_by_id,
         );
@@ -141,6 +142,7 @@ fn ensure_group(
     status: crate::domain::confidence::DomainStatus,
     confidence: &crate::domain::confidence::DomainConfidence,
     domain_policy: &DomainPolicy,
+    store: &FactStore,
     groups: &mut Vec<DomainGroup>,
     group_index_by_id: &mut HashMap<String, usize>,
 ) {
@@ -153,7 +155,7 @@ fn ensure_group(
         id: domain_id.to_string(),
         key: domain_key.to_string(),
         label: label(domain_key),
-        kind: domain_kind(domain_key, domain_policy),
+        kind: domain_kind(domain_key, domain_policy, store),
         status,
         confidence: confidence.clone(),
         primary_unit_ids: Vec::new(),
@@ -166,12 +168,47 @@ fn ensure_group(
     });
 }
 
-fn domain_kind(key: &str, policy: &DomainPolicy) -> DomainKind {
+fn domain_kind(key: &str, policy: &DomainPolicy, store: &FactStore) -> DomainKind {
     if policy.cross_cutting_keys.contains(key) || is_operational_capability_key(key) {
-        DomainKind::CrossCutting
-    } else {
-        DomainKind::Business
+        return DomainKind::CrossCutting;
     }
+    if library_style_project(store) {
+        return DomainKind::CrossCutting;
+    }
+    DomainKind::Business
+}
+
+fn library_style_project(store: &FactStore) -> bool {
+    if store
+        .entrypoints
+        .iter()
+        .any(|entrypoint| entrypoint.kind == crate::facts::EntrypointKind::Main)
+    {
+        return false;
+    }
+    let has_service_framework = store.entrypoints.iter().any(|entrypoint| {
+        entrypoint.framework_id.as_deref().is_some_and(|framework_id| {
+            framework_id.contains("nestjs")
+                || framework_id.contains("fastapi")
+                || framework_id.contains("django")
+                || framework_id.contains("spring")
+                || framework_id.contains("mvc")
+                || framework_id.contains("minimal_api")
+                || framework_id.contains("drogon")
+                || framework_id.contains("actix")
+        })
+    });
+    if has_service_framework {
+        return false;
+    }
+    store.entrypoints.iter().any(|entrypoint| {
+        matches!(
+            entrypoint.kind,
+            crate::facts::EntrypointKind::Http
+                | crate::facts::EntrypointKind::Rpc
+                | crate::facts::EntrypointKind::WebSocket
+        )
+    })
 }
 
 fn assign_unit_membership(

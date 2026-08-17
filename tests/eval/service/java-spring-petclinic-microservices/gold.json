@@ -1,0 +1,38 @@
+{
+  "id": "java-spring-petclinic-microservices",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/java-spring-petclinic-microservices",
+  "mustHaveDomains": ["owners", "pets", "vets", "visits", "genai"],
+  "domainAliases": [{ "key": "owners", "aliases": ["customers", "customer"] }],
+  "mustNotMerge": [
+    ["owners", "pets"],
+    ["owners", "vets"],
+    ["pets", "visits"],
+    ["vets", "visits"],
+    ["genai", "owners"],
+    ["genai", "pets"]
+  ],
+  "crossCutting": ["api-gateway", "config-server", "discovery-server", "admin-server", "health", "runtime"],
+  "mustHaveFeatures": [
+    { "contract": "POST /api/customer/owners", "domain": "owners" },
+    { "contract": "GET /api/customer/owners", "domain": "owners" },
+    { "contract": "GET /api/customer/owners/{ownerId}", "domain": "owners" },
+    { "contract": "PUT /api/customer/owners/{ownerId}", "domain": "owners" },
+    { "contract": "GET /api/customer/petTypes", "domain": "pets" },
+    { "contract": "POST /api/customer/owners/{ownerId}/pets", "domain": "pets" },
+    { "contract": "GET /api/customer/owners/{ownerId}/pets/{petId}", "domain": "pets" },
+    { "contract": "PUT /api/customer/owners/{ownerId}/pets/{petId}", "domain": "pets" },
+    { "contract": "GET /api/vet/vets", "domain": "vets" },
+    { "contract": "POST /api/visit/owners/{ownerId}/pets/{petId}/visits", "domain": "visits" },
+    { "contract": "GET /api/visit/owners/{ownerId}/pets/{petId}/visits", "domain": "visits" },
+    { "contract": "GET /api/visit/pets/visits", "domain": "visits" },
+    { "contract": "POST /api/genai/chatclient", "domain": "genai" },
+    { "contract": "GET /api/gateway/owners/{ownerId}", "domain": "owners" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "POST /api/customer/owners", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /api/customer/owners/{ownerId}/pets", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /api/visit/owners/{ownerId}/pets/{petId}/visits", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] }
+  ]
+}

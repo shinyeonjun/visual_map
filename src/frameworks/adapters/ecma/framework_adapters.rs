@@ -8,6 +8,7 @@ mod express;
 mod fastify;
 mod koa;
 mod nestjs;
+mod nestjs_graphql;
 mod nextjs;
 mod nuxt;
 mod react;
@@ -28,6 +29,7 @@ pub(super) fn enrich(facts: &mut FactStore, detections: &[FrameworkDetection]) {
     express::enrich(facts, detections);
     fastify::enrich(facts, detections);
     nestjs::enrich(facts, detections);
+    nestjs_graphql::enrich(facts, detections);
     koa::enrich(facts, detections);
     tauri::enrich(facts, detections);
 }

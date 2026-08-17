@@ -6,6 +6,10 @@ const NON_INSTANCE_SEGMENTS: &[&str] = &[
     "auth", "data", "file", "http", "jobs", "role", "tags", "task", "user", "ws",
 ];
 
+const TRANSPORT_CAPABILITY_SEGMENTS: &[&str] = &[
+    "shop-api", "admin-api", "gateway", "graphql", "connect", "rpc",
+];
+
 /// 원시 경로·URL·메서드 접두를 정규화한 계약 경로다.
 pub(crate) fn normalize_contract_path(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
@@ -71,7 +75,11 @@ pub(crate) fn contract_identity(method: Option<&str>, raw: &str) -> Option<Strin
 pub(crate) fn capability_key_from_path(raw: &str) -> Option<String> {
     let normalized = normalize_contract_path(raw)?;
     let mut segments = capability_key_segments(&normalized);
-    while !segments.is_empty() && STRIP_PREFIXES.contains(&segments[0]) {
+    while !segments.is_empty()
+        && (STRIP_PREFIXES.contains(&segments[0])
+            || segments[0] == ":param"
+            || TRANSPORT_CAPABILITY_SEGMENTS.contains(&segments[0]))
+    {
         segments.remove(0);
     }
     segments
@@ -192,8 +200,15 @@ fn strip_url_to_path(value: &str) -> String {
 
 fn mark_instance_segments(mut segments: Vec<String>) -> Vec<String> {
     // 마지막 세그먼트는 latest/job 같은 계약 단어일 수 있어 인스턴스로 보지 않는다.
+    // 바로 뒤가 :param이면 리소스 이름(users/items)이므로 인스턴스로 치환하지 않는다.
     let last = segments.len().saturating_sub(1);
     for index in 1..last {
+        if segments
+            .get(index + 1)
+            .is_some_and(|next| next == ":param")
+        {
+            continue;
+        }
         if is_instance_value_segment(&segments[index]) {
             segments[index] = ":param".to_string();
         }
@@ -205,13 +220,17 @@ fn is_instance_value_segment(segment: &str) -> bool {
     if segment == ":param" || NON_INSTANCE_SEGMENTS.contains(&segment) {
         return false;
     }
-    let len = segment.len();
-    if !(3..=6).contains(&len) {
-        return false;
+    if segment.chars().all(|ch| ch.is_ascii_digit()) {
+        return true;
     }
-    segment
-        .chars()
-        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+    if segment.len() >= 32 && segment.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-') {
+        return true;
+    }
+    // 짧은 opaque slug(abc, x1)만 인스턴스로 본다. email·apple 같은 리소스 명사는 제외한다.
+    (1..=4).contains(&segment.len())
+        && segment
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
 }
 
 fn normalize_segment(segment: &str) -> String {
@@ -242,12 +261,52 @@ mod tests {
     };
 
     #[test]
+    fn 경로_파라미터_앞_리소스_세그먼트는_인스턴스로_치환하지_않는다() {
+        assert_eq!(
+            normalize_contract_path("/api/v1/users/{user_id}"),
+            Some("/users/:param".into())
+        );
+        assert_eq!(
+            normalize_contract_path("/api/v1/items/{id}"),
+            Some("/items/:param".into())
+        );
+        assert_eq!(
+            contract_identity(Some("GET"), "/api/v1/users/{user_id}"),
+            Some("GET:/users/:param".into())
+        );
+    }
+
+    #[test]
     fn api_버전_접두를_제거하고_능력_키를_만든다() {
         assert_eq!(
             normalize_contract_path("/api/v1/reports/123"),
             Some("/reports/:param".into())
         );
         assert_eq!(capability_key_from_path("/api/v1/reports/123"), Some("reports".into()));
+    }
+
+    #[test]
+    fn email_같은_리소스_명사는_param으로_치환하지_않는다() {
+        assert_eq!(
+            normalize_contract_path("/api/v1/auth/email/login"),
+            Some("/auth/email/login".into())
+        );
+        assert_eq!(
+            contract_identity(Some("POST"), "/api/v1/auth/email/login"),
+            Some("POST:/auth/email/login".into())
+        );
+    }
+
+    #[test]
+    fn graphql_전송_접두는_능력_키에서_건너뛴다() {
+        assert_eq!(
+            capability_key_from_path("/shop-api/products"),
+            Some("products".into())
+        );
+        assert_eq!(
+            capability_key_from_path("/admin-api/createPromotion"),
+            Some("createpromotion".into())
+        );
     }
 
     #[test]

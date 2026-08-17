@@ -1,0 +1,41 @@
+{
+  "id": "ghost",
+  "set": "lab",
+  "mode": "service",
+  "projectPath": "D:/test/visual_map_reliability_lab/ghost",
+  "mustHaveDomains": ["content", "posts", "pages", "members", "subscriptions", "comments", "settings", "tags"],
+  "mustNotMerge": [
+    ["posts", "pages"],
+    ["members", "posts"],
+    ["subscriptions", "content"],
+    ["comments", "posts"],
+    ["settings", "content"]
+  ],
+  "crossCutting": ["stats", "webhooks", "integrations", "schedules", "session", "health", "runtime"],
+  "mustHaveFeatures": [
+    { "contract": "GET /ghost/api/content/posts", "domain": "posts" },
+    { "contract": "GET /ghost/api/content/posts/{id}", "domain": "posts" },
+    { "contract": "GET /ghost/api/content/posts/slug/{slug}", "domain": "posts" },
+    { "contract": "GET /ghost/api/content/pages", "domain": "pages" },
+    { "contract": "GET /ghost/api/content/tags", "domain": "tags" },
+    { "contract": "GET /ghost/api/content/authors", "domain": "content" },
+    { "contract": "GET /ghost/api/content/settings", "domain": "settings" },
+    { "contract": "GET /ghost/api/content/tiers", "domain": "subscriptions" },
+    { "contract": "POST /ghost/api/admin/posts", "domain": "posts" },
+    { "contract": "PUT /ghost/api/admin/posts/{id}", "domain": "posts" },
+    { "contract": "DELETE /ghost/api/admin/posts/{id}", "domain": "posts" },
+    { "contract": "POST /ghost/api/admin/pages", "domain": "pages" },
+    { "contract": "GET /ghost/api/admin/members", "domain": "members" },
+    { "contract": "POST /ghost/api/admin/members", "domain": "members" },
+    { "contract": "POST /ghost/api/admin/members/{id}/subscriptions/", "domain": "subscriptions" },
+    { "contract": "GET /ghost/api/admin/settings", "domain": "settings" },
+    { "contract": "PUT /ghost/api/admin/settings", "domain": "settings" },
+    { "contract": "GET /ghost/api/admin/comments", "domain": "comments" },
+    { "contract": "POST /ghost/api/admin/tags", "domain": "tags" }
+  ],
+  "flowInvariants": [
+    { "featureContract": "POST /ghost/api/admin/posts", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "POST /ghost/api/admin/members", "mustHaveEdgeKinds": ["trueBranch", "falseBranch"] },
+    { "featureContract": "PUT /ghost/api/admin/settings", "mustHaveEdgeKinds": ["trueBranch"] }
+  ]
+}

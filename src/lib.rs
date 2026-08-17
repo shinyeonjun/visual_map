@@ -9,6 +9,7 @@ pub mod config;
 pub mod diagnostics;
 pub mod domain;
 pub mod engine;
+pub mod eval;
 pub mod facts;
 pub mod flow;
 pub mod frameworks;
