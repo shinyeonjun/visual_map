@@ -5,7 +5,7 @@ use crate::facts::FactStore;
 use crate::flow::ExecutionFlowGraph;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-pub(super) struct CapabilityData {
+pub(crate) struct CapabilityData {
     pub unit_ids: Vec<Vec<String>>,
     pub resource_ids: Vec<Vec<String>>,
     pub flow_ids: Vec<Vec<String>>,

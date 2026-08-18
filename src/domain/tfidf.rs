@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use super::signals::tokenize_with_generic;
 
 /// 하나의 Feature에서 추출한 용어 빈도 벡터다.
-pub(super) struct FeatureTerms {
+pub(crate) struct FeatureTerms {
     pub term_frequencies: HashMap<String, f64>,
 }
 

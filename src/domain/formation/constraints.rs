@@ -41,8 +41,7 @@ pub(super) fn build_constraints(
                 push_forbidden_pair(&mut forbidden_pairs, i, j);
                 continue;
             }
-            if mode == DomainClusteringMode::LegacyStrictKey
-                && capability_a.key != capability_b.key
+            if !allows_cross_key(mode) && capability_a.key != capability_b.key
             {
                 push_forbidden_pair(&mut forbidden_pairs, i, j);
             }
@@ -69,6 +68,28 @@ fn push_forbidden_pair(forbidden_pairs: &mut Vec<(usize, usize)>, a: usize, b: u
     if !forbidden_pairs.iter().any(|&(x, y)| x == lo && y == hi) {
         forbidden_pairs.push((lo, hi));
     }
+}
+
+pub(super) fn pair_forbidden_reason(
+    capability_a: &Capability,
+    capability_b: &Capability,
+    store: &FactStore,
+    path_policy: &PathPolicy,
+    mode: DomainClusteringMode,
+) -> Option<&'static str> {
+    if is_test_capability(capability_a, store, path_policy)
+        != is_test_capability(capability_b, store, path_policy)
+    {
+        return Some("forbiddenTestProd");
+    }
+    if !allows_cross_key(mode) && capability_a.key != capability_b.key {
+        return Some("forbiddenKey");
+    }
+    None
+}
+
+fn allows_cross_key(mode: DomainClusteringMode) -> bool {
+    !matches!(mode, DomainClusteringMode::LegacyStrictKey)
 }
 
 #[cfg(test)]

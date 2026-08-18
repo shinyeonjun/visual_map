@@ -4,10 +4,35 @@ mod gold;
 mod score;
 mod snapshot;
 mod clustering_ab;
+mod domain_recovery;
+mod domain_seed_diagnose;
+mod gold_pairs;
+mod gold_pair_diagnose;
+mod pair_diagnose;
 
 pub use clustering_ab::{
-    compare_clustering_modes, ClusteringAbModeReport, ClusteringAbProjectReport,
-    ClusteringAbReport, ClusteringAbSummary,
+    compare_clustering_modes, compare_clustering_modes_experiment, ClusteringAbExperimentReport,
+    ClusteringAbModeReport, ClusteringAbProjectReport, ClusteringAbReport, ClusteringAbSummary,
+    GoldPairModeWeightedMetrics, GoldPairWeightedSummary,
+};
+pub use domain_recovery::{
+    evaluate_domain_recovery_catalog, DomainRecoveryCatalogReport, DomainRecoveryProjectReport,
+    DomainRecoverySummary, HistoricalClusteringBaseline,
+};
+pub use domain_seed_diagnose::{
+    diagnose_domain_seed_catalog, DomainSeedCatalogReport, DomainSeedProjectReport,
+};
+pub use gold_pair_diagnose::{
+    diagnose_gold_pair_catalog, GoldPairSignalProjectReport, GoldPairSignalReport,
+};
+pub use gold_pairs::{
+    contract_to_capability_key, extract_actual_positive_pairs, extract_gold_pair_labels,
+    GoldPairKind, GoldPairLabel,
+};
+pub use pair_diagnose::{
+    diagnose_pair_catalog, parse_mode_selection, parse_project_ids,
+    PairDiagnoseModeSelection, PairDiagnoseProjectReport, PairDiagnoseReport,
+    DEFAULT_PAIR_DIAGNOSE_IDS,
 };
 pub use gold::{
     DomainAlias, EvalCatalog, EvalGold, EvalMode, FeatureGold, FlowInvariantGold,
@@ -17,7 +42,8 @@ pub use score::{
     EvalFinding, EvalOutcome, EvalReport,
 };
 pub use snapshot::{
-    snapshot_from_clean, snapshot_from_overview, EvalSnapshot, SnapDomain, SnapFeature,
+    snapshot_from_clean, snapshot_from_domain_recovery, snapshot_from_overview, EvalSnapshot,
+    SnapDomain, SnapFeature,
 };
 
 use crate::clean::CleanBundleError;

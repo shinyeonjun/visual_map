@@ -51,6 +51,24 @@ impl DomainAnalyzer {
             &self.path_policy,
         )
     }
+
+    /// capability 쌍이 clustering merge 후보에서 탈락한 이유를 분석한다.
+    pub fn diagnose_capability_pairs(
+        &self,
+        store: &FactStore,
+        execution_flows: &ExecutionFlowGraph,
+        mode: crate::config::DomainClusteringMode,
+        top_k: usize,
+    ) -> super::CapabilityPairDiagnostics {
+        super::formation::pair_diagnostics::analyze_capability_pairs(
+            store,
+            execution_flows,
+            &self.domain_policy,
+            &self.path_policy,
+            mode,
+            top_k,
+        )
+    }
 }
 
 /// 의미 리뷰 병합 이후 최종 도메인 관계를 다시 집계한다.

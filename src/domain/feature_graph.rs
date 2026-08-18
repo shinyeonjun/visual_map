@@ -40,17 +40,18 @@ impl SimilarityWeights {
 
 /// 두 Capability 사이의 다차원 유사도다.
 #[derive(Debug, Clone)]
-pub(super) struct FeatureSimilarity {
+pub(crate) struct FeatureSimilarity {
     pub http_match: f64,
     pub call: f64,
     pub flow: f64,
     pub resource: f64,
+    pub path: f64,
     pub lexical: f64,
     pub combined: f64,
 }
 
 /// Capability 쌍의 유사도 행렬이다. 대칭 상삼각만 저장한다.
-pub(super) struct SimilarityMatrix {
+pub(crate) struct SimilarityMatrix {
     size: usize,
     values: Vec<FeatureSimilarity>,
 }
@@ -76,6 +77,7 @@ impl SimilarityMatrix {
                     call: 0.0,
                     flow: 0.0,
                     resource: 0.0,
+                    path: 0.0,
                     lexical: combined,
                     combined,
                 };
@@ -131,6 +133,7 @@ pub(super) fn compute(
                 call,
                 flow,
                 resource,
+                path,
                 lexical,
                 combined,
             });

@@ -1,13 +1,15 @@
-//! legacy vs structural cross-key clustering A/B 비교.
+//! legacy vs structural vs V2 cross-key clustering A/B 비교.
 
 use super::gold::EvalGold;
+use super::pair_diagnose::DEFAULT_PAIR_DIAGNOSE_IDS;
 use super::score::{count_findings_by_kind, score_gold, EvalReport};
 use super::snapshot::snapshot_from_overview;
 use super::EvalError;
 use crate::config::DomainClusteringMode;
-use crate::domain::DomainFormationDiagnostics;
+use crate::domain::{DomainFormationDiagnostics, GoldLabeledPairSignals, GoldPairSignalModeReport};
 use crate::analyze;
 use crate::model::AnalysisRequest;
+use crate::AnalysisEngine;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +21,7 @@ pub struct ClusteringAbProjectReport {
     pub skip_reason: Option<String>,
     pub legacy: Option<ClusteringAbModeReport>,
     pub structural: Option<ClusteringAbModeReport>,
+    pub v2: Option<ClusteringAbModeReport>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +62,44 @@ pub struct ClusteringAbSummary {
     pub structural_wrong_domain: usize,
     pub legacy_over_merge: usize,
     pub structural_over_merge: usize,
+    pub v2_passed: usize,
+    pub v2_domain_hits: usize,
+    pub v2_domain_expected: usize,
+    pub v2_feature_hits: usize,
+    pub v2_feature_expected: usize,
+    pub v2_over_split: usize,
+    pub v2_wrong_domain: usize,
+    pub v2_over_merge: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoldPairModeWeightedMetrics {
+    pub positive_eligible_rate_project_equal: f64,
+    pub negative_eligible_rate_project_equal: f64,
+    pub positive_eligible_rate_family_equal: f64,
+    pub negative_eligible_rate_family_equal: f64,
+    pub positive_avg_combined_project_equal: f64,
+    pub positive_avg_path_project_equal: f64,
+    pub positive_avg_lexical_project_equal: f64,
+    pub negative_avg_combined_project_equal: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoldPairWeightedSummary {
+    pub projects: usize,
+    pub legacy: GoldPairModeWeightedMetrics,
+    pub structural: GoldPairModeWeightedMetrics,
+    pub v2: GoldPairModeWeightedMetrics,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusteringAbExperimentReport {
+    pub summary: ClusteringAbSummary,
+    pub projects: Vec<ClusteringAbProjectReport>,
+    pub gold_pair_summary: GoldPairWeightedSummary,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,7 +114,7 @@ pub fn compare_clustering_modes(catalog_path: &Path) -> Result<ClusteringAbRepor
     let mut projects = Vec::with_capacity(golds.len());
 
     for gold in &golds {
-        projects.push(compare_project(gold)?);
+        projects.push(compare_project(gold, false)?);
     }
 
     Ok(ClusteringAbReport {
@@ -82,7 +123,45 @@ pub fn compare_clustering_modes(catalog_path: &Path) -> Result<ClusteringAbRepor
     })
 }
 
-fn compare_project(gold: &EvalGold) -> Result<ClusteringAbProjectReport, EvalError> {
+pub fn compare_clustering_modes_experiment(
+    catalog_path: &Path,
+) -> Result<ClusteringAbExperimentReport, EvalError> {
+    let golds = super::load_catalog(catalog_path)?;
+    let selected: Vec<_> = golds
+        .iter()
+        .filter(|gold| DEFAULT_PAIR_DIAGNOSE_IDS.contains(&gold.id.as_str()))
+        .collect();
+    let mut projects = Vec::with_capacity(selected.len());
+    let engine = AnalysisEngine::default();
+    let mut gold_reports: Vec<(String, Vec<GoldPairSignalModeReport>)> = Vec::new();
+
+    for gold in selected {
+        let project = compare_project(gold, true)?;
+        if !project.skipped {
+            if let Some(project_path) = gold.project_path.as_deref() {
+                let request = AnalysisRequest::new(project_path);
+                let modes = [
+                    DomainClusteringMode::LegacyStrictKey,
+                    DomainClusteringMode::StructuralCrossKey,
+                    DomainClusteringMode::StructuralCrossKeyV2,
+                ];
+                let mode_reports = engine
+                    .diagnose_gold_pair_signals(request, gold, &modes, false)
+                    .map_err(|error| EvalError::AnalysisFailed(error.to_string()))?;
+                gold_reports.push((gold.id.clone(), mode_reports));
+            }
+        }
+        projects.push(project);
+    }
+
+    Ok(ClusteringAbExperimentReport {
+        summary: summarize_ab(&projects),
+        gold_pair_summary: summarize_gold_pairs(&gold_reports),
+        projects,
+    })
+}
+
+fn compare_project(gold: &EvalGold, include_v2: bool) -> Result<ClusteringAbProjectReport, EvalError> {
     let Some(project_path) = gold.project_path.as_deref() else {
         return Ok(skipped_report(
             gold,
@@ -100,6 +179,15 @@ fn compare_project(gold: &EvalGold) -> Result<ClusteringAbProjectReport, EvalErr
     let legacy = analyze_with_mode(gold, &project_path, DomainClusteringMode::LegacyStrictKey)?;
     let structural =
         analyze_with_mode(gold, &project_path, DomainClusteringMode::StructuralCrossKey)?;
+    let v2 = if include_v2 {
+        Some(analyze_with_mode(
+            gold,
+            &project_path,
+            DomainClusteringMode::StructuralCrossKeyV2,
+        )?)
+    } else {
+        None
+    };
 
     Ok(ClusteringAbProjectReport {
         id: gold.id.clone(),
@@ -107,6 +195,7 @@ fn compare_project(gold: &EvalGold) -> Result<ClusteringAbProjectReport, EvalErr
         skip_reason: None,
         legacy: Some(legacy),
         structural: Some(structural),
+        v2,
     })
 }
 
@@ -117,6 +206,7 @@ fn skipped_report(gold: &EvalGold, reason: String) -> ClusteringAbProjectReport 
         skip_reason: Some(reason),
         legacy: None,
         structural: None,
+        v2: None,
     }
 }
 
@@ -174,6 +264,14 @@ fn summarize_ab(projects: &[ClusteringAbProjectReport]) -> ClusteringAbSummary {
         structural_wrong_domain: 0,
         legacy_over_merge: 0,
         structural_over_merge: 0,
+        v2_passed: 0,
+        v2_domain_hits: 0,
+        v2_domain_expected: 0,
+        v2_feature_hits: 0,
+        v2_feature_expected: 0,
+        v2_over_split: 0,
+        v2_wrong_domain: 0,
+        v2_over_merge: 0,
     };
 
     for project in projects {
@@ -206,9 +304,121 @@ fn summarize_ab(projects: &[ClusteringAbProjectReport]) -> ClusteringAbSummary {
             summary.structural_wrong_domain += structural.wrong_domain;
             summary.structural_over_merge += structural.over_merge;
         }
+        if let Some(v2) = &project.v2 {
+            if v2.passed {
+                summary.v2_passed += 1;
+            }
+            summary.v2_domain_hits += v2.domain_hits;
+            summary.v2_domain_expected += v2.domain_expected;
+            summary.v2_feature_hits += v2.feature_hits;
+            summary.v2_feature_expected += v2.feature_expected;
+            summary.v2_over_split += v2.over_split;
+            summary.v2_wrong_domain += v2.wrong_domain;
+            summary.v2_over_merge += v2.over_merge;
+        }
     }
 
     summary
+}
+
+fn summarize_gold_pairs(
+    reports: &[(String, Vec<GoldPairSignalModeReport>)],
+) -> GoldPairWeightedSummary {
+    let legacy = aggregate_mode_gold_metrics(reports, "legacyStrictKey");
+    let structural = aggregate_mode_gold_metrics(reports, "structuralCrossKey");
+    let v2 = aggregate_mode_gold_metrics(reports, "structuralCrossKeyV2");
+    GoldPairWeightedSummary {
+        projects: reports.len(),
+        legacy,
+        structural,
+        v2,
+    }
+}
+
+fn aggregate_mode_gold_metrics(
+    reports: &[(String, Vec<GoldPairSignalModeReport>)],
+    mode_label: &str,
+) -> GoldPairModeWeightedMetrics {
+    let mut project_positive_eligible = Vec::new();
+    let mut project_negative_eligible = Vec::new();
+    let mut project_positive_combined = Vec::new();
+    let mut project_positive_path = Vec::new();
+    let mut project_positive_lexical = Vec::new();
+    let mut project_negative_combined = Vec::new();
+    let mut family_positive_rates = Vec::new();
+    let mut family_negative_rates = Vec::new();
+
+    for (_, modes) in reports {
+        let Some(mode_report) = modes.iter().find(|mode| mode.clustering_mode == mode_label) else {
+            continue;
+        };
+        let positive_eligible = eligible_rate(&mode_report.pairs, true);
+        let negative_eligible = eligible_rate(&mode_report.pairs, false);
+        project_positive_eligible.push(positive_eligible);
+        project_negative_eligible.push(negative_eligible);
+        project_positive_combined.push(mode_report.positive_avg.combined);
+        project_positive_path.push(mode_report.positive_avg.path);
+        project_positive_lexical.push(mode_report.positive_avg.lexical);
+        project_negative_combined.push(mode_report.negative_avg.combined);
+
+        for family_rate in family_eligible_rates(&mode_report.pairs, true) {
+            family_positive_rates.push(family_rate);
+        }
+        for family_rate in family_eligible_rates(&mode_report.pairs, false) {
+            family_negative_rates.push(family_rate);
+        }
+    }
+
+    GoldPairModeWeightedMetrics {
+        positive_eligible_rate_project_equal: average(&project_positive_eligible),
+        negative_eligible_rate_project_equal: average(&project_negative_eligible),
+        positive_eligible_rate_family_equal: average(&family_positive_rates),
+        negative_eligible_rate_family_equal: average(&family_negative_rates),
+        positive_avg_combined_project_equal: average(&project_positive_combined),
+        positive_avg_path_project_equal: average(&project_positive_path),
+        positive_avg_lexical_project_equal: average(&project_positive_lexical),
+        negative_avg_combined_project_equal: average(&project_negative_combined),
+    }
+}
+
+fn eligible_rate(pairs: &[GoldLabeledPairSignals], positive: bool) -> f64 {
+    let kind = if positive { "positive" } else { "negative" };
+    let matched: Vec<_> = pairs
+        .iter()
+        .filter(|pair| pair.found && pair.kind == kind)
+        .collect();
+    if matched.is_empty() {
+        return 0.0;
+    }
+    let eligible = matched
+        .iter()
+        .filter(|pair| pair.rejection.as_deref() == Some("eligible"))
+        .count();
+    eligible as f64 / matched.len() as f64
+}
+
+fn family_eligible_rates(pairs: &[GoldLabeledPairSignals], positive: bool) -> Vec<f64> {
+    let kind = if positive { "positive" } else { "negative" };
+    let mut families: std::collections::BTreeMap<String, (usize, usize)> =
+        std::collections::BTreeMap::new();
+    for pair in pairs.iter().filter(|pair| pair.found && pair.kind == kind) {
+        let entry = families.entry(pair.source.clone()).or_default();
+        entry.0 += 1;
+        if pair.rejection.as_deref() == Some("eligible") {
+            entry.1 += 1;
+        }
+    }
+    families
+        .values()
+        .map(|(total, eligible)| *eligible as f64 / *total as f64)
+        .collect()
+}
+
+fn average(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().sum::<f64>() / values.len() as f64
 }
 
 #[cfg(test)]
@@ -238,6 +448,14 @@ mod tests {
                 structural_wrong_domain: 0,
                 legacy_over_merge: 0,
                 structural_over_merge: 0,
+                v2_passed: 0,
+                v2_domain_hits: 0,
+                v2_domain_expected: 0,
+                v2_feature_hits: 0,
+                v2_feature_expected: 0,
+                v2_over_split: 0,
+                v2_wrong_domain: 0,
+                v2_over_merge: 0,
             },
             projects: vec![ClusteringAbProjectReport {
                 id: "sample".into(),
@@ -245,6 +463,7 @@ mod tests {
                 skip_reason: Some("missing".into()),
                 legacy: None,
                 structural: None,
+                v2: None,
             }],
         };
         let json = serde_json::to_string(&report).expect("직렬화");
@@ -257,7 +476,7 @@ mod tests {
             id: "no-path".into(),
             ..EvalGold::default()
         };
-        let item = compare_project(&gold).expect("비교");
+        let item = compare_project(&gold, false).expect("비교");
         assert!(item.skipped);
     }
 }

@@ -1,12 +1,50 @@
 //! Capability-first 클러스터링으로 도메인을 형성하는 파이프라인.
 
 mod capability_data;
+pub(crate) mod capability_evidence;
 mod cluster_groups;
 mod constraints;
 pub mod diagnostics;
+mod domain_seed_aggregation;
+mod domain_seed_diagnostics;
+mod domain_seed_role_graph;
+mod domain_seed_responsibility_equivalence;
+mod domain_seed_responsibility_scope;
+mod domain_seed_scope_classification_decomposition;
+mod domain_seed_scope_role_diagnostics;
+mod domain_seed_concept_hierarchy;
+mod domain_seed_assignment_ambiguity;
+mod domain_seed_knowledge_graph;
+mod domain_seed_retrieval_ablation;
+mod domain_seed_anchor_eligibility;
+mod domain_seed_anchor_affinity;
+mod domain_seed_provenance;
+mod domain_seed_recovery;
 mod domain_cleanup;
 mod feature_assignment;
+pub mod key_decomposition;
+pub mod pair_diagnostics;
+pub(crate) mod gold_pair_resolution;
+pub(crate) mod gold_pair_signals;
+pub(crate) mod pair_context;
 mod singleton_absorption;
+
+pub use domain_seed_aggregation::{
+    aggregate_project_domain_seeds, AggregatedDomainSeedCandidate, EvidenceGroupDiagnostic,
+    IdfPenaltyDiagnostic, IdfPenaltyPolicyDiagnostic, ProjectDomainSeedAggregation,
+    RankedConceptFamily,
+};
+pub use domain_seed_recovery::{
+    AnchorScoreComponent, AnchorScoreComponents, SparseSeedCandidateGraph, SparseSeedGraphEdge,
+    SparseSeedGraphNode,
+};
+pub use domain_seed_role_graph::{
+    ConceptRoleDiagnostic, SeedCandidateGraph, SeedGraphEdge, SeedGraphEdgeEvidence, SeedGraphNode,
+};
+pub use domain_seed_diagnostics::{
+    analyze_domain_seeds, CapabilityDomainSeeds, CapabilitySeedCoverage, DomainSeedCandidate,
+    DomainSeedConfidence, DomainSeedDiagnostics, DomainSeedEvidenceSource, DomainSeedRawEvidence,
+};
 
 use crate::config::DomainPolicy;
 use crate::domain::capabilities::build as build_capabilities;
@@ -113,6 +151,16 @@ pub(super) fn analyze_feature_first(
             target_count: target_clusters,
             max_count: domain_policy.domain_cluster_max,
             mode: domain_policy.domain_clustering_mode,
+            merge_context: if domain_policy.domain_clustering_mode
+                == crate::config::DomainClusteringMode::StructuralCrossKeyV2
+            {
+                Some(clustering::MergeContext {
+                    capabilities: &capabilities,
+                    store,
+                })
+            } else {
+                None
+            },
         },
     );
     for event in merge_events {

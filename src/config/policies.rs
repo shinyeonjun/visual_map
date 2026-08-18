@@ -209,6 +209,8 @@ pub enum DomainClusteringMode {
     LegacyStrictKey,
     /// cross-key 병합을 허용하되 structural merge gate로 제한한다.
     StructuralCrossKey,
+    /// cross-key 병합을 증거 계층형 V2 merge gate로 제한한다.
+    StructuralCrossKeyV2,
 }
 
 /// 도메인 후보 점수와 그룹화 기준이다.

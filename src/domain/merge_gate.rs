@@ -1,7 +1,9 @@
 //! 클러스터 병합 자격을 clustering mode별로 판정한다.
 
 use crate::config::DomainClusteringMode;
+use crate::domain::capabilities::Capability;
 use crate::domain::feature_graph::FeatureSimilarity;
+use crate::facts::FactStore;
 
 const HTTP_MATCH_MIN: f64 = 0.20;
 const CALL_MIN: f64 = 0.12;
@@ -9,6 +11,13 @@ const FLOW_MIN: f64 = 0.12;
 const RESOURCE_MIN: f64 = 0.20;
 const HTTP_STRONG: f64 = 0.60;
 const RESOURCE_STRONG: f64 = 0.45;
+
+#[derive(Debug, Clone, Copy)]
+pub struct MergePairContext<'a> {
+    pub left: &'a Capability,
+    pub right: &'a Capability,
+    pub store: &'a FactStore,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StructuralSignal {
@@ -21,10 +30,17 @@ enum StructuralSignal {
 pub(super) fn merge_allowed(
     mode: DomainClusteringMode,
     sim: &FeatureSimilarity,
+    pair: Option<MergePairContext<'_>>,
 ) -> Option<&'static str> {
     match mode {
         DomainClusteringMode::LegacyStrictKey => legacy_merge_allowed(sim),
         DomainClusteringMode::StructuralCrossKey => structural_merge_allowed(sim),
+        DomainClusteringMode::StructuralCrossKeyV2 => {
+            let Some(pair) = pair else {
+                return None;
+            };
+            super::merge_evidence_v2::merge_allowed_v2(pair.left, pair.right, sim, pair.store)
+        }
     }
 }
 
@@ -116,6 +132,7 @@ mod tests {
             call,
             flow,
             resource,
+            path: 0.0,
             lexical,
             combined: http_match + call + flow + resource + lexical,
         }

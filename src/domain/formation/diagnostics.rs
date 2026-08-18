@@ -76,10 +76,11 @@ impl DomainFormationDiagnostics {
     }
 }
 
-pub(super) fn clustering_mode_label(mode: DomainClusteringMode) -> &'static str {
+pub(crate) fn clustering_mode_label(mode: DomainClusteringMode) -> &'static str {
     match mode {
         DomainClusteringMode::LegacyStrictKey => "legacyStrictKey",
         DomainClusteringMode::StructuralCrossKey => "structuralCrossKey",
+        DomainClusteringMode::StructuralCrossKeyV2 => "structuralCrossKeyV2",
     }
 }
 

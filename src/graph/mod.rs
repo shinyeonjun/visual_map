@@ -5,5 +5,7 @@
 
 pub mod aggregation;
 pub mod dependency;
+pub mod knowledge_graph_ir;
 
 pub use dependency::{build, StaticRelationGraph};
+pub use knowledge_graph_ir::KnowledgeGraphIr;

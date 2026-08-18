@@ -19,6 +19,34 @@ impl AnalysisEngine {
     pub fn analyze(&self, request: AnalysisRequest) -> Result<AnalysisResult, EngineError> {
         self.pipeline.run(request)
     }
+
+    pub fn diagnose_formation_pairs(
+        &self,
+        request: AnalysisRequest,
+        modes: &[crate::config::DomainClusteringMode],
+        top_k: usize,
+    ) -> Result<Vec<crate::domain::CapabilityPairDiagnostics>, EngineError> {
+        self.pipeline
+            .diagnose_formation_pairs(request, modes, top_k)
+    }
+
+    pub fn diagnose_domain_seeds(
+        &self,
+        request: AnalysisRequest,
+    ) -> Result<crate::domain::DomainSeedDiagnostics, EngineError> {
+        self.pipeline.diagnose_domain_seeds(request)
+    }
+
+    pub fn diagnose_gold_pair_signals(
+        &self,
+        request: AnalysisRequest,
+        gold: &crate::eval::EvalGold,
+        modes: &[crate::config::DomainClusteringMode],
+        include_evidence: bool,
+    ) -> Result<Vec<crate::domain::GoldPairSignalModeReport>, EngineError> {
+        self.pipeline
+            .diagnose_gold_pair_signals(request, gold, modes, include_evidence)
+    }
 }
 
 #[cfg(test)]
