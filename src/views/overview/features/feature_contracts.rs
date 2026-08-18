@@ -225,12 +225,8 @@ mod tests {
             "/api/v1/history/timeline",
             "unit-history".into(),
         );
-        let nested = entrypoint_with_unit(
-            "ep-nested",
-            Some("GET"),
-            "/timeline",
-            "unit-history".into(),
-        );
+        let nested =
+            entrypoint_with_unit("ep-nested", Some("GET"), "/timeline", "unit-history".into());
         assert!(same_contract(&mounted, &nested));
     }
 

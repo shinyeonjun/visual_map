@@ -37,7 +37,10 @@ fn object_property_string(expression: &str, key: &str) -> Option<String> {
 }
 
 fn split_top_level_segments(expression: &str) -> Vec<String> {
-    let inner = expression.trim().trim_start_matches('{').trim_end_matches('}');
+    let inner = expression
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}');
     let mut segments = Vec::new();
     let mut current = String::new();
     let mut depth = 0_i32;

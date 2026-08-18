@@ -1,7 +1,7 @@
 //! 청크별 의미 제안을 ID와 원본 순서 기준으로 병합한다.
 
 use super::context::ReviewContext;
-use super::response::{DomainSuggestion, ReviewProposal};
+use super::response::{DomainSuggestion, FeatureSuggestion, ReviewProposal};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -176,11 +176,7 @@ pub fn merge(
     let flow_relations = flow_relations(contexts, &canonical_by_source);
     let features = feature_order
         .into_iter()
-        .map(|id| static_feature_result(
-            id,
-            &feature_current,
-            &feature_domain_ids,
-        ))
+        .map(|id| static_feature_result(id, &feature_current, &feature_domain_ids))
         .collect();
     let flows = flow_order
         .into_iter()
@@ -208,6 +204,54 @@ pub fn merge(
         features,
         flows,
         warnings,
+    }
+}
+
+pub fn apply_feature_names(
+    result: &mut SemanticReviewResult,
+    proposals: &[ReviewProposal],
+    maximum_name_length: usize,
+    maximum_summary_length: usize,
+) {
+    let known = result
+        .features
+        .iter()
+        .map(|feature| feature.feature_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut names = BTreeMap::<String, FeatureSuggestion>::new();
+    for proposal in proposals {
+        for suggestion in &proposal.features {
+            if !known.contains(&suggestion.feature_id) {
+                result.warnings.push(ReviewWarning {
+                    code: "SEMANTIC_UNKNOWN_ID".into(),
+                    item_id: Some(suggestion.feature_id.clone()),
+                    message: "입력 context에 없는 ID를 무시했습니다.".into(),
+                });
+                continue;
+            }
+            if !valid_text(&suggestion.name, maximum_name_length)
+                || suggestion.name.contains(['\r', '\n'])
+                || suggestion.summary.as_ref().is_some_and(|value| {
+                    !valid_text(value, maximum_summary_length) || value.contains(['\r', '\n'])
+                })
+            {
+                result.warnings.push(ReviewWarning {
+                    code: "SEMANTIC_INVALID_TEXT".into(),
+                    item_id: Some(suggestion.feature_id.clone()),
+                    message: "이름 또는 한 줄 설명 형식이 잘못되어 무시했습니다.".into(),
+                });
+                continue;
+            }
+            names
+                .entry(suggestion.feature_id.clone())
+                .or_insert_with(|| suggestion.clone());
+        }
+    }
+    for feature in &mut result.features {
+        if let Some(suggestion) = names.get(&feature.feature_id) {
+            feature.name = suggestion.name.clone();
+            feature.summary = suggestion.summary.clone();
+        }
     }
 }
 
@@ -274,6 +318,7 @@ mod tests {
                 source_paths: Vec::new(),
                 entrypoints: Vec::new(),
                 resources: Vec::new(),
+                packets: Vec::new(),
                 feature_ids: vec!["feature-a".into()],
                 flow_ids: vec!["flow-a".into()],
             }],
@@ -309,6 +354,7 @@ mod tests {
         let result = merge(
             &[context()],
             &[ReviewProposal {
+                features: Vec::new(),
                 domains: vec![DomainSuggestion {
                     domain_id: "domain-a".into(),
                     canonical_domain_id: None,
@@ -338,6 +384,7 @@ mod tests {
         let result = merge(
             &[context()],
             &[ReviewProposal {
+                features: Vec::new(),
                 domains: vec![
                     DomainSuggestion {
                         domain_id: "unknown".into(),
@@ -392,6 +439,7 @@ mod tests {
         let result = merge(
             &[first, second],
             &[ReviewProposal {
+                features: Vec::new(),
                 domains: vec![
                     DomainSuggestion {
                         domain_id: "domain-a".into(),
@@ -436,6 +484,7 @@ mod tests {
         let result = merge(
             &[empty],
             &[ReviewProposal {
+                features: Vec::new(),
                 domains: vec![DomainSuggestion {
                     domain_id: "domain-a".into(),
                     canonical_domain_id: None,
@@ -469,6 +518,7 @@ mod tests {
         let result = merge(
             &[with_contract],
             &[ReviewProposal {
+                features: Vec::new(),
                 domains: vec![DomainSuggestion {
                     domain_id: "domain-a".into(),
                     canonical_domain_id: None,
@@ -490,6 +540,43 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.code == "SEMANTIC_DEMOTE_REJECTED"));
+    }
+
+    #[test]
+    fn 기능_이름_제안은_정적_라벨을_덮어쓴다() {
+        let mut result = merge(
+            &[context()],
+            &[ReviewProposal {
+                features: Vec::new(),
+                domains: vec![DomainSuggestion {
+                    domain_id: "domain-a".into(),
+                    canonical_domain_id: None,
+                    action: None,
+                    name: "인증".into(),
+                    summary: None,
+                }],
+            }],
+            "context.json".into(),
+            0,
+            0,
+            120,
+            500,
+        );
+        super::apply_feature_names(
+            &mut result,
+            &[ReviewProposal {
+                features: vec![crate::semantic::review::response::FeatureSuggestion {
+                    feature_id: "feature-a".into(),
+                    name: "로그인".into(),
+                    summary: None,
+                }],
+                domains: Vec::new(),
+            }],
+            120,
+            500,
+        );
+        assert_eq!(result.features[0].name, "로그인");
+        assert_eq!(result.flows[0].name, "Login");
     }
 }
 

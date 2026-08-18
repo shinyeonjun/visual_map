@@ -1,4 +1,6 @@
-use crate::facts::{CodeUnitKind, EntrypointKind, Evidence, ReferenceKind, ResourceKind, ResolutionStatus};
+use crate::facts::{
+    CodeUnitKind, EntrypointKind, Evidence, ReferenceKind, ResolutionStatus, ResourceKind,
+};
 use crate::flow::ExecutionFlowGraph;
 use crate::model::Language;
 use crate::views::overview::model::DynamicBoundary;

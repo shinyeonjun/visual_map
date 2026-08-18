@@ -37,10 +37,18 @@ impl std::fmt::Display for ProviderError {
 impl std::error::Error for ProviderError {}
 
 impl AiProvider {
-    pub fn execute_prompt(&self, prompt: &str, project_root: &Path) -> Result<Vec<u8>, ProviderError> {
+    pub fn execute_prompt(
+        &self,
+        prompt: &str,
+        project_root: &Path,
+    ) -> Result<Vec<u8>, ProviderError> {
         match self {
-            Self::Codex(provider) => provider.execute_prompt(prompt, project_root).map_err(ProviderError::Codex),
-            Self::Claude(provider) => provider.execute_prompt(prompt, project_root).map_err(ProviderError::Claude),
+            Self::Codex(provider) => provider
+                .execute_prompt(prompt, project_root)
+                .map_err(ProviderError::Codex),
+            Self::Claude(provider) => provider
+                .execute_prompt(prompt, project_root)
+                .map_err(ProviderError::Claude),
         }
     }
 }

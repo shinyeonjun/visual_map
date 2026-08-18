@@ -1,8 +1,8 @@
+use code_analysis_engine::domain::DomainKind;
 use code_analysis_engine::eval::{
     classify_outcome, load_catalog, load_gold, resolve_clean_dir, score_gold, EvalMode,
     EvalOutcome, EvalSnapshot, SnapDomain,
 };
-use code_analysis_engine::domain::DomainKind;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -60,8 +60,14 @@ fn simplebank_gold는_빈_스냅샷에서_필수_domain을_누락으로_채점�
     assert!(!report.passed);
     assert_eq!(report.outcome, EvalOutcome::Fail);
     assert_eq!(report.domain_hits, 0);
-    assert!(report.findings.iter().any(|item| item.kind == "missing" && item.layer == "domain"));
-    assert!(report.findings.iter().any(|item| item.kind == "missing" && item.layer == "feature"));
+    assert!(report
+        .findings
+        .iter()
+        .any(|item| item.kind == "missing" && item.layer == "domain"));
+    assert!(report
+        .findings
+        .iter()
+        .any(|item| item.kind == "missing" && item.layer == "feature"));
 }
 
 #[test]
@@ -99,10 +105,7 @@ fn classify_outcome은_서비스_통과와_라이브러리_negative_only를_구�
     let service = load_gold(&gold_path("service/nestjs-boilerplate/gold.json")).unwrap();
     let library = load_gold(&gold_path("library-cli/c-curl/gold.json")).unwrap();
 
-    assert_eq!(
-        classify_outcome(&service, true),
-        EvalOutcome::PassPositive
-    );
+    assert_eq!(classify_outcome(&service, true), EvalOutcome::PassPositive);
     assert_eq!(
         classify_outcome(&library, true),
         EvalOutcome::PassNegativeOnly

@@ -103,7 +103,14 @@ pub(crate) fn is_operational_capability_key(key: &str) -> bool {
     }
     matches!(
         key,
-        "runtime" | "metrics" | "monitor" | "readiness" | "ready" | "ping" | "status" | "utils"
+        "runtime"
+            | "metrics"
+            | "monitor"
+            | "readiness"
+            | "ready"
+            | "ping"
+            | "status"
+            | "utils"
             | "install"
     )
 }

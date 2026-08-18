@@ -151,9 +151,15 @@ fn find_absorption_parent(
         return Some((domain_id, "static-page"));
     }
 
-    if let Some(domain_id) =
-        same_source_file_parent(child, capabilities, clusters, terms, store, domain_policy, absorbed)
-    {
+    if let Some(domain_id) = same_source_file_parent(
+        child,
+        capabilities,
+        clusters,
+        terms,
+        store,
+        domain_policy,
+        absorbed,
+    ) {
         return Some((domain_id, "same-source-file"));
     }
 
@@ -450,15 +456,13 @@ pub(super) fn merge_domains(
         }
     }
     for unit_id in child.primary_unit_ids {
-        if !parent.primary_unit_ids.contains(&unit_id)
-            && !parent.shared_unit_ids.contains(&unit_id)
+        if !parent.primary_unit_ids.contains(&unit_id) && !parent.shared_unit_ids.contains(&unit_id)
         {
             parent.primary_unit_ids.push(unit_id);
         }
     }
     for unit_id in child.shared_unit_ids {
-        if !parent.primary_unit_ids.contains(&unit_id)
-            && !parent.shared_unit_ids.contains(&unit_id)
+        if !parent.primary_unit_ids.contains(&unit_id) && !parent.shared_unit_ids.contains(&unit_id)
         {
             parent.shared_unit_ids.push(unit_id);
         }
@@ -477,7 +481,9 @@ pub(super) fn merge_domains(
     parent.entrypoint_ids.dedup();
     parent.resource_ids.sort();
     parent.resource_ids.dedup();
-    parent.evidence.sort_by(|left, right| left.id.cmp(&right.id));
+    parent
+        .evidence
+        .sort_by(|left, right| left.id.cmp(&right.id));
     parent.evidence.dedup_by(|left, right| left.id == right.id);
     parent.evidence.truncate(24);
 
@@ -706,7 +712,11 @@ mod tests {
     fn schedule_계열_단일_키는_schedules_도메인으로_흡수된다() {
         let capabilities = vec![
             capability("send-schedule", "unit:mail", &["/send-schedule"]),
-            capability("schedules", "unit:sched", &["/schedules", "/schedules/{id}"]),
+            capability(
+                "schedules",
+                "unit:sched",
+                &["/schedules", "/schedules/{id}"],
+            ),
         ];
         let clusters = vec![
             clustering::Cluster {

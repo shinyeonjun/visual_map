@@ -43,12 +43,7 @@ impl<'a> FeatureFlowIndex<'a> {
         }
 
         while let Some(flow_id) = queue.pop_front() {
-            for link in self
-                .links_by_source
-                .get(flow_id)
-                .into_iter()
-                .flatten()
-            {
+            for link in self.links_by_source.get(flow_id).into_iter().flatten() {
                 if selected.insert(link.target_flow_id.clone()) {
                     queue.push_back(link.target_flow_id.as_str());
                 }
@@ -62,8 +57,8 @@ impl<'a> FeatureFlowIndex<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::{ExecutionFlow, ExecutionFlowGraph, FlowLink};
     use crate::facts::ResolutionStatus;
+    use crate::flow::{ExecutionFlow, ExecutionFlowGraph, FlowLink};
 
     fn flow(id: &str, owner: &str) -> ExecutionFlow {
         ExecutionFlow {

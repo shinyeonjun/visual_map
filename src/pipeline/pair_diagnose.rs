@@ -33,12 +33,7 @@ fn diagnose_modes(
     modes
         .iter()
         .map(|mode| {
-            analyzer.diagnose_capability_pairs(
-                &bundle.facts,
-                &bundle.execution_flows,
-                *mode,
-                top_k,
-            )
+            analyzer.diagnose_capability_pairs(&bundle.facts, &bundle.execution_flows, *mode, top_k)
         })
         .collect()
 }

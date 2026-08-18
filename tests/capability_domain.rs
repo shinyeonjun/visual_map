@@ -14,7 +14,7 @@ fn temporary_project(name: &str) -> PathBuf {
 }
 
 #[test]
-fn polyglot_http_match는_폴더명이_아니라_계약_키로_도메인을_만든다() {
+fn polyglot_http_계약은_기능으로_남고_도메인은_경로_버킷이다() {
     let root = temporary_project("polyglot-http");
     fs::create_dir_all(root.join("web")).expect("web 디렉터리를 만들어야 한다");
     fs::create_dir_all(root.join("svc")).expect("svc 디렉터리를 만들어야 한다");
@@ -51,12 +51,24 @@ def create_invoice():
         .collect();
 
     assert!(
-        keys.iter().any(|key| *key == "billing"),
-        "billing 계약 도메인이 없어: {keys:?}"
+        overview.features.iter().any(|feature| {
+            feature.entrypoint_ids.iter().any(|entrypoint_id| {
+                overview.entrypoints.iter().any(|entrypoint| {
+                    &entrypoint.id == entrypoint_id
+                        && entrypoint.path.as_deref() == Some("/billing/invoices")
+                })
+            })
+        }),
+        "POST /billing/invoices 기능이 있어야 한다: features={:?}",
+        overview
+            .features
+            .iter()
+            .map(|feature| feature.label.as_str())
+            .collect::<Vec<_>>()
     );
     assert!(
-        !keys.iter().any(|key| *key == "web" || *key == "svc"),
-        "폴더명이 도메인 키가 되면 안 된다: {keys:?}"
+        !overview.domains.is_empty(),
+        "서버 경로 버킷 도메인이 있어야 한다: {keys:?}"
     );
     assert!(
         overview
@@ -66,8 +78,8 @@ def create_invoice():
             || overview
                 .domains
                 .iter()
-                .any(|domain| domain.key == "billing" && !domain.feature_ids.is_empty()),
-        "billing 도메인이 fetch와 route를 묶거나 http 관계가 있어야 한다"
+                .any(|domain| !domain.feature_ids.is_empty()),
+        "billing 기능이 도메인에 붙거나 http 관계가 있어야 한다"
     );
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
@@ -150,8 +162,19 @@ export function listUsers() {
         .collect();
 
     assert!(
-        keys.iter().any(|key| *key == "users"),
-        "users 계약 도메인이 있어야 한다: {keys:?}"
+        overview.features.iter().any(|feature| {
+            feature.entrypoint_ids.iter().any(|entrypoint_id| {
+                overview.entrypoints.iter().any(|entrypoint| {
+                    &entrypoint.id == entrypoint_id && entrypoint.path.as_deref() == Some("/users")
+                })
+            })
+        }),
+        "GET /users 기능이 있어야 한다: {:?}",
+        overview
+            .features
+            .iter()
+            .map(|feature| feature.label.as_str())
+            .collect::<Vec<_>>()
     );
     assert!(
         !keys.iter().any(|key| *key == "scripts"),
@@ -281,7 +304,9 @@ export function createSchedule(request: Request) {
             feature.label
         );
         assert!(
-            expected.iter().all(|domain_id| assigned.contains(domain_id)),
+            expected
+                .iter()
+                .all(|domain_id| assigned.contains(domain_id)),
             "기능은 자신의 진입점이 들어 있는 도메인에 붙어야 한다: {} {:?} expected={expected:?}",
             feature.label,
             feature.domain_ids
@@ -300,7 +325,7 @@ export function createSchedule(request: Request) {
 }
 
 #[test]
-fn 서로_다른_계약_도메인은_개수_상한_때문에_한_카드로_합쳐지지_않는다() {
+fn 같은_패키지의_서로_다른_계약은_기능으로_나뉘고_도메인은_버킷_하나다() {
     let root = temporary_project("distinct-contract-domains");
     fs::create_dir_all(root.join("server")).expect("server 디렉터리를 만들어야 한다");
     fs::write(
@@ -342,35 +367,30 @@ export function {handler}(request: Request) {{
         .map(|domain| domain.key.as_str())
         .collect();
 
-    for expected in ["auth", "sessions", "billing", "users", "reports"] {
+    let expected_paths = [
+        "/auth/login",
+        "/sessions",
+        "/billing/invoices",
+        "/users",
+        "/reports/summary",
+    ];
+    for expected in expected_paths {
         assert!(
-            domain_keys.contains(expected),
-            "계약 접두 도메인이 있어야 한다: {expected} in {domain_keys:?}"
+            overview.features.iter().any(|feature| {
+                feature.entrypoint_ids.iter().any(|entrypoint_id| {
+                    overview.entrypoints.iter().any(|entrypoint| {
+                        &entrypoint.id == entrypoint_id
+                            && entrypoint.path.as_deref() == Some(expected)
+                    })
+                })
+            }),
+            "계약 기능이 있어야 한다: {expected}"
         );
     }
-
-    for domain in &overview.domains {
-        let entrypoint_paths: Vec<_> = domain
-            .entrypoint_ids
-            .iter()
-            .filter_map(|entrypoint_id| {
-                overview
-                    .entrypoints
-                    .iter()
-                    .find(|entrypoint| &entrypoint.id == entrypoint_id)
-                    .and_then(|entrypoint| entrypoint.path.clone())
-            })
-            .collect();
-        let domain_keys_in_card: std::collections::HashSet<_> = entrypoint_paths
-            .iter()
-            .filter_map(|path| path.trim_start_matches('/').split('/').next())
-            .collect();
-        assert!(
-            domain_keys_in_card.len() <= 1,
-            "한 도메인 카드에 서로 다른 계약 접두가 섞이면 안 된다: key={} paths={entrypoint_paths:?}",
-            domain.key
-        );
-    }
+    assert!(
+        domain_keys.iter().any(|key| key.contains("server")),
+        "같은 패키지의 계약은 경로 버킷 하나로 묶여야 한다: {domain_keys:?}"
+    );
 
     fs::remove_dir_all(root).expect("임시 프로젝트를 정리해야 한다");
 }
@@ -492,8 +512,7 @@ export function purgeUsers() {
         .find(|feature| {
             feature.entrypoint_ids.iter().any(|entrypoint_id| {
                 overview.entrypoints.iter().any(|entrypoint| {
-                    entrypoint.id == *entrypoint_id
-                        && entrypoint.path.as_deref() == Some("/users")
+                    entrypoint.id == *entrypoint_id && entrypoint.path.as_deref() == Some("/users")
                 })
             })
         })
@@ -640,11 +659,14 @@ app.include_router(router, prefix="/api/v1/sessions")
         "두 route 진입점이 같은 기능에 남아야 한다"
     );
     assert!(
-        overview
-            .domains
-            .iter()
-            .any(|domain| domain.key == "sessions"),
-        "start route는 sessions 도메인에 속해야 한다: {:?}",
+        !start_features[0].domain_ids.is_empty()
+            || overview.domains.iter().any(|domain| {
+                start_features[0]
+                    .entrypoint_ids
+                    .iter()
+                    .any(|entrypoint_id| domain.entrypoint_ids.contains(entrypoint_id))
+            }),
+        "start route는 경로 버킷 도메인에 속해야 한다: {:?}",
         overview
             .domains
             .iter()

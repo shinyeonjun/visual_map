@@ -152,9 +152,7 @@ impl<'a> FlowEventIndex<'a> {
         self.events
             .iter()
             .enumerate()
-            .filter(|(candidate, event)| {
-                *candidate != index && event.start_position() > end
-            })
+            .filter(|(candidate, event)| *candidate != index && event.start_position() > end)
             .min_by_key(|(_, event)| event.start_position())
             .map(|(_, event)| event)
     }
@@ -219,7 +217,11 @@ pub(super) fn contains(container: &SourceSpan, nested: &SourceSpan) -> bool {
         && (nested.end_line, nested.end_column) <= (container.end_line, container.end_column)
 }
 
-fn smallest_enclosing_loop(events: &[Event], event_index: usize, event_span: &SourceSpan) -> Option<usize> {
+fn smallest_enclosing_loop(
+    events: &[Event],
+    event_index: usize,
+    event_span: &SourceSpan,
+) -> Option<usize> {
     events
         .iter()
         .enumerate()
@@ -240,7 +242,11 @@ fn smallest_enclosing_loop(events: &[Event], event_index: usize, event_span: &So
         .map(|(_, owner_index)| owner_index)
 }
 
-fn smallest_enclosing_try(events: &[Event], event_index: usize, event_span: &SourceSpan) -> Option<usize> {
+fn smallest_enclosing_try(
+    events: &[Event],
+    event_index: usize,
+    event_span: &SourceSpan,
+) -> Option<usize> {
     events
         .iter()
         .enumerate()

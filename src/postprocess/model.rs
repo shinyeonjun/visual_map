@@ -128,6 +128,9 @@ pub struct ContextDomain {
     pub source_paths: Vec<String>,
     pub entrypoints: Vec<ContextEntrypoint>,
     pub resources: Vec<ContextResource>,
+    /// 경로 버킷에 들어 있는 진입점 패킷 한 줄 요약이다.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packets: Vec<String>,
     /// 전역 `features`에서 이 도메인이 사용하는 기능 ID다.
     pub feature_ids: Vec<String>,
     /// 전역 `flows`에서 이 도메인이 사용하는 흐름 ID다.

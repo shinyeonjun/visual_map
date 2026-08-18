@@ -25,6 +25,7 @@ src-tauri/gen/
 
 # ── 분석 실행 결과 (재생성 가능, clean 번들은 GB 단위) ───────
 tests/eval/runs/
+tests/result/
 tests/dev/
 
 # ── 로컬 환경 / 비밀정보 ───────────────────────────────────

@@ -298,19 +298,11 @@ mod tests {
             ("source".into(), unit("source", "source", "source")),
             (
                 "backend".into(),
-                unit(
-                    "backend",
-                    "UserService",
-                    "backend::services::UserService",
-                ),
+                unit("backend", "UserService", "backend::services::UserService"),
             ),
             (
                 "frontend".into(),
-                unit(
-                    "frontend",
-                    "UserService",
-                    "frontend::services::UserService",
-                ),
+                unit("frontend", "UserService", "frontend::services::UserService"),
             ),
             (
                 "unique".into(),
@@ -328,20 +320,31 @@ mod tests {
         let mut store = FactStore {
             units: decoys,
             references: vec![
-                reference("ref_unique", "infra::cache::Store", ResolutionStatus::Candidate),
+                reference(
+                    "ref_unique",
+                    "infra::cache::Store",
+                    ResolutionStatus::Candidate,
+                ),
                 reference(
                     "ref_ambiguous",
                     "services::UserService",
                     ResolutionStatus::Candidate,
                 ),
-                reference("ref_missing", "missing::Nothing", ResolutionStatus::Candidate),
+                reference(
+                    "ref_missing",
+                    "missing::Nothing",
+                    ResolutionStatus::Candidate,
+                ),
             ],
             ..FactStore::default()
         };
 
         store.resolve_references();
 
-        assert_eq!(store.references[0].target_unit_id.as_deref(), Some("unique"));
+        assert_eq!(
+            store.references[0].target_unit_id.as_deref(),
+            Some("unique")
+        );
         assert_eq!(store.references[0].status, ResolutionStatus::Confirmed);
         assert_eq!(store.references[1].status, ResolutionStatus::Candidate);
         assert_eq!(

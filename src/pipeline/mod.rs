@@ -9,7 +9,6 @@ pub mod stages;
 
 mod cache;
 mod fact_bundle;
-mod domain_seed_diagnose;
 mod gold_pair_diagnose;
 mod pair_diagnose;
 mod runner;

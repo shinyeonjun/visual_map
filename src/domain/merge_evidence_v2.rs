@@ -30,8 +30,10 @@ pub(super) fn merge_allowed_v2(
         strong += 1;
     }
 
-    if shared_value(&left_ownership.owner_classes, &right_ownership.owner_classes)
-        && entity_family_match(&left.key, &right.key)
+    if shared_value(
+        &left_ownership.owner_classes,
+        &right_ownership.owner_classes,
+    ) && entity_family_match(&left.key, &right.key)
     {
         strong += 1;
     }
@@ -97,9 +99,7 @@ fn shared_unit_path(left: &Capability, right: &Capability, store: &FactStore) ->
     if left_paths.is_empty() || right_paths.is_empty() {
         return false;
     }
-    left_paths
-        .iter()
-        .any(|path| right_paths.contains(path))
+    left_paths.iter().any(|path| right_paths.contains(path))
 }
 
 fn unit_paths(capability: &Capability, store: &FactStore) -> BTreeSet<String> {
@@ -134,9 +134,9 @@ fn is_nested_contract_path(outer: &str, inner: &str) -> bool {
     if !outer.starts_with(inner) {
         return false;
     }
-    outer
-        .strip_prefix(inner)
-        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('/') || suffix.starts_with('.'))
+    outer.strip_prefix(inner).is_some_and(|suffix| {
+        suffix.is_empty() || suffix.starts_with('/') || suffix.starts_with('.')
+    })
 }
 
 #[cfg(test)]
@@ -187,15 +187,13 @@ mod tests {
     fn v2는_lexical_단독으로_병합하지_않는다() {
         let left = capability("accounts");
         let right = capability("contacts");
-        assert!(
-            merge_allowed_v2(
-                &left,
-                &right,
-                &sim(0.9, 0.0, 0.0, 0.0),
-                &FactStore::default()
-            )
-            .is_none()
-        );
+        assert!(merge_allowed_v2(
+            &left,
+            &right,
+            &sim(0.9, 0.0, 0.0, 0.0),
+            &FactStore::default()
+        )
+        .is_none());
     }
 
     #[test]
@@ -249,12 +247,7 @@ mod tests {
             },
         );
         assert_eq!(
-            merge_allowed_v2(
-                &left,
-                &right,
-                &sim(0.6, 0.7, 0.0, 0.0),
-                &store
-            ),
+            merge_allowed_v2(&left, &right, &sim(0.6, 0.7, 0.0, 0.0), &store),
             Some("v2-medium")
         );
     }

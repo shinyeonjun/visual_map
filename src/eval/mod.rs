@@ -1,27 +1,19 @@
 //! 사람 기준 정답(gold)과 분석 결과를 비교하는 정확도 평가.
 
+mod clustering_ab;
 mod gold;
+mod gold_pair_diagnose;
+mod gold_pairs;
+mod pair_diagnose;
 mod score;
 mod snapshot;
-mod clustering_ab;
-mod domain_recovery;
-mod domain_seed_diagnose;
-mod gold_pairs;
-mod gold_pair_diagnose;
-mod pair_diagnose;
 
 pub use clustering_ab::{
     compare_clustering_modes, compare_clustering_modes_experiment, ClusteringAbExperimentReport,
     ClusteringAbModeReport, ClusteringAbProjectReport, ClusteringAbReport, ClusteringAbSummary,
     GoldPairModeWeightedMetrics, GoldPairWeightedSummary,
 };
-pub use domain_recovery::{
-    evaluate_domain_recovery_catalog, DomainRecoveryCatalogReport, DomainRecoveryProjectReport,
-    DomainRecoverySummary, HistoricalClusteringBaseline,
-};
-pub use domain_seed_diagnose::{
-    diagnose_domain_seed_catalog, DomainSeedCatalogReport, DomainSeedProjectReport,
-};
+pub use gold::{DomainAlias, EvalCatalog, EvalGold, EvalMode, FeatureGold, FlowInvariantGold};
 pub use gold_pair_diagnose::{
     diagnose_gold_pair_catalog, GoldPairSignalProjectReport, GoldPairSignalReport,
 };
@@ -30,20 +22,15 @@ pub use gold_pairs::{
     GoldPairKind, GoldPairLabel,
 };
 pub use pair_diagnose::{
-    diagnose_pair_catalog, parse_mode_selection, parse_project_ids,
-    PairDiagnoseModeSelection, PairDiagnoseProjectReport, PairDiagnoseReport,
-    DEFAULT_PAIR_DIAGNOSE_IDS,
-};
-pub use gold::{
-    DomainAlias, EvalCatalog, EvalGold, EvalMode, FeatureGold, FlowInvariantGold,
+    diagnose_pair_catalog, parse_mode_selection, parse_project_ids, PairDiagnoseModeSelection,
+    PairDiagnoseProjectReport, PairDiagnoseReport, DEFAULT_PAIR_DIAGNOSE_IDS,
 };
 pub use score::{
-    classify_outcome, count_findings_by_kind, score_gold, score_gold_with_diagnostics,
-    EvalFinding, EvalOutcome, EvalReport,
+    classify_outcome, count_findings_by_kind, score_gold, score_gold_with_diagnostics, EvalFinding,
+    EvalOutcome, EvalReport,
 };
 pub use snapshot::{
-    snapshot_from_clean, snapshot_from_domain_recovery, snapshot_from_overview, EvalSnapshot,
-    SnapDomain, SnapFeature,
+    snapshot_from_clean, snapshot_from_overview, EvalSnapshot, SnapDomain, SnapFeature,
 };
 
 use crate::clean::CleanBundleError;
@@ -76,7 +63,9 @@ impl std::fmt::Display for EvalError {
                     path.display()
                 )
             }
-            Self::Serialization(error) => write!(formatter, "평가 JSON을 해석하지 못했습니다: {error}"),
+            Self::Serialization(error) => {
+                write!(formatter, "평가 JSON을 해석하지 못했습니다: {error}")
+            }
             Self::Clean(error) => write!(formatter, "{error}"),
             Self::MissingOverview => write!(formatter, "분석 결과에 Overview가 없습니다."),
             Self::MissingClean(path) => {
@@ -178,7 +167,10 @@ pub fn resolve_clean_dir(clean_root: &Path, gold: &EvalGold) -> PathBuf {
     preferred_clean_dir(clean_root, gold)
 }
 
-pub fn evaluate_catalog(catalog_path: &Path, clean_root: &Path) -> Result<CatalogReport, EvalError> {
+pub fn evaluate_catalog(
+    catalog_path: &Path,
+    clean_root: &Path,
+) -> Result<CatalogReport, EvalError> {
     let golds = load_catalog(catalog_path)?;
     let mut reports = Vec::with_capacity(golds.len());
     for gold in &golds {
@@ -303,10 +295,8 @@ mod tests {
 
     #[test]
     fn resolve_clean_dir은_clean_하위_번들을_우선한다() {
-        let base = std::env::temp_dir().join(format!(
-            "visual_map_eval_resolve_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("visual_map_eval_resolve_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let bundle = base.join("simplebank").join("clean");
         fs::create_dir_all(&bundle).expect("temp clean bundle");
@@ -320,10 +310,8 @@ mod tests {
 
     #[test]
     fn resolve_clean_dir은_runs_루트에서_kind_하위를_찾는다() {
-        let base = std::env::temp_dir().join(format!(
-            "visual_map_eval_runs_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("visual_map_eval_runs_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let bundle = base.join("service").join("ghost").join("clean");
         fs::create_dir_all(&bundle).expect("temp clean bundle");

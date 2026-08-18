@@ -138,19 +138,20 @@ impl DomainAnalysisPipeline {
         let stage_started = Instant::now();
         facts.resolve_references();
         diagnostics.extend(facts.diagnostics.clone());
-        let resolution_counts = facts
-            .references
-            .iter()
-            .fold([0usize; 4], |mut counts, reference| {
-                let index = match reference.status {
-                    crate::facts::ResolutionStatus::Confirmed => 0,
-                    crate::facts::ResolutionStatus::Candidate => 1,
-                    crate::facts::ResolutionStatus::Unknown => 2,
-                    crate::facts::ResolutionStatus::Dynamic => 3,
-                };
-                counts[index] += 1;
-                counts
-            });
+        let resolution_counts =
+            facts
+                .references
+                .iter()
+                .fold([0usize; 4], |mut counts, reference| {
+                    let index = match reference.status {
+                        crate::facts::ResolutionStatus::Confirmed => 0,
+                        crate::facts::ResolutionStatus::Candidate => 1,
+                        crate::facts::ResolutionStatus::Unknown => 2,
+                        crate::facts::ResolutionStatus::Dynamic => 3,
+                    };
+                    counts[index] += 1;
+                    counts
+                });
         profiler.record(
             "reference_resolution",
             stage_started,
@@ -226,8 +227,8 @@ impl DomainAnalysisPipeline {
         );
         let feature_first_result =
             domain_analyzer.analyze_feature_first(&facts, &static_graph, &execution_flows);
-        let mut domain_analysis = feature_first_result.analysis;
-        let prebuilt_features = feature_first_result.features;
+        let (mut domain_analysis, prebuilt_features) =
+            (feature_first_result.analysis, feature_first_result.features);
         profiler.record(
             "domain_grouping",
             stage_started,

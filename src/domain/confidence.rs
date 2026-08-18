@@ -37,19 +37,16 @@ pub fn calculate_from_cluster(
     evidence_diversity: f64,
 ) -> (DomainStatus, DomainConfidence) {
     let overall = 0.4 * cohesion + 0.3 * separation + 0.3 * evidence_diversity;
-    let (status, level) = if member_count >= 2
-        && overall >= 0.6
-        && evidence_diversity >= 0.4
-        && separation >= 0.3
-    {
-        (DomainStatus::Confirmed, "high")
-    } else if overall >= 0.3 {
-        (DomainStatus::Candidate, "medium")
-    } else if overall > 0.0 {
-        (DomainStatus::Ambiguous, "low")
-    } else {
-        (DomainStatus::Unknown, "none")
-    };
+    let (status, level) =
+        if member_count >= 2 && overall >= 0.6 && evidence_diversity >= 0.4 && separation >= 0.3 {
+            (DomainStatus::Confirmed, "high")
+        } else if overall >= 0.3 {
+            (DomainStatus::Candidate, "medium")
+        } else if overall > 0.0 {
+            (DomainStatus::Ambiguous, "low")
+        } else {
+            (DomainStatus::Unknown, "none")
+        };
     let score = (overall * 100.0).round() as u32;
     (
         status,

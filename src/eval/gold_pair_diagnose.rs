@@ -2,12 +2,10 @@
 
 use super::gold::EvalGold;
 use super::gold_pairs::extract_gold_pair_labels;
-use super::pair_diagnose::{
-    PairDiagnoseModeSelection, DEFAULT_PAIR_DIAGNOSE_IDS,
-};
+use super::pair_diagnose::{PairDiagnoseModeSelection, DEFAULT_PAIR_DIAGNOSE_IDS};
 use super::EvalError;
-use crate::domain::GoldPairSignalModeReport;
 use crate::config::DomainClusteringMode;
+use crate::domain::GoldPairSignalModeReport;
 use crate::model::AnalysisRequest;
 use crate::AnalysisEngine;
 use serde::Serialize;

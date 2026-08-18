@@ -6,8 +6,7 @@ use super::context_profile::{compact_global_summary, global_summary, project_pro
 use super::domains::build_plan;
 use super::indexes::PostprocessIndexes;
 use super::model::{
-    AiContextBundle, AiContextManifest, ContextChunkDescriptor, ContextWarning,
-    DomainCoverage,
+    AiContextBundle, AiContextManifest, ContextChunkDescriptor, ContextWarning, DomainCoverage,
 };
 use super::partition::partition_domains;
 use super::PostprocessError;

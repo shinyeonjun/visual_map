@@ -88,10 +88,9 @@ fn project_inner(
             .unwrap_or(0);
     }
 
-    let features = prebuilt_features
-        .unwrap_or_else(|| {
-            super::features::build(analysis, facts, &execution_flows, &PathPolicy::default())
-        });
+    let features = prebuilt_features.unwrap_or_else(|| {
+        super::features::build(analysis, facts, &execution_flows, &PathPolicy::default())
+    });
     let confirmed_reference_count = facts
         .references
         .iter()

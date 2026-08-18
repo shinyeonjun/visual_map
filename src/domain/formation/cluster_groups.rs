@@ -178,7 +178,7 @@ fn domain_kind(key: &str, policy: &DomainPolicy, store: &FactStore) -> DomainKin
     DomainKind::Business
 }
 
-fn library_style_project(store: &FactStore) -> bool {
+pub(super) fn library_style_project(store: &FactStore) -> bool {
     if store
         .entrypoints
         .iter()
@@ -187,16 +187,21 @@ fn library_style_project(store: &FactStore) -> bool {
         return false;
     }
     let has_service_framework = store.entrypoints.iter().any(|entrypoint| {
-        entrypoint.framework_id.as_deref().is_some_and(|framework_id| {
-            framework_id.contains("nestjs")
-                || framework_id.contains("fastapi")
-                || framework_id.contains("django")
-                || framework_id.contains("spring")
-                || framework_id.contains("mvc")
-                || framework_id.contains("minimal_api")
-                || framework_id.contains("drogon")
-                || framework_id.contains("actix")
-        })
+        entrypoint
+            .framework_id
+            .as_deref()
+            .is_some_and(|framework_id| {
+                framework_id.contains("nestjs")
+                    || framework_id.contains("express")
+                    || framework_id.contains("fastapi")
+                    || framework_id.contains("django")
+                    || framework_id.contains("spring")
+                    || framework_id.contains("mvc")
+                    || framework_id.contains("minimal_api")
+                    || framework_id.contains("drogon")
+                    || framework_id.contains("actix")
+                    || framework_id.contains("tauri")
+            })
     });
     if has_service_framework {
         return false;

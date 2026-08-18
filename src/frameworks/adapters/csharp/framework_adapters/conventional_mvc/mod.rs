@@ -51,7 +51,8 @@ pub(super) fn enrich(facts: &mut FactStore) {
                 continue;
             };
             let action = action_name(facts, &method_id).unwrap_or_else(|| method.name.clone());
-            let conventional_path = join_conventional_path(area.as_deref(), &controller_segment, &action);
+            let conventional_path =
+                join_conventional_path(area.as_deref(), &controller_segment, &action);
             for entrypoint in facts.entrypoints.iter_mut() {
                 if entrypoint.unit_id != method_id {
                     continue;
@@ -90,10 +91,7 @@ fn is_controller_class(unit: &crate::facts::CodeUnit) -> bool {
         .is_some_and(|signature| signature.contains("Controller"))
 }
 
-fn area_for_controller(
-    facts: &FactStore,
-    controller: &crate::facts::CodeUnit,
-) -> Option<String> {
+fn area_for_controller(facts: &FactStore, controller: &crate::facts::CodeUnit) -> Option<String> {
     for decorator in &facts.decorators {
         if decorator.unit_id != controller.id {
             continue;
@@ -122,7 +120,7 @@ fn controller_segment(controller_name: &str) -> String {
 }
 
 fn action_name(facts: &FactStore, method_id: &str) -> Option<String> {
-  for decorator in &facts.decorators {
+    for decorator in &facts.decorators {
         if decorator.unit_id != method_id {
             continue;
         }
@@ -159,9 +157,7 @@ fn needs_conventional_path(path: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::facts::{
-        DecoratorFact, Entrypoint, EntrypointKind, Evidence, SourceSpan,
-    };
+    use crate::facts::{DecoratorFact, Entrypoint, EntrypointKind, Evidence, SourceSpan};
     use crate::model::Language;
 
     fn controller(id: &str, path: &str) -> crate::facts::CodeUnit {
@@ -230,12 +226,19 @@ mod tests {
             method: Some("HTTPGET".into()),
             path: Some("/".into()),
             framework_id: Some("csharp.aspnet_core".into()),
-            evidence: vec![Evidence::new("route", "/", SourceSpan::new("file", "Controllers/CustomerController.cs", 1, 1, 1, 1))],
+            evidence: vec![Evidence::new(
+                "route",
+                "/",
+                SourceSpan::new("file", "Controllers/CustomerController.cs", 1, 1, 1, 1),
+            )],
         });
 
         enrich(&mut facts);
 
-        assert_eq!(facts.entrypoints[0].path.as_deref(), Some("/Customer/Login"));
+        assert_eq!(
+            facts.entrypoints[0].path.as_deref(),
+            Some("/Customer/Login")
+        );
     }
 
     #[test]

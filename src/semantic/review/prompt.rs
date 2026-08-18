@@ -108,7 +108,9 @@ fn domain_name_context(context: &ReviewContext) -> Value {
 fn domain_name_item(domain: &crate::semantic::review::context::ReviewDomain) -> Value {
     json!({
         "domainId": domain.domain_id,
+        "package": domain.current_label,
         "contractKey": domain.current_label,
+        "packets": unique_limited(domain.packets.iter().cloned(), MAX_DOMAIN_HINTS),
         "entrypoints": unique_limited(
             domain.entrypoints.iter().map(entrypoint_hint),
             MAX_DOMAIN_HINTS
@@ -144,6 +146,84 @@ fn unique_limited(values: impl IntoIterator<Item = String>, limit: usize) -> Vec
         }
     }
     result
+}
+
+const MAX_FEATURE_HINTS: usize = 6;
+const MAX_FEATURES_PER_PROMPT: usize = 24;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MissingFeatureIds {
+    pub features: BTreeSet<String>,
+}
+
+impl MissingFeatureIds {
+    pub fn is_empty(&self) -> bool {
+        self.features.is_empty()
+    }
+}
+
+pub fn build_feature_prompt(
+    domain_name: &str,
+    features: &[crate::semantic::review::context::ReviewFeature],
+    limits: PromptLimits,
+) -> Result<String, serde_json::Error> {
+    let selected: Vec<_> = features.iter().take(MAX_FEATURES_PER_PROMPT).collect();
+    let context_json = json!({
+        "features": selected.iter().map(|feature| json!({
+            "featureId": feature.id,
+            "currentLabel": feature.current_label,
+            "symbols": unique_limited(feature.symbols.iter().cloned(), MAX_FEATURE_HINTS),
+            "sourcePaths": unique_limited(feature.source_paths.iter().cloned(), MAX_FEATURE_HINTS),
+        })).collect::<Vec<_>>()
+    });
+    Ok(include_str!("../prompts/semantic_feature_review.txt")
+        .replace("{domain_name}", domain_name)
+        .replace(
+            "{maximum_name_length}",
+            &limits.maximum_name_length.to_string(),
+        )
+        .replace("{context_json}", &context_json.to_string()))
+}
+
+pub fn missing_feature_ids(
+    features: &[crate::semantic::review::context::ReviewFeature],
+    proposal: &ReviewProposal,
+    limits: PromptLimits,
+) -> MissingFeatureIds {
+    let known = proposal
+        .features
+        .iter()
+        .filter(|item| {
+            valid_suggestion(
+                &item.name,
+                &item.summary,
+                limits.maximum_name_length,
+                limits.maximum_summary_length,
+            )
+        })
+        .map(|item| item.feature_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut missing = MissingFeatureIds::default();
+    for feature in features.iter().take(MAX_FEATURES_PER_PROMPT) {
+        if !known.contains(feature.id.as_str()) {
+            missing.features.insert(feature.id.clone());
+        }
+    }
+    missing
+}
+
+pub fn build_missing_feature_prompt(
+    domain_name: &str,
+    features: &[crate::semantic::review::context::ReviewFeature],
+    missing: &MissingFeatureIds,
+    limits: PromptLimits,
+) -> Result<String, serde_json::Error> {
+    let narrowed: Vec<_> = features
+        .iter()
+        .filter(|feature| missing.features.contains(&feature.id))
+        .cloned()
+        .collect();
+    build_feature_prompt(domain_name, &narrowed, limits)
 }
 
 fn valid_suggestion(
@@ -197,6 +277,7 @@ mod tests {
                     source_paths: Vec::new(),
                     entrypoints: Vec::new(),
                     resources: Vec::new(),
+                    packets: Vec::new(),
                     feature_ids: vec!["feature-a".into()],
                     flow_ids: vec!["flow-a".into()],
                 },
@@ -209,6 +290,7 @@ mod tests {
                     source_paths: Vec::new(),
                     entrypoints: Vec::new(),
                     resources: Vec::new(),
+                    packets: Vec::new(),
                     feature_ids: Vec::new(),
                     flow_ids: Vec::new(),
                 },
@@ -244,6 +326,7 @@ mod tests {
     #[allow(non_snake_case)]
     fn 응답에_없는_도메인만_재요청_목록에_남긴다() {
         let proposal = ReviewProposal {
+            features: Vec::new(),
             domains: vec![DomainSuggestion {
                 domain_id: "domain-a".into(),
                 canonical_domain_id: None,
@@ -302,11 +385,29 @@ mod tests {
         .unwrap();
         assert!(domain_prompt.contains("\"domains\":["));
         assert!(domain_prompt.contains("contractKey"));
+        assert!(domain_prompt.contains("package"));
         assert!(!domain_prompt.contains("feature-a"));
         assert!(!domain_prompt.contains("flow-a"));
         assert!(!domain_prompt.contains("\"features\""));
         assert!(!domain_prompt.contains("\"flows\""));
         assert!(!domain_prompt.contains("projectProfile"));
         assert!(!domain_prompt.contains("globalSummary"));
+    }
+
+    #[test]
+    fn 기능_prompt는_기능_id만_보내고_흐름은_보내지_않는다() {
+        let feature_prompt = super::build_feature_prompt(
+            "인증",
+            &context().features,
+            PromptLimits {
+                maximum_name_length: 80,
+                maximum_summary_length: 120,
+            },
+        )
+        .unwrap();
+        assert!(feature_prompt.contains("feature-a"));
+        assert!(feature_prompt.contains("\"features\":["));
+        assert!(!feature_prompt.contains("flow-a"));
+        assert!(!feature_prompt.contains("domain-a"));
     }
 }

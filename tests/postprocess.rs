@@ -65,8 +65,7 @@ function saveOrder(order: unknown) { return order; }
 
     let result = analyze(AnalysisRequest::new(&root)).expect("정적 분석이 성공해야 한다");
     let config = AnalysisConfig::default();
-    let bundle =
-        build_ai_context(&result, &config).expect("AI 컨텍스트 bundle이 생성되어야 한다");
+    let bundle = build_ai_context(&result, &config).expect("AI 컨텍스트 bundle이 생성되어야 한다");
 
     assert_eq!(bundle.manifest.schema_version, "ai-context-manifest.v1");
     assert!(!bundle.chunks.is_empty());

@@ -1,6 +1,6 @@
 //! 도메인 형성 단계의 추적 가능한 진단 지표.
 
-use crate::config::DomainClusteringMode;
+use crate::config::{DomainClusteringMode, DomainFormationMode};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "camelCase")]
 pub struct DomainFormationDiagnostics {
     pub clustering_mode: String,
+    #[serde(default)]
+    pub formation_mode: String,
     pub capabilities: usize,
     pub distinct_keys: usize,
     pub total_pairs: usize,
@@ -20,14 +22,34 @@ pub struct DomainFormationDiagnostics {
     pub clustering_merges: usize,
     pub merge_reasons: BTreeMap<String, usize>,
     pub absorption_reasons: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub packets: usize,
+    #[serde(default)]
+    pub buckets: usize,
+    #[serde(default)]
+    pub bucket_cap_merges: usize,
 }
 
 impl DomainFormationDiagnostics {
     pub fn new(mode: DomainClusteringMode) -> Self {
+        Self::with_formation(mode, DomainFormationMode::EvidenceBuckets)
+    }
+
+    pub fn with_formation(mode: DomainClusteringMode, formation: DomainFormationMode) -> Self {
         Self {
             clustering_mode: clustering_mode_label(mode).into(),
+            formation_mode: formation_mode_label(formation).into(),
             ..Default::default()
         }
+    }
+
+    pub fn record_evidence(&mut self, packet_count: usize, bucket_count: usize, cap_merges: usize) {
+        self.packets = packet_count;
+        self.buckets = bucket_count;
+        self.bucket_cap_merges = cap_merges;
+        self.clusters_before_absorption = bucket_count;
+        self.domains_before_absorption = bucket_count;
+        self.domains_after_absorption = bucket_count;
     }
 
     pub fn record_constraint_stats(
@@ -54,9 +76,7 @@ impl DomainFormationDiagnostics {
 
     pub fn record_absorption(&mut self, domain_count: usize) {
         self.domains_after_absorption = domain_count;
-        self.absorbed_domains = self
-            .domains_before_absorption
-            .saturating_sub(domain_count);
+        self.absorbed_domains = self.domains_before_absorption.saturating_sub(domain_count);
     }
 
     pub fn record_merge(&mut self, reason: &str) {
@@ -72,7 +92,14 @@ impl DomainFormationDiagnostics {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.capabilities == 0 && self.clusters_before_absorption == 0
+        self.capabilities == 0 && self.clusters_before_absorption == 0 && self.packets == 0
+    }
+}
+
+pub(crate) fn formation_mode_label(mode: DomainFormationMode) -> &'static str {
+    match mode {
+        DomainFormationMode::EvidenceBuckets => "evidenceBuckets",
+        DomainFormationMode::Clustering => "clustering",
     }
 }
 

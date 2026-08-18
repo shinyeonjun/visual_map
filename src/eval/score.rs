@@ -95,7 +95,7 @@ fn score_domains(
     for expected in &gold.must_have_domains {
         let matched = matching_domains(snapshot, expected, aliases);
         if matched.is_empty() {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "domain",
                 "missing",
                 format!("필수 Domain '{expected}' 가 없습니다."),
@@ -112,17 +112,20 @@ fn score_domains(
         let left = matching_domain_ids(snapshot, &pair[0], aliases);
         let right = matching_domain_ids(snapshot, &pair[1], aliases);
         if !left.is_empty() && !right.is_empty() && left.intersection(&right).next().is_some() {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "domain",
                 "overMerge",
-                format!("'{}' 와 '{}' 가 한 Domain으로 합쳐졌습니다.", pair[0], pair[1]),
+                format!(
+                    "'{}' 와 '{}' 가 한 Domain으로 합쳐졌습니다.",
+                    pair[0], pair[1]
+                ),
             ));
         }
     }
 
     for expected in &gold.must_not_split {
         if matching_domains(snapshot, expected, aliases).len() > 1 {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "domain",
                 "overSplit",
                 format!("'{expected}' 가 여러 Domain 카드로 쪼개졌습니다."),
@@ -133,26 +136,32 @@ fn score_domains(
     for domain in &snapshot.domains {
         let key = canonical_capability_key(&domain.key).to_ascii_lowercase();
         if is_forbidden_domain_key(&key, gold) {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "domain",
                 "folderName",
                 format!("폴더성 Domain key '{}' 가 올라왔습니다.", domain.key),
             ));
         }
-        if gold.cross_cutting.iter().any(|item| item.eq_ignore_ascii_case(&key))
+        if gold
+            .cross_cutting
+            .iter()
+            .any(|item| item.eq_ignore_ascii_case(&key))
             && domain.kind == DomainKind::Business
         {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "domain",
                 "crossCuttingAsBusiness",
-                format!("운영 경계 '{}' 가 비즈니스 Domain으로 올라왔습니다.", domain.key),
+                format!(
+                    "운영 경계 '{}' 가 비즈니스 Domain으로 올라왔습니다.",
+                    domain.key
+                ),
             ));
         }
         if gold.mode == EvalMode::Library
             && domain.kind == DomainKind::Business
             && !is_expected_domain(&key, gold, aliases)
         {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "domain",
                 "unexpectedBusiness",
                 format!(
@@ -175,20 +184,28 @@ fn score_features(
     let mut hits = 0;
     for expected in &gold.must_have_features {
         let Some(contract) = normalize_gold_contract(&expected.contract) else {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "feature",
                 "invalidContract",
-                format!("정답 계약 '{}' 을 정규화하지 못했습니다.", expected.contract),
+                format!(
+                    "정답 계약 '{}' 을 정규화하지 못했습니다.",
+                    expected.contract
+                ),
             ));
             continue;
         };
         let matches: Vec<_> = snapshot
             .features
             .iter()
-            .filter(|feature| feature.contracts.iter().any(|item| contracts_match(item, &contract)))
+            .filter(|feature| {
+                feature
+                    .contracts
+                    .iter()
+                    .any(|item| contracts_match(item, &contract))
+            })
             .collect();
         if matches.is_empty() {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "feature",
                 "missing",
                 format!("필수 Feature '{contract}' 가 없습니다."),
@@ -197,10 +214,13 @@ fn score_features(
         }
         hits += 1;
         if matches.len() > 1 {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "feature",
                 "duplicate",
-                format!("Feature '{contract}' 가 {}개로 중복되었습니다.", matches.len()),
+                format!(
+                    "Feature '{contract}' 가 {}개로 중복되었습니다.",
+                    matches.len()
+                ),
             ));
         }
         if let Some(domain) = &expected.domain {
@@ -211,7 +231,7 @@ fn score_features(
                     .any(|key| keys_match(key, domain, aliases))
             });
             if !ok {
-                findings.push(finding(
+                findings.push(eval_finding(
                     "feature",
                     "wrongDomain",
                     format!("Feature '{contract}' 가 Domain '{domain}' 에 붙지 않았습니다."),
@@ -226,7 +246,7 @@ fn score_flows(gold: &EvalGold, snapshot: &EvalSnapshot, findings: &mut Vec<Eval
     let mut hits = 0;
     for expected in &gold.flow_invariants {
         let Some(contract) = normalize_gold_contract(&expected.feature_contract) else {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "flow",
                 "invalidContract",
                 format!(
@@ -239,14 +259,19 @@ fn score_flows(gold: &EvalGold, snapshot: &EvalSnapshot, findings: &mut Vec<Eval
         let kinds: HashSet<String> = snapshot
             .features
             .iter()
-            .filter(|feature| feature.contracts.iter().any(|item| contracts_match(item, &contract)))
+            .filter(|feature| {
+                feature
+                    .contracts
+                    .iter()
+                    .any(|item| contracts_match(item, &contract))
+            })
             .flat_map(|feature| &feature.flow_ids)
             .filter_map(|flow_id| snapshot.flows.get(flow_id))
             .flatten()
             .cloned()
             .collect();
         if kinds.is_empty() && !expected.must_have_edge_kinds.is_empty() {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "flow",
                 "missing",
                 format!("Feature '{contract}' 에 실행 흐름이 없습니다."),
@@ -262,7 +287,7 @@ fn score_flows(gold: &EvalGold, snapshot: &EvalSnapshot, findings: &mut Vec<Eval
         if missing.is_empty() {
             hits += 1;
         } else {
-            findings.push(finding(
+            findings.push(eval_finding(
                 "flow",
                 "wrongEdge",
                 format!("Feature '{contract}' 에 {missing:?} edge가 없습니다. 실제: {kinds:?}"),
@@ -301,9 +326,11 @@ fn keys_match(actual: &str, expected: &str, aliases: &HashMap<String, Vec<String
     if actual == expected {
         return true;
     }
-    aliases
-        .get(&expected)
-        .is_some_and(|names| names.iter().any(|alias| alias.eq_ignore_ascii_case(&actual)))
+    aliases.get(&expected).is_some_and(|names| {
+        names
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case(&actual))
+    })
 }
 
 fn is_expected_domain(
@@ -331,7 +358,7 @@ fn alias_map(gold: &EvalGold) -> HashMap<String, Vec<String>> {
         .collect()
 }
 
-fn normalize_gold_contract(raw: &str) -> Option<String> {
+pub(crate) fn normalize_gold_contract(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if let Some((method, path)) = trimmed.split_once(' ') {
         return contract_identity(Some(method), path);
@@ -354,7 +381,7 @@ fn is_forbidden_domain_key(key: &str, gold: &EvalGold) -> bool {
             .any(|forbidden| forbidden.eq_ignore_ascii_case(key))
 }
 
-fn contracts_match(actual: &str, expected: &str) -> bool {
+pub(crate) fn contracts_match(actual: &str, expected: &str) -> bool {
     if actual == expected {
         return true;
     }
@@ -409,7 +436,7 @@ pub fn classify_outcome(gold: &EvalGold, passed: bool) -> EvalOutcome {
     }
 }
 
-fn finding(layer: &str, kind: &str, message: String) -> EvalFinding {
+pub(crate) fn eval_finding(layer: &str, kind: &str, message: String) -> EvalFinding {
     EvalFinding {
         layer: layer.into(),
         kind: kind.into(),
@@ -419,10 +446,10 @@ fn finding(layer: &str, kind: &str, message: String) -> EvalFinding {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::gold::{DomainAlias, FeatureGold, FlowInvariantGold};
     use super::super::snapshot::SnapFeature;
     use super::super::{EvalGold, EvalMode, EvalSnapshot};
+    use super::*;
 
     fn domain(id: &str, key: &str, kind: DomainKind) -> SnapDomain {
         SnapDomain {
@@ -507,7 +534,11 @@ mod tests {
         gold.must_have_features.clear();
         gold.flow_invariants.clear();
         let report = score_gold(&gold, &snapshot);
-        let kinds: Vec<_> = report.findings.iter().map(|item| item.kind.as_str()).collect();
+        let kinds: Vec<_> = report
+            .findings
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
         assert!(kinds.contains(&"missing"));
         assert!(kinds.contains(&"overSplit"));
     }
@@ -549,7 +580,11 @@ mod tests {
             ..EvalGold::default()
         };
         let report = score_gold(&gold, &snapshot);
-        let kinds: Vec<_> = report.findings.iter().map(|item| item.kind.as_str()).collect();
+        let kinds: Vec<_> = report
+            .findings
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
         assert!(kinds.contains(&"crossCuttingAsBusiness"));
         assert!(kinds.contains(&"folderName"));
     }
@@ -585,12 +620,7 @@ mod tests {
         };
         let snapshot = EvalSnapshot {
             domains: vec![domain("d-users", "users", DomainKind::Business)],
-            features: vec![feature(
-                "f-user",
-                "GET:/users/:param",
-                "users",
-                &[],
-            )],
+            features: vec![feature("f-user", "GET:/users/:param", "users", &[])],
             flows: HashMap::new(),
         };
         let report = score_gold(&gold, &snapshot);
@@ -633,7 +663,11 @@ mod tests {
             flows: HashMap::from([("flow-login".into(), vec!["sequential".into()])]),
         };
         let report = score_gold(&gold_service(), &snapshot);
-        let kinds: Vec<_> = report.findings.iter().map(|item| item.kind.as_str()).collect();
+        let kinds: Vec<_> = report
+            .findings
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
         assert!(kinds.contains(&"wrongDomain"));
         assert!(kinds.contains(&"wrongEdge"));
     }

@@ -7,7 +7,12 @@ const NON_INSTANCE_SEGMENTS: &[&str] = &[
 ];
 
 const TRANSPORT_CAPABILITY_SEGMENTS: &[&str] = &[
-    "shop-api", "admin-api", "gateway", "graphql", "connect", "rpc",
+    "shop-api",
+    "admin-api",
+    "gateway",
+    "graphql",
+    "connect",
+    "rpc",
 ];
 
 /// 원시 경로·URL·메서드 접두를 정규화한 계약 경로다.
@@ -89,10 +94,7 @@ pub(crate) fn capability_key_from_path(raw: &str) -> Option<String> {
 }
 
 pub(crate) fn paths_match(a: &str, b: &str) -> bool {
-    match (
-        normalize_contract_path(a),
-        normalize_contract_path(b),
-    ) {
+    match (normalize_contract_path(a), normalize_contract_path(b)) {
         (Some(left), Some(right)) if left == right => true,
         (Some(left), Some(right)) => path_prefix_match(&left, &right),
         _ => false,
@@ -203,10 +205,7 @@ fn mark_instance_segments(mut segments: Vec<String>) -> Vec<String> {
     // 바로 뒤가 :param이면 리소스 이름(users/items)이므로 인스턴스로 치환하지 않는다.
     let last = segments.len().saturating_sub(1);
     for index in 1..last {
-        if segments
-            .get(index + 1)
-            .is_some_and(|next| next == ":param")
-        {
+        if segments.get(index + 1).is_some_and(|next| next == ":param") {
             continue;
         }
         if is_instance_value_segment(&segments[index]) {
@@ -223,7 +222,11 @@ fn is_instance_value_segment(segment: &str) -> bool {
     if segment.chars().all(|ch| ch.is_ascii_digit()) {
         return true;
     }
-    if segment.len() >= 32 && segment.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-') {
+    if segment.len() >= 32
+        && segment
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() || ch == '-')
+    {
         return true;
     }
     // 짧은 opaque slug(abc, x1)만 인스턴스로 본다. email·apple 같은 리소스 명사는 제외한다.
@@ -247,7 +250,11 @@ fn normalize_segment(segment: &str) -> String {
     if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
         return ":param".to_string();
     }
-    if trimmed.len() >= 32 && trimmed.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-') {
+    if trimmed.len() >= 32
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() || ch == '-')
+    {
         return ":param".to_string();
     }
     trimmed.to_ascii_lowercase()
@@ -282,7 +289,10 @@ mod tests {
             normalize_contract_path("/api/v1/reports/123"),
             Some("/reports/:param".into())
         );
-        assert_eq!(capability_key_from_path("/api/v1/reports/123"), Some("reports".into()));
+        assert_eq!(
+            capability_key_from_path("/api/v1/reports/123"),
+            Some("reports".into())
+        );
     }
 
     #[test]
@@ -380,14 +390,8 @@ mod tests {
             normalize_contract_path("/api/v1/reports/abc/latest"),
             Some("/reports/:param/latest".into())
         );
-        assert_eq!(
-            normalize_contract_path("/health"),
-            Some("/health".into())
-        );
-        assert_eq!(
-            contract_identity(None, "/health"),
-            Some("*:/health".into())
-        );
+        assert_eq!(normalize_contract_path("/health"), Some("/health".into()));
+        assert_eq!(contract_identity(None, "/health"), Some("*:/health".into()));
         assert_ne!(
             contract_identity(Some("GET"), "/health"),
             contract_identity(Some("POST"), "/health")

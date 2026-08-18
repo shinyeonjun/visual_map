@@ -200,6 +200,17 @@ fn default_archived_directory_names() -> Vec<String> {
     ]
 }
 
+/// Overview 도메인을 만드는 방식이다.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DomainFormationMode {
+    /// 진입점 패킷을 경로/패키지 버킷으로 묶어 바로 Overview 도메인으로 쓴다.
+    #[default]
+    EvidenceBuckets,
+    /// capability 클러스터링으로 도메인을 만든다. eval 기준선 전용이다.
+    Clustering,
+}
+
 /// 도메인 클러스터링 알고리즘 선택지다.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -247,6 +258,9 @@ pub struct DomainPolicy {
     pub domain_cluster_merge_threshold: f64,
     #[serde(default)]
     pub domain_clustering_mode: DomainClusteringMode,
+    /// Overview 도메인 형성 방식이다. 기본값은 경로 버킷이다.
+    #[serde(default)]
+    pub domain_formation: DomainFormationMode,
 }
 
 impl Default for DomainPolicy {

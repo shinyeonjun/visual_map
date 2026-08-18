@@ -70,8 +70,7 @@ fn parse_parameter(raw: String) -> Option<CodeParameter> {
         None => (text, None),
     };
     let text = strip_parameter_modifiers(
-        text
-            .trim_start_matches("mut ")
+        text.trim_start_matches("mut ")
             .trim_start_matches("ref ")
             .trim_start_matches("final ")
             .trim(),
@@ -103,7 +102,13 @@ fn parse_parameter(raw: String) -> Option<CodeParameter> {
 
 fn strip_parameter_modifiers(mut text: &str) -> &str {
     const MODIFIERS: &[&str] = &[
-        "public", "private", "protected", "readonly", "const", "override", "volatile",
+        "public",
+        "private",
+        "protected",
+        "readonly",
+        "const",
+        "override",
+        "volatile",
     ];
     loop {
         let trimmed = text.trim_start();

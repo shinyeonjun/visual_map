@@ -19,10 +19,8 @@ pub(super) fn extract_capability_data(
     store: &FactStore,
     flows: &ExecutionFlowGraph,
 ) -> CapabilityData {
-    let flow_ids_by_owner: HashMap<&str, Vec<&str>> = flows
-        .flows
-        .iter()
-        .fold(HashMap::new(), |mut index, flow| {
+    let flow_ids_by_owner: HashMap<&str, Vec<&str>> =
+        flows.flows.iter().fold(HashMap::new(), |mut index, flow| {
             index
                 .entry(flow.owner_unit_id.as_str())
                 .or_default()

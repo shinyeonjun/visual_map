@@ -1,7 +1,7 @@
 //! 도메인 분석에서 공유하는 데이터 모델.
 
-use crate::domain::formation::diagnostics::DomainFormationDiagnostics;
 use crate::domain::confidence::{DomainConfidence, DomainStatus};
+use crate::domain::formation::diagnostics::DomainFormationDiagnostics;
 use crate::domain::membership::DomainMembership;
 use crate::facts::{Evidence, ResolutionStatus};
 use crate::graph::StaticRelationGraph;

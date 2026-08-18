@@ -5,10 +5,7 @@ use crate::views::overview::model::FeatureGroup;
 use std::collections::{BTreeSet, HashMap};
 
 /// 기능을 도메인 그룹에 실제로 들어간 진입점·자원 ID로 배정한다.
-pub(super) fn assign_features_to_domains(
-    features: &mut [FeatureGroup],
-    groups: &[DomainGroup],
-) {
+pub(super) fn assign_features_to_domains(features: &mut [FeatureGroup], groups: &[DomainGroup]) {
     let mut entrypoint_to_domains: HashMap<&str, BTreeSet<&str>> = HashMap::new();
     for group in groups {
         for entrypoint_id in &group.entrypoint_ids {
@@ -49,7 +46,9 @@ mod tests {
     use super::*;
     use crate::domain::confidence::{DomainConfidence, DomainStatus};
     use crate::domain::grouping::DomainKind;
-    use crate::views::overview::model::{FeatureConfidence, FeatureKind, FeatureStatus, FeatureVisibility};
+    use crate::views::overview::model::{
+        FeatureConfidence, FeatureKind, FeatureStatus, FeatureVisibility,
+    };
     use std::collections::BTreeSet;
 
     fn domain(id: &str, entrypoint_ids: &[&str], resource_ids: &[&str]) -> DomainGroup {
@@ -156,9 +155,6 @@ mod tests {
 
         assign_features_to_domains(&mut features, &groups);
 
-        assert_eq!(
-            features[0].domain_ids,
-            vec!["domain-audit", "domain-auth"]
-        );
+        assert_eq!(features[0].domain_ids, vec!["domain-audit", "domain-auth"]);
     }
 }

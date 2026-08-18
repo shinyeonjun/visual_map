@@ -6,7 +6,9 @@ use crate::clean::{
 };
 use crate::domain::confidence::DomainConfidence;
 use crate::domain::DomainGroup;
-use crate::facts::{CodeUnit, CodeUnitVisibility, Entrypoint, Reference, ResourceAccess, SourceSpan};
+use crate::facts::{
+    CodeUnit, CodeUnitVisibility, Entrypoint, Reference, ResourceAccess, SourceSpan,
+};
 use crate::frameworks::registry::capabilities::FrameworkKind;
 use crate::frameworks::registry::detector::FrameworkDetection;
 use crate::graph::StaticRelationGraph;
@@ -51,8 +53,18 @@ fn to_overview(prepared: &PreparedStaticOverview) -> OverviewResponse {
         static_graph: rebuild_static_graph(prepared),
         execution_flows: prepared.execution_flows.clone(),
         units: prepared.units.iter().cloned().map(to_unit).collect(),
-        entrypoints: prepared.entrypoints.iter().cloned().map(to_entrypoint).collect(),
-        resources: prepared.resources.iter().cloned().map(to_resource).collect(),
+        entrypoints: prepared
+            .entrypoints
+            .iter()
+            .cloned()
+            .map(to_entrypoint)
+            .collect(),
+        resources: prepared
+            .resources
+            .iter()
+            .cloned()
+            .map(to_resource)
+            .collect(),
         unassigned_unit_ids: prepared.unassigned_unit_ids.clone(),
         dynamic_boundary_ids: prepared
             .dynamic_boundaries
@@ -178,7 +190,12 @@ fn to_unit(unit: PreparedUnit) -> CodeUnit {
         language: unit.language,
         parent_id: unit.parent_id,
         span: SourceSpan::new(
-            file_id, path, unit.start_line, unit.start_column, unit.end_line, unit.end_column,
+            file_id,
+            path,
+            unit.start_line,
+            unit.start_column,
+            unit.end_line,
+            unit.end_column,
         ),
         body_span: None,
         signature: unit.signature,

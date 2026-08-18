@@ -7,11 +7,17 @@ use serde_json::Value;
 #[serde(rename_all = "camelCase", default)]
 pub struct ReviewProposal {
     pub domains: Vec<DomainSuggestion>,
+    pub features: Vec<FeatureSuggestion>,
 }
 
 impl ReviewProposal {
     pub fn merge_missing(&mut self, supplement: Self) {
-        merge_by_id(&mut self.domains, supplement.domains, |item| item.domain_id.as_str());
+        merge_by_id(&mut self.domains, supplement.domains, |item| {
+            item.domain_id.as_str()
+        });
+        merge_by_id(&mut self.features, supplement.features, |item| {
+            item.feature_id.as_str()
+        });
     }
 }
 
@@ -53,6 +59,15 @@ impl DomainSuggestion {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureSuggestion {
+    pub feature_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
 pub fn parse_response(stdout: &[u8]) -> Result<ReviewProposal, String> {
     let text = String::from_utf8_lossy(stdout);
     let mut candidates = Vec::new();
@@ -86,14 +101,17 @@ pub fn parse_response(stdout: &[u8]) -> Result<ReviewProposal, String> {
         let has_domains = value
             .as_object()
             .is_some_and(|object| object.contains_key("domains"));
-        if has_domains {
+        let has_features = value
+            .as_object()
+            .is_some_and(|object| object.contains_key("features"));
+        if has_domains || has_features {
             if let Ok(proposal) = serde_json::from_value::<ReviewProposal>(value) {
                 return Ok(proposal);
             }
         }
     }
 
-    Err("AI 응답에서 도메인 이름 JSON을 찾지 못했습니다.".into())
+    Err("AI 응답에서 도메인 또는 기능 이름 JSON을 찾지 못했습니다.".into())
 }
 
 fn collect_strings(value: &Value, output: &mut Vec<String>) {

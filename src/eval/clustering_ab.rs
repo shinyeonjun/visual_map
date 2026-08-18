@@ -5,9 +5,9 @@ use super::pair_diagnose::DEFAULT_PAIR_DIAGNOSE_IDS;
 use super::score::{count_findings_by_kind, score_gold, EvalReport};
 use super::snapshot::snapshot_from_overview;
 use super::EvalError;
-use crate::config::DomainClusteringMode;
-use crate::domain::{DomainFormationDiagnostics, GoldLabeledPairSignals, GoldPairSignalModeReport};
 use crate::analyze;
+use crate::config::{DomainClusteringMode, DomainFormationMode};
+use crate::domain::{DomainFormationDiagnostics, GoldLabeledPairSignals, GoldPairSignalModeReport};
 use crate::model::AnalysisRequest;
 use crate::AnalysisEngine;
 use serde::Serialize;
@@ -161,7 +161,10 @@ pub fn compare_clustering_modes_experiment(
     })
 }
 
-fn compare_project(gold: &EvalGold, include_v2: bool) -> Result<ClusteringAbProjectReport, EvalError> {
+fn compare_project(
+    gold: &EvalGold,
+    include_v2: bool,
+) -> Result<ClusteringAbProjectReport, EvalError> {
     let Some(project_path) = gold.project_path.as_deref() else {
         return Ok(skipped_report(
             gold,
@@ -177,8 +180,11 @@ fn compare_project(gold: &EvalGold, include_v2: bool) -> Result<ClusteringAbProj
     }
 
     let legacy = analyze_with_mode(gold, &project_path, DomainClusteringMode::LegacyStrictKey)?;
-    let structural =
-        analyze_with_mode(gold, &project_path, DomainClusteringMode::StructuralCrossKey)?;
+    let structural = analyze_with_mode(
+        gold,
+        &project_path,
+        DomainClusteringMode::StructuralCrossKey,
+    )?;
     let v2 = if include_v2 {
         Some(analyze_with_mode(
             gold,
@@ -216,6 +222,7 @@ fn analyze_with_mode(
     mode: DomainClusteringMode,
 ) -> Result<ClusteringAbModeReport, EvalError> {
     let mut request = AnalysisRequest::new(project_path);
+    request.options.config.domains.domain_formation = DomainFormationMode::Clustering;
     request.options.config.domains.domain_clustering_mode = mode;
     let result = analyze(request).map_err(analysis_error)?;
     let overview = result.overview.ok_or(super::EvalError::MissingOverview)?;
@@ -223,7 +230,10 @@ fn analyze_with_mode(
     Ok(mode_report(report, overview.formation_diagnostics))
 }
 
-fn mode_report(report: EvalReport, diagnostics: DomainFormationDiagnostics) -> ClusteringAbModeReport {
+fn mode_report(
+    report: EvalReport,
+    diagnostics: DomainFormationDiagnostics,
+) -> ClusteringAbModeReport {
     ClusteringAbModeReport {
         passed: report.passed,
         domain_hits: report.domain_hits,

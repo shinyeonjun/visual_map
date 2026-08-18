@@ -362,12 +362,8 @@ impl ReferenceResolutionIndex {
                 .or_else(|| target.strip_prefix("this."))
                 .unwrap_or(target);
             if let Some((receiver, method)) = body.rsplit_once('.') {
-                let injected = self.injected_method_candidates(
-                    parent_id,
-                    receiver,
-                    method,
-                    language,
-                );
+                let injected =
+                    self.injected_method_candidates(parent_id, receiver, method, language);
                 if !injected.is_empty() {
                     return Some(injected);
                 }

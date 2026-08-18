@@ -319,9 +319,7 @@ fn resolve_service_unit(facts: &FactStore, source_file_id: &str, argument: &str)
 #[cfg(test)]
 mod tests {
     use super::add_endpoint_methods;
-    use crate::facts::{
-        CodeUnit, CodeUnitKind, EntrypointKind, Evidence, FactStore, SourceSpan,
-    };
+    use crate::facts::{CodeUnit, CodeUnitKind, EntrypointKind, Evidence, FactStore, SourceSpan};
     use crate::frameworks::registry::capabilities::FrameworkKind;
     use crate::frameworks::registry::detector::FrameworkDetection;
     use crate::model::Language;
@@ -388,15 +386,25 @@ mod tests {
     #[test]
     fn endpoint_메서드는_rpc_경로를_가진다() {
         let mut facts = FactStore::default();
-        facts
-            .units
-            .insert("class:greeting".into(), endpoint_class("class:greeting", "server/lib/greeting_endpoint.dart"));
+        facts.units.insert(
+            "class:greeting".into(),
+            endpoint_class("class:greeting", "server/lib/greeting_endpoint.dart"),
+        );
         facts.units.insert(
             "method:hello".into(),
-            endpoint_method("method:hello", "class:greeting", "server/lib/greeting_endpoint.dart"),
+            endpoint_method(
+                "method:hello",
+                "class:greeting",
+                "server/lib/greeting_endpoint.dart",
+            ),
         );
 
-        add_endpoint_methods(&mut facts, &detection("file:class:greeting"), "dart.serverpod", "Endpoint");
+        add_endpoint_methods(
+            &mut facts,
+            &detection("file:class:greeting"),
+            "dart.serverpod",
+            "Endpoint",
+        );
 
         assert_eq!(facts.entrypoints.len(), 1);
         assert_eq!(facts.entrypoints[0].kind, EntrypointKind::Rpc);
@@ -413,10 +421,19 @@ mod tests {
         );
         facts.units.insert(
             "method:hello".into(),
-            endpoint_method("method:hello", "class:client", "lib/src/protocol/client.dart"),
+            endpoint_method(
+                "method:hello",
+                "class:client",
+                "lib/src/protocol/client.dart",
+            ),
         );
 
-        add_endpoint_methods(&mut facts, &detection("file:class:greeting"), "dart.serverpod", "Endpoint");
+        add_endpoint_methods(
+            &mut facts,
+            &detection("file:class:greeting"),
+            "dart.serverpod",
+            "Endpoint",
+        );
 
         assert!(facts.entrypoints.is_empty());
     }

@@ -1,14 +1,14 @@
 //! gold 라벨 pair에 대한 similarity/rejection/evidence 분석.
 
-use crate::config::{DomainClusteringMode, PathPolicy};
 use super::gold_pair_resolution::resolve_capability_key;
+use crate::config::{DomainClusteringMode, PathPolicy};
 use crate::facts::FactStore;
 use serde::{Deserialize, Serialize};
 
 use super::capability_evidence::{build_capability_evidence, CapabilityEvidence};
 use super::diagnostics::clustering_mode_label;
-use super::pair_diagnostics::{classify_pair_with_context, PairSimilarityBreakdown};
 use super::pair_context::CapabilityPairContext;
+use super::pair_diagnostics::{classify_pair_with_context, PairSimilarityBreakdown};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

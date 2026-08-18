@@ -174,6 +174,7 @@ pub(crate) fn domain_context(
         source_paths,
         entrypoints: Vec::new(),
         resources: Vec::new(),
+        packets: packet_summaries(cluster, indexes),
         feature_ids: Vec::new(),
         flow_ids: Vec::new(),
         features: Vec::new(),
@@ -181,6 +182,27 @@ pub(crate) fn domain_context(
         evidence_ids,
         omission: Default::default(),
     })
+}
+
+fn packet_summaries(cluster: &DomainCluster, indexes: &PostprocessIndexes<'_>) -> Vec<String> {
+    let mut packets = cluster
+        .source_domain_ids
+        .iter()
+        .filter_map(|domain_id| indexes.domains.get(domain_id.as_str()))
+        .flat_map(|domain| {
+            domain.evidence.iter().filter_map(|evidence| {
+                if evidence.kind == "packet" {
+                    Some(evidence.value.clone())
+                } else {
+                    None
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    packets.sort();
+    packets.dedup();
+    packets.truncate(12);
+    packets
 }
 
 fn has_visible_unit(domain: &crate::domain::DomainGroup, indexes: &PostprocessIndexes<'_>) -> bool {

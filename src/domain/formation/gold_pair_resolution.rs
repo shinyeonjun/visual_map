@@ -1,7 +1,7 @@
 //! gold expected capability key를 actual capability에 매핑한다.
 
-use crate::domain::capability_keys::canonical_capability_key;
 use super::key_decomposition::{decompose_capability_key, keys_share_entity};
+use crate::domain::capability_keys::canonical_capability_key;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,7 +45,11 @@ pub fn resolve_capability_key(expected: &str, actual_keys: &[String]) -> Capabil
         expected_key: expected,
         resolved_key: None,
         matched: false,
-        unmatched_reason: Some(CapabilityKeyUnmatchedReason::CapabilityNotFound.label().into()),
+        unmatched_reason: Some(
+            CapabilityKeyUnmatchedReason::CapabilityNotFound
+                .label()
+                .into(),
+        ),
         candidate_actual_keys: candidates,
     }
 }
@@ -56,17 +60,8 @@ pub fn candidate_actual_keys(expected: &str, actual_keys: &[String]) -> Vec<Stri
         .map(|actual| (actual.clone(), match_score(&expected, actual)))
         .filter(|(_, score)| *score > 0)
         .collect();
-    ranked.sort_by(|left, right| {
-        right
-            .1
-            .cmp(&left.1)
-            .then_with(|| left.0.cmp(&right.0))
-    });
-    ranked
-        .into_iter()
-        .take(8)
-        .map(|(key, _)| key)
-        .collect()
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    ranked.into_iter().take(8).map(|(key, _)| key).collect()
 }
 
 fn match_score(expected: &str, actual: &str) -> u32 {
@@ -89,7 +84,9 @@ fn match_score(expected: &str, actual: &str) -> u32 {
     {
         return 200;
     }
-    let expected_entity = decompose_capability_key(&expected).entity.unwrap_or_default();
+    let expected_entity = decompose_capability_key(&expected)
+        .entity
+        .unwrap_or_default();
     let actual_entity = decompose_capability_key(&actual).entity.unwrap_or_default();
     if !expected_entity.is_empty()
         && (actual_entity.contains(&expected_entity) || expected_entity.contains(&actual_entity))

@@ -104,7 +104,10 @@ pub fn extract_gold_pair_labels(gold: &EvalGold) -> (Vec<GoldPairLabel>, Vec<Gol
     (positives, negatives)
 }
 
-pub fn extract_actual_positive_pairs(gold: &EvalGold, actual_keys: &[String]) -> Vec<GoldPairLabel> {
+pub fn extract_actual_positive_pairs(
+    gold: &EvalGold,
+    actual_keys: &[String],
+) -> Vec<GoldPairLabel> {
     let aliases = alias_map(gold);
     let feature_domains = feature_domain_keys(gold);
     let logical_domains = build_logical_domain_groups(gold, &aliases, &feature_domains);
@@ -398,7 +401,9 @@ mod tests {
         assert!(positives
             .iter()
             .any(|pair| pair.source.starts_with("domainAlias:login")));
-        assert!(negatives.iter().any(|pair| pair.source.starts_with("mustNotMerge:")));
+        assert!(negatives
+            .iter()
+            .any(|pair| pair.source.starts_with("mustNotMerge:")));
     }
 
     #[test]
@@ -412,7 +417,9 @@ mod tests {
                 "users".into(),
             ],
         );
-        assert!(positives.iter().any(|pair| pair.source.starts_with("actualDomain:login")));
+        assert!(positives
+            .iter()
+            .any(|pair| pair.source.starts_with("actualDomain:login")));
         assert!(positives.iter().any(|pair| {
             pair.left_key == "password-recovery" && pair.right_key == "reset-password"
         }));

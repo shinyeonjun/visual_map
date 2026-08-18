@@ -30,13 +30,6 @@ impl AnalysisEngine {
             .diagnose_formation_pairs(request, modes, top_k)
     }
 
-    pub fn diagnose_domain_seeds(
-        &self,
-        request: AnalysisRequest,
-    ) -> Result<crate::domain::DomainSeedDiagnostics, EngineError> {
-        self.pipeline.diagnose_domain_seeds(request)
-    }
-
     pub fn diagnose_gold_pair_signals(
         &self,
         request: AnalysisRequest,

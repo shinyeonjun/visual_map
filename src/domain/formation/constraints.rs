@@ -41,8 +41,7 @@ pub(super) fn build_constraints(
                 push_forbidden_pair(&mut forbidden_pairs, i, j);
                 continue;
             }
-            if !allows_cross_key(mode) && capability_a.key != capability_b.key
-            {
+            if !allows_cross_key(mode) && capability_a.key != capability_b.key {
                 push_forbidden_pair(&mut forbidden_pairs, i, j);
             }
         }

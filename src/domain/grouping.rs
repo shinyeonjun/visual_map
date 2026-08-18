@@ -36,7 +36,7 @@ impl DomainAnalyzer {
         }
     }
 
-    /// Feature를 먼저 만들고 Multi-view 유사도로 클러스터링해 도메인을 형성한다.
+    /// Feature를 만든 뒤 경로 버킷(또는 eval용 클러스터링)으로 도메인을 형성한다.
     pub fn analyze_feature_first(
         &self,
         store: &FactStore,

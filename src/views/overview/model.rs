@@ -152,6 +152,9 @@ pub struct OverviewResponse {
     pub semantic_status: SemanticStatus,
     pub semantic_analysis: SemanticAnalysisSummary,
     pub coverage: AnalysisCoverage,
-    #[serde(default, skip_serializing_if = "crate::domain::DomainFormationDiagnostics::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::domain::DomainFormationDiagnostics::is_empty"
+    )]
     pub formation_diagnostics: crate::domain::DomainFormationDiagnostics,
 }

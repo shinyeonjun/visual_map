@@ -120,12 +120,7 @@ pub fn add_decorator_routes(
             let owner_id = controller_owner_unit_id(facts, decorator)?;
             applicability
                 .applies(facts, &owner_id, rule.framework_id)
-                .then(|| {
-                    (
-                        owner_id,
-                        decorator_path_argument(decorator),
-                    )
-                })
+                .then(|| (owner_id, decorator_path_argument(decorator)))
         })
         .collect::<HashMap<_, _>>();
 
@@ -237,9 +232,7 @@ pub fn add_decorator_routes(
             return true;
         }
         !generic_keys.iter().any(|(kind, path, method)| {
-            &entrypoint.kind == kind
-                && &entrypoint.path == path
-                && &entrypoint.method == method
+            &entrypoint.kind == kind && &entrypoint.path == path && &entrypoint.method == method
         })
     });
     facts.entrypoints.extend(additions);
@@ -298,7 +291,12 @@ fn route_owner_unit_id(
         .values()
         .filter(|candidate| candidate.file_id == unit.file_id && flow_units(candidate))
         .filter(|candidate| candidate.span.start_line <= line && line <= candidate.span.end_line)
-        .min_by_key(|candidate| candidate.span.end_line.saturating_sub(candidate.span.start_line))
+        .min_by_key(|candidate| {
+            candidate
+                .span
+                .end_line
+                .saturating_sub(candidate.span.start_line)
+        })
     {
         return Some(containing.id.clone());
     }
@@ -329,9 +327,7 @@ fn controller_owner_unit_id(
     facts
         .units
         .values()
-        .filter(|candidate| {
-            candidate.kind == CodeUnitKind::Class && candidate.file_id == file_id
-        })
+        .filter(|candidate| candidate.kind == CodeUnitKind::Class && candidate.file_id == file_id)
         .filter(|candidate| candidate.span.start_line >= line)
         .min_by_key(|candidate| candidate.span.start_line)
         .map(|candidate| candidate.id.clone())

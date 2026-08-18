@@ -132,6 +132,7 @@ fn merge_domain(destination: &mut ReviewDomain, source: &ReviewDomain) {
     merge_unique_by_key(&mut destination.resources, &source.resources, |item| {
         item.id.clone()
     });
+    merge_unique(&mut destination.packets, &source.packets);
 }
 
 fn merge_unique<T: PartialEq + Clone>(destination: &mut Vec<T>, source: &[T]) {
@@ -289,6 +290,7 @@ mod tests {
                     source_paths: vec![format!("src/module-{index}/handler.rs")],
                     entrypoints: Vec::new(),
                     resources: Vec::new(),
+                    packets: Vec::new(),
                     feature_ids: Vec::new(),
                     flow_ids: Vec::new(),
                 })
@@ -324,13 +326,8 @@ mod tests {
         let mut second = first.clone();
         second.chunk_id = "chunk-0001".into();
 
-        let merged = super::split_to_budget_with_limits(
-            &[first, second],
-            2_000_000,
-            120,
-            500,
-        )
-        .expect("도메인 context를 만들어야 한다");
+        let merged = super::split_to_budget_with_limits(&[first, second], 2_000_000, 120, 500)
+            .expect("도메인 context를 만들어야 한다");
         assert_eq!(merged.contexts.len(), 1);
         assert_eq!(merged.contexts[0].domains.len(), 3);
         assert!(merged.contexts[0].features.is_empty());

@@ -4,9 +4,7 @@ use super::super::model::{
     FeatureConfidence, FeatureGroup, FeatureKind, FeatureStatus, FeatureVisibility,
 };
 use super::super::reachability::ReachabilityIndex;
-use crate::facts::{
-    Entrypoint, FactStore, Reference, ResolutionStatus, ResourceAccess,
-};
+use crate::facts::{Entrypoint, FactStore, Reference, ResolutionStatus, ResourceAccess};
 use crate::languages::common::metadata::stable_id;
 use std::collections::{BTreeSet, HashMap};
 
@@ -36,18 +34,25 @@ impl FeatureBuildContext<'_> {
         let root_unit_id = input
             .operation_root_id
             .or_else(|| {
-                input.entrypoint.map(|value| value.unit_id.as_str()).or_else(|| {
-                    input
-                        .owner_units
-                        .first()
-                        .map(|index| self.reachability.unit_id(*index))
-                })
+                input
+                    .entrypoint
+                    .map(|value| value.unit_id.as_str())
+                    .or_else(|| {
+                        input
+                            .owner_units
+                            .first()
+                            .map(|index| self.reachability.unit_id(*index))
+                    })
             })
             .unwrap_or_default();
         let key = input
             .feature_key
             .map(str::to_string)
-            .or_else(|| input.entrypoint.map(|value| format!("entrypoint:{}", value.id)))
+            .or_else(|| {
+                input
+                    .entrypoint
+                    .map(|value| format!("entrypoint:{}", value.id))
+            })
             .unwrap_or_else(|| format!("operation:{}", root_unit_id));
         let id = stable_id("feature", &key);
         let root_unit = self.facts.unit(root_unit_id);

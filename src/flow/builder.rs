@@ -44,13 +44,8 @@ pub(crate) fn build(facts: &FactStore, limits: &AnalysisLimits) -> (ExecutionFlo
     let mut link_batches: Vec<_> = flows
         .par_iter_mut()
         .map(|flow| {
-            let links = collect_call_links(
-                flow,
-                &input_index,
-                &flow_ids,
-                &entry_nodes,
-                &exit_nodes,
-            );
+            let links =
+                collect_call_links(flow, &input_index, &flow_ids, &entry_nodes, &exit_nodes);
             sort_flow(flow);
             links
         })
@@ -134,11 +129,11 @@ fn build_flow(unit: &CodeUnit, input_index: &FlowInputIndex<'_>) -> ExecutionFlo
     let dynamic_boundary_ids = events
         .iter()
         .filter_map(|event| match event {
-            Event::Reference { reference_id, status, .. }
-                if *status == ResolutionStatus::Dynamic =>
-            {
-                Some(reference_id.clone())
-            }
+            Event::Reference {
+                reference_id,
+                status,
+                ..
+            } if *status == ResolutionStatus::Dynamic => Some(reference_id.clone()),
             _ => None,
         })
         .collect();

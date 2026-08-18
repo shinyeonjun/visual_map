@@ -17,8 +17,8 @@ pub struct LoadedCleanBundle {
 
 pub fn load(clean_dir: &Path) -> Result<LoadedCleanBundle, CleanBundleError> {
     let manifest_path = clean_dir.join("manifest.json");
-    let manifest_text = fs::read_to_string(&manifest_path)
-        .map_err(|source| CleanBundleError::Io {
+    let manifest_text =
+        fs::read_to_string(&manifest_path).map_err(|source| CleanBundleError::Io {
             path: manifest_path.clone(),
             source,
         })?;
@@ -130,10 +130,12 @@ fn load_dataset<T: serde::de::DeserializeOwned>(
                 name, part.path
             )));
         }
-        let text = String::from_utf8(bytes).map_err(|error| CleanBundleError::Validation(format!(
-            "{} part {} UTF-8이 아닙니다: {error}",
-            name, part.path
-        )))?;
+        let text = String::from_utf8(bytes).map_err(|error| {
+            CleanBundleError::Validation(format!(
+                "{} part {} UTF-8이 아닙니다: {error}",
+                name, part.path
+            ))
+        })?;
         let part_items: Vec<T> =
             serde_json::from_str(&text).map_err(CleanBundleError::Serialization)?;
         items.extend(part_items);

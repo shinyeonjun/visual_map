@@ -243,6 +243,7 @@ mod tests {
             source_paths: Vec::new(),
             entrypoints: Vec::new(),
             resources: Vec::new(),
+            packets: Vec::new(),
             feature_ids: Vec::new(),
             flow_ids: Vec::new(),
             features: Vec::new(),

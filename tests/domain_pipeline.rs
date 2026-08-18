@@ -107,7 +107,18 @@ export function dispatch(name: string, request: Request) {
         .map(|domain| domain.key.as_str())
         .collect();
 
-    assert!(keys.contains(&"orders"), "orders 도메인이 없어: {keys:?}");
+    assert!(
+        overview.domains.iter().any(|domain| {
+            domain.key.contains("order")
+                || domain.entrypoint_ids.iter().any(|entrypoint_id| {
+                    overview.entrypoints.iter().any(|entrypoint| {
+                        &entrypoint.id == entrypoint_id
+                            && entrypoint.path.as_deref() == Some("/orders")
+                    })
+                })
+        }),
+        "주문 경로 버킷 또는 /orders 진입점 도메인이 없어: {keys:?}"
+    );
     assert!(
         overview.domains.len() <= 20,
         "도메인 수가 과도하게 많다: {}",

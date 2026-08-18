@@ -8,16 +8,14 @@ use feature_build::{FeatureBuildContext, FeatureBuildInput};
 use feature_contracts::{contract_feature_key, group_entrypoints_by_contract};
 use feature_flows::FeatureFlowIndex;
 
-use super::model::{
-    FeatureGroup, FeatureKind, FeatureStatus, FeatureVisibility,
-};
+use super::model::{FeatureGroup, FeatureKind, FeatureStatus, FeatureVisibility};
 use super::reachability::ReachabilityIndex;
 use crate::config::PathPolicy;
 use crate::domain::contract_path::paths_match;
 use crate::domain::DomainAnalysisOutput;
 use crate::facts::{
-    CodeUnitKind, Entrypoint, EntrypointKind, FactStore, Reference, ReferenceKind,
-    ResourceAccess, ResourceKind,
+    CodeUnitKind, Entrypoint, EntrypointKind, FactStore, Reference, ReferenceKind, ResourceAccess,
+    ResourceKind,
 };
 use crate::flow::ExecutionFlowGraph;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -147,8 +145,14 @@ fn sort_entrypoints_for_representative(
         let right_production = facts
             .unit(&right.unit_id)
             .is_some_and(|unit| path_policy.is_production_path(&unit.relative_path));
-        let left_method = left.method.as_deref().is_some_and(|value| !value.trim().is_empty());
-        let right_method = right.method.as_deref().is_some_and(|value| !value.trim().is_empty());
+        let left_method = left
+            .method
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+        let right_method = right
+            .method
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
         right_production
             .cmp(&left_production)
             .then_with(|| right_method.cmp(&left_method))

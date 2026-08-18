@@ -47,7 +47,6 @@ fn parse_source(language: Language, grammar: fn() -> TreeLanguage, source: &str)
     })
 }
 
-
 // 기존 외부 호출 경로를 유지하고 실제 구현은 책임별 모듈에 둔다.
 pub use normalization::{mark_dynamic_calls, normalize_bundle};
 

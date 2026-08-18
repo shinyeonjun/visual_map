@@ -127,9 +127,7 @@ fn assign_client_homes(
         let Some(home_key) = key_counts
             .iter()
             .max_by(|(left_key, left_count), (right_key, right_count)| {
-                left_count
-                    .cmp(right_count)
-                    .then(right_key.cmp(left_key))
+                left_count.cmp(right_count).then(right_key.cmp(left_key))
             })
             .map(|(key, _)| key.clone())
         else {
@@ -144,7 +142,10 @@ fn assign_client_homes(
 fn is_capability_entrypoint_kind(kind: &EntrypointKind) -> bool {
     matches!(
         kind,
-        EntrypointKind::Http | EntrypointKind::WebSocket | EntrypointKind::Rpc | EntrypointKind::Job
+        EntrypointKind::Http
+            | EntrypointKind::WebSocket
+            | EntrypointKind::Rpc
+            | EntrypointKind::Job
     )
 }
 
@@ -158,19 +159,16 @@ fn http_capability_key(
     store: &FactStore,
     unit_capability_keys: &HashMap<String, String>,
 ) -> Option<String> {
-    if let Some(key) = contract_capability_key(entrypoint).filter(|key| {
-        !is_leaf_capability_key(key) && !is_transport_capability_key(key)
-    }) {
+    if let Some(key) = contract_capability_key(entrypoint)
+        .filter(|key| !is_leaf_capability_key(key) && !is_transport_capability_key(key))
+    {
         return Some(key);
     }
     if let Some(key) = handler_class_capability_key(entrypoint, store) {
         return Some(key);
     }
-    contract_capability_key(entrypoint).or_else(|| {
-        unit_capability_keys
-            .get(&entrypoint.unit_id)
-            .cloned()
-    })
+    contract_capability_key(entrypoint)
+        .or_else(|| unit_capability_keys.get(&entrypoint.unit_id).cloned())
 }
 
 fn is_transport_capability_key(key: &str) -> bool {
@@ -213,14 +211,12 @@ fn rpc_capability_key(entrypoint: &Entrypoint, store: &FactStore) -> Option<Stri
         .or_else(|| endpoint_class_capability_key(&parent.name, "Service"))
 }
 
-fn unit_capability_keys(
-    store: &FactStore,
-    path_policy: &PathPolicy,
-) -> HashMap<String, String> {
+fn unit_capability_keys(store: &FactStore, path_policy: &PathPolicy) -> HashMap<String, String> {
     let mut candidates: HashMap<String, Vec<(String, usize)>> = HashMap::new();
 
     for entrypoint in &store.entrypoints {
-        if !is_capability_entrypoint_kind(&entrypoint.kind) || entrypoint.kind == EntrypointKind::Job
+        if !is_capability_entrypoint_kind(&entrypoint.kind)
+            || entrypoint.kind == EntrypointKind::Job
         {
             continue;
         }
@@ -234,8 +230,9 @@ fn unit_capability_keys(
         }
         let raw = entrypoint.path.as_deref().unwrap_or(&entrypoint.name);
         let Some(key) = (match entrypoint.kind {
-            EntrypointKind::Rpc => rpc_capability_key(entrypoint, store)
-                .or_else(|| capability_key_from_path(raw)),
+            EntrypointKind::Rpc => {
+                rpc_capability_key(entrypoint, store).or_else(|| capability_key_from_path(raw))
+            }
             _ => capability_key_from_path(raw),
         }) else {
             continue;
@@ -311,11 +308,7 @@ impl CapabilityBuilder {
         if include_unit {
             self.unit_ids.insert(unit_id.to_string());
         }
-        if let Some(path) = entrypoint
-            .path
-            .as_deref()
-            .and_then(normalize_contract_path)
-        {
+        if let Some(path) = entrypoint.path.as_deref().and_then(normalize_contract_path) {
             self.contract_paths.insert(path);
         }
     }
@@ -485,9 +478,10 @@ mod tests {
     #[test]
     fn 스크립트_경로의_엔트리포인트는_능력_원자에서_제외된다() {
         let mut store = FactStore::default();
-        store
-            .units
-            .insert("unit:seed".into(), file_unit("unit:seed", "scripts/seed.py"));
+        store.units.insert(
+            "unit:seed".into(),
+            file_unit("unit:seed", "scripts/seed.py"),
+        );
         store
             .entrypoints
             .push(http_entrypoint("entry:cli", "unit:seed", "POST", "/users"));
@@ -513,9 +507,11 @@ mod tests {
             "POST",
             "/billing/invoices",
         ));
-        store
-            .resources
-            .push(fetch_resource("resource:fetch", "unit:client", "/billing/invoices"));
+        store.resources.push(fetch_resource(
+            "resource:fetch",
+            "unit:client",
+            "/billing/invoices",
+        ));
 
         let capabilities = build(&store, &PathPolicy::default());
         assert_eq!(capabilities.len(), 1);

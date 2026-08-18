@@ -85,6 +85,8 @@ pub struct ReviewDomain {
     #[serde(default)]
     pub resources: Vec<ReviewResource>,
     #[serde(default)]
+    pub packets: Vec<String>,
+    #[serde(default)]
     pub feature_ids: Vec<String>,
     #[serde(default)]
     pub flow_ids: Vec<String>,

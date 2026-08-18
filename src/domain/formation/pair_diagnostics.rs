@@ -98,14 +98,7 @@ pub fn analyze_capability_pairs(
     top_k: usize,
 ) -> CapabilityPairDiagnostics {
     let context = build_capability_pair_context(store, execution_flows, domain_policy, path_policy);
-    analyze_capability_pairs_with_context(
-        store,
-        path_policy,
-        &context,
-        mode,
-        top_k,
-        true,
-    )
+    analyze_capability_pairs_with_context(store, path_policy, &context, mode, top_k, true)
 }
 
 pub(super) fn analyze_capability_pairs_with_context(
@@ -141,8 +134,15 @@ pub(super) fn analyze_capability_pairs_with_context(
             let left = &capabilities[i];
             let right = &capabilities[j];
             let sim = context.matrix.get(i, j);
-            let (reason, merge_gate_reason) =
-                classify_pair(left, right, sim, store, path_policy, mode, context.merge_threshold);
+            let (reason, merge_gate_reason) = classify_pair(
+                left,
+                right,
+                sim,
+                store,
+                path_policy,
+                mode,
+                context.merge_threshold,
+            );
 
             *report
                 .rejected
@@ -242,11 +242,8 @@ fn classify_pair(
             None,
         );
     }
-    let merge_gate_reason = merge_gate::merge_allowed(
-        mode,
-        sim,
-        merge_pair_context(left, right, store, mode),
-    );
+    let merge_gate_reason =
+        merge_gate::merge_allowed(mode, sim, merge_pair_context(left, right, store, mode));
     let Some(gate) = merge_gate_reason else {
         return (PairRejectionReason::NoStructuralGate, None);
     };

@@ -108,7 +108,15 @@ pub(super) fn cluster<'a>(
         if sim < options.merge_threshold && active.len() <= options.max_count {
             break;
         }
-        if !can_merge(a, b, &clusters, matrix, constraints, options.mode, options.merge_context) {
+        if !can_merge(
+            a,
+            b,
+            &clusters,
+            matrix,
+            constraints,
+            options.mode,
+            options.merge_context,
+        ) {
             cluster_sim[a][b] = -1.0;
             cluster_sim[b][a] = -1.0;
             continue;
@@ -137,10 +145,7 @@ pub(super) fn cluster<'a>(
         }
     }
 
-    (
-        clusters.into_iter().flatten().collect(),
-        merge_events,
-    )
+    (clusters.into_iter().flatten().collect(), merge_events)
 }
 
 fn best_merge_pair(
@@ -159,7 +164,8 @@ fn best_merge_pair(
             if sim < 0.0 {
                 continue;
             }
-            if sim > best_sim || (sim == best_sim && best_pair.map_or(true, |(pa, pb)| (a, b) < (pa, pb)))
+            if sim > best_sim
+                || (sim == best_sim && best_pair.map_or(true, |(pa, pb)| (a, b) < (pa, pb)))
             {
                 best_sim = sim;
                 best_pair = Some((a, b));
@@ -189,7 +195,8 @@ fn best_merge_pair_force<'a>(
                 continue;
             }
             let sim = cluster_sim[a][b];
-            if sim > best_sim || (sim == best_sim && best_pair.map_or(true, |(pa, pb)| (a, b) < (pa, pb)))
+            if sim > best_sim
+                || (sim == best_sim && best_pair.map_or(true, |(pa, pb)| (a, b) < (pa, pb)))
             {
                 best_sim = sim;
                 best_pair = Some((a, b));
@@ -329,7 +336,11 @@ fn average_linkage_from_matrix(
     total / count as f64
 }
 
-pub(super) fn target_cluster_count(feature_count: usize, min_count: usize, max_count: usize) -> usize {
+pub(super) fn target_cluster_count(
+    feature_count: usize,
+    min_count: usize,
+    max_count: usize,
+) -> usize {
     if feature_count == 0 {
         return 0;
     }

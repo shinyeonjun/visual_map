@@ -63,7 +63,11 @@ pub fn add_graphql_resolver_routes(
                 "entry",
                 &format!("{}:graphql:{}:{}", decorator.id, framework_id, path),
             );
-            if facts.entrypoints.iter().any(|entrypoint| entrypoint.id == id) {
+            if facts
+                .entrypoints
+                .iter()
+                .any(|entrypoint| entrypoint.id == id)
+            {
                 continue;
             }
             additions.push(Entrypoint {
@@ -150,10 +154,7 @@ fn resolver_target_units(
         return Vec::new();
     };
     if matches!(unit.kind, CodeUnitKind::Method | CodeUnitKind::Function) {
-        return vec![(
-            unit.id.clone(),
-            graphql_field_name(decorator, &unit.name),
-        )];
+        return vec![(unit.id.clone(), graphql_field_name(decorator, &unit.name))];
     }
     if unit.kind != CodeUnitKind::Class {
         return Vec::new();

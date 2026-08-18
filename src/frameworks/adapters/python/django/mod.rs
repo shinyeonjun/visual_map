@@ -23,11 +23,7 @@ pub(super) fn enrich(facts: &mut FactStore, file_frameworks: &HashMap<String, Ve
         if !matches!(name, "path" | "re_path") {
             continue;
         }
-        let method = if name == "re_path" {
-            "HTTP_REGEX"
-        } else {
-            "*"
-        };
+        let method = if name == "re_path" { "HTTP_REGEX" } else { "*" };
         add_call_entrypoint(
             facts,
             index,

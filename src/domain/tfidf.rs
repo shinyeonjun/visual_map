@@ -110,8 +110,18 @@ pub(super) fn cosine_similarity(a: &FeatureTerms, b: &FeatureTerms) -> f64 {
         }
     }
 
-    let magnitude_a: f64 = a.term_frequencies.values().map(|v| v * v).sum::<f64>().sqrt();
-    let magnitude_b: f64 = b.term_frequencies.values().map(|v| v * v).sum::<f64>().sqrt();
+    let magnitude_a: f64 = a
+        .term_frequencies
+        .values()
+        .map(|v| v * v)
+        .sum::<f64>()
+        .sqrt();
+    let magnitude_b: f64 = b
+        .term_frequencies
+        .values()
+        .map(|v| v * v)
+        .sum::<f64>()
+        .sqrt();
     if magnitude_a == 0.0 || magnitude_b == 0.0 {
         return 0.0;
     }
@@ -127,7 +137,9 @@ pub(super) fn most_specific_term(terms: &FeatureTerms, index: &TermIndex) -> Opt
         .max_by(|a, b| {
             let idf_a = index.idf.get(a.0).unwrap_or(&0.0);
             let idf_b = index.idf.get(b.0).unwrap_or(&0.0);
-            idf_a.partial_cmp(idf_b).unwrap_or(std::cmp::Ordering::Equal)
+            idf_a
+                .partial_cmp(idf_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|(term, _)| term.clone())
 }

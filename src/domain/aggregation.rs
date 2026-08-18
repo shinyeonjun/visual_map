@@ -57,7 +57,13 @@ pub(super) fn aggregate_relations(
         }
     }
 
-    aggregate_http_relations(store, groups, &unit_domains, &key_to_domain, &mut aggregated);
+    aggregate_http_relations(
+        store,
+        groups,
+        &unit_domains,
+        &key_to_domain,
+        &mut aggregated,
+    );
 
     let mut relations: Vec<_> = aggregated.into_values().collect();
     relations.sort_by(|left, right| {
@@ -195,7 +201,11 @@ fn insert_relation(
     weight: u32,
     evidence: Vec<crate::facts::Evidence>,
 ) {
-    let key = (source_domain.to_string(), target_domain.to_string(), kind.clone());
+    let key = (
+        source_domain.to_string(),
+        target_domain.to_string(),
+        kind.clone(),
+    );
     let relation = aggregated.entry(key).or_insert_with(|| DomainRelation {
         source_domain_id: source_domain.to_string(),
         target_domain_id: target_domain.to_string(),
@@ -394,11 +404,10 @@ mod tests {
             evidence: Vec::new(),
         });
         let mut billing = group_with_key("domain-billing", "billing");
-        billing.entrypoint_ids.push("entrypoint:billing".to_string());
-        let groups = vec![
-            group_with_key("domain-web", "web"),
-            billing,
-        ];
+        billing
+            .entrypoint_ids
+            .push("entrypoint:billing".to_string());
+        let groups = vec![group_with_key("domain-web", "web"), billing];
         let memberships = vec![
             membership("client", "domain-web"),
             membership("server", "domain-billing"),
@@ -448,10 +457,7 @@ mod tests {
         });
         let mut auth = group_with_key("domain-auth", "auth");
         auth.entrypoint_ids.push("entrypoint:auth".to_string());
-        let groups = vec![
-            group_with_key("domain-billing", "billing"),
-            auth,
-        ];
+        let groups = vec![group_with_key("domain-billing", "billing"), auth];
         let memberships = vec![
             membership("client", "domain-billing"),
             membership("server-auth", "domain-auth"),
@@ -469,9 +475,7 @@ mod tests {
 
     #[test]
     fn fetch_유닛_멤버십이_없으면_파일_유닛으로_source를_찾는다() {
-        use crate::facts::{
-            CodeUnit, CodeUnitKind, ResourceAccess, ResourceKind, SourceSpan,
-        };
+        use crate::facts::{CodeUnit, CodeUnitKind, ResourceAccess, ResourceKind, SourceSpan};
         use crate::model::Language;
 
         let graph = StaticRelationGraph::default();

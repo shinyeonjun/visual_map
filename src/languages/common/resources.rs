@@ -213,11 +213,10 @@ fn extract_url_name(argument: &str) -> Option<String> {
 }
 
 fn normalize_url_name(raw: &str) -> Option<String> {
-    crate::domain::contract_path::normalize_contract_path(raw)
-        .or_else(|| {
-            let trimmed = raw.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        })
+    crate::domain::contract_path::normalize_contract_path(raw).or_else(|| {
+        let trimmed = raw.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
 }
 
 fn unwrap_url_wrapper(argument: &str) -> &str {
@@ -463,8 +462,7 @@ mod tests {
     fn build_api_url_래퍼와_fetch_impl도_계약_경로를_추출한다() {
         let mut bundle = FactBundle::default();
         let mut site = call("fetchImpl");
-        site.arguments =
-            vec!["buildApiUrl(`/api/v1/reports/${sessionId}/latest`)".to_string()];
+        site.arguments = vec!["buildApiUrl(`/api/v1/reports/${sessionId}/latest`)".to_string()];
 
         extract(
             Language::TypeScript,
